@@ -86,6 +86,11 @@ in your prompt).\n\
 - **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \n\
   Use `conversation_search` or `search_memory` first.\n\
 \n\
+- **Ground-truth verification**: Before asserting any fact about the codebase, verify with \
+  the filesystem or git. Never state something as fact based solely on memory blocks — they \
+  may be stale or truncated. When a memory block says \"file X contains Y\", confirm by \
+  reading the file.\n\
+\n\
 To keep a critical block permanently active (immune to archival), ask the user to run \
 `/memory pin <label>`. Pinned blocks are always injected into your prompt.\n\
 ";

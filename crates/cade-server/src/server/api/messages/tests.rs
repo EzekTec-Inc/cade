@@ -412,6 +412,20 @@ fn constants_are_sane() {
         "PROACTIVE_CONSOLIDATION_THRESHOLD outside sane band: {}",
         PROACTIVE_CONSOLIDATION_THRESHOLD
     );
+
+    // A6: observation budget scales with model context window.
+    let (small_obs, small_chars) = MemoryBudgets::observation_budget("openai/gpt-4o-mini");
+    let (large_obs, large_chars) = MemoryBudgets::observation_budget("gemini/gemini-2.5-pro");
+    assert!(small_obs >= 30, "minimum 30 observations");
+    assert!(small_chars >= 2_000, "minimum 2k char budget");
+    assert!(
+        large_obs > small_obs,
+        "larger model should get more observations"
+    );
+    assert!(
+        large_chars > small_chars,
+        "larger model should get larger obs char budget"
+    );
 }
 
 // ── End-to-end integration logic for P4-C ────────────────────────────────

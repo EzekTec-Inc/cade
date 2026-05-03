@@ -137,13 +137,18 @@ pub fn prune_old_observations(db: &Db, agent_id: &str, max_turn: i64) -> Result<
 
 /// Render a compact summary of observations for context injection.
 ///
+/// A6: includes `turn_age` so the agent knows how old each observation is.
+///
 /// Returns a section like:
 /// ```text
-/// # Recent Observations
-/// [turn 42] read_file: Read src/main.rs (importance: 3)
-/// [turn 42] edit_file: Edited src/lib.rs lines 10-20 (importance: 4)
+/// # Recent Observations (turns 42-55)
+/// [turn 55, 0 ago] write_file: Wrote src/main.rs (importance: 4)
+/// [turn 42, 13 ago] read_file: Read Cargo.toml (importance: 2)
 /// ```
-pub fn render_observations_section(observations: &[ObservationRow], budget_chars: usize) -> String {
+pub fn render_observations_section(
+    observations: &[ObservationRow],
+    budget_chars: usize,
+) -> String {
     if observations.is_empty() {
         return String::new();
     }
@@ -151,10 +156,24 @@ pub fn render_observations_section(observations: &[ObservationRow], budget_chars
     let mut lines = Vec::new();
     let mut total_chars = 0;
 
+    // A6: compute relative time from created_at (epoch seconds).
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
     for obs in observations {
+        let age_secs = (now_epoch - obs.created_at).max(0);
+        let age_str = if age_secs < 60 {
+            format!("{}s ago", age_secs)
+        } else if age_secs < 3600 {
+            format!("{}m ago", age_secs / 60)
+        } else {
+            format!("{}h ago", age_secs / 3600)
+        };
         let line = format!(
-            "[turn {}] {}: {} (importance: {})",
-            obs.turn, obs.tool_name, obs.summary, obs.importance
+            "[turn {}, {}] {}: {} (importance: {})",
+            obs.turn, age_str, obs.tool_name, obs.summary, obs.importance
         );
         let line_chars = line.chars().count() + 1; // +1 for newline
         if total_chars + line_chars > budget_chars {
@@ -168,7 +187,18 @@ pub fn render_observations_section(observations: &[ObservationRow], budget_chars
         return String::new();
     }
 
-    format!("# Recent Observations\n{}", lines.join("\n"))
+    // A6: add turn range to header.
+    let newest = observations.first().map(|o| o.turn).unwrap_or(0);
+    let oldest_shown = observations
+        .get(lines.len().saturating_sub(1))
+        .map(|o| o.turn)
+        .unwrap_or(newest);
+    format!(
+        "# Recent Observations (turns {}-{})\n{}",
+        oldest_shown,
+        newest,
+        lines.join("\n")
+    )
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -316,9 +346,13 @@ mod tests {
         let section = render_observations_section(&obs, 500);
         assert!(section.contains("read_file"));
         assert!(section.contains("edit_file"));
+        // A6: header includes turn range
+        assert!(section.contains("turns 9-10"));
+        // A6: each line includes time-ago
+        assert!(section.contains("ago]"));
 
-        // Tiny budget → only first
-        let section = render_observations_section(&obs, 80);
+        // Tiny budget → only first (increase budget to accommodate longer format)
+        let section = render_observations_section(&obs, 100);
         assert!(section.contains("read_file"));
         assert!(!section.contains("edit_file"));
 

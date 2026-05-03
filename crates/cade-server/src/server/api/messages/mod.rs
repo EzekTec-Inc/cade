@@ -85,6 +85,26 @@ impl MemoryBudgets {
             long: ((window_chars as f64 * 0.015) as usize).max(LONG_BUDGET_MIN),
         }
     }
+
+    /// A6: Observation window scaled to the model's context window.
+    ///
+    /// Returns `(max_observations, char_budget)`.
+    ///
+    /// | Model window | Observations | Char budget |
+    /// |-------------|-------------|-------------|
+    /// | 32k tokens  | 30          | 2,000       |
+    /// | 128k tokens | 50          | 4,000       |
+    /// | 200k tokens | 75          | 6,000       |
+    /// | 1M tokens   | 150         | 12,000      |
+    pub fn observation_budget(model: &str) -> (usize, usize) {
+        let window_tokens = catalogue::context_window_for_model(model) as usize;
+        // Scale linearly from the 32k baseline, clamped.
+        let obs_count = ((window_tokens as f64 / 32_000.0) * 30.0)
+            .round() as usize;
+        let obs_chars = ((window_tokens as f64 / 32_000.0) * 2_000.0)
+            .round() as usize;
+        (obs_count.clamp(30, 200), obs_chars.clamp(2_000, 16_000))
+    }
 }
 /// Awareness footer appended to system prompt when any memory tier is present.
 pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 80+ turns are \

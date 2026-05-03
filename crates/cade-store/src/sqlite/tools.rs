@@ -684,4 +684,85 @@ mod tests {
     }
 }
 
+// ── C7: Unified recall (federated FTS5 search) ────────────────────────────
+
+/// A single result from the federated recall search.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecallResult {
+    pub source: String,   // "memory", "conversation", "archival", "event_log"
+    pub label: String,    // block label / message role / archive id / event type
+    pub snippet: String,  // contextual excerpt
+    pub score: f64,       // RRF-combined score (higher = better)
+}
+
+/// C7: Federated search across memory blocks, messages, archival memory,
+/// and event log.  Returns up to `limit` results ranked by reciprocal
+/// rank fusion (RRF) across the four sources.
+pub fn recall(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<RecallResult>> {
+    const RRF_K: f64 = 60.0; // standard RRF constant
+
+    let mut all_results: Vec<RecallResult> = Vec::new();
+
+    // Source 1: Memory blocks (LIKE + fuzzy)
+    if let Ok(mem_hits) = search_memory(db, agent_id, query) {
+        for (rank, (label, _value, snippet)) in mem_hits.into_iter().enumerate() {
+            all_results.push(RecallResult {
+                source: "memory".into(),
+                label,
+                snippet,
+                score: 1.0 / (RRF_K + rank as f64 + 1.0),
+            });
+        }
+    }
+
+    // Source 2: Conversation messages (FTS5)
+    if let Ok(msg_hits) = search_messages(db, agent_id, query, None) {
+        for (rank, hit) in msg_hits.into_iter().enumerate() {
+            all_results.push(RecallResult {
+                source: "conversation".into(),
+                label: hit.role,
+                snippet: hit.snippet,
+                score: 1.0 / (RRF_K + rank as f64 + 1.0),
+            });
+        }
+    }
+
+    // Source 3: Archival memory (FTS5)
+    if let Ok(arch_hits) = search_archival_memory(db, agent_id, query, 10) {
+        for (rank, hit) in arch_hits.into_iter().enumerate() {
+            let snip = hit.content.chars().take(200).collect::<String>();
+            all_results.push(RecallResult {
+                source: "archival".into(),
+                label: hit.tags.first().cloned().unwrap_or_default(),
+                snippet: snip,
+                score: 1.0 / (RRF_K + rank as f64 + 1.0),
+            });
+        }
+    }
+
+    // Source 4: Event log (FTS5)
+    if let Ok(ev_hits) = super::event_log::query_event_log(db, agent_id, query, 10) {
+        for (rank, hit) in ev_hits.into_iter().enumerate() {
+            let snip = hit.content.chars().take(200).collect::<String>();
+            all_results.push(RecallResult {
+                source: "event_log".into(),
+                label: hit.event_type,
+                snippet: snip,
+                score: 1.0 / (RRF_K + rank as f64 + 1.0),
+            });
+        }
+    }
+
+    // Sort by RRF score descending, take top `limit`.
+    all_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    all_results.truncate(limit);
+
+    Ok(all_results)
+}
+
 // endregion: --- Tests

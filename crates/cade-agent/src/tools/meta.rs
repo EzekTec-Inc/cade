@@ -39,6 +39,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_conversation_search(),
         schema_query_event_log(),
         schema_search_memory(),
+        schema_recall(),
         schema_load_skill(),
         schema_unload_skill(),
         schema_install_skill(),
@@ -206,6 +207,21 @@ fn schema_search_memory() -> Value {
 }
 
 // endregion: --- Memory schemas
+
+fn schema_recall() -> Value {
+    json!({
+        "name": "recall",
+        "description": "Search all memory sources at once: persistent memory blocks, conversation history, archival memory, and event log. Returns ranked results from all sources using reciprocal rank fusion. Use this as a single entry point when you need to find something but aren't sure where it was stored.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Keyword or phrase to search for across all memory sources" },
+                "limit": { "type": "integer", "description": "Max results to return (default 10)" }
+            },
+            "required": ["query"]
+        }
+    })
+}
 
 // region:    --- Skill schemas
 

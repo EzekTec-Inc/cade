@@ -1225,22 +1225,22 @@ fn assemble_system_prompt_memory(
             dynamic_core.push_str("\n\n");
         }
 
-        // ── P1: Inject recent observations into context ──────────────────
-        // Fetch high-importance observations (≥3) from the last ~50 turns
-        // and render a compact trail so the LLM knows what it did even after
-        // older messages have been dropped from the message window.
+        // ── P1 + A6: Inject recent observations into context ─────────────
+        // Fetch high-importance observations (≥3) scaled to the model's
+        // context window.  The LLM sees a compact trail of what it did even
+        // after older messages have been dropped from the message window.
         {
-            const OBSERVATION_CONTEXT_BUDGET: usize = 2_000;
+            let (obs_limit, obs_budget) = MemoryBudgets::observation_budget(&agent.model);
             let observations = sqlite::observations::get_important_observations(
                 &state.db,
                 agent_id,
                 3,
-                30,
+                obs_limit,
             )
             .unwrap_or_default();
             let obs_section = sqlite::observations::render_observations_section(
                 &observations,
-                OBSERVATION_CONTEXT_BUDGET,
+                obs_budget,
             );
             if !obs_section.is_empty() {
                 dynamic_core.push_str(&obs_section);

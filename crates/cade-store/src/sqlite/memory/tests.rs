@@ -1207,3 +1207,30 @@ fn f7_access_bump_is_scoped_to_agent() -> Result<()> {
     assert_eq!(a2_count, 0, "a2's block must NOT have inherited any accesses");
     Ok(())
 }
+
+// ── A2: Write-ahead verification ──────────────────────────────────────────
+
+#[test]
+fn upsert_returns_write_result_with_char_counts() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let wr = upsert_memory_block(&db, "a1", "note", "hello world", None, None)?;
+    assert!(!wr.was_truncated);
+    assert_eq!(wr.stored_chars, 11);
+    assert_eq!(wr.requested_chars, 11);
+    Ok(())
+}
+
+#[test]
+fn upsert_errors_when_exceeding_char_limit() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let big = "x".repeat(200);
+    let res = upsert_memory_block(&db, "a1", "note", &big, None, Some(100));
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("exceeds character limit"));
+    Ok(())
+}

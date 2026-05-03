@@ -86,6 +86,12 @@ pub(super) async fn intercept_meta_tool(
                 handle_query_event_log_meta(state, agent_id, &tc.arguments).await;
             Some(mk(output, is_error))
         }
+        // ── C7: unified recall tool ──────────────────────────────────────
+        "recall" => {
+            let (output, is_error) =
+                handle_recall_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
         // ── Phase A2: skill meta-tools ────────────────────────────────────
         "install_skill" => {
             let (output, is_error) =
@@ -227,7 +233,22 @@ async fn handle_update_memory(
         description,
         None,
     ) {
-        Ok(_) => (format!("Memory block '{label}' updated"), false),
+        Ok(wr) => {
+            let char_info = format!(" ({}/{} chars)", wr.stored_chars, wr.requested_chars);
+            if wr.was_truncated {
+                (
+                    format!(
+                        "Memory block '{label}' updated{char_info}.\n\
+                         ⚠️ WARNING: Content was truncated from {} to {} chars.\n\
+                         Consider splitting into multiple blocks or using archival_memory_insert for overflow.",
+                        wr.requested_chars, wr.stored_chars
+                    ),
+                    false,
+                )
+            } else {
+                (format!("Memory block '{label}' updated{char_info}"), false)
+            }
+        }
         Err(e) => (format!("Failed: {e}"), true),
     }
 }
@@ -308,8 +329,8 @@ async fn handle_memory_apply_patch(
             description,
             None,
         ) {
-            Ok(_) => (
-                format!("Memory block '{label}' patched successfully"),
+            Ok(wr) => (
+                format!("Memory block '{label}' patched successfully ({} chars)", wr.stored_chars),
                 false,
             ),
             Err(e) => (format!("Failed to save patched memory: {e}"), true),
@@ -1277,5 +1298,40 @@ async fn handle_unload_skill_tool(
             output: format!("Skill '{}' is not currently loaded", skill_id),
             is_error: true,
         }
+    }
+}
+
+/// C7: Unified recall handler — federated search across memory, messages,
+/// archival memory, and event log.
+async fn handle_recall_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+
+    if query.is_empty() {
+        return ("Error: 'query' is required".to_string(), true);
+    }
+
+    match cade_store::sqlite::recall(&state.db, agent_id, &query, limit) {
+        Ok(results) if results.is_empty() => {
+            (format!("No results found for '{query}' across memory, conversations, archival memory, or event log."), false)
+        }
+        Ok(results) => {
+            let mut out = format!("Found {} results for '{query}':\n\n", results.len());
+            for (i, r) in results.iter().enumerate() {
+                out.push_str(&format!(
+                    "{}. [{}] {}: {}\n",
+                    i + 1,
+                    r.source,
+                    r.label,
+                    r.snippet.chars().take(300).collect::<String>(),
+                ));
+            }
+            (out, false)
+        }
+        Err(e) => (format!("Recall search failed: {e}"), true),
     }
 }

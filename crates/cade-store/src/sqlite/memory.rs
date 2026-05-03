@@ -152,6 +152,23 @@ fn block_info_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BlockInfo> {
 // Agent-scoped memory operations (existing)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Result of a memory block write operation (A2: write-ahead verification).
+///
+/// Callers can inspect `was_truncated` / `stored_chars` / `requested_chars`
+/// to warn the agent that content was silently clipped, preventing
+/// hallucination from partial data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteResult {
+    /// `true` when the stored value is shorter than the requested value
+    /// because it hit the `max_chars` limit (currently an error, but this
+    /// struct is forward-compatible for auto-trim flows).
+    pub was_truncated: bool,
+    /// Number of chars actually persisted.
+    pub stored_chars: usize,
+    /// Number of chars the caller originally requested to write.
+    pub requested_chars: usize,
+}
+
 pub fn upsert_memory_block(
     db: &Db,
     agent_id: &str,
@@ -159,7 +176,7 @@ pub fn upsert_memory_block(
     value: &str,
     description: Option<&str>,
     max_chars: Option<usize>,
-) -> Result<()> {
+) -> Result<WriteResult> {
     let conn = db
         .lock();
 
@@ -301,7 +318,14 @@ pub fn upsert_memory_block(
 
     // ── Semantic search: compute and store embedding for this block ──────────
     // Semantic search feature removed (F5).
-    Ok(())
+
+    let requested_chars = value.chars().count();
+    let stored_chars = final_value.chars().count();
+    Ok(WriteResult {
+        was_truncated: false,
+        stored_chars,
+        requested_chars,
+    })
 }
 
 /// Link an existing shared memory block to an agent.

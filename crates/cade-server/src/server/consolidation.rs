@@ -65,8 +65,8 @@ const SESSION_SUMMARY_ARCHIVED_MAX_CHARS: usize = 4_000;
 
 /// Max chars retained in the `session_index` pinned block. When the FIFO
 /// line-buffer exceeds this, the oldest lines are dropped.
-/// P5: raised from 3,000 → 5,000.
-const SESSION_INDEX_MAX_CHARS: usize = 5_000;
+/// A7: raised from 5,000 → 10,000 for richer session continuity.
+const SESSION_INDEX_MAX_CHARS: usize = 10_000;
 
 /// Maximum tokens for the P7 active_goal auto-update LLM call.
 const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
@@ -844,9 +844,22 @@ fn rotate_and_archive_session_summary_db(
     // Step 1: evict oldest slot if occupied.
     let oldest_label = label_for(SESSION_SUMMARY_RING_CAP);
     if let Some((_, val, _)) = blocks.iter().find(|(l, _, _)| l == &oldest_label) {
-        let excerpt = first_nonempty_line(val);
+        // A7: archive the full evicted content to archival_memory for recovery.
+        if !val.trim().is_empty() {
+            let tags = vec!["evicted-session-summary".to_string()];
+            let _ = sqlite::insert_archival_memory(
+                db,
+                agent_id,
+                val,
+                &tags,
+            );
+        }
+
+        // A7: use a 500-char excerpt instead of first_nonempty_line (~200 chars).
+        let excerpt = truncate_head_to(val, 500);
+        let excerpt = excerpt.trim();
         if !excerpt.is_empty() {
-            append_to_session_index_db(db, agent_id, &excerpt);
+            append_to_session_index_db(db, agent_id, excerpt);
         }
         if let Err(e) = sqlite::delete_memory_block(db, agent_id, &oldest_label) {
             tracing::debug!(
@@ -971,6 +984,7 @@ fn append_to_session_index_db(db: &cade_store::sqlite::Db, agent_id: &str, excer
 }
 
 /// Return the first non-empty, trimmed line of `s`, capped at 200 chars.
+#[allow(dead_code)] // A7: no longer used in production (replaced by 500-char truncate_head_to), but kept for tests
 fn first_nonempty_line(s: &str) -> String {
     for line in s.lines() {
         let t = line.trim();
