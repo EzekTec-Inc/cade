@@ -229,6 +229,12 @@ pub struct ThemeColors {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub syntax_theme_override: Option<std::path::PathBuf>,
 
+    /// Colour-scheme variant: `"dark"` or `"light"`.  Consumers (e.g. the
+    /// egui GUI) use this to set `Visuals::dark_mode` correctly.  `None`
+    /// means "unknown — assume dark".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub variant: Option<String>,
+
     // -- Semantic Palette (Phase 1)
     pub bg_base: ColorDef,
     pub bg_surface0: ColorDef,
@@ -354,6 +360,13 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
+    /// Returns `true` when the theme is a light variant (bright backgrounds).
+    ///
+    /// Falls back to `false` (dark) when `variant` is `None`.
+    pub fn is_light(&self) -> bool {
+        self.variant.as_deref() == Some("light")
+    }
+
     // -- Built-in themes
 
     /// Resolve a built-in theme name to `ThemeColors`.
@@ -408,6 +421,7 @@ impl ThemeColors {
         Self {
             source_path: None,
             syntax_theme_override: None,
+            variant: Some("dark".to_string()),
 
             // Semantic Elevation — noticeable depth between layers
             bg_base: ColorDef::Rgb(12, 13, 20), // near-void blue-black
@@ -512,6 +526,7 @@ impl ThemeColors {
     pub fn from_theme(theme: &Theme) -> ThemeColors {
         let mut base = Self::dark();
         base.source_path = Some(theme.source.clone());
+        base.variant = theme.variant.clone();
 
         // Auto-discover .tmTheme override: mytheme.json → mytheme.tmTheme
         let tmtheme_path = theme.source.with_extension("tmTheme");
@@ -703,6 +718,7 @@ impl ThemeColors {
         Self {
             source_path: None,
             syntax_theme_override: None,
+            variant: Some("light".to_string()),
 
             // Semantic Elevation — clear layering on a white surface
             bg_base: ColorDef::Rgb(252, 252, 255), // near-white, slight blue
@@ -802,6 +818,7 @@ impl ThemeColors {
     /// Palette source: <https://github.com/catppuccin/catppuccin>
     pub fn catppuccin_mocha() -> Self {
         let mut c = Self::dark();
+        c.variant = Some("dark".to_string());
         // Base surfaces
         c.bg_base = ColorDef::Rgb(30, 30, 46); // Crust
         c.bg_surface0 = ColorDef::Rgb(36, 36, 54); // Mantle
@@ -884,6 +901,7 @@ impl ThemeColors {
     /// Palette source: <https://github.com/catppuccin/catppuccin>
     pub fn catppuccin_latte() -> Self {
         let mut c = Self::light();
+        c.variant = Some("light".to_string());
         // Base surfaces
         c.bg_base = ColorDef::Rgb(239, 241, 245); // Base
         c.bg_surface0 = ColorDef::Rgb(230, 233, 239); // Mantle
@@ -961,6 +979,7 @@ impl ThemeColors {
     /// Palette source: <https://github.com/enkia/tokyo-night-vscode-theme>
     pub fn tokyo_night() -> Self {
         let mut c = Self::dark();
+        c.variant = Some("dark".to_string());
         // Base surfaces
         c.bg_base = ColorDef::Rgb(26, 27, 38); // bg
         c.bg_surface0 = ColorDef::Rgb(28, 29, 44); // bg_dark
@@ -1876,6 +1895,81 @@ mod tests {
         // ctx_bar_native_tools derives from primary, which came from accent
         // — it should NOT equal the dark() built-in value
         assert_ne!(tc.ctx_bar_native_tools, dark.ctx_bar_native_tools);
+    }
+
+    // -- Variant field tests (P0 dark_mode fix)
+
+    #[test]
+    fn dark_builtin_has_dark_variant() {
+        let tc = ThemeColors::dark();
+        assert_eq!(tc.variant.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn light_builtin_has_light_variant() {
+        let tc = ThemeColors::light();
+        assert_eq!(tc.variant.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn catppuccin_mocha_has_dark_variant() {
+        let tc = ThemeColors::catppuccin_mocha();
+        assert_eq!(tc.variant.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn catppuccin_latte_has_light_variant() {
+        let tc = ThemeColors::catppuccin_latte();
+        assert_eq!(tc.variant.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn tokyo_night_has_dark_variant() {
+        let tc = ThemeColors::tokyo_night();
+        assert_eq!(tc.variant.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn is_light_helper_works() {
+        assert!(!ThemeColors::dark().is_light());
+        assert!(ThemeColors::light().is_light());
+        assert!(!ThemeColors::catppuccin_mocha().is_light());
+        assert!(ThemeColors::catppuccin_latte().is_light());
+        assert!(!ThemeColors::tokyo_night().is_light());
+    }
+
+    #[test]
+    fn from_theme_preserves_variant() {
+        let mut t = Theme {
+            name: "test-variant".to_string(),
+            description: None,
+            author: None,
+            variant: Some("light".to_string()),
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        let tc = ThemeColors::from_theme(&t);
+        assert_eq!(tc.variant.as_deref(), Some("light"));
+
+        t.variant = Some("dark".to_string());
+        let tc2 = ThemeColors::from_theme(&t);
+        assert_eq!(tc2.variant.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn from_theme_without_variant_defaults_to_none() {
+        let t = Theme {
+            name: "test-no-variant".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        let tc = ThemeColors::from_theme(&t);
+        assert!(tc.variant.is_none());
     }
 }
 

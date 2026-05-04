@@ -48,7 +48,7 @@ pub fn render_model_picker(
         egui::Order::Background,
         egui::Id::new("model_picker_backdrop"),
     ));
-    painter.rect_filled(backdrop_rect, 0.0, egui::Color32::from_black_alpha(140));
+    painter.rect_filled(backdrop_rect, 0.0, theme.overlay_backdrop());
 
     // ESC closes
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {

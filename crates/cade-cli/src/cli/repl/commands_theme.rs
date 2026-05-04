@@ -40,6 +40,48 @@ impl Repl {
             return Ok(false);
         }
 
+        // -- `/theme list` → print available themes inline
+        if new_theme == "list" {
+            let agent_dir = self
+                .settings
+                .lock()
+                .global_path()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+
+            let current_name = self
+                .settings
+                .lock()
+                .global_settings_mut()
+                .theme
+                .clone()
+                .unwrap_or_else(|| "dark".to_string());
+
+            let discovered =
+                cade_core::resources::discover_themes_with_builtins(&self.cwd, &agent_dir);
+
+            self.tui_hdr("Available themes:");
+            for t in &discovered {
+                let variant = t.variant.as_deref().unwrap_or("dark");
+                let marker = if t.name == current_name { " ◀ active" } else { "" };
+                let desc = t
+                    .description
+                    .as_deref()
+                    .unwrap_or("");
+                let source = if t.source.as_os_str() == "builtin" {
+                    "built-in"
+                } else {
+                    "custom"
+                };
+                self.tui_ok(format!(
+                    "  {:<22} ({variant}, {source}) {desc}{marker}",
+                    t.name,
+                ));
+            }
+            return Ok(false);
+        }
+
         // -- `/theme reload` → re-read the current theme from disk
         if new_theme == "reload" {
             let current_source = self.app.lock().colors.source_path.clone();

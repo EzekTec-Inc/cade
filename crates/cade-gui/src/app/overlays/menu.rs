@@ -25,7 +25,7 @@ pub fn render_menu_overlay(
         egui::Order::Background,
         egui::Id::new("menu_overlay_backdrop"),
     ));
-    painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+    painter.rect_filled(screen, 0.0, theme.overlay_backdrop());
 
     egui::Window::new("Command Menu")
         .title_bar(false)

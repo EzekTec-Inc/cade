@@ -55,6 +55,12 @@ pub trait EguiThemeExt {
     fn tinted_bg(&self, base: Color32, alpha: u8) -> Color32 {
         Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
     }
+
+    /// Semi-transparent overlay backdrop derived from the theme's base colour.
+    ///
+    /// Dark themes get a near-black backdrop; light themes get a near-white one.
+    /// Both use ~55% opacity (alpha ≈ 140).
+    fn overlay_backdrop(&self) -> Color32;
 }
 
 impl EguiThemeExt for CoreThemeColors {
@@ -118,6 +124,10 @@ impl EguiThemeExt for CoreThemeColors {
     fn diff_removed(&self) -> Color32 {
         self.diff_removed.to_egui()
     }
+    fn overlay_backdrop(&self) -> Color32 {
+        let base = self.bg_base.to_egui();
+        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 140)
+    }
 }
 
 /// Fraction of the context window consumed by `total_tokens`, clamped 0.0-1.0.
@@ -155,7 +165,7 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
     };
 
     let visuals = Visuals {
-        dark_mode: true,
+        dark_mode: !theme.is_light(),
         override_text_color: Some(theme.text_primary()),
         panel_fill: theme.bg_base(),
         window_fill: theme.bg_surface0(),
@@ -215,7 +225,7 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
         window_shadow: egui::Shadow::NONE,
         popup_shadow: egui::Shadow::NONE,
 
-        ..Visuals::dark()
+        ..if theme.is_light() { Visuals::light() } else { Visuals::dark() }
     };
 
     ctx.set_visuals(visuals);

@@ -91,6 +91,10 @@ const SECTIONS: &[Section] = &[
                 desc: "Change colorscheme  (/theme [name])",
             },
             CmdEntry {
+                cmd: "/theme list",
+                desc: "List all available themes (built-in + custom)",
+            },
+            CmdEntry {
                 cmd: "/model",
                 desc: "Interactive model picker  (or /model provider/name)",
             },

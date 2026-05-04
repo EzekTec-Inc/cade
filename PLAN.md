@@ -1,3 +1,22 @@
+## 2026-05-04T04:50:00Z — fix(gui): theme variant field + overlay backdrops + /theme list
+
+**Task:** P0: Fix `dark_mode` hardcoded to `true` in GUI. P1: Theme overlay backdrops. P1: Add `/theme list`.
+
+**Files modified:**
+- `crates/cade-core/src/resources/themes.rs` — added `variant: Option<String>` to `ThemeColors`, `is_light()` helper, set in all 5 built-ins, copied in `from_theme()`; 8 new tests
+- `crates/cade-gui/src/theme.rs` — `apply_theme()` now uses `theme.is_light()` for `dark_mode` and `Visuals::light()`/`dark()` base; added `overlay_backdrop()` to `EguiThemeExt`
+- `crates/cade-gui/src/app/overlays/menu.rs` — `from_black_alpha(140)` → `theme.overlay_backdrop()`
+- `crates/cade-gui/src/app/overlays/mcp.rs` — same
+- `crates/cade-gui/src/app/overlays/models.rs` — same
+- `crates/cade-cli/src/cli/repl/commands_theme.rs` — added `/theme list` sub-command
+- `crates/cade-tui/src/menu.rs` — added `/theme list` to `/help` catalogue
+
+**Previous behavior:** GUI `Visuals::dark_mode` was always `true`, light themes got wrong egui base. Overlay backdrops were hardcoded `from_black_alpha(140)`. No inline theme listing.
+
+**New behavior:** `dark_mode` is `!theme.is_light()`, spread from correct `Visuals::light()`/`dark()`. Backdrops derive from `theme.bg_base` with alpha. `/theme list` prints all themes inline with variant, source, and active marker.
+
+**Rollback:** `git revert <sha>` or restore checkpoint cp-98238dcd.
+
 ## 2026-05-03T22:45:00Z — fix(tui): comprehensive theme polish — wire unused tokens, fix hardcoded styles
 
 ## 2026-05-04T03:40:00Z — feat(tui): theme reload, .tmTheme override, password backdrop, border token split
