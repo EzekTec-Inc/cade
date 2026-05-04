@@ -315,6 +315,23 @@ impl Repl {
                                                                 let _ = app.draw();
                                                             }
                                                     }
+                                                    // Ctrl+T — toggle plan/todos panel
+                                                    (KeyCode::Char('t'), KeyModifiers::CONTROL)
+                                                    | (KeyCode::Char('\x14'), _) => {
+                                                        if let Some(plan) = &mut app.active_plan {
+                                                            plan.is_visible = !plan.is_visible;
+                                                            let msg = if plan.is_visible {
+                                                                "Plan panel shown"
+                                                            } else {
+                                                                "Plan panel hidden"
+                                                            };
+                                                            app.show_toast(msg, cade_tui::app::ToastLevel::Info);
+                                                        } else {
+                                                            app.show_toast("No active plan", cade_tui::app::ToastLevel::Info);
+                                                        }
+                                                        app.draw_dirty = true;
+                                                        let _ = app.draw();
+                                                    }
                                                     // Ctrl+C — always cancel the running turn.
                                                     // Ctrl+C: if input is non-empty → steering
                                                     // (cancel + redirect with typed text).
