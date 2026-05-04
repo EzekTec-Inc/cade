@@ -18,7 +18,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     // Top dashed separator (matches question-panel style)
     lines.push(Line::from(Span::styled(
         "╌".repeat(w),
-        colors.border_base(),
+        colors.border_muted(),
     )));
 
     // Header: "@ <query>" + no-match hint
@@ -179,7 +179,7 @@ pub(crate) fn render_theme_picker(
                 .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ))
-        .border_style(colors.border_base())
+        .border_style(colors.border_accent())
         .style(Style::default().bg(colors.bg_surface0.to_ratatui()));
 
     let inner_table_area = outer_block.inner(table_area);
@@ -303,7 +303,7 @@ pub(crate) fn render_theme_picker(
             " ↑↓ nav · Enter ok · Esc cancel · type to filter ",
             Style::default().fg(colors.text_muted.to_ratatui()).add_modifier(Modifier::DIM),
         ))
-        .border_style(colors.border_base())
+        .border_style(colors.border_accent())
         .style(Style::default().bg(colors.bg_surface1.to_ratatui()));
     let filter_text = Paragraph::new(format!("> {}█", tp.query))
         .block(filter_block)

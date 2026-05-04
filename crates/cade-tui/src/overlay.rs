@@ -20,7 +20,7 @@ pub fn render_overlay_shell(
         .borders(Borders::ALL)
         .border_type(colors.border_style.to_ratatui())
         .style(Style::default().bg(colors.bg_surface2.to_ratatui()))
-        .border_style(colors.border_base())
+        .border_style(colors.border_accent())
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(

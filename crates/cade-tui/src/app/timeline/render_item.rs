@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) fn render_separator_item(width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(Span::styled(
         "─".repeat(width),
-        colors.border_base(),
+        colors.border_muted(),
     )));
 }
 
@@ -262,7 +262,7 @@ pub(crate) fn render_tool_result_item(
     let lns: Vec<&str> = content.lines().collect();
     if lns.is_empty() {
         out.push(Line::from(vec![
-            Span::styled("│ ", colors.border_base()),
+            Span::styled("│ ", colors.border_muted()),
             Span::styled(
                 status_label,
                 Style::default()
@@ -284,7 +284,7 @@ pub(crate) fn render_tool_result_item(
         for (i, ln) in lns.iter().take(show).enumerate() {
             let mut spans = Vec::new();
             if i == 0 {
-                spans.push(Span::styled("│ ", colors.border_base()));
+                spans.push(Span::styled("│ ", colors.border_muted()));
                 spans.push(Span::styled(
                     status_label.clone(),
                     Style::default()
@@ -294,7 +294,7 @@ pub(crate) fn render_tool_result_item(
                 ));
                 spans.push(Span::raw(" "));
             } else {
-                spans.push(Span::styled("│      ", colors.border_base()));
+                spans.push(Span::styled("│      ", colors.border_muted()));
             }
 
             let parsed_text = ln
@@ -343,7 +343,7 @@ pub(crate) fn render_tool_result_item(
                 format!("… +{remaining} lines (ctrl+o to expand)")
             };
             out.push(Line::from(vec![
-                Span::styled("       ", colors.border_base()),
+                Span::styled("       ", colors.border_muted()),
                 Span::styled(
                     hint,
                     Style::default()
@@ -365,7 +365,7 @@ pub(crate) fn render_reasoning_item(
 ) {
     out.push(Line::from(""));
     out.push(Line::from(vec![
-        Span::styled("╭ ", colors.border_base()),
+        Span::styled("╭ ", colors.border_muted()),
         Span::styled(
             " THINKING ",
             Style::default()
@@ -388,7 +388,7 @@ pub(crate) fn render_reasoning_item(
         let inner_w = width.saturating_sub(4);
         for ln in content.lines() {
             out.push(Line::from(vec![
-                Span::styled("│ ", colors.border_base()),
+                Span::styled("│ ", colors.border_muted()),
                 Span::styled(
                     truncate_str(ln, inner_w),
                     Style::default()
@@ -414,7 +414,7 @@ pub(crate) fn render_live_output_item(
 
     if lines.is_empty() {
         out.push(Line::from(vec![
-            Span::styled("│ ", colors.border_base()),
+            Span::styled("│ ", colors.border_muted()),
             Span::styled(
                 " LIVE ",
                 Style::default()
@@ -444,7 +444,7 @@ pub(crate) fn render_live_output_item(
     if hidden > 0 {
         let hint = format!("… {hidden} earlier lines (ctrl+o to expand)");
         out.push(Line::from(vec![
-            Span::styled("│ ", colors.border_base()),
+            Span::styled("│ ", colors.border_muted()),
             Span::styled(
                 hint,
                 Style::default()
@@ -458,7 +458,7 @@ pub(crate) fn render_live_output_item(
     for (i, ln) in lines[start..].iter().enumerate() {
         let mut spans = Vec::new();
         if i == 0 && hidden == 0 {
-            spans.push(Span::styled("│ ", colors.border_base()));
+            spans.push(Span::styled("│ ", colors.border_muted()));
             spans.push(Span::styled(
                 " LIVE ",
                 Style::default()
@@ -468,7 +468,7 @@ pub(crate) fn render_live_output_item(
             ));
             spans.push(Span::raw(" "));
         } else {
-            spans.push(Span::styled("│      ", colors.border_base()));
+            spans.push(Span::styled("│      ", colors.border_muted()));
         }
 
         let parsed_text = ln

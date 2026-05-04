@@ -11,7 +11,7 @@ use crate::Result;
 
 use super::{RenderLine, TuiApp};
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
-use crate::colors::{ColorDefExt, ThemeColors};
+use crate::colors::{ColorDefExt, BorderStyleExt, ThemeColors};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use std::any::Any;
@@ -43,16 +43,27 @@ impl OverlayComponent for PasswordPromptState {
         let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
         let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
         let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+        // Dim backdrop behind password popup
+        crate::app::layout::helpers::render_backdrop(frame, area, colors);
+
         frame.render_widget(Clear, popup_area);
         let block = Block::default()
             .title(" 🔒 Password ")
+            .title_style(Style::default().fg(colors.primary.to_ratatui()).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(colors.primary.to_ratatui()));
+            .border_type(colors.border_style.to_ratatui())
+            .border_style(Style::default().fg(colors.primary.to_ratatui()))
+            .style(Style::default()
+                .bg(colors.bg_surface1.to_ratatui())
+                .fg(colors.text_primary.to_ratatui()));
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
         let prompt_line = Line::from(Span::styled(
             &self.prompt,
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors.text_primary.to_ratatui())
+                .add_modifier(Modifier::BOLD),
         ));
         let mask: String = "*".repeat(self.input.len());
         let input_line = Line::from(vec![

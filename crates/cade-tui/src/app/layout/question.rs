@@ -65,7 +65,7 @@ pub(crate) fn render_question_inline(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             dash_str,
-            colors.border_base(),
+            colors.border_muted(),
         ))),
         sep_area,
     );

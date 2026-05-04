@@ -105,7 +105,7 @@ pub fn show_skills_manager(
                     .borders(Borders::ALL)
                     .border_type(colors.border_style.to_ratatui())
                     .title(" Skills ")
-                    .border_style(colors.border_base()),
+                    .border_style(colors.border_accent()),
             );
 
             let mut ts = TableState::default().with_selected(Some(selected_idx));
@@ -135,7 +135,7 @@ pub fn show_skills_manager(
                         .borders(Borders::ALL)
                         .border_type(colors.border_style.to_ratatui())
                         .title(" Preview ")
-                        .border_style(colors.border_base()),
+                        .border_style(colors.border_accent()),
                 );
             f.render_widget(preview, top_chunks[1]);
 

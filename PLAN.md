@@ -1,5 +1,46 @@
 ## 2026-05-03T22:45:00Z — fix(tui): comprehensive theme polish — wire unused tokens, fix hardcoded styles
 
+## 2026-05-04T03:40:00Z — feat(tui): theme reload, .tmTheme override, password backdrop, border token split
+
+**Task:** 4 remaining TUI polish items: theme hot-reload, syntax theme file support, password popup backdrop, border_accent/border_muted split.
+
+**Files modified:**
+- `crates/cade-cli/src/cli/repl/commands_theme.rs` (add `/theme reload` handler: re-reads theme from disk)
+- `crates/cade-core/src/resources/themes.rs` (add `syntax_theme_override`, `border_muted`, `border_accent` fields; auto-discover .tmTheme in from_theme; set defaults for all 5 themes; wire from_theme resolution)
+- `crates/cade-tui/src/colors.rs` (generate_syntect_theme loads .tmTheme override; add border_muted/border_accent trait methods)
+- `crates/cade-tui/src/app/password.rs` (add backdrop dimming, border_type, surface1 bg, title_style, themed prompt text)
+- `crates/cade-tui/src/app/timeline/render_item.rs` (inline │ borders → border_muted)
+- `crates/cade-tui/src/app/layout/breadcrumb.rs` (separator → border_muted)
+- `crates/cade-tui/src/app/layout/command_palette.rs` (overlay border → border_accent, separator → border_muted)
+- `crates/cade-tui/src/app/layout/pickers.rs` (overlay borders → border_accent, separator → border_muted)
+- `crates/cade-tui/src/app/layout/question.rs` (separator → border_muted)
+- `crates/cade-tui/src/question.rs` (separator → border_muted)
+- `crates/cade-tui/src/overlay.rs` (overlay border → border_accent)
+- `crates/cade-tui/src/mcp_picker.rs` (overlay borders → border_accent)
+- `crates/cade-tui/src/skills.rs` (overlay borders → border_accent)
+
+**Previous behavior:**
+- No `/theme reload` in CLI (only in server)
+- No .tmTheme syntax highlight override
+- Password popup had no backdrop dimming, no themed border_type, no background
+- Single `border_base` token for all borders
+
+**New behavior:**
+- `/theme reload` re-reads the current theme's source file from disk and applies it live
+- `.tmTheme` files auto-discovered next to theme JSON (mytheme.tmTheme → mytheme.json) override syntax highlighting
+- Password popup has dimmed backdrop, themed border_type, surface1 bg, styled title
+- `border_muted` for inline/separator borders (dimmer), `border_accent` for overlay borders (brighter)
+- `border_base` retained for structural panel borders (sidebar, plan panel)
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert HEAD
+```
+
+---
+
 **Task:** Fix 4 critical hardcoded styles, wire 6 unused theme tokens, add background fills, and add overlay backdrop dimming.
 
 **Files modified:**

@@ -223,6 +223,11 @@ pub enum BorderStyle {
 pub struct ThemeColors {
     // -- Core
     pub source_path: Option<std::path::PathBuf>,
+    /// Optional `.tmTheme` file to override syntax highlighting colors.
+    /// Discovered automatically next to the theme JSON (e.g. `mytheme.tmTheme`
+    /// next to `mytheme.json`), or set explicitly.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub syntax_theme_override: Option<std::path::PathBuf>,
 
     // -- Semantic Palette (Phase 1)
     pub bg_base: ColorDef,
@@ -241,6 +246,10 @@ pub struct ThemeColors {
 
     pub border_base: ColorDef,
     pub border_focus: ColorDef,
+    /// Dimmer border for inline content (tool result │, separators).
+    pub border_muted: ColorDef,
+    /// Brighter border for focused overlays and active elements.
+    pub border_accent: ColorDef,
 
     // -- Diffs
     pub diff_added: ColorDef,
@@ -398,6 +407,7 @@ impl ThemeColors {
     pub fn dark() -> Self {
         Self {
             source_path: None,
+            syntax_theme_override: None,
 
             // Semantic Elevation — noticeable depth between layers
             bg_base: ColorDef::Rgb(12, 13, 20), // near-void blue-black
@@ -416,6 +426,8 @@ impl ThemeColors {
 
             border_base: ColorDef::Rgb(41, 44, 64), // barely-visible divider
             border_focus: ColorDef::Rgb(122, 162, 247), // matches primary
+            border_muted: ColorDef::Rgb(33, 35, 52), // dimmer than base for inline │
+            border_accent: ColorDef::Rgb(80, 100, 180), // between base and focus
 
             diff_added: ColorDef::Rgb(73, 196, 127),
             diff_removed: ColorDef::Rgb(247, 93, 100),
@@ -501,6 +513,12 @@ impl ThemeColors {
         let mut base = Self::dark();
         base.source_path = Some(theme.source.clone());
 
+        // Auto-discover .tmTheme override: mytheme.json → mytheme.tmTheme
+        let tmtheme_path = theme.source.with_extension("tmTheme");
+        if tmtheme_path.exists() {
+            base.syntax_theme_override = Some(tmtheme_path);
+        }
+
         let resolve = |c: &ThemeColor| -> ColorDef { resolve_color(c, &theme.vars) };
         let t = &theme.colors;
 
@@ -527,6 +545,8 @@ impl ThemeColors {
         // -- Borders
         base.border_base = resolve(&t.border);
         base.border_focus = resolve(&t.border_accent);
+        base.border_muted = resolve(&t.border_muted);
+        base.border_accent = resolve(&t.border_accent);
 
         // -- Text
         base.text_primary = resolve(&t.text);
@@ -682,6 +702,7 @@ impl ThemeColors {
     pub fn light() -> Self {
         Self {
             source_path: None,
+            syntax_theme_override: None,
 
             // Semantic Elevation — clear layering on a white surface
             bg_base: ColorDef::Rgb(252, 252, 255), // near-white, slight blue
@@ -700,6 +721,8 @@ impl ThemeColors {
 
             border_base: ColorDef::Rgb(198, 206, 226),
             border_focus: ColorDef::Rgb(14, 98, 200),
+            border_muted: ColorDef::Rgb(215, 220, 235), // dimmer than base
+            border_accent: ColorDef::Rgb(80, 130, 210), // between base and focus
 
             diff_added: ColorDef::Rgb(0, 135, 75),
             diff_removed: ColorDef::Rgb(185, 28, 28),
@@ -798,6 +821,8 @@ impl ThemeColors {
         // Borders
         c.border_base = ColorDef::Rgb(69, 71, 90);
         c.border_focus = ColorDef::Rgb(137, 180, 250);
+        c.border_muted = ColorDef::Rgb(55, 57, 72);
+        c.border_accent = ColorDef::Rgb(100, 130, 210);
         // Diff
         c.diff_added = ColorDef::Rgb(166, 227, 161);
         c.diff_removed = ColorDef::Rgb(243, 139, 168);
@@ -879,6 +904,8 @@ impl ThemeColors {
         // Borders
         c.border_base = ColorDef::Rgb(188, 192, 204);
         c.border_focus = ColorDef::Rgb(30, 102, 245);
+        c.border_muted = ColorDef::Rgb(200, 204, 216);
+        c.border_accent = ColorDef::Rgb(80, 140, 230);
         // Markdown
         c.md_heading = ColorDef::Rgb(223, 142, 29);
         c.md_link = ColorDef::Rgb(30, 102, 245);
@@ -953,6 +980,8 @@ impl ThemeColors {
         // Borders
         c.border_base = ColorDef::Rgb(41, 44, 66);
         c.border_focus = ColorDef::Rgb(122, 162, 247);
+        c.border_muted = ColorDef::Rgb(33, 36, 54);
+        c.border_accent = ColorDef::Rgb(80, 110, 190);
         // Diff
         c.diff_added = ColorDef::Rgb(158, 206, 106);
         c.diff_removed = ColorDef::Rgb(247, 93, 100);

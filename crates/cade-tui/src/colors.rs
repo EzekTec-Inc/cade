@@ -46,6 +46,8 @@ pub trait ThemeColorsExt {
 
     fn border_base(&self) -> Style;
     fn border_focus(&self) -> Style;
+    fn border_muted(&self) -> Style;
+    fn border_accent(&self) -> Style;
     
     fn primary(&self) -> Style;
     fn primary_bold(&self) -> Style;
@@ -110,6 +112,8 @@ impl ThemeColorsExt for ThemeColors {
 
     fn border_base(&self) -> Style { Style::default().fg(self.border_base.to_ratatui()) }
     fn border_focus(&self) -> Style { Style::default().fg(self.border_focus.to_ratatui()) }
+    fn border_muted(&self) -> Style { Style::default().fg(self.border_muted.to_ratatui()) }
+    fn border_accent(&self) -> Style { Style::default().fg(self.border_accent.to_ratatui()) }
     
     fn primary(&self) -> Style { Style::default().fg(self.primary.to_ratatui()) }
     fn primary_bold(&self) -> Style { Style::default().fg(self.primary.to_ratatui()).add_modifier(Modifier::BOLD) }
@@ -164,6 +168,17 @@ impl ThemeColorsExt for ThemeColors {
 
 #[cfg(feature = "syntax-highlighting")]
 pub fn generate_syntect_theme(colors: &ThemeColors) -> syntect::highlighting::Theme {
+    // If a .tmTheme override exists, use it directly.
+    if let Some(ref path) = colors.syntax_theme_override {
+        if let Ok(f) = std::fs::File::open(path) {
+            let mut reader = std::io::BufReader::new(f);
+            if let Ok(theme) = syntect::highlighting::ThemeSet::load_from_reader(&mut reader) {
+                return theme;
+            }
+            eprintln!("[cade-tui] Failed to parse {}, falling back to generated theme", path.display());
+        }
+    }
+
     use syntect::highlighting::{Color, ThemeItem, ThemeSettings, ScopeSelectors};
     use std::str::FromStr;
 

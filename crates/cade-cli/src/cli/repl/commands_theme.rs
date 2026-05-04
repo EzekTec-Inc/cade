@@ -40,6 +40,46 @@ impl Repl {
             return Ok(false);
         }
 
+        // -- `/theme reload` → re-read the current theme from disk
+        if new_theme == "reload" {
+            let current_source = self.app.lock().colors.source_path.clone();
+            if let Some(path) = current_source {
+                if path.exists() {
+                    match cade_core::resources::themes::load_theme(&path) {
+                        Ok(theme) => {
+                            let colors = ThemeColors::from_theme(&theme);
+                            self.app.lock().apply_theme(colors);
+                            self.tui_ok(format!(
+                                "  ✓ Theme reloaded from {}",
+                                path.display()
+                            ));
+                        }
+                        Err(e) => {
+                            self.tui_err(format!("  ✗ Failed to reload theme: {e}"));
+                        }
+                    }
+                } else {
+                    self.tui_err("  ✗ Theme source file no longer exists on disk.");
+                }
+            } else {
+                // Built-in theme — re-resolve from settings
+                let saved_name = self
+                    .settings
+                    .lock()
+                    .global_settings_mut()
+                    .theme
+                    .clone()
+                    .unwrap_or_else(|| "dark".to_string());
+                if let Some(tc) = ThemeColors::builtin_by_name(&saved_name) {
+                    self.app.lock().apply_theme(tc);
+                    self.tui_ok(format!("  ✓ Theme '{saved_name}' reloaded"));
+                } else {
+                    self.tui_err(format!("  ✗ Saved theme '{saved_name}' not found"));
+                }
+            }
+            return Ok(false);
+        }
+
         // -- `/theme <name>` → resolve + apply
         let name = new_theme;
         let (target_theme_colors, found_name) = if let Some(tc) =

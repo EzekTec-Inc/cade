@@ -32,7 +32,7 @@ pub(crate) fn render_breadcrumb(
         return;
     }
 
-    let sep = Span::styled(" │ ", colors.border_base());
+    let sep = Span::styled(" │ ", colors.border_muted());
 
     let mut spans: Vec<Span<'static>> = Vec::new();
 

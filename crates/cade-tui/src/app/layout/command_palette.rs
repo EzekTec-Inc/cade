@@ -52,7 +52,7 @@ pub(crate) fn render_command_palette(
             ),
             Span::raw(" "),
         ]))
-        .border_style(colors.border_base())
+        .border_style(colors.border_accent())
         .style(Style::default().bg(colors.bg_surface2.to_ratatui()));
 
     let inner = block.inner(r);
@@ -94,7 +94,7 @@ pub(crate) fn render_command_palette(
     // -- Separator
     let sep = "─".repeat(sep_area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(sep, colors.border_base())),
+        Paragraph::new(Span::styled(sep, colors.border_muted())),
         sep_area,
     );
 

@@ -129,7 +129,7 @@ impl QuestionWidget {
                 // Separator
                 lines.push(Line::from(Span::styled(
                     sep.clone(),
-                    colors.border_base(),
+                    colors.border_muted(),
                 )));
 
                 // Header chip
