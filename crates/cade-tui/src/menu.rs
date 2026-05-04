@@ -264,6 +264,10 @@ const SECTIONS: &[Section] = &[
                 desc: "/search <query>  — search message history",
             },
             CmdEntry {
+                cmd: "/compact",
+                desc: "Manually consolidate dropped turns (alias: /consolidate)",
+            },
+            CmdEntry {
                 cmd: "/context",
                 desc: "Show context window usage bar chart",
             },
