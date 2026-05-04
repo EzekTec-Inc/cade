@@ -1,5 +1,19 @@
 use crate::colors::ColorDefExt;
 use crate::app::*;
+
+/// Render a dim backdrop over the full frame area. Call before rendering an
+/// overlay to provide visual separation from the content underneath.
+pub(crate) fn render_backdrop(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, colors: &ThemeColors) {
+    use ratatui::widgets::Paragraph;
+    use ratatui::style::Style;
+    let dim_style = Style::default().bg(colors.bg_base.to_ratatui());
+    let blank = " ".repeat(area.width as usize);
+    let lines: Vec<ratatui::text::Line<'static>> = (0..area.height)
+        .map(|_| ratatui::text::Line::from(ratatui::text::Span::styled(blank.clone(), dim_style)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 /// Abbreviate a filesystem path for the footer: last 2 components, with ~/
 /// prefix when the path is under the user's home directory.
 pub(crate) fn abbreviate_cwd(path: &std::path::Path) -> String {

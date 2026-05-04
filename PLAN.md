@@ -1,3 +1,53 @@
+## 2026-05-03T22:45:00Z — fix(tui): comprehensive theme polish — wire unused tokens, fix hardcoded styles
+
+**Task:** Fix 4 critical hardcoded styles, wire 6 unused theme tokens, add background fills, and add overlay backdrop dimming.
+
+**Files modified:**
+- `crates/cade-tui/src/app/render.rs` (fix hardcoded border_type, unstyled "Terminal too small", hardcoded cursor style, add plan title style)
+- `crates/cade-tui/src/session_tree.rs` (fix unstyled icon)
+- `crates/cade-tui/src/colors.rs` (add ThemeColorsExt methods: bg_card_style, selected_bg_style, tool_success/error/pending_bg_style)
+- `crates/cade-tui/src/app/timeline/mod.rs` (wire bg_card_style into user/assistant cards)
+- `crates/cade-tui/src/app/timeline/render_item.rs` (wire tool_success_bg/tool_error_bg/tool_pending_bg into status badges)
+- `crates/cade-tui/src/app/layout/pickers.rs` (wire selected_bg_style into selected rows + add backdrop)
+- `crates/cade-tui/src/app/layout/command_palette.rs` (wire selected_bg into selected items + add backdrop)
+- `crates/cade-tui/src/app/layout/question.rs` (add surface1 background fill)
+- `crates/cade-tui/src/app/layout/summary.rs` (add backdrop)
+- `crates/cade-tui/src/app/layout/helpers.rs` (add render_backdrop helper)
+- `crates/cade-tui/src/mcp_picker.rs` (wire selected_bg_style)
+- `crates/cade-core/src/resources/themes.rs` (add selected_bg, tool_pending_bg, tool_success_bg, tool_error_bg fields; set defaults for all themes; wire from_theme resolution)
+
+**Previous behavior:**
+- Subagent overlay used hardcoded `BorderType::Rounded`
+- "Terminal too small" had no styling
+- Cursor was hardcoded REVERSED
+- Session tree icons had no fg color
+- User/assistant cards had no background fill
+- Tool result badges had no background
+- Picker selected rows used hardcoded bg_surface1
+- Overlays had no backdrop dimming
+- 25 theme tokens defined but never used
+
+**New behavior:**
+- All borders use `colors.border_style.to_ratatui()`
+- "Terminal too small" styled with error color
+- Cursor uses `primary` bg + `bg_base` fg
+- Session tree icons use `text_muted`
+- User/assistant cards have subtle `bg_card` background
+- Tool result OK/ERR/LIVE badges have status-colored backgrounds
+- Picker selections use `selected_bg` token
+- Command palette, theme picker, summary overlays have dimmed backdrop
+- Question panel has `surface1` background fill
+- Plan title styled with `primary_bold`
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert HEAD
+```
+
+---
+
 ## 2026-05-03T22:15:00Z — refactor(its): replace hardcoded tool name lists with tag-based discovery
 
 **Task:** Remove all hardcoded tool name lists from ITS. Use DB registration tags (`"cade"`, `"meta"`, `"mcp"`) to classify tools dynamically. Use meta-tool registry for sequential-tool classification.

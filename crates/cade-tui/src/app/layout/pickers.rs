@@ -125,7 +125,7 @@ fn theme_row<'a>(
     let desc_cell = Cell::from(Span::styled(desc, colors.text_muted()));
 
     let row_style = if is_sel {
-        Style::default().bg(colors.bg_surface1.to_ratatui())
+        colors.selected_bg_style()
     } else {
         Style::default()
     };
@@ -151,6 +151,9 @@ pub(crate) fn render_theme_picker(
     if area.height == 0 {
         return;
     }
+
+    // Dim backdrop behind the overlay
+    super::helpers::render_backdrop(frame, area, colors);
 
     frame.render_widget(Clear, area);
 

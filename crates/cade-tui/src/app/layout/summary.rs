@@ -25,6 +25,9 @@ pub fn render_summary(
         height: h,
     };
 
+    // Dim backdrop behind the overlay
+    super::helpers::render_backdrop(frame, area, colors);
+
     frame.render_widget(Clear, rect);
 
     let block = Block::default()

@@ -32,6 +32,9 @@ pub(crate) fn render_command_palette(
         height: h,
     };
 
+    // Dim backdrop behind the overlay
+    super::helpers::render_backdrop(frame, area, colors);
+
     // Clear the background
     frame.render_widget(Clear, r);
 
@@ -127,14 +130,14 @@ pub(crate) fn render_command_palette(
             (
                 Style::default()
                     .fg(colors.primary.to_ratatui())
-                    .bg(colors.bg_surface1.to_ratatui())
+                    .bg(colors.selected_bg.to_ratatui())
                     .add_modifier(Modifier::BOLD),
                 Style::default()
                     .fg(colors.primary.to_ratatui())
-                    .bg(colors.bg_surface1.to_ratatui()),
+                    .bg(colors.selected_bg.to_ratatui()),
                 Style::default()
                     .fg(colors.primary.to_ratatui())
-                    .bg(colors.bg_surface1.to_ratatui()),
+                    .bg(colors.selected_bg.to_ratatui()),
             )
         } else {
             (
@@ -163,7 +166,7 @@ pub(crate) fn render_command_palette(
         let section_style = if is_selected {
             Style::default()
                 .fg(colors.text_dim.to_ratatui())
-                .bg(colors.bg_surface1.to_ratatui())
+                .bg(colors.selected_bg.to_ratatui())
         } else {
             colors.text_dim()
         };
@@ -172,7 +175,7 @@ pub(crate) fn render_command_palette(
             Span::styled(format!(" {} ", glyph), glyph_style),
             Span::styled(label_padded, label_style),
             Span::styled("  ", if is_selected {
-                Style::default().bg(colors.bg_surface1.to_ratatui())
+                Style::default().bg(colors.selected_bg.to_ratatui())
             } else {
                 Style::default()
             }),

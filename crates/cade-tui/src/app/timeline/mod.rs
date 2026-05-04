@@ -459,12 +459,14 @@ pub(crate) fn render_timeline_viewport(
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
                         .border_style(colors.text_dim())
+                        .style(colors.bg_card_style())
                         .padding(ratatui::widgets::Padding::left(1));
                 }
                 CardStyle::Assistant => {
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
                         .border_style(colors.primary())
+                        .style(colors.bg_card_style())
                         .padding(ratatui::widgets::Padding::left(1));
                 }
                 CardStyle::None => {}

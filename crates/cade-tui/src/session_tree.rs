@@ -154,7 +154,7 @@ fn draw_tree(
             };
 
             let line = Line::from(vec![
-                Span::styled(format!("  {icon} "), Style::default()),
+                Span::styled(format!("  {icon} "), colors.text_muted()),
                 Span::styled(
                     label.to_string(),
                     if list_state.selected() == Some(i) {

@@ -88,6 +88,11 @@ pub trait ThemeColorsExt {
     fn thinking_xhigh(&self) -> Style;
 
     fn bash_mode(&self) -> Style;
+    fn bg_card_style(&self) -> Style;
+    fn selected_bg_style(&self) -> Style;
+    fn tool_success_bg_style(&self) -> Style;
+    fn tool_error_bg_style(&self) -> Style;
+    fn tool_pending_bg_style(&self) -> Style;
 }
 
 impl ThemeColorsExt for ThemeColors {
@@ -147,8 +152,11 @@ impl ThemeColorsExt for ThemeColors {
     fn thinking_xhigh(&self) -> Style { Style::default().fg(self.thinking_xhigh.to_ratatui()) }
 
     fn bash_mode(&self) -> Style { Style::default().fg(self.bash_mode.to_ratatui()) }
-
-
+    fn bg_card_style(&self) -> Style { Style::default().bg(self.bg_card.to_ratatui()).fg(self.text_primary.to_ratatui()) }
+    fn selected_bg_style(&self) -> Style { Style::default().bg(self.selected_bg.to_ratatui()).fg(self.text_primary.to_ratatui()) }
+    fn tool_success_bg_style(&self) -> Style { Style::default().bg(self.tool_success_bg.to_ratatui()).fg(self.text_primary.to_ratatui()) }
+    fn tool_error_bg_style(&self) -> Style { Style::default().bg(self.tool_error_bg.to_ratatui()).fg(self.text_primary.to_ratatui()) }
+    fn tool_pending_bg_style(&self) -> Style { Style::default().bg(self.tool_pending_bg.to_ratatui()).fg(self.text_primary.to_ratatui()) }
 }
 
 

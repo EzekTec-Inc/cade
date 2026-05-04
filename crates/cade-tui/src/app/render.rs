@@ -173,7 +173,11 @@ pub(crate) fn render_frame(
     let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
 
     if main_area.height <= bottom_rows + 1 {
-        frame.render_widget(Paragraph::new("Terminal too small"), main_area);
+        frame.render_widget(
+            Paragraph::new("Terminal too small")
+                .style(colors.error()),
+            main_area,
+        );
         return (0, None);
     }
 
@@ -442,7 +446,11 @@ pub(crate) fn render_frame(
         textarea.set_placeholder_text(input_placeholder);
         textarea.set_placeholder_style(colors.text_muted());
         textarea.set_cursor_line_style(Style::default().bg(colors.bg_input.to_ratatui()));
-        textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+        textarea.set_cursor_style(
+            Style::default()
+                .fg(colors.bg_base.to_ratatui())
+                .bg(colors.primary.to_ratatui()),
+        );
         // Apply bg_input as the textarea base style so the whole row has the
         // themed background even when the line is shorter than the terminal width.
         textarea.set_style(Style::default().bg(colors.bg_input.to_ratatui()));
@@ -637,6 +645,7 @@ pub(crate) fn render_frame(
                 .borders(Borders::ALL)
                 .border_type(colors.border_style.to_ratatui())
                 .title(" Todos ")
+                .title_style(colors.primary_bold())
                 .border_style(colors.border_base()),
         );
         frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
@@ -669,7 +678,7 @@ pub(crate) fn render_frame(
 
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(ratatui::widgets::BorderType::Rounded)
+                .border_type(colors.border_style.to_ratatui())
                 .style(colors.style_surface1())
                 .border_style(colors.primary());
             

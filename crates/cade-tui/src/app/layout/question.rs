@@ -230,6 +230,11 @@ pub(crate) fn render_question_inline(
         colors.text_dim().add_modifier(Modifier::DIM),
     )));
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .style(colors.style_surface1()),
+        body_area,
+    );
 }
 

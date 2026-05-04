@@ -337,6 +337,11 @@ pub struct ThemeColors {
     pub spinner_2: ColorDef,
     #[serde(default = "ColorDef::default_reset")]
     pub spinner_3: ColorDef,
+    // -- Tool result status backgrounds
+    pub selected_bg: ColorDef,
+    pub tool_pending_bg: ColorDef,
+    pub tool_success_bg: ColorDef,
+    pub tool_error_bg: ColorDef,
 }
 
 impl ThemeColors {
@@ -476,6 +481,11 @@ impl ThemeColors {
             spinner_1: ColorDef::Rgb(120, 215, 255),
             spinner_2: ColorDef::Rgb(160, 235, 255),
             spinner_3: ColorDef::Rgb(100, 200, 255),
+            // Tool result status backgrounds (dark theme)
+            selected_bg: ColorDef::Rgb(30, 33, 50),
+            tool_pending_bg: ColorDef::Rgb(25, 30, 45),
+            tool_success_bg: ColorDef::Rgb(20, 35, 25),
+            tool_error_bg: ColorDef::Rgb(40, 20, 22),
         }
     }
 
@@ -509,6 +519,10 @@ impl ThemeColors {
         base.bg_surface2 = resolve(&t.selected_bg);
         base.bg_card = resolve(&t.tool_success_bg);
         base.bg_input = resolve(&t.user_message_bg);
+        base.selected_bg = resolve(&t.selected_bg);
+        base.tool_pending_bg = resolve(&t.tool_pending_bg);
+        base.tool_success_bg = resolve(&t.tool_success_bg);
+        base.tool_error_bg = resolve(&t.tool_error_bg);
 
         // -- Borders
         base.border_base = resolve(&t.border);
@@ -751,6 +765,11 @@ impl ThemeColors {
             spinner_1: ColorDef::Rgb(40, 150, 220),
             spinner_2: ColorDef::Rgb(60, 170, 230),
             spinner_3: ColorDef::Rgb(30, 140, 215),
+            // Tool result status backgrounds (light theme)
+            selected_bg: ColorDef::Rgb(220, 225, 240),
+            tool_pending_bg: ColorDef::Rgb(230, 238, 245),
+            tool_success_bg: ColorDef::Rgb(225, 245, 230),
+            tool_error_bg: ColorDef::Rgb(250, 225, 225),
         }
     }
 
@@ -830,6 +849,11 @@ impl ThemeColors {
         c.spinner_2 = ColorDef::Rgb(148, 226, 213); // Teal
         c.spinner_3 = ColorDef::Rgb(137, 180, 250); // Blue
 
+        c.selected_bg = ColorDef::Rgb(49, 50, 68);  // Surface1
+        c.tool_pending_bg = ColorDef::Rgb(30, 30, 46); // Base
+        c.tool_success_bg = ColorDef::Rgb(30, 40, 35);
+        c.tool_error_bg = ColorDef::Rgb(50, 30, 35);
+
         c
     }
     /// Palette source: <https://github.com/catppuccin/catppuccin>
@@ -897,6 +921,11 @@ impl ThemeColors {
         c.spinner_1 = ColorDef::Rgb(4, 165, 229); // Sapphire
         c.spinner_2 = ColorDef::Rgb(23, 146, 153); // Teal
         c.spinner_3 = ColorDef::Rgb(2, 169, 165); // Sky
+
+        c.selected_bg = ColorDef::Rgb(204, 208, 218);
+        c.tool_pending_bg = ColorDef::Rgb(220, 224, 232);
+        c.tool_success_bg = ColorDef::Rgb(210, 240, 215);
+        c.tool_error_bg = ColorDef::Rgb(245, 215, 215);
 
         c
     }
@@ -974,6 +1003,11 @@ impl ThemeColors {
         c.spinner_1 = ColorDef::Rgb(125, 207, 255); // blue5
         c.spinner_2 = ColorDef::Rgb(42, 195, 222); // cyan
         c.spinner_3 = ColorDef::Rgb(115, 218, 202); // teal
+
+        c.selected_bg = ColorDef::Rgb(41, 44, 66);
+        c.tool_pending_bg = ColorDef::Rgb(30, 32, 48);
+        c.tool_success_bg = ColorDef::Rgb(28, 40, 35);
+        c.tool_error_bg = ColorDef::Rgb(50, 28, 32);
 
         c
     }

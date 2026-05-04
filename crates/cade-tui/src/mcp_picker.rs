@@ -114,9 +114,7 @@ pub fn show_mcp_manager(
                     let is_sel = i == selected_idx;
 
                     let style = if is_sel {
-                        Style::default()
-                            .bg(colors.bg_surface1.to_ratatui())
-                            .add_modifier(Modifier::BOLD)
+                        colors.selected_bg_style().add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
                     };

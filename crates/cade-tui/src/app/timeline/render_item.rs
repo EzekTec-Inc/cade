@@ -248,6 +248,11 @@ pub(crate) fn render_tool_result_item(
     } else {
         colors.diff_added.to_ratatui()
     };
+    let status_bg = if is_error {
+        colors.tool_error_bg.to_ratatui()
+    } else {
+        colors.tool_success_bg.to_ratatui()
+    };
     let status_label = if is_error {
         format!("{} ERR ", crate::icons::error_icon(nerd))
     } else {
@@ -262,6 +267,7 @@ pub(crate) fn render_tool_result_item(
                 status_label,
                 Style::default()
                     .fg(color)
+                    .bg(status_bg)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -283,6 +289,7 @@ pub(crate) fn render_tool_result_item(
                     status_label.clone(),
                     Style::default()
                         .fg(color)
+                        .bg(status_bg)
                         .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::raw(" "));
@@ -412,7 +419,7 @@ pub(crate) fn render_live_output_item(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.bg_surface1.to_ratatui())
+                    .bg(colors.tool_pending_bg.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -456,7 +463,7 @@ pub(crate) fn render_live_output_item(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.bg_surface1.to_ratatui())
+                    .bg(colors.tool_pending_bg.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw(" "));
