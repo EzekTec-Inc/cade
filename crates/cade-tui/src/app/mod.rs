@@ -760,6 +760,33 @@ pub struct PlanStep {
 pub struct PlanState {
     pub steps: Vec<PlanStep>,
     pub is_visible: bool,
+    /// Scroll offset for the plan panel (0-based row index of the first visible step).
+    pub scroll_offset: usize,
+}
+
+impl PlanState {
+    /// Auto-scroll so the first incomplete step is visible.
+    /// `visible_rows` is the number of steps that fit in the panel (excluding border).
+    /// If all steps are done, scrolls to show the last steps.
+    pub fn auto_scroll(&mut self, visible_rows: usize) {
+        if visible_rows == 0 || self.steps.len() <= visible_rows {
+            self.scroll_offset = 0;
+            return;
+        }
+
+        let max_offset = self.steps.len().saturating_sub(visible_rows);
+
+        // Find first incomplete step index
+        if let Some(idx) = self.steps.iter().position(|s| !s.is_done) {
+            // Scroll so that the incomplete step is near the middle of the visible area
+            // but at minimum is visible
+            let target = idx.saturating_sub(visible_rows / 3);
+            self.scroll_offset = target.min(max_offset);
+        } else {
+            // All done → scroll to bottom
+            self.scroll_offset = max_offset;
+        }
+    }
 }
 
 use regex::Regex;
@@ -1221,7 +1248,17 @@ impl TuiApp {
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
-        let active_plan_snap = self.active_plan.clone();
+        let mut active_plan_snap = self.active_plan.clone();
+        // Auto-scroll plan panel to keep first incomplete step visible
+        if let Some(plan) = &mut active_plan_snap {
+            let plan_h = (plan.steps.len() as u16 + 2).min(10).max(4);
+            let visible_rows = (plan_h.saturating_sub(2)) as usize;
+            plan.auto_scroll(visible_rows);
+            // Persist computed offset back so it's stable across frames
+            if let Some(real_plan) = &mut self.active_plan {
+                real_plan.scroll_offset = plan.scroll_offset;
+            }
+        }
         if self
             .toast
             .as_ref()
@@ -1629,6 +1666,87 @@ mod tests {
         let wrote = tick_bg_pending_toast(1, &mut last, &mut toast);
         assert!(wrote);
         assert_eq!(last, 1);
+    }
+
+    // -- PlanState scroll offset
+
+    #[test]
+    fn plan_state_has_scroll_offset_defaulting_to_zero() {
+        let plan = PlanState {
+            steps: vec![PlanStep { id: 1, description: "task".into(), is_done: false }],
+            is_visible: true,
+            scroll_offset: 0,
+        };
+        assert_eq!(plan.scroll_offset, 0);
+    }
+
+    #[test]
+    fn plan_state_auto_scroll_targets_first_incomplete() {
+        let mut plan = PlanState {
+            steps: (1..=15)
+                .map(|i| PlanStep {
+                    id: i,
+                    description: format!("Step {i}"),
+                    is_done: i <= 10,
+                })
+                .collect(),
+            is_visible: true,
+            scroll_offset: 0,
+        };
+        plan.auto_scroll(8); // visible_rows = 8
+        // First incomplete is step 11 (index 10).
+        // Should scroll so step 11 is visible.
+        // With 8 visible rows, offset should be at least 10 - 7 = 3
+        assert!(plan.scroll_offset >= 3, "scroll_offset={}", plan.scroll_offset);
+        assert!(plan.scroll_offset <= 10);
+    }
+
+    #[test]
+    fn plan_state_auto_scroll_stays_zero_when_all_fit() {
+        let mut plan = PlanState {
+            steps: (1..=5)
+                .map(|i| PlanStep {
+                    id: i,
+                    description: format!("Step {i}"),
+                    is_done: false,
+                })
+                .collect(),
+            is_visible: true,
+            scroll_offset: 0,
+        };
+        plan.auto_scroll(8);
+        assert_eq!(plan.scroll_offset, 0);
+    }
+
+    #[test]
+    fn plan_state_auto_scroll_when_all_done() {
+        let mut plan = PlanState {
+            steps: (1..=15)
+                .map(|i| PlanStep {
+                    id: i,
+                    description: format!("Step {i}"),
+                    is_done: true,
+                })
+                .collect(),
+            is_visible: true,
+            scroll_offset: 0,
+        };
+        plan.auto_scroll(8);
+        // All done → scroll to bottom so last steps visible
+        let max_offset = plan.steps.len().saturating_sub(8);
+        assert_eq!(plan.scroll_offset, max_offset);
+    }
+
+    #[test]
+    fn set_plan_initializes_scroll_offset_zero() {
+        let mut app = TuiApp::new(
+            cade_core::permissions::PermissionMode::Default,
+            "test".into(),
+            "test-model".into(),
+            None,
+        );
+        app.set_plan(vec!["a".into(), "b".into(), "c".into()]);
+        assert_eq!(app.active_plan.as_ref().unwrap().scroll_offset, 0);
     }
 }
 

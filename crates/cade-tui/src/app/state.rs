@@ -129,6 +129,7 @@ impl TuiApp {
                 })
                 .collect(),
             is_visible: true,
+            scroll_offset: 0,
         });
         self.draw_dirty = true;
     }

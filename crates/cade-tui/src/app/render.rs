@@ -620,7 +620,8 @@ pub(crate) fn render_frame(
     if let Some(plan) = active_plan
         && plan.is_visible
     {
-        use ratatui::widgets::{List, ListItem};
+        use ratatui::widgets::{List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState};
+
         let mut items = Vec::new();
         for step in &plan.steps {
             let (prefix, color) = if step.is_done {
@@ -640,15 +641,48 @@ pub(crate) fn render_frame(
                 ),
             ])));
         }
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(colors.border_style.to_ratatui())
-                .title(" Todos ")
-                .title_style(colors.primary_bold())
-                .border_style(colors.border_base()),
-        );
-        frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
+
+        let plan_area = chunks[2];
+        let visible_rows = plan_area.height.saturating_sub(2) as usize; // subtract border
+        let total_steps = plan.steps.len();
+        let needs_scrollbar = total_steps > visible_rows;
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(colors.border_style.to_ratatui())
+            .title(format!(
+                " Todos ({}/{}) ",
+                plan.steps.iter().filter(|s| s.is_done).count(),
+                total_steps,
+            ))
+            .title_style(colors.primary_bold())
+            .border_style(colors.border_base());
+
+        let list = List::new(items).block(block);
+
+        // Use ListState with offset for scrolling
+        let mut list_state = ListState::default().with_offset(plan.scroll_offset);
+
+        frame.render_stateful_widget(list, plan_area, &mut list_state);
+
+        // Render scrollbar when content overflows
+        if needs_scrollbar {
+            let mut scrollbar_state = ScrollbarState::new(total_steps.saturating_sub(visible_rows))
+                .position(plan.scroll_offset);
+
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"))
+                .track_symbol(Some("│"))
+                .thumb_symbol("█");
+
+            // Render inside the border (inset by 1 vertical for top/bottom border)
+            frame.render_stateful_widget(
+                scrollbar,
+                plan_area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+                &mut scrollbar_state,
+            );
+        }
     }
 
     if !subagent_trackers.is_empty() {
