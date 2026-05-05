@@ -338,3 +338,485 @@ git revert HEAD
 ```sh
 git reset --hard HEAD~1
 ```
+
+## 2026-05-04T23:45:00Z — Plan panel scrolling for overflowing todos
+
+**Summary:** Made the `/todos` (plan) panel scrollable when steps exceed the visible panel height. Added auto-scroll to keep the first incomplete step visible, `ListState`-backed rendering for scroll offset, and a `Scrollbar` indicator.
+
+**Files modified:**
+- `crates/cade-tui/src/app/mod.rs` — Added `scroll_offset: usize` field to `PlanState`, implemented `auto_scroll()` method, auto-scroll logic in `draw()` before `render_frame` call. 5 new tests.
+- `crates/cade-tui/src/app/state.rs` — Updated `set_plan()` to initialize `scroll_offset: 0`.
+- `crates/cade-tui/src/app/render.rs` — Replaced `render_widget(List)` with `render_stateful_widget(List, &mut ListState)` using scroll offset. Added `Scrollbar` widget when steps overflow. Updated title to show progress count `(done/total)`.
+
+**Reason:** When the agent sets a plan with more than 8 steps, the panel height was capped at 10 rows (8 visible + 2 border). Steps beyond 8 were silently clipped with no way to see them.
+
+**Previous behavior:** Plan panel used stateless `render_widget(List)` with hard-capped height `.min(10)`. No scroll offset, no scrollbar, no indication of hidden steps.
+
+**New behavior:**
+- Panel keeps the `.min(10)` height cap but now scrolls internally via `ListState::with_offset()`.
+- Auto-scroll keeps the first incomplete step visible, positioning it ~⅓ from the top of the visible area.
+- When all steps are done, scrolls to show the last steps.
+- `Scrollbar` with `↑`/`↓` arrows rendered when content overflows.
+- Title shows progress: `Todos (3/7)`.
+
+**Rollback steps:**
+```sh
+git checkout cp-277da1e8-8378-44d5-9528-57e884632deb -- crates/cade-tui/
+```
+
+---
+
+## WI-SEMANTIC: Opt-in Hybrid Semantic Search for Memory Blocks
+
+**Memory anchor:** `ANCHOR_WI_SEMANTIC_SEARCH`
+
+**Status:** Plan approved. Not started.
+
+**Problem:** `search_memory` (tools.rs:207) uses `LIKE` + brute-force word-match. When an
+agent searches "how we fixed the deadlock", it will miss memory blocks containing "scoped
+mutex lock" because no keywords overlap. The existing `embedding.rs` has RRF scaffolding
+and `is_available() → false` — this plan wires it up.
+
+**Constraint:** Opt-in via `semantic-search` feature flag. Zero binary bloat for
+default builds. No ONNX/C++ compilation unless explicitly enabled.
+
+### Validated Current State
+
+| Component | Location | State |
+|-----------|----------|-------|
+| `search_memory` | `cade-store/src/sqlite/tools.rs:207` | LIKE + fuzzy word-match (no FTS5, no semantic) |
+| `embedding.rs` | `cade-store/src/sqlite/embedding.rs` | RRF helper + `is_available() → false` |
+| `search_memory_blocks_fts` | `embedding.rs:11` | **BUG**: queries `messages_fts` (wrong table) instead of memory-specific FTS |
+| Schema | `mod.rs:95` | `shared_memory_blocks` — no `embedding` column, no `vec0` virtual table |
+| Workspace deps | `Cargo.toml:97-98` | `fastembed = "4"`, `sqlite-vec = "0.1"` declared but unused |
+| `cade-store` feature | `cade-store/Cargo.toml:9` | Comment: "Removed semantic-search" |
+| Schema version | `mod.rs:552` | Currently at `PRAGMA user_version = 9` |
+| Write path | `memory.rs:364` | Comment: "Semantic search feature removed (F5)" |
+| Search call sites | `tools.rs:207`, `meta_tools.rs:494`, `agents.rs:759`, `tools.rs:712` | 4 callers |
+
+### Bugs to Fix (Pre-requisites)
+
+**Bug 1 — Wrong FTS table in `search_memory_blocks_fts`:**
+`embedding.rs:18` queries `messages_fts` (conversation history FTS) but is documented as
+searching memory blocks. Must either create a `memory_blocks_fts` table or rewrite the
+query to join correctly.
+
+---
+
+### Phase 1: Feature Gate + Schema (no new deps)
+
+**Goal:** Add the `semantic-search` feature flag and migration. Default build unchanged.
+
+**WI-S1: Re-enable `semantic-search` feature flag in `cade-store/Cargo.toml`**
+```toml
+[features]
+default         = ["bundled-sqlite"]
+bundled-sqlite  = ["rusqlite/bundled"]
+semantic-search = ["dep:fastembed", "dep:sqlite-vec"]
+```
+
+Files: `crates/cade-store/Cargo.toml`
+
+**WI-S2: Migration 10 — add `embedding` column + `memory_blocks_fts` table**
+```sql
+-- Only when semantic-search feature is active:
+ALTER TABLE shared_memory_blocks ADD COLUMN embedding BLOB;
+
+-- Always (fixes Bug 1 — memory-specific FTS5):
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_blocks_fts USING fts5(
+    label, value,
+    content=shared_memory_blocks,
+    content_rowid=rowid
+);
+-- Backfill existing blocks into the FTS index:
+INSERT INTO memory_blocks_fts(memory_blocks_fts) VALUES('rebuild');
+```
+
+Files: `crates/cade-store/src/sqlite/mod.rs` (migration 10)
+
+**WI-S3: Fix `search_memory_blocks_fts` to use `memory_blocks_fts`**
+
+Rewrite `embedding.rs:17-25` to query the new `memory_blocks_fts` table:
+```sql
+SELECT b.id, bm25(memory_blocks_fts) as rank, b.label, b.value
+FROM memory_blocks_fts f
+JOIN shared_memory_blocks b ON b.rowid = f.rowid
+JOIN agent_memory_blocks amb ON amb.block_id = b.id AND amb.agent_id = ?1
+WHERE memory_blocks_fts MATCH ?2
+ORDER BY rank
+LIMIT ?3
+```
+
+Files: `crates/cade-store/src/sqlite/embedding.rs`
+
+**Verification:**
+- `cargo check -p cade-store` — compiles without `semantic-search`
+- `cargo check -p cade-store --features semantic-search` — compiles with it
+- Existing `rrf_*` tests still pass
+- New test: `search_memory_blocks_fts` returns results from `memory_blocks_fts`
+- `cargo test --workspace` — 0 regressions
+
+---
+
+### Phase 2: Embedder Trait + Write Path
+
+**Goal:** Compute and store embeddings on memory block write when the feature is active.
+
+**WI-S4: Define `Embedder` trait in `cade-store`**
+```rust
+// cade-store/src/sqlite/embedding.rs
+
+/// Trait for computing text embeddings. Feature-gated implementations.
+pub trait Embedder: Send + Sync {
+    fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+    fn dimension(&self) -> usize;
+}
+
+#[cfg(feature = "semantic-search")]
+pub struct FastEmbedder { model: fastembed::TextEmbedding }
+
+#[cfg(feature = "semantic-search")]
+impl FastEmbedder {
+    pub fn new() -> Result<Self> { /* init all-MiniLM-L6-v2 */ }
+}
+
+#[cfg(feature = "semantic-search")]
+impl Embedder for FastEmbedder { /* delegate to fastembed */ }
+
+/// Stub when feature is disabled. All methods return empty/error.
+#[cfg(not(feature = "semantic-search"))]
+pub struct NoopEmbedder;
+```
+
+Files: `crates/cade-store/src/sqlite/embedding.rs`
+
+**WI-S5: Wire embedding into `upsert_memory_block`**
+
+At `memory.rs:364` (currently a removed comment), add:
+```rust
+#[cfg(feature = "semantic-search")]
+if let Some(embedder) = embedder {
+    if let Ok(vec) = embedder.embed(&final_value) {
+        let blob: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+        conn.execute(
+            "UPDATE shared_memory_blocks SET embedding = ?1 WHERE id = ?2",
+            params![blob, block_id],
+        )?;
+    }
+}
+```
+
+The `embedder` parameter is `Option<&dyn Embedder>` — `None` when feature is disabled.
+
+Files: `crates/cade-store/src/sqlite/memory.rs`
+
+**WI-S6: Backfill command — compute embeddings for existing blocks**
+
+Add a one-shot function `backfill_embeddings(db, agent_id, embedder)` that iterates
+all blocks with `embedding IS NULL` and computes + stores their vectors. Called from
+server startup when the feature is active.
+
+Files: `crates/cade-store/src/sqlite/embedding.rs`
+
+**Verification:**
+- Test: `upsert_memory_block` with `FastEmbedder` stores non-NULL embedding blob
+- Test: `upsert_memory_block` without feature stores NULL embedding (no panic)
+- Test: `backfill_embeddings` fills all NULL embedding rows
+- `cargo test --workspace` — 0 regressions
+
+---
+
+### Phase 3: Semantic Search + Hybrid Merge
+
+**Goal:** Add cosine similarity search and merge with keyword results via RRF.
+
+**WI-S7: Implement `search_memory_semantic` in `embedding.rs`**
+```rust
+#[cfg(feature = "semantic-search")]
+pub fn search_memory_semantic(
+    conn: &Connection,
+    agent_id: &str,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<(String, f64, String, String)>> {
+    // Use sqlite-vec vec0 distance function:
+    // SELECT b.id, vec_distance_cosine(b.embedding, ?1) as dist, b.label, b.value
+    // FROM shared_memory_blocks b
+    // JOIN agent_memory_blocks amb ON amb.block_id = b.id
+    // WHERE amb.agent_id = ?2 AND b.embedding IS NOT NULL
+    // ORDER BY dist ASC LIMIT ?3
+}
+```
+
+Files: `crates/cade-store/src/sqlite/embedding.rs`
+
+**WI-S8: Wire hybrid search into `search_memory` (tools.rs:286)**
+
+Replace the "Phase 3: Semantic search (removed)" comment:
+```rust
+// Phase 3: Semantic search (feature-gated).
+#[cfg(feature = "semantic-search")]
+if results.len() < 10 {
+    if let Some(embedder) = get_embedder() {
+        if let Ok(query_vec) = embedder.embed(query) {
+            let conn = db.lock();
+            if let Ok(sem_hits) = embedding::search_memory_semantic(&conn, agent_id, &query_vec, 10) {
+                let kw_ids: Vec<String> = results.iter().map(|(l, _, _)| l.clone()).collect();
+                let sem_ids: Vec<String> = sem_hits.iter().map(|(id, _, _, _)| id.clone()).collect();
+                let fused = embedding::reciprocal_rank_fusion(&kw_ids, &sem_ids, 60.0);
+                // Rebuild results in fused order, deduplicating
+                // ... merge logic using fused ordering ...
+            }
+        }
+    }
+}
+```
+
+Files: `crates/cade-store/src/sqlite/tools.rs`
+
+**WI-S9: Update `is_available()` to reflect feature state**
+```rust
+pub fn is_available() -> bool {
+    cfg!(feature = "semantic-search")
+}
+```
+
+Files: `crates/cade-store/src/sqlite/embedding.rs`
+
+**Verification:**
+- Test: `search_memory("how we fixed the deadlock")` finds block containing "scoped mutex lock"
+- Test: `search_memory("deadlock")` still finds block containing "deadlock" (keyword path)
+- Test: RRF boosts blocks that appear in both keyword and semantic results
+- Test: Feature-disabled build returns same results as today (LIKE + fuzzy only)
+- `cargo test --workspace` — 0 regressions
+- `cargo test --workspace --features semantic-search` — all new tests pass
+
+---
+
+### Phase 4: Server Integration
+
+**Goal:** Initialize the embedder at server startup and pass it through call sites.
+
+**WI-S10: Initialize embedder in `AppState`**
+
+Add `embedder: Option<Arc<dyn Embedder>>` to `AppState`. Initialized at server startup:
+- `#[cfg(feature = "semantic-search")]`: `Some(Arc::new(FastEmbedder::new()?))`
+- `#[cfg(not(feature = "semantic-search"))]`: `None`
+
+Files: `crates/cade-server/src/server/state.rs`
+
+**WI-S11: Thread `embedder` through `upsert_memory_block` call sites**
+
+All callers of `upsert_memory_block` must pass `state.embedder.as_deref()`:
+- `meta_tools.rs` (update_memory tool handler)
+- `consolidation.rs` (session_summary writes)
+- `agents.rs` (memory API handlers)
+- `evidence.rs` (memory with provenance)
+
+Files: 4 files in `cade-server/src/server/api/` and `consolidation.rs`
+
+**WI-S12: Run backfill on startup**
+
+On server startup, if `semantic-search` feature is active:
+```rust
+if let Some(ref embedder) = state.embedder {
+    tokio::task::spawn_blocking({
+        let db = state.db.clone();
+        let e = embedder.clone();
+        move || embedding::backfill_embeddings(&db, "*", &*e)
+    });
+}
+```
+
+Files: `crates/cade-server/src/server/mod.rs` or `main.rs`
+
+**Verification:**
+- `cargo check --workspace` — compiles without feature
+- `cargo check --workspace --features semantic-search` — compiles with feature
+- `cargo test --workspace` — 0 regressions
+- Manual test: start server with `--features semantic-search`, create memory blocks,
+  search with semantic query, verify results
+
+---
+
+### Risk Assessment
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| `fastembed` C++/ONNX compile failure on some platforms | Medium | Feature-gated; default build unaffected |
+| Binary size increase (~25-50MB) | Low | Opt-in only; documented |
+| First compile time increase (3-8 min) | Low | Only on `--features semantic-search`; incremental builds fast |
+| `sqlite-vec` compatibility with `rusqlite 0.31` | Medium | Verify in Phase 1 before proceeding |
+| Migration 10 adds FTS table — large existing DBs may rebuild slowly | Low | `INSERT INTO ... VALUES('rebuild')` is one-time; test on large DBs |
+| Embedding quality for short text (<10 words) | Medium | Test with real memory blocks; fall back to keyword for very short queries |
+
+### Execution Order
+
+```
+Phase 1 (no new deps)    →  feature gate + migration + FTS bug fix
+Phase 2 (embedder trait) →  write-path embedding computation
+Phase 3 (search merge)   →  hybrid retrieval + RRF
+Phase 4 (server wiring)  →  startup init + call-site threading
+```
+
+Each phase is independently committable and testable. Phase 1 improves keyword
+search (adds FTS5 for memory blocks) even without the semantic feature enabled.
+
+### Commit Plan
+
+```
+Phase 1: fix(store): add memory_blocks_fts table + fix search_memory_blocks_fts bug
+Phase 2: feat(store): add Embedder trait + write-path embedding (feature-gated)
+Phase 3: feat(store): hybrid semantic+keyword search via RRF (feature-gated)
+Phase 4: feat(server): wire embedder into AppState + startup backfill
+```
+
+---
+
+## 2026-05-04T18:10:00Z — WI-SEMANTIC Phase 1: memory_blocks_fts + FTS bug fix
+
+**Summary:** Phase 1 of WI-SEMANTIC. Re-enabled the `semantic-search` feature
+gate in `cade-store` (off by default, no impact on default builds). Added
+Migration 10 which creates the `memory_blocks_fts` FTS5 virtual table over
+`shared_memory_blocks` plus three sync triggers (insert/update/delete) and a
+one-time `'rebuild'` to backfill existing rows. Fixed the long-standing bug in
+`embedding::search_memory_blocks_fts` where the SQL queried `messages_fts`
+(conversation history) and joined `b.id = f.rowid` (incompatible types — TEXT
+UUID vs INTEGER rowid), causing the function to silently return zero memory
+hits. The query now targets `memory_blocks_fts` and joins on the integer rowid
+that FTS5 stores via `content_rowid='rowid'`.
+
+**Files modified:**
+- `crates/cade-store/Cargo.toml` — added `[features] semantic-search = [...]`
+  and optional `fastembed`/`sqlite-vec` deps. Default build pulls neither.
+- `crates/cade-store/src/sqlite/mod.rs` — Migration 10: create
+  `memory_blocks_fts` (FTS5 external-content over `shared_memory_blocks`,
+  `content_rowid='rowid'`), three sync triggers, one-time rebuild. Bumps
+  `PRAGMA user_version` 9 → 10. Tolerates "already exists" on re-run.
+- `crates/cade-store/src/sqlite/embedding.rs` — rewrote
+  `search_memory_blocks_fts` SQL: queries `memory_blocks_fts` (was
+  `messages_fts`); joins `b.rowid = f.rowid` (was `b.id = f.rowid`).
+- `crates/cade-store/src/sqlite/memory/tests.rs` — 3 new tests:
+  `memory_blocks_fts_exists_after_migration`,
+  `memory_blocks_fts_indexes_upserted_blocks`,
+  `search_memory_blocks_fts_returns_memory_hits_not_messages`.
+
+**Reason:** The plan validation in WI-SEMANTIC identified that the existing
+FTS5 query in `embedding.rs` was unreachable on memory blocks — it referenced
+the wrong table and joined incompatible columns. Phase 1 makes that path
+correct so Phase 3's hybrid retrieval can reuse it.
+
+**Previous behavior:**
+- `search_memory_blocks_fts` returned `Ok(vec![])` for every input because
+  `messages_fts` does not contain memory-block rows and the join key mismatch
+  filtered out anything that did match.
+- No FTS5 index over `shared_memory_blocks` existed.
+- The `semantic-search` feature gate was removed (per a prior commit) with no
+  way to opt back in without editing `Cargo.toml`.
+
+**New behavior:**
+- Default build: identical surface area, plus a working FTS5 index for memory
+  blocks. `cade-store` clippy: clean.
+- `--features semantic-search` build: pulls `fastembed`/`sqlite-vec`, compiles
+  cleanly. (Phase 2 will start using them.)
+- `search_memory_blocks_fts` returns correct BM25-ranked memory blocks for the
+  given agent.
+- Migration 10 is idempotent — second run is a no-op.
+
+**Verification:**
+- `cargo test -p cade-store --lib` → 140 passed (137 baseline + 3 new), 0 fail.
+- `cargo test --workspace` → all suites pass, 0 regressions.
+- `cargo check -p cade-store` → clean (default).
+- `cargo check -p cade-store --features semantic-search` → clean.
+- `cargo clippy -p cade-store --all-targets` → no warnings on cade-store.
+
+**Rollback steps:**
+```sh
+git checkout cp-614cdf39-f4a3-4b00-a186-afecad1a199d -- crates/cade-store/
+```
+
+Note: the migration is idempotent and additive — rolling back the code does
+not require dropping `memory_blocks_fts` or the triggers; subsequent runs will
+just re-create them (harmless `IF NOT EXISTS`).
+
+---
+
+## 2026-05-04T18:50:00Z — WI-SEMANTIC Phase 2: Embedder trait + write-path
+
+**Summary:** Phase 2 of WI-SEMANTIC. Introduced the `Embedder` trait and a
+no-op default impl (`NoopEmbedder`), added Migration 11 for the `embedding`
+BLOB column on `shared_memory_blocks`, and built two new write-path APIs:
+`upsert_memory_block_with_embedder` (single-row write that also stores the
+embedding) and `embedding::backfill_embeddings` (bulk fill of NULL rows for
+DBs created before the column existed). Behind `#[cfg(feature =
+"semantic-search")]`, added a `FastEmbedder` adapter that drives `fastembed`'s
+quantised `all-MiniLM-L6-v2` model (384-dim). The default build pulls neither
+`fastembed` nor `sqlite-vec`; existing call sites are unchanged.
+
+**Files modified:**
+- `crates/cade-store/src/sqlite/mod.rs` — Migration 11: `ALTER TABLE
+  shared_memory_blocks ADD COLUMN embedding BLOB`. Idempotent, tolerates
+  duplicate-column on re-run. Bumps `PRAGMA user_version` 10 → 11.
+- `crates/cade-store/src/sqlite/embedding.rs` — added `Embedder` trait,
+  `NoopEmbedder`, `FastEmbedder` (feature-gated), `backfill_embeddings`,
+  doc updates. Updated `is_available()` to reflect the feature flag instead
+  of always returning `false`.
+- `crates/cade-store/src/sqlite/memory.rs` — added
+  `upsert_memory_block_with_embedder` thin wrapper.
+- `crates/cade-store/src/sqlite/memory/tests.rs` — 4 new tests:
+  `shared_memory_blocks_has_embedding_column`,
+  `upsert_with_embedder_writes_blob`,
+  `upsert_with_none_embedder_leaves_embedding_null`,
+  `backfill_embeddings_populates_null_rows`. Each uses an inline
+  `FakeEmbedder` so the tests run on the default feature set.
+- (in `embedding.rs`) — 2 new tests: `noop_embedder_dimension_zero_and_empty_embed`,
+  `is_available_reflects_feature_flag`. Plus `fast_embedder_produces_384_dim_vector`
+  gated on the feature and marked `#[ignore]` because the first run downloads
+  ~25 MB of model weights.
+
+**Reason:** The plan required a stable type for embedding production that
+works in both default and feature-enabled builds without `#[cfg]` blocks
+leaking into call sites. The trait + `NoopEmbedder` lets us pass
+`Option<&dyn Embedder>` everywhere and pay zero runtime cost when disabled.
+Migration 11 reserves the storage slot so DB files are forward-compatible.
+
+**Previous behavior:**
+- No way to store a per-block embedding vector; the column did not exist.
+- `embedding::is_available()` always returned `false`, even with the feature
+  enabled, so callers had no way to detect the embedding stack.
+- Removing semantic search left a comment in `memory.rs` ("Semantic search
+  feature removed (F5)") with no API to re-enable it.
+
+**New behavior:**
+- `embedding` BLOB column present on every DB after migrations.
+- `Embedder` trait with three impls available to call sites: `NoopEmbedder`
+  (default, returns empty vec), `FastEmbedder` (feature-gated, 384-dim
+  MiniLM-L6-v2-Q via ONNX runtime).
+- `upsert_memory_block_with_embedder(..., embedder: Option<&dyn Embedder>)`
+  preserves existing `upsert_memory_block` behavior and additionally writes
+  the packed le-f32 BLOB when `embedder` is `Some`.
+- `backfill_embeddings(db, embedder)` iterates rows where `embedding IS NULL`
+  and fills them; per-row failures are logged and skipped, returns the count
+  of rows successfully written.
+- `is_available()` correctly reports `cfg!(feature = "semantic-search")`.
+- All existing callers of `upsert_memory_block` continue to compile and run
+  unchanged. Migration 11 is idempotent.
+
+**Verification:**
+- `cargo test -p cade-store --lib` → 146 passed (140 baseline + 6 new), 0 fail.
+- `cargo test --workspace` → all suites pass, 0 regressions.
+- `cargo check -p cade-store` → clean (default).
+- `cargo check -p cade-store --features semantic-search` → clean.
+- `cargo clippy -p cade-store --all-targets` → no `cade-store` warnings.
+- `cargo clippy -p cade-store --all-targets --features semantic-search` →
+  no `cade-store` warnings.
+
+**Rollback steps:**
+```sh
+git checkout cp-614cdf39-f4a3-4b00-a186-afecad1a199d -- crates/cade-store/
+```
+
+Note: Migration 11 is additive and idempotent — rolling back the code does
+not require schema surgery. The unused `embedding` column simply stays
+present with all NULLs, costing one byte per row in SQLite's row header.
