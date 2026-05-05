@@ -820,3 +820,75 @@ git checkout cp-614cdf39-f4a3-4b00-a186-afecad1a199d -- crates/cade-store/
 Note: Migration 11 is additive and idempotent — rolling back the code does
 not require schema surgery. The unused `embedding` column simply stays
 present with all NULLs, costing one byte per row in SQLite's row header.
+
+---
+
+## 2026-05-04T19:50:00Z — WI-SEMANTIC Phase 3: hybrid search via RRF
+
+**Summary:** Phase 3 of WI-SEMANTIC. Added cosine-similarity semantic
+search (`embedding::search_memory_semantic`) over the BLOB embedding column,
+implemented in pure Rust with no `sqlite-vec` dependency, and a new
+hybrid retrieval entry point `tools::search_memory_hybrid` that runs the
+existing keyword leg plus the semantic leg and merges them via Reciprocal
+Rank Fusion (k=60). Existing `search_memory` is unchanged so all four
+current call sites continue to work bit-for-bit; Phase 4 will switch them
+over.
+
+**Files modified:**
+- `crates/cade-store/src/sqlite/embedding.rs` — new pub fn
+  `search_memory_semantic(conn, agent_id, query_embedding, limit)` returning
+  `(id, similarity, label, value)` ordered by descending cosine similarity.
+  Two private helpers: `decode_embedding_blob` (le-f32 BLOB → `Vec<f32>`)
+  and `cosine_similarity` (returns `None` on shape mismatch or zero norm).
+  Pure-Rust brute-force scan over `embedding IS NOT NULL` rows; no extra deps.
+- `crates/cade-store/src/sqlite/tools.rs` — new pub fn
+  `search_memory_hybrid(db, agent_id, query, embedder: Option<&dyn Embedder>)`
+  that calls the existing `search_memory` for the keyword leg, embeds the
+  query and runs `search_memory_semantic` for the semantic leg, then merges
+  the two label rankings via `reciprocal_rank_fusion`. Materialises the
+  fused order back into `(label, value, snippet)` rows. With
+  `embedder = None` it returns the keyword result verbatim.
+- `crates/cade-store/src/sqlite/memory/tests.rs` — 4 new tests:
+  `search_memory_semantic_ranks_by_cosine_similarity`,
+  `search_memory_semantic_skips_null_embedding_rows`,
+  `search_memory_hybrid_finds_non_keyword_conceptual_match` (the central
+  acceptance test: 'deadlock' query finds a 'mutex' block via the semantic
+  leg, which the keyword leg alone misses),
+  `search_memory_hybrid_with_none_embedder_matches_old_behaviour`.
+
+**Reason:** The plan required hybrid retrieval that surfaces conceptual
+matches (e.g. 'deadlock' query finds 'scoped mutex lock' notes) without
+breaking keyword precision. Reciprocal Rank Fusion is the standard merge
+strategy because it boosts results that appear in both legs while still
+including unique hits from either side.
+
+**Previous behavior:**
+- `search_memory` only used LIKE + fuzzy word-match.
+- `embedding::search_memory_semantic` did not exist.
+- No hybrid retrieval entry point.
+
+**New behavior:**
+- `search_memory_semantic` ranks blocks by cosine similarity to a query
+  embedding; rows without an embedding are silently skipped, dimension
+  mismatches are treated as a non-match.
+- `search_memory_hybrid` is opt-in via the `embedder` argument: pass `None`
+  for legacy behaviour, pass `Some(&embedder)` (e.g. `&FastEmbedder` under
+  the `semantic-search` feature) for hybrid retrieval. RRF (k=60) fuses
+  both rankings, deduplicated by block label.
+- Both functions leave the existing `search_memory` callers untouched.
+
+**Verification:**
+- `cargo test -p cade-store --lib` → 150 passed (146 baseline + 4 new), 0 fail.
+- `cargo test --workspace` → all suites pass, 0 regressions.
+- `cargo check -p cade-store` → clean (default).
+- `cargo check -p cade-store --features semantic-search --tests` → clean.
+- `cargo clippy -p cade-store --all-targets` → no `cade-store` warnings.
+
+**Rollback steps:**
+```sh
+git checkout cp-771bd5db-0a39-440d-ae88-0cc97cfb6f3c -- crates/cade-store/
+```
+
+Note: this phase adds new public API only; nothing existing was removed or
+renamed. Reverting just leaves the new functions inert — no callers in the
+default build use them yet.

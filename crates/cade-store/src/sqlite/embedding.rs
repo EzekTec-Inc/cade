@@ -196,6 +196,95 @@ pub fn backfill_embeddings(
     Ok(written)
 }
 
+/// Decode a packed little-endian f32 BLOB back into a `Vec<f32>`.
+/// Returns `None` if the byte slice is not a multiple of 4 bytes long.
+fn decode_embedding_blob(bytes: &[u8]) -> Option<Vec<f32>> {
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().ok()?;
+        out.push(f32::from_le_bytes(arr));
+    }
+    Some(out)
+}
+
+/// Cosine similarity between two equal-length vectors.
+/// Returns `None` if either vector is empty or the lengths differ.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
+    if a.is_empty() || a.len() != b.len() {
+        return None;
+    }
+    let mut dot = 0.0_f32;
+    let mut na = 0.0_f32;
+    let mut nb = 0.0_f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        return None;
+    }
+    Some(dot / (na.sqrt() * nb.sqrt()))
+}
+
+/// Search memory blocks by semantic (cosine) similarity to a query embedding.
+///
+/// Returns `(block_id, similarity, label, value)` tuples ordered by descending
+/// similarity (best match first). Rows whose `embedding` is NULL or whose
+/// stored vector cannot be decoded or whose dimensionality does not match the
+/// query are silently skipped.
+///
+/// Pure Rust — does not depend on the `sqlite-vec` extension. Suitable for
+/// small (≤ a few thousand) memory-block corpora where a brute-force scan is
+/// fast enough; if the corpus grows, swap this implementation for one backed
+/// by `sqlite-vec` without changing the public signature.
+pub fn search_memory_semantic(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<(String, f64, String, String)>> {
+    if query_embedding.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.label, b.value, b.embedding
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.embedding IS NOT NULL",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![agent_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+        ))
+    })?;
+
+    let mut scored: Vec<(String, f64, String, String)> = Vec::new();
+    for r in rows.flatten() {
+        let (id, label, value, blob) = r;
+        let Some(vec) = decode_embedding_blob(&blob) else {
+            continue;
+        };
+        let Some(sim) = cosine_similarity(query_embedding, &vec) else {
+            continue;
+        };
+        scored.push((id, sim as f64, label, value));
+    }
+
+    // Sort by similarity descending; NaN sorts last via partial_cmp fallback.
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+    Ok(scored)
+}
+
 /// Reciprocal Rank Fusion (RRF) for hybrid ranking.
 pub fn reciprocal_rank_fusion(
     keyword_ids: &[String],

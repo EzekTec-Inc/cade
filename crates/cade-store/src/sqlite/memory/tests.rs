@@ -1467,3 +1467,173 @@ fn backfill_embeddings_populates_null_rows() -> Result<()> {
     assert_eq!(any_blob.len(), 2 * 4, "expected 2 f32 le bytes = 8");
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WI-SEMANTIC Phase 3: cosine similarity search over stored embeddings
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn search_memory_semantic_ranks_by_cosine_similarity() -> Result<()> {
+    use crate::sqlite::embedding::{Embedder, search_memory_semantic};
+    use crate::sqlite::memory::upsert_memory_block_with_embedder;
+
+    /// Maps the first byte of the input string to a fixed direction vector,
+    /// so the test can build deterministic clusters without fastembed.
+    struct LetterEmbedder;
+    impl Embedder for LetterEmbedder {
+        fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+            // Three orthogonal basis vectors keyed on first char.
+            let v = match text.chars().next().unwrap_or('?') {
+                'a' => vec![1.0, 0.0, 0.0],
+                'b' => vec![0.0, 1.0, 0.0],
+                'c' => vec![0.0, 0.0, 1.0],
+                _ => vec![0.5, 0.5, 0.5],
+            };
+            Ok(v)
+        }
+        fn dimension(&self) -> usize {
+            3
+        }
+    }
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Three blocks, each in its own basis direction.
+    upsert_memory_block_with_embedder(&db, "a1", "alpha", "alpha note", None, None, Some(&LetterEmbedder))?;
+    upsert_memory_block_with_embedder(&db, "a1", "beta",  "bravo note", None, None, Some(&LetterEmbedder))?;
+    upsert_memory_block_with_embedder(&db, "a1", "gamma", "charlie note", None, None, Some(&LetterEmbedder))?;
+
+    // Query "a"-direction — should rank `alpha` first.
+    let q = LetterEmbedder.embed("alpha query")?;
+    let conn = db.lock();
+    let hits = search_memory_semantic(&conn, "a1", &q, 10)?;
+    assert!(!hits.is_empty(), "semantic search returned no rows");
+
+    // First hit must be the alpha block.
+    let (_id, _score, label, _value) = &hits[0];
+    assert_eq!(label, "alpha", "expected 'alpha' first, got {hits:?}");
+    Ok(())
+}
+
+#[test]
+fn search_memory_semantic_skips_null_embedding_rows() -> Result<()> {
+    use crate::sqlite::embedding::{Embedder, search_memory_semantic};
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    // Block has NO embedding — must be filtered out by semantic search.
+    upsert_memory_block(&db, "a1", "no_emb", "value with no embedding", None, None)?;
+
+    struct ZeroEmbedder;
+    impl Embedder for ZeroEmbedder {
+        fn embed(&self, _text: &str) -> crate::error::Result<Vec<f32>> {
+            Ok(vec![1.0, 0.0])
+        }
+        fn dimension(&self) -> usize {
+            2
+        }
+    }
+
+    let q = ZeroEmbedder.embed("anything")?;
+    let conn = db.lock();
+    let hits = search_memory_semantic(&conn, "a1", &q, 10)?;
+    assert!(hits.is_empty(), "rows without an embedding must not appear in semantic results");
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WI-SEMANTIC Phase 3: hybrid search_memory_hybrid (keyword + semantic via RRF)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn search_memory_hybrid_finds_non_keyword_conceptual_match() -> Result<()> {
+    use crate::sqlite::embedding::Embedder;
+    use crate::sqlite::memory::upsert_memory_block_with_embedder;
+    use crate::sqlite::tools::search_memory_hybrid;
+
+    /// Maps any input containing 'lock' OR 'mutex' to direction A,
+    /// other inputs to direction B. So a query about deadlocks (no
+    /// keyword overlap with 'mutex') still embeds close to direction A.
+    struct ConceptualEmbedder;
+    impl Embedder for ConceptualEmbedder {
+        fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+            let lower = text.to_lowercase();
+            let v = if lower.contains("lock")
+                || lower.contains("mutex")
+                || lower.contains("deadlock")
+                || lower.contains("contention")
+            {
+                vec![1.0_f32, 0.0]
+            } else {
+                vec![0.0_f32, 1.0]
+            };
+            Ok(v)
+        }
+        fn dimension(&self) -> usize {
+            2
+        }
+    }
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "fix_note",
+        // Note: the value mentions 'mutex' but NOT 'deadlock'.
+        "We scoped the parking_lot mutex to a smaller block.",
+        None,
+        None,
+        Some(&ConceptualEmbedder),
+    )?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "unrelated",
+        "Some unrelated note about colors",
+        None,
+        None,
+        Some(&ConceptualEmbedder),
+    )?;
+
+    // Pure-keyword search for 'deadlock' MUST return zero hits — the value
+    // has no keyword overlap. This documents the previous behaviour.
+    let kw = crate::sqlite::tools::search_memory(&db, "a1", "deadlock")?;
+    assert!(
+        kw.iter().all(|(l, _, _)| l != "fix_note"),
+        "baseline: keyword search must not find 'fix_note' for 'deadlock'; got {kw:?}"
+    );
+
+    // Hybrid search WITH the embedder MUST surface 'fix_note' via the
+    // semantic path (and via RRF should rank it among the top results).
+    let hybrid = search_memory_hybrid(&db, "a1", "deadlock", Some(&ConceptualEmbedder))?;
+    let labels: Vec<&str> = hybrid.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert!(
+        labels.contains(&"fix_note"),
+        "hybrid search must surface 'fix_note' for conceptual query 'deadlock'; got {labels:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn search_memory_hybrid_with_none_embedder_matches_old_behaviour() -> Result<()> {
+    use crate::sqlite::embedding::Embedder;
+    use crate::sqlite::tools::{search_memory, search_memory_hybrid};
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "rust_tip", "parking_lot Mutex tips", None, None)?;
+    upsert_memory_block(&db, "a1", "other", "irrelevant text", None, None)?;
+
+    let old: Vec<String> = search_memory(&db, "a1", "parking_lot")?
+        .into_iter()
+        .map(|(l, _, _)| l)
+        .collect();
+    let new: Vec<String> = search_memory_hybrid(&db, "a1", "parking_lot", None::<&dyn Embedder>)?
+        .into_iter()
+        .map(|(l, _, _)| l)
+        .collect();
+    assert_eq!(old, new, "hybrid with None embedder must equal legacy search_memory");
+    Ok(())
+}

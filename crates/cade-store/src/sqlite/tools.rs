@@ -297,6 +297,84 @@ pub fn search_memory(
     Ok(results)
 }
 
+/// Hybrid keyword + semantic memory search.
+///
+/// Runs the existing keyword path ([`search_memory`]) and, when an
+/// [`Embedder`](super::embedding::Embedder) is supplied, also runs cosine
+/// similarity over stored embeddings ([`search_memory_semantic`](
+/// super::embedding::search_memory_semantic)). The two ranked label lists
+/// are merged via Reciprocal Rank Fusion (RRF, k=60) so that:
+///   * blocks that appear in both lists get the highest combined score, and
+///   * blocks unique to either list are still surfaced.
+///
+/// Returns `(label, value, snippet)` rows in fused-rank order, capped at the
+/// keyword path's existing 10-result limit.
+///
+/// `embedder = None` is equivalent to calling [`search_memory`] directly —
+/// the keyword result list is returned unchanged. This lets the default-
+/// feature build call this function uniformly while paying zero cost.
+///
+/// # Errors
+///
+/// Returns whatever errors [`search_memory`] or the embedder would return.
+pub fn search_memory_hybrid(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+    embedder: Option<&dyn super::embedding::Embedder>,
+) -> Result<Vec<(String, String, String)>> {
+    // 1. Keyword leg — existing behaviour, unchanged.
+    let kw_results = search_memory(db, agent_id, query)?;
+
+    // 2. If no embedder, return the keyword leg verbatim — preserves the
+    //    legacy contract bit-for-bit when semantic search isn't wired up.
+    let Some(emb) = embedder else {
+        return Ok(kw_results);
+    };
+
+    // 3. Semantic leg — embed the query, run cosine search.
+    let q_vec = emb.embed(query)?;
+    if q_vec.is_empty() {
+        // NoopEmbedder or embedder returning empty for some reason.
+        return Ok(kw_results);
+    }
+    let sem_hits = {
+        let conn = db.lock();
+        super::embedding::search_memory_semantic(&conn, agent_id, &q_vec, 10)?
+    };
+
+    // 4. Build label-keyed lookup of full rows from both legs.
+    use std::collections::HashMap;
+    let mut by_label: HashMap<String, (String, String, String)> = HashMap::new();
+    for (label, value, snippet) in &kw_results {
+        by_label
+            .entry(label.clone())
+            .or_insert_with(|| (label.clone(), value.clone(), snippet.clone()));
+    }
+    for (_id, _score, label, value) in &sem_hits {
+        by_label.entry(label.clone()).or_insert_with(|| {
+            // Synthesize a snippet when the row only came in via the
+            // semantic leg (no keyword to highlight).
+            let snippet: String = value.chars().take(200).collect();
+            (label.clone(), value.clone(), snippet)
+        });
+    }
+
+    // 5. RRF on the two label lists.
+    let kw_labels: Vec<String> = kw_results.iter().map(|(l, _, _)| l.clone()).collect();
+    let sem_labels: Vec<String> = sem_hits.iter().map(|(_, _, l, _)| l.clone()).collect();
+    let fused = super::embedding::reciprocal_rank_fusion(&kw_labels, &sem_labels, 60.0);
+
+    // 6. Materialise rows in fused order, deduplicated, capped at 10.
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for label in fused.iter().take(10) {
+        if let Some(row) = by_label.remove(label) {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ArchivalRecord {
     pub id: String,
