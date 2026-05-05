@@ -542,6 +542,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
             std::collections::HashMap::new(),
         )),
         subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+        embedder: None,
     };
 
     // Call blocking endpoint
@@ -743,6 +744,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
             std::collections::HashMap::new(),
         )),
         subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+        embedder: None,
     };
 
     let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
@@ -950,6 +952,7 @@ fn build_minimal_state(
             std::collections::HashMap::new(),
         )),
         subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+        embedder: None,
     }
 }
 

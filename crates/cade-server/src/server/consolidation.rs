@@ -1662,6 +1662,7 @@ mod tests {
             agent_skills: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             pending_subagent_results: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            embedder: None,
         }
     }
 

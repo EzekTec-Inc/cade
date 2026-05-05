@@ -137,6 +137,9 @@ mcp         = ["cade-agent/mcp"]
 integration = ["dep:cade-sdk"]
 backend-docker = ["cade-agent/backend-docker"]
 backend-ssh = ["cade-agent/backend-ssh"]
+# WI-SEMANTIC: opt-in semantic search. Forwards to cade-store/semantic-search
+# which pulls fastembed + sqlite-vec. Default builds DO NOT activate this.
+semantic-search = ["cade-store/semantic-search"]
 
 [dependencies]
 # -- Workspace crates

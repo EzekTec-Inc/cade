@@ -753,10 +753,11 @@ pub async fn search_memory_handler(
     let db = state.db.clone();
     let aid = agent_id.clone();
     let q = query.to_string();
+    let embedder = state.embedder.clone();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(move || {
-            sqlite::search_memory(&db, &aid, &q)
+            sqlite::tools::search_memory_hybrid(&db, &aid, &q, embedder.as_deref())
         }),
     )
     .await;

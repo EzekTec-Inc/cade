@@ -488,10 +488,16 @@ async fn handle_search_memory_meta(
     let db = state.db.clone();
     let aid = agent_id.to_string();
     let q = query.clone();
+    let embedder = state.embedder.clone();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(move || {
-            cade_store::sqlite::search_memory(&db, &aid, &q)
+            cade_store::sqlite::tools::search_memory_hybrid(
+                &db,
+                &aid,
+                &q,
+                embedder.as_deref(),
+            )
         }),
     )
     .await;

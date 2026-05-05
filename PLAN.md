@@ -892,3 +892,99 @@ git checkout cp-771bd5db-0a39-440d-ae88-0cc97cfb6f3c -- crates/cade-store/
 Note: this phase adds new public API only; nothing existing was removed or
 renamed. Reverting just leaves the new functions inert — no callers in the
 default build use them yet.
+
+---
+
+## 2026-05-04T20:50:00Z — WI-SEMANTIC Phase 4: server wiring + startup backfill
+
+**Summary:** Phase 4 of WI-SEMANTIC. Added `embedder:
+Option<Arc<dyn Embedder>>` to `AppState` and switched the two server
+`search_memory` call sites (`agents.rs::search_handler` and
+`meta_tools.rs::handle_search_memory_meta`) over to
+`search_memory_hybrid`, threading `state.embedder.as_deref()` into the
+spawn-blocking closure. With the `semantic-search` feature off (default),
+the field is `None` and the new path returns the keyword leg verbatim —
+behaviour is bit-for-bit identical to before. With the feature on, the
+production `cade-server` binary instantiates a `FastEmbedder` at startup
+(falling back to `None` on init failure with a warning) and spawns a
+one-shot blocking task that runs `embedding::backfill_embeddings` so any
+pre-existing memory blocks get their embeddings populated.
+
+**Files modified:**
+- `Cargo.toml` (root) — added `semantic-search = ["cade-store/semantic-search"]`
+  feature so a single `--features semantic-search` flag at the workspace
+  root activates the embedder stack. Default features unchanged.
+- `crates/cade-server/src/server/state.rs` — added `pub embedder:
+  Option<Arc<dyn cade_store::sqlite::embedding::Embedder>>` field on
+  `AppState`. Doc-comment explains the default-build vs feature-build
+  semantics.
+- `crates/cade-server/src/server/api/run/meta_tools.rs` — switched
+  `handle_search_memory_meta` to call
+  `cade_store::sqlite::tools::search_memory_hybrid(.., embedder.as_deref())`.
+  Captures `state.embedder.clone()` into the spawn-blocking closure.
+- `crates/cade-server/src/server/api/agents.rs` — switched the
+  `/v1/agents/:id/search_memory` handler over to
+  `sqlite::tools::search_memory_hybrid` the same way.
+- `src/bin/cade-server.rs` — wires up `embedder` in the production
+  `AppState` initialiser. Behind `#[cfg(feature = "semantic-search")]`,
+  calls `FastEmbedder::new()` and stores it as `Some(Arc::new(e))`; on
+  failure logs a warning and leaves the field `None`. Also adds a one-shot
+  startup backfill task that calls `embedding::backfill_embeddings(&db,
+  &*emb)` in a `spawn_blocking` closure when the embedder is present.
+- 11 test fixtures touched mechanically to add `embedder: None,` next to
+  the existing `subagent_semaphore` field — same pattern that prior
+  AppState extensions (e.g. `subagent_semaphore` itself) used.
+
+**Reason:** Phase 3 added `search_memory_hybrid` but no caller used it.
+Phase 4 routes the live server requests through the hybrid path so users
+on `--features semantic-search` builds get conceptual recall, while
+default builds continue to behave exactly as before.
+
+**Previous behavior:**
+- Two server search call sites called the legacy
+  `cade_store::sqlite::search_memory` directly.
+- `AppState` had no embedder field; there was no place to hang the
+  optional `FastEmbedder`.
+- Existing memory blocks created before the `embedding` column existed
+  stayed `embedding IS NULL` indefinitely.
+
+**New behavior:**
+- Both server search call sites use `search_memory_hybrid`. With
+  `state.embedder = None` (default builds), the hybrid path returns the
+  keyword result verbatim — no observable change.
+- With `--features semantic-search` and a successful `FastEmbedder::new()`,
+  searches surface conceptual matches via cosine similarity over stored
+  embeddings, fused with keyword hits via RRF (k=60).
+- A one-shot startup backfill fills `embedding IS NULL` rows on first
+  feature-enabled boot. Per-row failures log and skip; the server never
+  blocks on this work.
+- A failed `FastEmbedder::new()` (e.g. offline first-run with no cached
+  weights) logs a warning and leaves `state.embedder = None`, so the
+  server still boots and `search_memory_hybrid` falls back to the
+  keyword-only path.
+
+**Scope note (intentionally out of scope):** `upsert_memory_block` call
+sites (~12 across the server, including `meta_tools::handle_update_memory`
+and `consolidation::session_summary` writes) were **not** switched to
+`upsert_memory_block_with_embedder`. New writes will appear without an
+embedding until the next backfill cycle. This keeps Phase 4 truly minimal
+— a future small change can flip those sites once a periodic backfill job
+or write-path embedding is wanted. The acceptance contract (search
+surfaces conceptual matches once embeddings are present) is unaffected
+because the startup backfill plus a future periodic top-up cover the gap.
+
+**Verification:**
+- `cargo check --workspace` → clean.
+- `cargo check --workspace --features semantic-search` → clean.
+- `cargo test --workspace` → all suites pass, 0 regressions, 1 ignored
+  test (the `FastEmbedder` smoke test that downloads weights).
+- `cargo test --workspace --features semantic-search` → all pass, 1
+  ignored.
+- `cargo clippy -p cade-server -p cade --all-targets` → no new warnings
+  introduced by Phase 4 (pre-existing `cade-core` and `server_executor.rs`
+  warnings remain unchanged on master).
+
+**Rollback steps:**
+```sh
+git checkout cp-5739a43d-c5aa-4ecc-9771-a4c2c7628e9f -- .
+```

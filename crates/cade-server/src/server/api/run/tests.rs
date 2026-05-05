@@ -388,6 +388,7 @@ use cade_ai::LlmToolCall;
                 std::collections::HashMap::new(),
             )),
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+            embedder: None,
         }
     }
 

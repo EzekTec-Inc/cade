@@ -158,7 +158,53 @@ async fn main() -> Result<()> {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4),
         )),
+        // ── Embedder (WI-SEMANTIC Phase 4) ───────────────────────────────────
+        // Built only with `--features semantic-search`. First call downloads
+        // ~25 MB of MiniLM-L6-v2-Q weights into the user cache dir; subsequent
+        // calls reuse them. Failures fall back to None so the server still
+        // boots and `search_memory_hybrid` transparently degrades to the
+        // keyword-only path.
+        embedder: {
+            #[cfg(feature = "semantic-search")]
+            {
+                match cade_store::sqlite::embedding::FastEmbedder::new() {
+                    Ok(e) => {
+                        tracing::info!("Semantic search embedder initialised (FastEmbedder)");
+                        Some(Arc::new(e) as Arc<dyn cade_store::sqlite::embedding::Embedder>)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Semantic search requested but FastEmbedder init failed: {e}; \
+                             falling back to keyword-only memory search"
+                        );
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "semantic-search"))]
+            {
+                None
+            }
+        },
     };
+
+    // ── Embedding backfill (WI-SEMANTIC Phase 4) ────────────────────────────
+    // When the `semantic-search` feature is active and the embedder
+    // initialised successfully, fill in embeddings for any pre-existing
+    // memory blocks (rows where `embedding IS NULL`). Runs once at startup
+    // in a blocking thread so it doesn't stall the async runtime.
+    if let Some(emb) = state.embedder.clone() {
+        let db_bf = state.db.clone();
+        tokio::task::spawn_blocking(move || {
+            match cade_store::sqlite::embedding::backfill_embeddings(&db_bf, &*emb) {
+                Ok(n) if n > 0 => tracing::info!(
+                    "Embedding backfill: filled {n} memory block(s) at startup"
+                ),
+                Ok(_) => tracing::debug!("Embedding backfill: nothing to do"),
+                Err(e) => tracing::warn!("Embedding backfill failed: {e}"),
+            }
+        });
+    }
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────
     // Polls every 30 s.  When an agent has been inactive for 20 s AND its

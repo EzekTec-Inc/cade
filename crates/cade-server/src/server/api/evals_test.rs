@@ -57,6 +57,7 @@ async fn list_eval_tasks_returns_empty_on_fresh_db() {
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
         pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
         subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+        embedder: None,
     };
 
     let result = list_eval_tasks(axum::extract::State(state)).await;

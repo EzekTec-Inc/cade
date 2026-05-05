@@ -198,6 +198,17 @@ pub struct AppState {
         Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
+
+    // ── Embeddings (WI-SEMANTIC Phase 4) ────────────────────────────────────
+    /// Optional embedder for hybrid keyword+semantic memory search.
+    ///
+    /// `None` in default builds (no `semantic-search` feature) — call sites
+    /// transparently fall back to the legacy keyword-only path.
+    /// `Some(...)` when the binary was built with `--features semantic-search`
+    /// and `FastEmbedder::new()` succeeded at startup, in which case
+    /// `search_memory_hybrid` uses cosine similarity over the stored
+    /// `embedding` BLOB column to surface conceptual matches.
+    pub embedder: Option<Arc<dyn cade_store::sqlite::embedding::Embedder>>,
 }
 
 #[cfg(test)]
