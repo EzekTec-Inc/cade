@@ -243,7 +243,7 @@ fn meta_tools_are_tagged_correctly_at_registration() {
     // Meta tools are registered with tags ["cade", "meta"] (see bootstrap/tools.rs).
     // This test verifies the tag contract so ITS can rely on
     // the "mcp" tag to identify third-party tools.
-    let meta_tags = vec!["cade".to_string(), "meta".to_string()];
+    let meta_tags = ["cade".to_string(), "meta".to_string()];
     assert!(!meta_tags.contains(&"mcp".to_string()),
         "meta tool tags must not include 'mcp'");
     assert!(meta_tags.contains(&"cade".to_string()),
@@ -254,7 +254,7 @@ fn meta_tools_are_tagged_correctly_at_registration() {
 fn mcp_tool_tags_contain_mcp() {
     // MCP tools are registered with tags ["cade", "mcp"] (or ["cade", "mcp", "core_mcp"]).
     // ITS uses the "mcp" tag to decide whether to compress a tool's schema.
-    let mcp_tags = vec!["cade".to_string(), "mcp".to_string()];
+    let mcp_tags = ["cade".to_string(), "mcp".to_string()];
     assert!(mcp_tags.contains(&"mcp".to_string()),
         "MCP tool tags must include 'mcp' for ITS compression to apply");
 }

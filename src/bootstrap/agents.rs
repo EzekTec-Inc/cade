@@ -320,6 +320,48 @@ pub async fn resolve_agent_and_conversation(
         )
         .await;
 
+    // -- Auto-load required skills from `[project]` block
+    //
+    // Parse the project memory block for a "## Required Skills" section and
+    // auto-load each listed skill so the agent has them in context from the
+    // start, without relying on the LLM to remember to call `load_skill`.
+    {
+        let project_block = client
+            .get_memory(&agent.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|b| b.label == "project")
+            .map(|b| b.value)
+            .unwrap_or_default();
+
+        let required_skills = parse_required_skills(&project_block);
+        if !required_skills.is_empty() {
+            let mut auto_loaded = Vec::new();
+            for skill_id in &required_skills {
+                if let Some(skill) = loaded_skills.iter().find(|s| s.id == *skill_id) {
+                    // Load the skill body into a memory block so it's in context
+                    let skill_label = format!("skill:{skill_id}");
+                    let skill_content = match std::fs::read_to_string(&skill.path) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let _ = client
+                        .upsert_memory(&agent.id, &skill_label, &skill_content, None)
+                        .await;
+                    auto_loaded.push(skill_id.as_str());
+                }
+            }
+            if !auto_loaded.is_empty() {
+                tracing::info!(
+                    "Auto-loaded {} required skill(s) from [project] block: {}",
+                    auto_loaded.len(),
+                    auto_loaded.join(", ")
+                );
+            }
+        }
+    }
+
     // -- Conversation resolution
     //
     // Precedence: --new (create new) > --resume (picker) > --continue (reuse saved) > saved session
@@ -418,4 +460,90 @@ pub async fn resolve_agent_and_conversation(
         conversation_id,
         effective_system_prompt,
     ))
+}
+
+/// Parse a `[project]` memory block for a "## Required Skills" section.
+///
+/// Expects lines like `- skill-id` or `- skill-id [scope]` under the heading.
+/// Returns the list of skill IDs found.
+fn parse_required_skills(project_block: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut skills = Vec::new();
+    for line in project_block.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## Required Skills") || trimmed.starts_with("## Required skills") {
+            in_section = true;
+            continue;
+        }
+        if in_section && trimmed.starts_with("## ") {
+            // Hit the next section heading — stop parsing.
+            break;
+        }
+        if in_section && trimmed.starts_with("- ") {
+            // Extract skill ID: strip leading "- ", take first word.
+            let rest = trimmed.trim_start_matches("- ").trim();
+            let id = rest.split_whitespace().next().unwrap_or("").to_string();
+            if !id.is_empty() {
+                skills.push(id);
+            }
+        }
+    }
+    skills
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_required_skills_extracts_ids() {
+        let block = "\
+# CADE Project Rules
+
+## Allowed MCP Servers
+- context7
+- deepwiki
+
+## Required Skills
+Load and follow these skills for all work:
+- tdd-guide
+- strict-project-execution
+- caveman
+- grill-me
+- rust
+
+## Workflow Requirements
+- Always index the workspace
+";
+        let skills = parse_required_skills(block);
+        assert_eq!(
+            skills,
+            vec!["tdd-guide", "strict-project-execution", "caveman", "grill-me", "rust"]
+        );
+    }
+
+    #[test]
+    fn parse_required_skills_empty_block() {
+        assert!(parse_required_skills("").is_empty());
+    }
+
+    #[test]
+    fn parse_required_skills_no_section() {
+        let block = "Some random project notes\n- not a skill";
+        assert!(parse_required_skills(block).is_empty());
+    }
+
+    #[test]
+    fn parse_required_skills_stops_at_next_heading() {
+        let block = "\
+## Required Skills
+- alpha
+- beta
+
+## Something Else
+- gamma
+";
+        let skills = parse_required_skills(block);
+        assert_eq!(skills, vec!["alpha", "beta"]);
+    }
 }

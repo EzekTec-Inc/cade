@@ -1178,6 +1178,42 @@ fn assemble_system_prompt_memory(
     // Sort by priority then by original order (stable sort preserves DB order within same priority).
     candidates.sort_by_key(|c| c.priority);
 
+    // -- Fix R4: Auto-detect missing required skills from [project] block.
+    //
+    // If [project] lists "## Required Skills", verify that each skill's
+    // `skill:<id>` block exists in the candidate list. If any are missing,
+    // inject a compact reminder into the dynamic section so the LLM knows
+    // to call `load_skill` immediately.
+    {
+        let project_value = active_blocks
+            .iter()
+            .find(|(label, _, _, _, _)| label == "project")
+            .map(|(_, val, _, _, _)| val.as_str())
+            .unwrap_or("");
+        let required = parse_required_skills_from_project(project_value);
+        if !required.is_empty() {
+            let loaded_skill_labels: Vec<&str> = candidates
+                .iter()
+                .filter(|c| c.label.starts_with("skill:"))
+                .map(|c| c.label.strip_prefix("skill:").unwrap_or(&c.label))
+                .collect();
+            let missing: Vec<&str> = required
+                .iter()
+                .filter(|s| !loaded_skill_labels.contains(&s.as_str()))
+                .map(|s| s.as_str())
+                .collect();
+            if !missing.is_empty() {
+                let reminder = format!(
+                    "⚠️ MISSING REQUIRED SKILLS: The [project] block requires these skills but they are NOT loaded: {}. \
+                     Call `load_skill(\"{}\")` for each one IMMEDIATELY before doing any work.",
+                    missing.join(", "),
+                    missing.join("\"), load_skill(\""),
+                );
+                dynamic_parts.push(reminder);
+            }
+        }
+    }
+
     // Greedy-pack into unified budget.
     let mut packed_parts: Vec<String> = Vec::new();
     let mut remaining = unified_budget;
@@ -1622,6 +1658,33 @@ async fn compute_context_breakdown(
     }))
 }
 
+/// Parse a `[project]` memory block for a "## Required Skills" section.
+///
+/// Expects lines like `- skill-id` under the heading. Returns the list of
+/// skill IDs found. Stops at the next `## ` heading.
+fn parse_required_skills_from_project(project_block: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut skills = Vec::new();
+    for line in project_block.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## Required Skills") || trimmed.starts_with("## Required skills") {
+            in_section = true;
+            continue;
+        }
+        if in_section && trimmed.starts_with("## ") {
+            break;
+        }
+        if in_section && trimmed.starts_with("- ") {
+            let rest = trimmed.trim_start_matches("- ").trim();
+            let id = rest.split_whitespace().next().unwrap_or("").to_string();
+            if !id.is_empty() {
+                skills.push(id);
+            }
+        }
+    }
+    skills
+}
+
 #[cfg(test)]
 mod head_tail_tests {
     use super::*;
@@ -1726,5 +1789,73 @@ mod blacklist_tests {
             !section.contains("skill-b"),
             "disabled skill must NOT appear, got: {section}"
         );
+    }
+}
+
+#[cfg(test)]
+mod parse_required_skills_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_skills_from_project_block() {
+        let block = "\
+# CADE Project Rules
+
+## Allowed MCP Servers
+- context7
+- deepwiki
+
+## Required Skills
+Load and follow these skills for all work:
+- tdd-guide
+- strict-project-execution
+- caveman
+- grill-me
+- rust
+
+## Workflow Requirements
+- Always index the workspace
+";
+        let skills = parse_required_skills_from_project(block);
+        assert_eq!(
+            skills,
+            vec!["tdd-guide", "strict-project-execution", "caveman", "grill-me", "rust"]
+        );
+    }
+
+    #[test]
+    fn empty_block_returns_empty() {
+        assert!(parse_required_skills_from_project("").is_empty());
+    }
+
+    #[test]
+    fn no_section_returns_empty() {
+        let block = "Some random project notes\n- not a skill";
+        assert!(parse_required_skills_from_project(block).is_empty());
+    }
+
+    #[test]
+    fn stops_at_next_heading() {
+        let block = "\
+## Required Skills
+- alpha
+- beta
+
+## Something Else
+- gamma
+";
+        let skills = parse_required_skills_from_project(block);
+        assert_eq!(skills, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn handles_extra_whitespace() {
+        let block = "\
+## Required Skills
+  - spaced-skill  
+-  another-skill
+";
+        let skills = parse_required_skills_from_project(block);
+        assert_eq!(skills, vec!["spaced-skill", "another-skill"]);
     }
 }

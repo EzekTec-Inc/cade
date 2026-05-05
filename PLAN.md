@@ -988,3 +988,41 @@ because the startup backfill plus a future periodic top-up cover the gap.
 ```sh
 git checkout cp-5739a43d-c5aa-4ecc-9771-a4c2c7628e9f -- .
 ```
+
+---
+
+## 2026-05-05T13:45:00Z — Fix CADE rule persistence across sessions (4 fixes)
+
+**Summary:** Implemented 4 fixes to ensure CADE reliably remembers and enforces project rules stored in the `[project]` memory block across all sessions and turns.
+
+**Root causes addressed:**
+- R1: No mandatory "read and enforce project rules" step in the system prompt
+- R2: Skills listed in `[project]` not auto-loaded by the server
+- R3: No session-start hook forces rule verification
+- R4: No server-side detection of missing required skills in context assembly
+
+**Files modified:**
+- `src/bootstrap/prompt.rs` — Added "## Project Rules (CRITICAL)" section to `BASE_SYSTEM_PROMPT`
+- `src/bootstrap/agents.rs` — Added `parse_required_skills()` helper + auto-load logic at session start + 4 unit tests
+- `.cade/hooks/session-start-rules.sh` — New SessionStart hook that injects mandatory rule reminder
+- `.cade/settings.json` — Wired SessionStart hook into project hooks config
+- `crates/cade-server/src/server/api/messages/context.rs` — Added `parse_required_skills_from_project()` + missing-skills warning injection into dynamic context + 5 unit tests
+- `crates/cade-server/src/server/state.rs` — Pre-existing clippy fix (field_reassign_with_default)
+- `crates/cade-core/src/resources/themes.rs` — Pre-existing clippy fixes (redundant closures, iter_cloned_collect)
+- `crates/cade-cli/src/cli/repl/turn_loop/agent.rs` — Pre-existing clippy fix
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs` — Pre-existing clippy fix
+
+**Previous behavior:** CADE stored project rules in the pinned `[project]` block but relied entirely on the LLM voluntarily reading and acting on them. Required skills were never auto-loaded; the LLM had to remember to call `load_skill` each session.
+
+**New behavior:**
+1. System prompt now contains explicit mandatory instructions to read and enforce `[project]` rules
+2. Bootstrap auto-parses `[project]` for "## Required Skills" and loads them at session start
+3. SessionStart hook injects a rule-compliance reminder into the agent's context
+4. Context assembly detects missing required skills and injects a warning into the dynamic section
+
+**Verification:** `cargo test --workspace` — 1,554 tests pass, 0 failures. `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+
+**Rollback steps:**
+```sh
+git checkout cp-2afa4485-9d14-4553-ad93-85bf3afdc6b0 -- .
+```
