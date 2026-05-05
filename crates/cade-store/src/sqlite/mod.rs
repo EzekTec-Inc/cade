@@ -552,6 +552,91 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 9", [])?;
     }
 
+    // ── Migration 10 (WI-SEMANTIC Phase 1): memory_blocks_fts ─────────────
+    //
+    // Adds an FTS5 virtual table for keyword search over memory blocks.
+    // The previous code in `embedding::search_memory_blocks_fts` queried
+    // `messages_fts` (conversation history FTS) by mistake, returning no
+    // memory hits — see PLAN.md WI-SEMANTIC.
+    //
+    // Architecture:
+    //   * external-content FTS5 (`content=shared_memory_blocks`) — no
+    //     duplicate storage of label/value text.
+    //   * `content_rowid=rowid` — uses SQLite's auto rowid on
+    //     shared_memory_blocks (the table is NOT declared WITHOUT ROWID).
+    //   * Triggers keep the FTS index in sync on INSERT/UPDATE/DELETE.
+    //   * One-time backfill at end via `INSERT INTO memory_blocks_fts(...)
+    //     VALUES('rebuild')` so existing rows are indexed.
+    //
+    // The semantic-search feature flag is NOT required for this migration:
+    // FTS5 is part of bundled SQLite and benefits keyword search even when
+    // the embedding stack is disabled.
+    if current_version < 10 {
+        let r = conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_blocks_fts USING fts5(
+                label,
+                value,
+                content='shared_memory_blocks',
+                content_rowid='rowid'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS shared_memory_blocks_ai
+            AFTER INSERT ON shared_memory_blocks BEGIN
+                INSERT INTO memory_blocks_fts(rowid, label, value)
+                VALUES (new.rowid, new.label, new.value);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS shared_memory_blocks_ad
+            AFTER DELETE ON shared_memory_blocks BEGIN
+                INSERT INTO memory_blocks_fts(memory_blocks_fts, rowid, label, value)
+                VALUES ('delete', old.rowid, old.label, old.value);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS shared_memory_blocks_au
+            AFTER UPDATE ON shared_memory_blocks BEGIN
+                INSERT INTO memory_blocks_fts(memory_blocks_fts, rowid, label, value)
+                VALUES ('delete', old.rowid, old.label, old.value);
+                INSERT INTO memory_blocks_fts(rowid, label, value)
+                VALUES (new.rowid, new.label, new.value);
+            END;
+
+            INSERT INTO memory_blocks_fts(memory_blocks_fts) VALUES('rebuild');
+            "#,
+        );
+        if let Err(e) = r {
+            // Tolerate re-run when artefacts already exist (idempotent migration).
+            let msg = e.to_string();
+            if !(msg.contains("already exists") || msg.contains("trigger") && msg.contains("exists")) {
+                tracing::warn!("Migration 10 (WI-SEMANTIC) memory_blocks_fts setup failed: {e}");
+            }
+        }
+        conn.execute("PRAGMA user_version = 10", [])?;
+    }
+
+    // ── Migration 11 (WI-SEMANTIC Phase 2): embedding BLOB column ─────────
+    //
+    // Adds an optional `embedding` BLOB column on shared_memory_blocks for
+    // storing per-block embedding vectors as packed little-endian f32 bytes.
+    //
+    // The column is always present (regardless of the `semantic-search`
+    // feature flag) so the schema is portable: a default-feature build can
+    // open and read a DB written by a feature-enabled build, the embedding
+    // bytes are simply ignored. Writes are gated on having an Embedder.
+    if current_version < 11 {
+        let r = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN embedding BLOB",
+            [],
+        );
+        if let Err(e) = r {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                tracing::warn!("Migration 11 (WI-SEMANTIC) ADD COLUMN embedding failed: {e}");
+            }
+        }
+        conn.execute("PRAGMA user_version = 11", [])?;
+    }
+
     Ok(())
 }
 

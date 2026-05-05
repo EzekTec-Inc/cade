@@ -1256,3 +1256,214 @@ fn extract_keywords_returns_distinctive_terms() -> Result<()> {
     
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WI-SEMANTIC Phase 1: memory_blocks_fts virtual table (Migration 10)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn memory_blocks_fts_exists_after_migration() -> Result<()> {
+    let db = setup_mem_db()?;
+    let conn = db.lock();
+    // Virtual table is registered in sqlite_master with type='table'
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_blocks_fts'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(count, 1, "memory_blocks_fts virtual table must exist after migrations");
+    Ok(())
+}
+
+#[test]
+fn memory_blocks_fts_indexes_upserted_blocks() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(
+        &db,
+        "a1",
+        "deadlock_fix",
+        "We scoped the parking_lot mutex lock to a smaller block",
+        None,
+        None,
+    )?;
+
+    let conn = db.lock();
+    let hits: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_blocks_fts WHERE memory_blocks_fts MATCH ?1",
+        rusqlite::params!["mutex"],
+        |r| r.get(0),
+    )?;
+    assert!(hits >= 1, "FTS must index value text — got {hits} hits for 'mutex'");
+    Ok(())
+}
+
+#[test]
+fn search_memory_blocks_fts_returns_memory_hits_not_messages() -> Result<()> {
+    use crate::sqlite::embedding::search_memory_blocks_fts;
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(
+        &db,
+        "a1",
+        "rust_tip",
+        "Use parking_lot::Mutex for lower contention overhead",
+        None,
+        None,
+    )?;
+
+    let conn = db.lock();
+    let hits = search_memory_blocks_fts(&conn, "a1", "parking_lot", 10)?;
+    assert!(
+        !hits.is_empty(),
+        "search_memory_blocks_fts must return memory hits, got 0"
+    );
+    let labels: Vec<&str> = hits.iter().map(|(_, _, l, _)| l.as_str()).collect();
+    assert!(labels.contains(&"rust_tip"), "expected 'rust_tip' in {labels:?}");
+    Ok(())
+}
+
+#[test]
+fn shared_memory_blocks_has_embedding_column() -> Result<()> {
+    let db = setup_mem_db()?;
+    let conn = db.lock();
+    // PRAGMA table_info returns one row per column with name in col 1.
+    let mut stmt = conn.prepare("PRAGMA table_info(shared_memory_blocks)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    assert!(
+        cols.contains(&"embedding".to_string()),
+        "embedding column missing from shared_memory_blocks; got {cols:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn upsert_with_embedder_writes_blob() -> Result<()> {
+    use crate::sqlite::embedding::Embedder;
+    use crate::sqlite::memory::upsert_memory_block_with_embedder;
+
+    // A minimal deterministic embedder for the test (no fastembed dependency).
+    struct FakeEmbedder;
+    impl Embedder for FakeEmbedder {
+        fn embed(&self, _text: &str) -> crate::error::Result<Vec<f32>> {
+            Ok(vec![0.25_f32, 0.5, 0.75, 1.0])
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+    }
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "lock_fix",
+        "scoped parking_lot mutex to a smaller block",
+        None,
+        None,
+        Some(&FakeEmbedder),
+    )?;
+
+    let conn = db.lock();
+    let blob: Option<Vec<u8>> = conn.query_row(
+        "SELECT b.embedding FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
+        rusqlite::params!["a1", "lock_fix"],
+        |r| r.get(0),
+    )?;
+    let bytes = blob.expect("embedding BLOB must be set");
+    assert_eq!(bytes.len(), 4 * 4, "expected 4 f32 little-endian bytes = 16");
+
+    // Decode and verify the f32 values round-tripped.
+    let mut floats = Vec::with_capacity(4);
+    for chunk in bytes.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().expect("chunks_exact(4)");
+        floats.push(f32::from_le_bytes(arr));
+    }
+    assert_eq!(floats, vec![0.25_f32, 0.5, 0.75, 1.0]);
+    Ok(())
+}
+
+#[test]
+fn upsert_with_none_embedder_leaves_embedding_null() -> Result<()> {
+    use crate::sqlite::embedding::Embedder;
+    use crate::sqlite::memory::upsert_memory_block_with_embedder;
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "no_emb",
+        "value without embedder",
+        None,
+        None,
+        None::<&dyn Embedder>,
+    )?;
+
+    let conn = db.lock();
+    let blob: Option<Vec<u8>> = conn.query_row(
+        "SELECT b.embedding FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
+        rusqlite::params!["a1", "no_emb"],
+        |r| r.get(0),
+    )?;
+    assert!(blob.is_none(), "embedding must be NULL when embedder is None");
+    Ok(())
+}
+
+#[test]
+fn backfill_embeddings_populates_null_rows() -> Result<()> {
+    use crate::sqlite::embedding::{Embedder, backfill_embeddings};
+    struct OneEmbedder;
+    impl Embedder for OneEmbedder {
+        fn embed(&self, _t: &str) -> crate::error::Result<Vec<f32>> {
+            Ok(vec![1.0_f32, 2.0])
+        }
+        fn dimension(&self) -> usize {
+            2
+        }
+    }
+
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    // Two blocks written via the existing API → embedding is NULL.
+    upsert_memory_block(&db, "a1", "k1", "value one", None, None)?;
+    upsert_memory_block(&db, "a1", "k2", "value two", None, None)?;
+
+    // Sanity: both NULL before backfill.
+    {
+        let conn = db.lock();
+        let null_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM shared_memory_blocks WHERE embedding IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(null_count, 2);
+    }
+
+    let processed = backfill_embeddings(&db, &OneEmbedder)?;
+    assert_eq!(processed, 2, "backfill must process both NULL rows");
+
+    let conn = db.lock();
+    let null_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM shared_memory_blocks WHERE embedding IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(null_count, 0, "no NULL embeddings should remain");
+
+    let any_blob: Vec<u8> = conn.query_row(
+        "SELECT embedding FROM shared_memory_blocks WHERE embedding IS NOT NULL LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(any_blob.len(), 2 * 4, "expected 2 f32 le bytes = 8");
+    Ok(())
+}

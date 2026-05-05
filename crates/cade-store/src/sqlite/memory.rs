@@ -373,6 +373,56 @@ pub fn upsert_memory_block(
     })
 }
 
+/// Upsert a memory block and, if an embedder is provided, compute and
+/// store its embedding as a packed little-endian f32 BLOB.
+///
+/// This is a thin wrapper over [`upsert_memory_block`] — it performs the
+/// row write through the existing path (so all truncation, typing, and
+/// access-tracking behaviour is unchanged) and then issues one extra
+/// `UPDATE` to populate `shared_memory_blocks.embedding`.
+///
+/// `embedder = None` is equivalent to calling `upsert_memory_block`
+/// directly; the embedding column stays NULL. This lets callers in the
+/// default-feature build pass `None` and pay zero cost.
+///
+/// # Errors
+///
+/// Returns the same errors as [`upsert_memory_block`], plus any error
+/// raised by the embedder or the BLOB UPDATE.
+pub fn upsert_memory_block_with_embedder(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    value: &str,
+    description: Option<&str>,
+    max_chars: Option<usize>,
+    embedder: Option<&dyn crate::sqlite::embedding::Embedder>,
+) -> Result<WriteResult> {
+    let res = upsert_memory_block(db, agent_id, label, value, description, max_chars)?;
+
+    if let Some(e) = embedder {
+        let vec = e.embed(value)?;
+        if !vec.is_empty() {
+            let mut bytes: Vec<u8> = Vec::with_capacity(vec.len() * 4);
+            for f in &vec {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
+            let conn = db.lock();
+            // Resolve the block id via the agent ↔ block link, then update.
+            conn.execute(
+                "UPDATE shared_memory_blocks
+                 SET embedding = ?1
+                 WHERE id = (SELECT b.id FROM shared_memory_blocks b
+                             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+                             WHERE amb.agent_id = ?2 AND b.label = ?3)",
+                params![bytes, agent_id, label],
+            )?;
+        }
+    }
+
+    Ok(res)
+}
+
 /// Link an existing shared memory block to an agent.
 pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<()> {
     let conn = db
