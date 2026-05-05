@@ -1223,7 +1223,7 @@ mod tests {
     #[test]
     fn code_block_short_line_not_wrapped() {
         let md = "```\nlet x = 1;\n```";
-        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
         // Layout: top, body, bottom = 3 lines.
         assert_eq!(lines.len(), 3, "{:?}", lines_text(&lines));
     }
@@ -1233,7 +1233,7 @@ mod tests {
     #[test]
     fn inline_code_in_table_renders_without_backticks() {
         let md = "| Cmd | Desc |\n|---|---|\n| `ls` | list |";
-        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
         let body_line = lines
             .iter()
             .find(|l| {
@@ -1250,7 +1250,7 @@ mod tests {
     #[test]
     fn image_renders_alt_and_url() {
         let md = "![logo](https://example.com/logo.png)";
-        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
         let combined: String = lines.iter().map(line_text).collect();
         assert!(combined.contains("🖼"), "expected image glyph in: {combined:?}");
         assert!(combined.contains("[logo]"), "expected [alt] in: {combined:?}");
@@ -1263,7 +1263,7 @@ mod tests {
     #[test]
     fn image_with_empty_alt_still_renders() {
         let md = "![](https://example.com/x.png)";
-        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
         let combined: String = lines.iter().map(line_text).collect();
         assert!(combined.contains("🖼"), "expected image glyph");
         assert!(

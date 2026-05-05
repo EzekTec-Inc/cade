@@ -385,10 +385,10 @@ impl Repl {
                             }
                         } else if let Some(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
-                            if let Event::Mouse(m) = evt {
-                                if app.handle_scroll_mouse(m.kind) {
-                                    let _ = app.draw();
-                                }
+                            if let Event::Mouse(m) = evt
+                                && app.handle_scroll_mouse(m.kind)
+                            {
+                                let _ = app.draw();
                             }
                         }
                     }

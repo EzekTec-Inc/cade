@@ -1026,3 +1026,44 @@ git checkout cp-5739a43d-c5aa-4ecc-9771-a4c2c7628e9f -- .
 ```sh
 git checkout cp-2afa4485-9d14-4553-ad93-85bf3afdc6b0 -- .
 ```
+
+---
+
+## 2026-05-05T17:50:00Z — chore(clippy): clear pre-existing -D warnings gate (15 errors)
+
+**Summary:** Resolved 15 pre-existing clippy errors that were blocking
+`cargo clippy --workspace --all-targets -- -D warnings`. All fixes are
+mechanical and behaviour-preserving — no logic changed.
+
+**Files modified:**
+- `crates/cade-core/src/resources/themes.rs` — 9× `redundant_closure` (`.map(|c| resolve(c))` → `.map(&resolve)` for the 8 borrowed call sites; `.map(resolve)` for the final `ctx_bar_buffer` site so the closure can be moved); 1× `iter_cloned_collect` (`.iter().copied().collect()` → `.to_vec()`).
+- `crates/cade-server/src/server/state.rs` — 1× `field_reassign_with_default` in `accumulate_usage_saturates_on_overflow`: folded `m.input_tokens_total = u64::MAX - 5` into the `AgentMetrics { .., ..Default::default() }` struct literal.
+- `crates/cade-tui/src/colors.rs` — 1× `collapsible_if`: collapsed the nested `if let Some(path)` / `if let Ok(f)` pair in `generate_syntect_theme` into a `let-else && let-chain`.
+- `crates/cade-tui/src/markdown.rs` — 4× `needless_borrow` in tests: dropped the `&` on the literal `&str` `md` argument to `parse_markdown_lines_with_theme` at lines 1226, 1236, 1253, 1266.
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs` — 1× `needless_borrow`: `.arg(&cmd)` → `.arg(cmd)` (`cmd` is already `&str` from `as_deref()`).
+- `crates/cade-cli/src/cli/repl/turn_loop/agent.rs` — 1× `collapsible_if`: collapsed the nested mouse-event match in the REPL tick path into a `let-chain`.
+
+**Reason:** The lint gate is part of the project's quality contract
+(rust skill §12). These errors had been masking each other (the compiler
+stops at the first failed crate), so resolving them required a full
+workspace pass.
+
+**Previous behavior:**
+- `cargo clippy --workspace --all-targets -- -D warnings` failed with 15
+  errors across 6 files.
+- Lint-driven CI gate (and any pre-commit hook running this command)
+  could not pass on `master`.
+
+**New behavior:**
+- `cargo clippy --workspace --all-targets -- -D warnings` is clean.
+- `cargo build --workspace` and `cargo test --workspace` continue to
+  pass with 0 regressions across all 1,500+ tests.
+
+**Verification:**
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean.
+- `cargo test --workspace` → all suites pass, 0 regressions.
+
+**Rollback steps:**
+```sh
+git checkout cp-fb8607f8-6988-4298-a2fa-7db52ece83ac -- .
+```

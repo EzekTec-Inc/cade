@@ -259,8 +259,10 @@ mod tests {
 
     #[test]
     fn accumulate_usage_saturates_on_overflow() {
-        let mut m = AgentMetrics::default();
-        m.input_tokens_total = u64::MAX - 5;
+        let mut m = AgentMetrics {
+            input_tokens_total: u64::MAX - 5,
+            ..Default::default()
+        };
         m.accumulate_usage(&TokenUsage {
             input_tokens: 100,
             output_tokens: 0,

@@ -169,14 +169,14 @@ impl ThemeColorsExt for ThemeColors {
 #[cfg(feature = "syntax-highlighting")]
 pub fn generate_syntect_theme(colors: &ThemeColors) -> syntect::highlighting::Theme {
     // If a .tmTheme override exists, use it directly.
-    if let Some(ref path) = colors.syntax_theme_override {
-        if let Ok(f) = std::fs::File::open(path) {
-            let mut reader = std::io::BufReader::new(f);
-            if let Ok(theme) = syntect::highlighting::ThemeSet::load_from_reader(&mut reader) {
-                return theme;
-            }
-            eprintln!("[cade-tui] Failed to parse {}, falling back to generated theme", path.display());
+    if let Some(ref path) = colors.syntax_theme_override
+        && let Ok(f) = std::fs::File::open(path)
+    {
+        let mut reader = std::io::BufReader::new(f);
+        if let Ok(theme) = syntect::highlighting::ThemeSet::load_from_reader(&mut reader) {
+            return theme;
         }
+        eprintln!("[cade-tui] Failed to parse {}, falling back to generated theme", path.display());
     }
 
     use syntect::highlighting::{Color, ThemeItem, ThemeSettings, ScopeSelectors};

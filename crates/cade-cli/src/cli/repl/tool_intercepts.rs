@@ -214,7 +214,7 @@ impl Repl {
                     && let Some(cmd) = cfg.test_command.as_deref() {
                         match std::process::Command::new("bash")
                             .arg("-c")
-                            .arg(&cmd)
+                            .arg(cmd)
                             .current_dir(&cwd_c)
                             .output()
                         {

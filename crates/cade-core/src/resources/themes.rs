@@ -650,7 +650,7 @@ impl ThemeColors {
         let spinner_base = t
             .spinner_accent
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or(base.primary);
         if let ColorDef::Rgb(_, _, _) = spinner_base {
             // Build a 4-step luminance gradient: base → brighter → brightest → mid
@@ -672,42 +672,42 @@ impl ThemeColors {
         base.ctx_bar_system = t
             .ctx_bar_system
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or_else(|| dim_color(base.text_muted, 30));
         base.ctx_bar_native_tools = t
             .ctx_bar_native_tools
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or(base.primary);
         base.ctx_bar_mcp_tools = t
             .ctx_bar_mcp_tools
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or_else(|| brighten_color(base.primary, 30));
         base.ctx_bar_memory = t
             .ctx_bar_memory
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or(base.warning);
         base.ctx_bar_skills = t
             .ctx_bar_skills
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or_else(|| brighten_color(base.warning, 20));
         base.ctx_bar_messages = t
             .ctx_bar_messages
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or(base.syntax_keyword);
         base.ctx_bar_free = t
             .ctx_bar_free
             .as_ref()
-            .map(|c| resolve(c))
+            .map(&resolve)
             .unwrap_or(base.text_dim);
         base.ctx_bar_buffer = t
             .ctx_bar_buffer
             .as_ref()
-            .map(|c| resolve(c))
+            .map(resolve)
             .unwrap_or(base.border_base);
 
         base
@@ -1326,7 +1326,7 @@ mod tests {
 
     #[test]
     fn builtin_names_and_listing_are_consistent() {
-        let names: Vec<&str> = ThemeColors::builtin_names().iter().copied().collect();
+        let names: Vec<&str> = ThemeColors::builtin_names().to_vec();
         let listing_names: Vec<&str> = ThemeColors::builtin_listing()
             .iter()
             .map(|(n, _, _)| *n)
