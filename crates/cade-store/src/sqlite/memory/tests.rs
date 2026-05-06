@@ -2093,3 +2093,83 @@ fn test_a11_search_memory_ranks_frequent_block_higher() -> Result<()> {
         "frequently-accessed block should rank higher");
     Ok(())
 }
+
+
+// ── A15: Subagent write-back tests ──────────────────────────────────────────
+
+#[test]
+fn test_a15_write_back_copies_custom_blocks() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "parent")?;
+    make_agent(&db, "sa_001")?;
+
+    // Subagent writes some facts.
+    upsert_memory_block(&db, "sa_001", "api_design", "REST with HATEOAS links", None, None)?;
+    upsert_memory_block(&db, "sa_001", "db_choice", "PostgreSQL 16", Some("database decision"), None)?;
+
+    let written = write_back_subagent_memory(&db, "sa_001", "parent");
+    assert_eq!(written, 2, "should write back 2 custom blocks");
+
+    // Verify they exist under parent with subagent: prefix.
+    let parent_blocks = get_memory_blocks(&db, "parent")?;
+    let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert!(labels.contains(&"subagent:api_design"), "should have subagent:api_design");
+    assert!(labels.contains(&"subagent:db_choice"), "should have subagent:db_choice");
+
+    // Verify values were copied correctly.
+    let api_val = parent_blocks.iter().find(|(l, _, _)| l == "subagent:api_design")
+        .map(|(_, v, _)| v.as_str()).unwrap_or("");
+    assert_eq!(api_val, "REST with HATEOAS links");
+    Ok(())
+}
+
+#[test]
+fn test_a15_write_back_excludes_system_blocks() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "parent")?;
+    make_agent(&db, "sa_002")?;
+
+    // Subagent has system blocks (seeded from parent) + a custom one.
+    upsert_memory_block(&db, "sa_002", "persona", "I am helpful", None, None)?;
+    upsert_memory_block(&db, "sa_002", "human", "User is Alice", None, None)?;
+    upsert_memory_block(&db, "sa_002", "project", "Rust project", None, None)?;
+    upsert_memory_block(&db, "sa_002", "active_goal", "doing stuff", None, None)?;
+    upsert_memory_block(&db, "sa_002", "skill:rust", "rust skill body", None, None)?;
+    upsert_memory_block(&db, "sa_002", "finding", "discovered bug in auth", None, None)?;
+
+    let written = write_back_subagent_memory(&db, "sa_002", "parent");
+    assert_eq!(written, 1, "only 'finding' should be written back");
+
+    let parent_blocks = get_memory_blocks(&db, "parent")?;
+    let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert!(labels.contains(&"subagent:finding"), "should have subagent:finding");
+    assert!(!labels.contains(&"subagent:persona"), "should NOT have subagent:persona");
+    assert!(!labels.contains(&"subagent:skill:rust"), "should NOT have subagent:skill:rust");
+    Ok(())
+}
+
+#[test]
+fn test_a15_write_back_skips_empty_values() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "parent")?;
+    make_agent(&db, "sa_003")?;
+
+    upsert_memory_block(&db, "sa_003", "empty_block", "", None, None)?;
+    upsert_memory_block(&db, "sa_003", "whitespace_block", "   \n  ", None, None)?;
+    upsert_memory_block(&db, "sa_003", "real_block", "valuable data", None, None)?;
+
+    let written = write_back_subagent_memory(&db, "sa_003", "parent");
+    assert_eq!(written, 1, "only non-empty block should be written back");
+    Ok(())
+}
+
+#[test]
+fn test_a15_write_back_no_blocks_returns_zero() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "parent")?;
+    make_agent(&db, "sa_004")?;
+
+    let written = write_back_subagent_memory(&db, "sa_004", "parent");
+    assert_eq!(written, 0, "no blocks → 0 written back");
+    Ok(())
+}

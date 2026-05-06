@@ -1101,6 +1101,102 @@ pub fn set_memory_tier(
     Ok(n > 0)
 }
 
+// ── A15: Subagent write-back ──────────────────────────────────────────────────
+
+/// Labels that are ephemeral to the subagent session and should NOT be
+/// written back to the parent agent (they either already exist or are
+/// parent-seeded copies).
+const WRITEBACK_EXCLUDE: &[&str] = &[
+    "persona",
+    "human",
+    "project",
+    "active_goal",
+    "recent_edits",
+    "session_summary",
+    "session_index",
+    "skills",
+];
+
+/// A fact extracted from the subagent's memory for write-back.
+#[derive(Debug, Clone)]
+pub struct WritebackFact {
+    pub label: String,
+    pub value: String,
+    pub description: String,
+}
+
+/// Extract typed facts from a subagent's memory and write them to the
+/// parent agent's memory, prefixed with `subagent:` so the parent can
+/// distinguish inherited knowledge.
+///
+/// Called just before the ephemeral subagent DB row is deleted.
+///
+/// Returns the number of facts written back.
+pub fn write_back_subagent_memory(
+    db: &Db,
+    subagent_id: &str,
+    parent_agent_id: &str,
+) -> usize {
+    let blocks = get_memory_blocks(db, subagent_id).unwrap_or_default();
+
+    let facts: Vec<WritebackFact> = blocks
+        .into_iter()
+        .filter(|(label, value, _)| {
+            // Skip excluded labels.
+            if WRITEBACK_EXCLUDE.contains(&label.as_str()) {
+                return false;
+            }
+            // Skip skill blocks (parent already has them).
+            if label.starts_with("skill:") {
+                return false;
+            }
+            // Skip empty values.
+            if value.trim().is_empty() {
+                return false;
+            }
+            true
+        })
+        .map(|(label, value, desc)| WritebackFact {
+            label,
+            value,
+            description: desc,
+        })
+        .collect();
+
+    let mut written = 0;
+    for fact in &facts {
+        // Prefix with `subagent:` to namespace it under the parent.
+        let parent_label = format!("subagent:{}", fact.label);
+        let desc = if fact.description.is_empty() {
+            Some(format!("Written back from subagent {subagent_id}"))
+        } else {
+            Some(format!("{} (from subagent {subagent_id})", fact.description))
+        };
+
+        if upsert_memory_block(
+            db,
+            parent_agent_id,
+            &parent_label,
+            &fact.value,
+            desc.as_deref(),
+            None,
+        )
+        .is_ok()
+        {
+            written += 1;
+        }
+    }
+
+    if written > 0 {
+        tracing::debug!(
+            "A15 write-back: {written}/{} facts from {subagent_id} → {parent_agent_id}",
+            facts.len()
+        );
+    }
+
+    written
+}
+
 /// Returns (label, value, description, tier) for all blocks, ordered by tier priority then label.
 /// Used by the API get_memory endpoint to expose tier information.
 pub fn get_memory_blocks_full(

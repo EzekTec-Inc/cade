@@ -328,6 +328,14 @@ pub(super) async fn handle_run_subagent_tool(
     let elapsed = start_time.elapsed().as_secs() as u32;
     drop(permit);
 
+    // A15: Write back any typed facts the subagent discovered to the
+    // parent agent's memory before the ephemeral row is deleted.
+    let writeback_count = cade_store::sqlite::memory::write_back_subagent_memory(
+        &state.db,
+        &subagent_id,
+        parent_agent_id,
+    );
+
     // Clean up the ephemeral subagent DB row — memory it wrote is no
     // longer needed once the result has been returned to the parent.
     let _ = cade_store::sqlite::delete_agent(&state.db, &subagent_id);
@@ -346,6 +354,7 @@ pub(super) async fn handle_run_subagent_tool(
         "result_preview": &result_preview,
         "elapsed_secs": elapsed,
         "is_error": is_error,
+        "writeback_facts": writeback_count,
     });
     let ev = axum::response::sse::Event::default().data(complete_event.to_string());
     let _ = sse_tx.send(Ok(ev)).await;

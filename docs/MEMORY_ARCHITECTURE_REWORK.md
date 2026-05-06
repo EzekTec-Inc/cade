@@ -1,6 +1,6 @@
 # CADE Memory Architecture Rework Spec
 
-> **Status:** Phases 1–4 COMPLETE, Phase 5 pending
+> **Status:** ALL 5 PHASES COMPLETE
 > **Target:** Address structural amnesia and hallucination root causes.
 
 ## Implementation Status
@@ -11,7 +11,7 @@
 | **Phase 2** | A4 (rich excerpts), A5 (chunking), A6 (chunk search) | ✅ DONE |
 | **Phase 3** | A7 (greedy packing), A8 (overflow manifest), A9 (proactive injection) | ✅ DONE |
 | **Phase 4** | A10 (access tracking), A11 (decay scoring), A12 (staleness nudge) | ✅ DONE |
-| **Phase 5** | A13 (expanded observations), A14 (session eviction), A15 (subagent write-back) | ⏳ Pending |
+| **Phase 5** | A13 (expanded observations), A14 (session eviction), A15 (subagent write-back) | ✅ DONE |
 
 ## 1. Gap Analysis
 
@@ -55,17 +55,18 @@
 - **A11:** `recency_frequency_score()` computes `recency × frequency` composite: `frequency = 1 + log2(access_count + 1)`, `recency = 1 / (1 + turns_idle × 0.02)`. `search_memory` Phase 1 now ranks by this composite score instead of raw `updated_at`.
 - **A12:** Server-side nudge already implemented: `ACTIVE_GOAL_NUDGE_INTERVAL = 5`, injects `⚠️` system message when `active_goal` stale. Already existed.
 
-### Phase 5: Multi-Agent Consolidation (Pending)
-- **A13:** Expand observation trail to 50 obs/4000 chars (128k) or 75 obs/6000 chars (200k). Add turn offsets.
-- **A14:** Improve session eviction: 500-char `session_index` excerpts + archival_memory backup.
-- **A15:** Subagent write-back: background reflection pass extracts typed facts to parent memory.
+### Phase 5: Multi-Agent Consolidation ✅
+- **A13:** Observation budget already scales by model context window (linear from 32k baseline). Turn offsets with `[turn N, Xm ago]` already in `render_observations_section`. Already existed.
+- **A14:** Session eviction already uses 500-char `truncate_head_to` excerpts and backs up full evicted content to `archival_memory` with `evicted-session-summary` tag. Already existed.
+- **A15:** `write_back_subagent_memory()` extracts custom memory blocks from the subagent before deletion. System blocks (persona, human, project, etc.) and skill blocks are excluded. Facts are written to parent with `subagent:` label prefix. `subagent_complete` SSE event includes `writeback_facts` count.
 
 ## 3. Test Coverage
 
-20 new tests across Phases 1–4:
+24 new tests across Phases 1–5:
 - Phase 1: 6 tests (3 truncation + 3 provenance)
 - Phase 2: 7 tests (3 chunking logic + 3 chunk storage + 1 chunk search)
 - Phase 3: 3 tests (keyword recall + empty query + deduplication)
 - Phase 4: 4 tests (3 scoring math + 1 end-to-end ranking)
+- Phase 5: 4 tests (custom block copy + system block exclusion + empty skip + zero-block)
 
 Full workspace: 1,570+ tests, 0 failures, 0 clippy warnings.

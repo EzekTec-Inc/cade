@@ -1221,3 +1221,44 @@ scoring) is the new work.
 ```sh
 git checkout cp-9b757e75-efad-4bba-b54a-b248240cb4d6 -- .
 ```
+
+---
+**UTC Timestamp:** 2026-05-05 22:30:00Z (approx)
+**Summary of change:** Phase 5 of Memory Architecture Rework (A13 + A14 + A15) — FINAL PHASE
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs` (A15: write_back_subagent_memory fn, WritebackFact struct, WRITEBACK_EXCLUDE list)
+- `crates/cade-server/src/server/api/run/subagent.rs` (A15: call write_back before delete_agent, writeback_facts in completion event)
+- `crates/cade-store/src/sqlite/memory/tests.rs` (4 new tests for subagent write-back)
+- `docs/MEMORY_ARCHITECTURE_REWORK.md` (updated to reflect all 5 phases complete)
+
+**Reason:**
+Phase 5 (final) of the memory architecture rework. A13 (expanded observation trail)
+and A14 (improved session eviction) were already implemented. A15 (subagent write-back)
+is the new work.
+
+**Previous behavior:**
+- When a subagent completed, its ephemeral DB row was deleted immediately.
+- Any memory blocks (typed facts, decisions, constraints) the subagent wrote
+  during its execution were lost forever.
+- The parent agent only received the subagent's final text output.
+
+**New behavior:**
+- Before deleting the ephemeral subagent row, `write_back_subagent_memory()`
+  extracts all custom memory blocks the subagent wrote.
+- System blocks (persona, human, project, active_goal, etc.) and skill blocks
+  are excluded (they're parent-seeded copies).
+- Remaining facts are written to the parent's memory with `subagent:` prefix
+  (e.g. `subagent:api_design`) with provenance in the description.
+- The `subagent_complete` SSE event now includes `writeback_facts` count.
+- 4 new tests validate: custom block copying, system block exclusion, empty
+  value skipping, and zero-block edge case.
+
+**Verification:**
+- `cargo build --workspace` → clean
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean
+- `cargo test --workspace` → 1,570+ tests pass, 0 failures
+
+**Rollback steps:**
+```sh
+git checkout cp-eed1f657-eb50-4f31-9c35-2edaf739925e -- .
+```
