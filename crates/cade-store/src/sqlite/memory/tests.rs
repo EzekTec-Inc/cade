@@ -2173,3 +2173,39 @@ fn test_a15_write_back_no_blocks_returns_zero() -> Result<()> {
     assert_eq!(written, 0, "no blocks → 0 written back");
     Ok(())
 }
+
+/// REC-3: Blocks whose label starts with `subagent:` must NOT be written
+/// back.  Without this filter a cascading chain of subagent invocations
+/// produces labels like `subagent:subagent:subagent:foo`.
+#[test]
+fn test_a15_write_back_excludes_subagent_prefix() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "parent")?;
+    make_agent(&db, "sa_005")?;
+
+    // Simulate a subagent that inherited `subagent:foo` from a previous
+    // write-back cycle (the parent seeded it), plus a genuine new finding.
+    upsert_memory_block(&db, "sa_005", "subagent:foo", "inherited data", None, None)?;
+    upsert_memory_block(&db, "sa_005", "subagent:bar:baz", "deeply inherited", None, None)?;
+    upsert_memory_block(&db, "sa_005", "new_finding", "fresh discovery", None, None)?;
+
+    let written = write_back_subagent_memory(&db, "sa_005", "parent");
+    assert_eq!(written, 1, "only 'new_finding' should be written back");
+
+    let parent_blocks = get_memory_blocks(&db, "parent")?;
+    let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert!(
+        labels.contains(&"subagent:new_finding"),
+        "should have subagent:new_finding"
+    );
+    // These must NOT appear — they would cascade to subagent:subagent:*
+    assert!(
+        !labels.contains(&"subagent:subagent:foo"),
+        "must NOT cascade subagent:subagent:foo"
+    );
+    assert!(
+        !labels.contains(&"subagent:subagent:bar:baz"),
+        "must NOT cascade subagent:subagent:bar:baz"
+    );
+    Ok(())
+}

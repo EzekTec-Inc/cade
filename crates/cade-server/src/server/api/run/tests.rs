@@ -647,6 +647,167 @@ use cade_ai::LlmToolCall;
         assert!(names.iter().any(|n| n == "read_file"));
     }
 
+    // ── REC-1: Wall-clock timeout ─────────────────────────────────────────
+
+    /// Mock LLM that sleeps for a very long time on each `complete()` call,
+    /// simulating a hung tool or slow provider.
+    struct SlowLlm;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for SlowLlm {
+        async fn complete(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            // Sleep for 60 seconds — the test timeout is 2 seconds.
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok(cade_ai::CompletionResponse {
+                content: Some("should never reach here".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            unreachable!("stream() not used")
+        }
+    }
+
+    /// REC-1: The subagent loop must enforce a wall-clock timeout. When the
+    /// timeout fires (before the LLM even responds), the subagent must
+    /// return an error result mentioning "timeout" and clean up its
+    /// ephemeral row.
+    ///
+    /// We use `subagent_timeout_secs()` which returns 2s under `cfg(test)`.
+    #[tokio::test]
+    async fn subagent_loop_respects_wall_clock_timeout() {
+        let llm = std::sync::Arc::new(SlowLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let agents_before: i64 = state
+            .db
+            .lock()
+            .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
+            .unwrap();
+
+        let args = serde_json::json!({ "prompt": "slow task" });
+
+        let start = std::time::Instant::now();
+        let result = handle_run_subagent_tool(&state, "parent_slow", "tc_slow", &args, tx).await;
+        let elapsed = start.elapsed();
+
+        // Must return within ~5s (2s test timeout + slack), NOT 60s.
+        assert!(
+            elapsed.as_secs() < 10,
+            "must respect timeout, took {elapsed:?}"
+        );
+        assert!(result.is_error, "timed-out subagent must be an error");
+        assert!(
+            result.output.to_lowercase().contains("timeout"),
+            "error must mention timeout, got: {}",
+            result.output
+        );
+
+        // Ephemeral row must be cleaned up (REC-2 guard fires on timeout path).
+        let agents_after: i64 = state
+            .db
+            .lock()
+            .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            agents_before, agents_after,
+            "ephemeral row must be cleaned up after timeout"
+        );
+    }
+
+    // ── REC-2: EphemeralAgentGuard cleanup ────────────────────────────────
+
+    /// REC-2: An `EphemeralAgentGuard` must delete the ephemeral agent row
+    /// and write back subagent memory when dropped, even if the agentic
+    /// loop panics or returns early.
+    #[test]
+    fn ephemeral_agent_guard_cleans_up_on_drop() {
+        use super::subagent::EphemeralAgentGuard;
+
+        let db = cade_store::sqlite::open(":memory:").unwrap();
+        // Create parent agent.
+        cade_store::sqlite::create_agent(
+            &db,
+            &cade_store::sqlite::AgentRow {
+                id: "parent_g".into(),
+                name: "parent".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+        // Create ephemeral subagent row (simulates line 197 of subagent.rs).
+        cade_store::sqlite::create_agent(
+            &db,
+            &cade_store::sqlite::AgentRow {
+                id: "sa_guard".into(),
+                name: "ephemeral".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        // Subagent wrote a finding during its loop.
+        cade_store::sqlite::upsert_memory_block(
+            &db,
+            "sa_guard",
+            "my_finding",
+            "important data",
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Row exists before drop.
+        let exists_before = cade_store::sqlite::get_agent(&db, "sa_guard")
+            .unwrap()
+            .is_some();
+        assert!(exists_before, "ephemeral row must exist before guard drop");
+
+        // Create guard, then drop it.
+        {
+            let _guard = EphemeralAgentGuard::new(
+                db.clone(),
+                "sa_guard".to_string(),
+                "parent_g".to_string(),
+            );
+        } // ← drop fires here
+
+        // Row must be gone.
+        let exists_after = cade_store::sqlite::get_agent(&db, "sa_guard")
+            .unwrap()
+            .is_some();
+        assert!(!exists_after, "ephemeral row must be deleted after guard drop");
+
+        // Write-back must have happened: parent should have `subagent:my_finding`.
+        let parent_blocks = cade_store::sqlite::get_memory_blocks(&db, "parent_g").unwrap();
+        let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
+        assert!(
+            labels.contains(&"subagent:my_finding"),
+            "write-back must run before delete; got labels: {labels:?}"
+        );
+    }
+
     // ── Phase A2: skills meta-tools ──────────────────────────────────────
 
     /// Phase A2 RED: `load_skill_ref` for a skill that does not exist must

@@ -1,3 +1,40 @@
+## 2026-05-07T14:30:00Z — fix(subagent): Implement REC-1, REC-2, REC-3 audit recommendations
+
+**Task:** Implement the three P1–P2 recommendations from the subagent system audit: wall-clock timeout (REC-1), ephemeral row cleanup guard (REC-2), and cascading write-back prefix filter (REC-3).
+
+**Files modified:**
+- `crates/cade-server/src/server/api/run/subagent.rs`
+  - REC-1: Added `subagent_timeout_secs()` helper (300s prod, 2s test) and wrapped agentic loop in `tokio::time::timeout`. On timeout, sets error with "timeout" message.
+  - REC-2: Added `EphemeralAgentGuard` struct with `Drop` impl. Ensures `write_back_subagent_memory` + `delete_agent` run even on panic/early-return. Replaced manual cleanup calls (lines 394–402) with guard.
+- `crates/cade-store/src/sqlite/memory.rs`
+  - REC-3: Added `label.starts_with("subagent:")` check to `write_back_subagent_memory` filter (line 1153). Prevents cascading `subagent:subagent:subagent:*` labels.
+- `crates/cade-server/src/server/api/run/tests.rs`
+  - Added `subagent_loop_respects_wall_clock_timeout` (async, uses SlowLlm mock)
+  - Added `ephemeral_agent_guard_cleans_up_on_drop` (sync, verifies guard Drop + write-back)
+- `crates/cade-store/src/sqlite/memory/tests.rs`
+  - Added `test_a15_write_back_excludes_subagent_prefix` (verifies cascading labels blocked)
+
+**Previous behavior:**
+- No wall-clock timeout — hung LLM/tool held semaphore permit indefinitely
+- Ephemeral agent row leaked on panic between create (line 197) and delete (line 341)
+- `subagent:` prefixed blocks cascaded through write-back: `subagent:subagent:subagent:foo`
+
+**New behavior:**
+- Agentic loop times out after `CADE_SUBAGENT_TIMEOUT_SECS` (default 300s, env-configurable). Returns error with "timeout" message. EphemeralAgentGuard ensures cleanup.
+- `EphemeralAgentGuard` Drop runs write-back + delete on all exit paths (happy, error, panic)
+- Write-back filters out `subagent:` prefixed labels — no cascading duplication
+
+**Dependency policy:** No new dependencies. EphemeralAgentGuard is a manual Drop struct (no scopeguard crate).
+
+**Test results:** 1579 passed, 0 failed. `cargo clippy --workspace -- -D warnings` clean.
+
+**Rollback steps:**
+```sh
+git checkout cp-3ce7db43  # or: git revert HEAD
+```
+
+---
+
 ## 2026-05-04T04:50:00Z — fix(gui): theme variant field + overlay backdrops + /theme list
 
 **Task:** P0: Fix `dark_mode` hardcoded to `true` in GUI. P1: Theme overlay backdrops. P1: Add `/theme list`.

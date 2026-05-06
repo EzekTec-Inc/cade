@@ -4,11 +4,90 @@ use serde_json::json;
 
 use crate::server::state::AppState;
 
+/// REC-2: Drop guard that ensures the ephemeral agent DB row is cleaned
+/// up even if the agentic loop panics or returns early.  On drop it:
+///   1. Writes back any subagent findings to the parent (A15).
+///   2. Deletes the ephemeral agent row.
+///
+/// The `writeback_count` field is set during drop so callers that need
+/// the count can read it *before* drop (by calling `write_back_and_delete`
+/// manually) or accept that the Drop path returns nothing.
+pub(super) struct EphemeralAgentGuard {
+    db: cade_store::sqlite::Db,
+    subagent_id: String,
+    parent_agent_id: String,
+    /// Set to `true` once the guard has already run (e.g. manual call).
+    defused: bool,
+}
+
+impl EphemeralAgentGuard {
+    pub(super) fn new(
+        db: cade_store::sqlite::Db,
+        subagent_id: String,
+        parent_agent_id: String,
+    ) -> Self {
+        Self {
+            db,
+            subagent_id,
+            parent_agent_id,
+            defused: false,
+        }
+    }
+
+    /// Run write-back + delete explicitly, returning the write-back count.
+    /// Defuses the Drop guard so it won't run a second time.
+    pub(super) fn write_back_and_delete(&mut self) -> usize {
+        if self.defused {
+            return 0;
+        }
+        self.defused = true;
+        let count = cade_store::sqlite::memory::write_back_subagent_memory(
+            &self.db,
+            &self.subagent_id,
+            &self.parent_agent_id,
+        );
+        let _ = cade_store::sqlite::delete_agent(&self.db, &self.subagent_id);
+        count
+    }
+}
+
+impl Drop for EphemeralAgentGuard {
+    fn drop(&mut self) {
+        if !self.defused {
+            self.defused = true;
+            let _ = cade_store::sqlite::memory::write_back_subagent_memory(
+                &self.db,
+                &self.subagent_id,
+                &self.parent_agent_id,
+            );
+            let _ = cade_store::sqlite::delete_agent(&self.db, &self.subagent_id);
+        }
+    }
+}
+
 pub(super) fn filter_subagent_tools(schemas: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
     schemas
         .into_iter()
         .filter(|s| s["name"].as_str() != Some("run_subagent"))
         .collect()
+}
+
+/// REC-1: Wall-clock timeout for the subagent agentic loop.
+///
+/// In production reads `CADE_SUBAGENT_TIMEOUT_SECS` (default 300).
+/// Under `cfg(test)` returns 2 seconds so tests run fast.
+fn subagent_timeout_secs() -> u64 {
+    #[cfg(test)]
+    {
+        2
+    }
+    #[cfg(not(test))]
+    {
+        std::env::var("CADE_SUBAGENT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300)
+    }
 }
 
 /// can render progress cards.
@@ -208,137 +287,129 @@ pub(super) async fn handle_run_subagent_tool(
         },
     );
 
-    for _iter in 0..max_iters {
-        let llm_req = cade_ai::CompletionRequest {
-            model: model.clone(),
-            messages: messages.clone(),
-            tools: parent_tool_schemas.clone(),
-            // Bug 4 fix: raised from 4096 → 8192. 4k was too low for coding
-            // subagents; complex outputs (file writes, detailed analysis)
-            // were silently truncated mid-response. 8k matches the typical
-            // per-turn budget for the parent agent loop.
-            max_tokens: 8192,
-            reasoning_effort: None,
-        };
+    // REC-2: Drop guard ensures write-back + row deletion even on panic.
+    let mut ephemeral_guard = EphemeralAgentGuard::new(
+        state.db.clone(),
+        subagent_id.clone(),
+        parent_agent_id.to_string(),
+    );
 
-        let resp = match state.llm.complete(&llm_req).await {
-            Ok(r) => r,
-            Err(e) => {
-                llm_err = Some(e.to_string());
-                break;
-            }
-        };
-
-        // Accumulate the assistant's prose across iterations.
-        //
-        // Previously this overwrote `last_text` on every iter, which silently
-        // discarded all intermediate explanation/working/findings the
-        // subagent produced before its final tool call.  The parent only
-        // ever saw the LAST iteration's text — typically empty, since the
-        // last iter is often a tool call with no prose.
-        //
-        // Now we append, joining iterations with a blank line so the parent
-        // receives the full investigation log as a single coherent message.
-        if let Some(t) = &resp.content
-            && !t.is_empty()
-        {
-            if !last_text.is_empty() {
-                last_text.push_str("\n\n");
-            }
-            last_text.push_str(t);
-        }
-
-        if resp.tool_calls.is_empty() {
-            // Final answer reached.
-            break;
-        }
-
-        // Append the assistant message (with tool_calls) so the next iter
-        // sees it in conversational context.
-        messages.push(LlmMessage {
-            role: "assistant".to_string(),
-            content: resp.content.clone().unwrap_or_default(),
-            tool_calls: Some(resp.tool_calls.clone()),
-            tool_call_id: None,
-            images: None,
-        });
-
-        // Dispatch each tool call and append the result back into messages.
-        for tc in &resp.tool_calls {
-            // Hard re-entry guard: even if `run_subagent` somehow leaked
-            // into the schema list, refuse to recurse without a depth
-            // bump.  We forward the same dispatch path the parent uses,
-            // but inject `_subagent_depth: next_depth` so the recursive
-            // call sees the updated counter.
-            let tool_result = if tc.name == "run_subagent" {
-                let mut nested_args = tc.arguments.clone();
-                if let Some(obj) = nested_args.as_object_mut() {
-                    obj.insert(
-                        "_subagent_depth".to_string(),
-                        serde_json::Value::from(next_depth as u64),
-                    );
-                }
-                // Re-enter via a Box::pin to satisfy async recursion.
-                Box::pin(handle_run_subagent_tool(
-                    state,
-                    parent_agent_id,
-                    &tc.id,
-                    &nested_args,
-                    sse_tx.clone(),
-                ))
-                .await
-            } else if let Some(intercepted) =
-                Box::pin(super::meta_tools::intercept_meta_tool(state, &subagent_id, tc, sse_tx.clone())).await
-            {
-                // Meta-tools (memory, skills, checkpoints, artifacts)
-                // are dispatched against the subagent's own DB row so its
-                // memory writes don't pollute the parent agent's store.
-                intercepted
-            } else {
-                cade_agent::tools::manager::dispatch(
-                    tc.id.clone(),
-                    &tc.name,
-                    &tc.arguments,
-                    &state.mcp,
-                )
-                .await
+    // REC-1: Wrap the agentic loop in a wall-clock timeout to prevent
+    // a hung LLM or tool call from holding the semaphore permit forever.
+    let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
+    let loop_result = tokio::time::timeout(timeout_dur, async {
+        for _iter in 0..max_iters {
+            let llm_req = cade_ai::CompletionRequest {
+                model: model.clone(),
+                messages: messages.clone(),
+                tools: parent_tool_schemas.clone(),
+                max_tokens: 8192,
+                reasoning_effort: None,
             };
 
-            // Track file-editing tools in the parent agent's recent_edits
-            // memory block so the parent knows what the subagent changed.
-            if !tool_result.is_error
-                && cade_agent::tools::manager::is_file_edit_tool(&tc.name)
-                && let Some(path) = tc.arguments["path"]
-                    .as_str()
-                    .or_else(|| tc.arguments["file_path"].as_str())
+            let resp = match state.llm.complete(&llm_req).await {
+                Ok(r) => r,
+                Err(e) => {
+                    llm_err = Some(e.to_string());
+                    break;
+                }
+            };
+
+            // Accumulate the assistant's prose across iterations.
+            if let Some(t) = &resp.content
+                && !t.is_empty()
+            {
+                if !last_text.is_empty() {
+                    last_text.push_str("\n\n");
+                }
+                last_text.push_str(t);
+            }
+
+            if resp.tool_calls.is_empty() {
+                break;
+            }
+
+            messages.push(LlmMessage {
+                role: "assistant".to_string(),
+                content: resp.content.clone().unwrap_or_default(),
+                tool_calls: Some(resp.tool_calls.clone()),
+                tool_call_id: None,
+                images: None,
+            });
+
+            for tc in &resp.tool_calls {
+                let tool_result = if tc.name == "run_subagent" {
+                    let mut nested_args = tc.arguments.clone();
+                    if let Some(obj) = nested_args.as_object_mut() {
+                        obj.insert(
+                            "_subagent_depth".to_string(),
+                            serde_json::Value::from(next_depth as u64),
+                        );
+                    }
+                    Box::pin(handle_run_subagent_tool(
+                        state,
+                        parent_agent_id,
+                        &tc.id,
+                        &nested_args,
+                        sse_tx.clone(),
+                    ))
+                    .await
+                } else if let Some(intercepted) =
+                    Box::pin(super::meta_tools::intercept_meta_tool(
+                        state,
+                        &subagent_id,
+                        tc,
+                        sse_tx.clone(),
+                    ))
+                    .await
+                {
+                    intercepted
+                } else {
+                    cade_agent::tools::manager::dispatch(
+                        tc.id.clone(),
+                        &tc.name,
+                        &tc.arguments,
+                        &state.mcp,
+                    )
+                    .await
+                };
+
+                if !tool_result.is_error
+                    && cade_agent::tools::manager::is_file_edit_tool(&tc.name)
+                    && let Some(path) = tc.arguments["path"]
+                        .as_str()
+                        .or_else(|| tc.arguments["file_path"].as_str())
                 {
                     super::record_recent_edit_db(&state.db, parent_agent_id, path);
                 }
 
-            messages.push(LlmMessage {
-                role: "tool".to_string(),
-                content: tool_result.output.clone(),
-                tool_calls: None,
-                tool_call_id: Some(tool_result.tool_call_id.clone()),
-                images: None,
-            });
+                messages.push(LlmMessage {
+                    role: "tool".to_string(),
+                    content: tool_result.output.clone(),
+                    tool_calls: None,
+                    tool_call_id: Some(tool_result.tool_call_id.clone()),
+                    images: None,
+                });
+            }
         }
+    })
+    .await;
+
+    // REC-1: If the timeout fired, record it as an LLM error.
+    if loop_result.is_err() {
+        llm_err = Some(format!(
+            "Subagent wall-clock timeout after {}s. The task was terminated to free resources.",
+            subagent_timeout_secs()
+        ));
     }
 
     let elapsed = start_time.elapsed().as_secs() as u32;
     drop(permit);
 
-    // A15: Write back any typed facts the subagent discovered to the
-    // parent agent's memory before the ephemeral row is deleted.
-    let writeback_count = cade_store::sqlite::memory::write_back_subagent_memory(
-        &state.db,
-        &subagent_id,
-        parent_agent_id,
-    );
-
-    // Clean up the ephemeral subagent DB row — memory it wrote is no
-    // longer needed once the result has been returned to the parent.
-    let _ = cade_store::sqlite::delete_agent(&state.db, &subagent_id);
+    // A15 + REC-2: Explicitly run write-back + delete via the guard.
+    // On the happy path this gives us the writeback_count; on panic the
+    // Drop impl handles it automatically (count is lost but cleanup happens).
+    let writeback_count = ephemeral_guard.write_back_and_delete();
 
     let (output, is_error) = match llm_err {
         Some(e) => (format!("Subagent error: {e}"), true),

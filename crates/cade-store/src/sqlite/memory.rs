@@ -1150,6 +1150,12 @@ pub fn write_back_subagent_memory(
             if label.starts_with("skill:") {
                 return false;
             }
+            // REC-3: Skip blocks already prefixed with `subagent:` to
+            // prevent cascading labels (subagent:subagent:subagent:…)
+            // when subagents inherit write-back results from prior runs.
+            if label.starts_with("subagent:") {
+                return false;
+            }
             // Skip empty values.
             if value.trim().is_empty() {
                 return false;
