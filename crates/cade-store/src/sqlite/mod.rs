@@ -109,7 +109,9 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             expires_at  INTEGER,
             -- F7 (Migration 9): activity-weighted aging
             access_count       INTEGER NOT NULL DEFAULT 0,
-            last_access_turn   INTEGER NOT NULL DEFAULT 0
+            last_access_turn   INTEGER NOT NULL DEFAULT 0,
+            -- A3 (Migration 12): provenance tracking
+            source_turn        INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS agent_memory_blocks (
@@ -139,6 +141,18 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_evidence_block ON memory_evidence(block_id);
+
+        -- A5 (Migration 13): Semantic chunks for large memory blocks.
+        CREATE TABLE IF NOT EXISTS memory_chunks (
+            id          TEXT PRIMARY KEY,
+            block_id    TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            content     TEXT NOT NULL,
+            char_count  INTEGER NOT NULL,
+            embedding   BLOB,
+            FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chunks_block ON memory_chunks(block_id, chunk_index);
 
         CREATE TABLE IF NOT EXISTS tools (
             id          TEXT PRIMARY KEY,
@@ -635,6 +649,42 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             }
         }
         conn.execute("PRAGMA user_version = 11", [])?;
+    }
+
+    // ── Migration 12: A3 provenance — add source_turn column ─────────────────
+    // `source_te_id` (TEXT, already exists from migration 2) is repurposed as
+    // `source_tool_call_id` — it stores the tool_call_id that triggered the
+    // memory write.  `source_turn` (INTEGER) records the agent's turn counter
+    // at write time so we can trace *when* a fact was established.
+    if current_version < 12 {
+        let r = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN source_turn INTEGER",
+            [],
+        );
+        if let Err(e) = r {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                tracing::warn!("Migration 12 (A3-provenance) ADD COLUMN source_turn failed: {e}");
+            }
+        }
+        conn.execute("PRAGMA user_version = 12", [])?;
+    }
+
+    // ── Migration 13: A5 semantic chunks table ───────────────────────────────
+    if current_version < 13 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory_chunks (
+                 id          TEXT PRIMARY KEY,
+                 block_id    TEXT NOT NULL,
+                 chunk_index INTEGER NOT NULL,
+                 content     TEXT NOT NULL,
+                 char_count  INTEGER NOT NULL,
+                 embedding   BLOB,
+                 FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
+             );
+             CREATE INDEX IF NOT EXISTS idx_chunks_block ON memory_chunks(block_id, chunk_index);",
+        )?;
+        conn.execute("PRAGMA user_version = 13", [])?;
     }
 
     Ok(())

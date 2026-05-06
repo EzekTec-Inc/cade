@@ -1067,3 +1067,121 @@ workspace pass.
 ```sh
 git checkout cp-fb8607f8-6988-4298-a2fa-7db52ece83ac -- .
 ```
+
+---
+**UTC Timestamp:** 2026-05-05 20:30:00Z (approx)
+**Summary of change:** Phase 1 of Memory Architecture Rework (A1 + A2 + A3)
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs` (A1: truncation logic, A3: stamp_provenance fn)
+- `crates/cade-store/src/sqlite/mod.rs` (A3: migration 12, schema column)
+- `crates/cade-server/src/server/api/run/meta_tools.rs` (A3: provenance threading through all 4 memory handlers)
+- `crates/cade-store/src/sqlite/memory/tests.rs` (6 new tests + 1 updated test)
+- `docs/MEMORY_ARCHITECTURE_REWORK.md` (created — full 5-phase spec)
+
+**Reason:**
+Address root causes of agent amnesia and hallucination (from memory-deficiency-report.md).
+Phase 1 covers A1 (write-ahead verification), A2 (ground truth protocol — already present),
+and A3 (provenance tracking on memory writes).
+
+**Previous behavior:**
+- `upsert_memory_block` returned a hard error when content exceeded `max_chars`, so the
+  agent got "Failed: ..." and the data was lost entirely.
+- `was_truncated` in `WriteResult` was always `false`.
+- `source_te_id` and `source_msg_id` columns existed in the schema but were never populated.
+- No provenance tracking: memory blocks had no record of which turn or tool call wrote them.
+
+**New behavior:**
+- `upsert_memory_block` truncates to `max_chars` and returns `was_truncated = true` so the
+  agent receives partial data + warning instead of nothing.
+- `handle_update_memory` (and typed/patch/field variants) surface `⚠️ WARNING: Content was
+  truncated from N to M chars` when truncation occurs.
+- All 4 server-side memory write handlers now call `stamp_provenance()` after successful
+  writes, recording the agent's turn counter and tool_call_id in `source_turn` and
+  `source_te_id` columns.
+- Migration 12 adds `source_turn INTEGER` column to `shared_memory_blocks`.
+- 6 new tests validate truncation + provenance behavior.
+
+**Verification:**
+- `cargo build --workspace` → clean
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean
+- `cargo test --workspace` → 1,560+ tests pass, 0 failures
+
+**Rollback steps:**
+```sh
+git checkout cp-62fd17fe-9312-4696-b619-3061ed322231 -- .
+```
+
+---
+**UTC Timestamp:** 2026-05-05 21:00:00Z (approx)
+**Summary of change:** Phase 2 of Memory Architecture Rework (A4 + A5 + A6)
+**Files modified:**
+- `crates/cade-store/src/sqlite/mod.rs` (A5: migration 13 + base schema for memory_chunks table)
+- `crates/cade-store/src/sqlite/memory.rs` (A5: chunk_text, rechunk_block, TextChunk, constants)
+- `crates/cade-store/src/sqlite/tools.rs` (A6: chunk-level keyword search in search_memory)
+- `crates/cade-server/src/server/api/run/meta_tools.rs` (A5: rechunk_block calls in all 4 handlers)
+- `crates/cade-store/src/sqlite/memory/tests.rs` (7 new tests for chunking + chunk search)
+
+**Reason:**
+Phase 2 of the memory architecture rework. A4 (rich archived excerpts) was already implemented.
+A5 (semantic chunking) and A6 (chunk-level search) are the new work.
+
+**Previous behavior:**
+- Large memory blocks (>500 chars) were stored as monolithic blobs.
+- search_memory only searched at the whole-block level via LIKE.
+- No memory_chunks table existed.
+
+**New behavior:**
+- New `memory_chunks` table stores overlapping sentence-boundary chunks for blocks > 500 chars.
+- `rechunk_block()` is called after every memory write in all 4 server-side handlers.
+- Chunks support per-chunk embeddings via the Embedder trait.
+- `search_memory()` now also queries `memory_chunks` for keyword hits, surfacing
+  the relevant portion of large blocks as `[chunk N] ...` snippets.
+- 7 new tests validate chunking logic (splits, overlap, storage, replacement, search).
+
+**Verification:**
+- `cargo build --workspace` → clean
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean
+- `cargo test --workspace` → 1,570+ tests pass, 0 failures
+
+**Rollback steps:**
+```sh
+git checkout cp-93090b51-bc4b-4680-ac46-0ee32e94b396 -- .
+```
+
+---
+**UTC Timestamp:** 2026-05-05 21:30:00Z (approx)
+**Summary of change:** Phase 3 of Memory Architecture Rework (A7 + A8 + A9)
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs` (A9: recall_chunks fn, RecalledChunk struct)
+- `crates/cade-server/src/server/api/messages/context.rs` (A9: proactive injection in assemble_system_prompt_memory, added conversation_id param)
+- `crates/cade-store/src/sqlite/memory/tests.rs` (3 new tests for recall_chunks)
+
+**Reason:**
+Phase 3 of the memory architecture rework. A7 (priority-ordered greedy packing) and
+A8 (context overflow manifest) were already implemented in prior sessions. A9 (proactive
+injection) is the new work.
+
+**Previous behavior:**
+- The agent had to explicitly call `search_memory()` to recall any stored facts.
+- If the agent forgot it had stored something, that knowledge was effectively lost.
+- `assemble_system_prompt_memory` did not accept `conversation_id`.
+
+**New behavior:**
+- Before generating the LLM prompt, the system fetches the latest user message,
+  extracts keywords, and searches `memory_chunks` for matching fragments.
+- Top 3 matching chunks are injected as a `# Recalled Context` section in the
+  dynamic system prompt.
+- Only runs on user messages (not tool returns) to avoid redundant lookups.
+- `assemble_system_prompt_memory` now receives `conversation_id` so it can scope
+  the user-message lookup.
+- 3 new tests validate keyword matching, empty-query handling, and deduplication.
+
+**Verification:**
+- `cargo build --workspace` → clean
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean
+- `cargo test --workspace` → 1,570+ tests pass, 0 failures
+
+**Rollback steps:**
+```sh
+git checkout cp-3a6ec9fe-7dd9-46bd-80ee-2a6da6fb1155 -- .
+```

@@ -1224,15 +1224,21 @@ fn upsert_returns_write_result_with_char_counts() -> Result<()> {
 }
 
 #[test]
-fn upsert_errors_when_exceeding_char_limit() -> Result<()> {
+fn upsert_truncates_when_exceeding_char_limit() -> Result<()> {
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
+    // A1: exceeding max_chars now truncates instead of erroring
     let big = "x".repeat(200);
-    let res = upsert_memory_block(&db, "a1", "note", &big, None, Some(100));
-    assert!(res.is_err());
-    let err_msg = res.unwrap_err().to_string();
-    assert!(err_msg.contains("exceeds character limit"));
+    let wr = upsert_memory_block(&db, "a1", "note", &big, None, Some(100))?;
+    assert!(wr.was_truncated);
+    assert_eq!(wr.stored_chars, 100);
+    assert_eq!(wr.requested_chars, 200);
+
+    // Verify the stored value is actually truncated
+    let blocks = get_memory_blocks(&db, "a1")?;
+    let stored = blocks.iter().find(|(l, _, _)| l == "note").unwrap();
+    assert_eq!(stored.1.chars().count(), 100);
     Ok(())
 }
 
@@ -1635,5 +1641,382 @@ fn search_memory_hybrid_with_none_embedder_matches_old_behaviour() -> Result<()>
         .map(|(l, _, _)| l)
         .collect();
     assert_eq!(old, new, "hybrid with None embedder must equal legacy search_memory");
+    Ok(())
+}
+
+
+// ── A1: Write-ahead truncation tests ─────────────────────────────────────────
+
+#[test]
+fn test_a1_truncation_returns_warning_not_error() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Write a value that exceeds the max_chars limit
+    let long_value = "x".repeat(150);
+    let wr = upsert_memory_block(&db, "a1", "small_block", &long_value, None, Some(100))?;
+
+    // Should truncate, not error
+    assert!(wr.was_truncated, "expected was_truncated = true");
+    assert_eq!(wr.stored_chars, 100);
+    assert_eq!(wr.requested_chars, 150);
+
+    // Verify the stored value is actually 100 chars
+    let blocks = get_memory_blocks(&db, "a1")?;
+    let stored = blocks.iter().find(|(l, _, _)| l == "small_block").unwrap();
+    assert_eq!(stored.1.chars().count(), 100);
+    Ok(())
+}
+
+#[test]
+fn test_a1_no_truncation_when_under_limit() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let value = "hello world";
+    let wr = upsert_memory_block(&db, "a1", "ok_block", value, None, Some(1000))?;
+
+    assert!(!wr.was_truncated);
+    assert_eq!(wr.stored_chars, value.len());
+    assert_eq!(wr.requested_chars, value.len());
+    Ok(())
+}
+
+#[test]
+fn test_a1_no_truncation_without_limit() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let long_value = "y".repeat(50_000);
+    let wr = upsert_memory_block(&db, "a1", "unlimited", &long_value, None, None)?;
+
+    assert!(!wr.was_truncated);
+    assert_eq!(wr.stored_chars, 50_000);
+    Ok(())
+}
+
+// ── A3: Provenance tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_a3_stamp_provenance_sets_columns() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "fact1", "some fact", None, None)?;
+
+    // Stamp provenance
+    stamp_provenance(&db, "a1", "fact1", Some(42), Some("tc-abc-123"));
+
+    // Verify columns
+    let conn = db.lock();
+    let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
+        "SELECT b.source_turn, b.source_te_id
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'fact1'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    assert_eq!(turn, Some(42));
+    assert_eq!(tc_id.as_deref(), Some("tc-abc-123"));
+    Ok(())
+}
+
+#[test]
+fn test_a3_stamp_provenance_coalesce_preserves_existing() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "fact2", "data", None, None)?;
+
+    // First stamp sets both
+    stamp_provenance(&db, "a1", "fact2", Some(10), Some("tc-first"));
+    // Second stamp with only turn — should not overwrite tc_id
+    stamp_provenance(&db, "a1", "fact2", Some(20), None);
+
+    let conn = db.lock();
+    let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
+        "SELECT b.source_turn, b.source_te_id
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'fact2'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    assert_eq!(turn, Some(20), "turn should be updated to 20");
+    assert_eq!(tc_id.as_deref(), Some("tc-first"), "tc_id should be preserved");
+    Ok(())
+}
+
+#[test]
+fn test_a3_stamp_provenance_noop_when_both_none() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "fact3", "data", None, None)?;
+
+    // Stamp with both None — should be a no-op
+    stamp_provenance(&db, "a1", "fact3", None, None);
+
+    let conn = db.lock();
+    let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
+        "SELECT b.source_turn, b.source_te_id
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'fact3'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    assert_eq!(turn, None, "source_turn should remain NULL");
+    assert_eq!(tc_id, None, "source_te_id should remain NULL");
+    Ok(())
+}
+
+
+// ── A5: Semantic chunking tests ─────────────────────────────────────────────
+
+#[test]
+fn test_a5_chunk_text_short_returns_single() {
+    let text = "Short text under threshold.";
+    let chunks = chunk_text(text);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].index, 0);
+    assert_eq!(chunks[0].content, text);
+}
+
+#[test]
+fn test_a5_chunk_text_long_splits_at_sentences() {
+    // Build a text with clear sentence boundaries, > 500 chars.
+    let sentences: Vec<String> = (0..20)
+        .map(|i| format!("This is sentence number {}.", i))
+        .collect();
+    let text = sentences.join(" ");
+    assert!(text.chars().count() > CHUNK_THRESHOLD);
+
+    let chunks = chunk_text(&text);
+    assert!(chunks.len() >= 2, "long text should produce multiple chunks");
+
+    // All original content should be covered.
+    for chunk in &chunks {
+        assert!(!chunk.content.is_empty());
+        assert!(chunk.content.len() <= CHUNK_TARGET + 200,
+            "chunk {} is {} bytes, overly large", chunk.index, chunk.content.len());
+    }
+
+    // Last chunk should end at or near the text end.
+    let last = &chunks[chunks.len() - 1];
+    assert!(text.ends_with(last.content.trim_end()),
+        "last chunk should cover the end of text");
+}
+
+#[test]
+fn test_a5_chunk_text_overlap_exists() {
+    let sentences: Vec<String> = (0..20)
+        .map(|i| format!("Sentence {}: The quick brown fox jumps.", i))
+        .collect();
+    let text = sentences.join(" ");
+
+    let chunks = chunk_text(&text);
+    if chunks.len() >= 2 {
+        // Check that consecutive chunks have overlapping content.
+        let c0_end: String = chunks[0].content.chars().rev().take(30).collect::<String>()
+            .chars().rev().collect();
+        let c1_start: String = chunks[1].content.chars().take(60).collect();
+        // The overlap means some substring at the end of chunk 0 appears
+        // at the start of chunk 1.
+        let overlap_found = c1_start.contains(&c0_end[..c0_end.len().min(20)]);
+        assert!(overlap_found, "chunks should overlap by ~{CHUNK_OVERLAP} chars");
+    }
+}
+
+#[test]
+fn test_a5_rechunk_block_stores_chunks() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Write a large block.
+    let sentences: Vec<String> = (0..20)
+        .map(|i| format!("Fact {}: The database uses PostgreSQL for persistence.", i))
+        .collect();
+    let big_value = sentences.join(" ");
+    upsert_memory_block(&db, "a1", "big_block", &big_value, None, None)?;
+
+    // Rechunk it.
+    rechunk_block(&db, "a1", "big_block", &big_value, None);
+
+    // Verify chunks exist.
+    let conn = db.lock();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_chunks mc
+         JOIN shared_memory_blocks b ON b.id = mc.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'big_block'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(count >= 2, "big block should have multiple chunks, got {count}");
+    Ok(())
+}
+
+#[test]
+fn test_a5_rechunk_block_skips_small_blocks() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "tiny", "hello", None, None)?;
+    rechunk_block(&db, "a1", "tiny", "hello", None);
+
+    let conn = db.lock();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_chunks mc
+         JOIN shared_memory_blocks b ON b.id = mc.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'tiny'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(count, 0, "small block should have no chunks");
+    Ok(())
+}
+
+#[test]
+fn test_a5_rechunk_replaces_old_chunks() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let big1: String = (0..25).map(|i| format!("Version1 sentence number {} with extra text here. ", i)).collect();
+    upsert_memory_block(&db, "a1", "evolving", &big1, None, None)?;
+    rechunk_block(&db, "a1", "evolving", &big1, None);
+
+    let conn = db.lock();
+    let count1: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_chunks mc
+         JOIN shared_memory_blocks b ON b.id = mc.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'evolving'",
+        [],
+        |r| r.get(0),
+    )?;
+    drop(conn);
+
+    // Re-write the block with different content.
+    let big2: String = (0..25).map(|i| format!("Version2 updated data point number {}. ", i)).collect();
+    upsert_memory_block(&db, "a1", "evolving", &big2, None, None)?;
+    rechunk_block(&db, "a1", "evolving", &big2, None);
+
+    let conn = db.lock();
+    // Verify no leftover Version1 chunks.
+    let v1_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_chunks mc
+         JOIN shared_memory_blocks b ON b.id = mc.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'evolving'
+           AND mc.content LIKE '%Version1%'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(v1_count, 0, "old chunks should be deleted on rechunk");
+
+    let count2: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM memory_chunks mc
+         JOIN shared_memory_blocks b ON b.id = mc.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'evolving'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(count2 >= 2, "new chunks should exist, got {count2}");
+    assert!(count1 > 0, "first chunk pass should have produced chunks");
+    Ok(())
+}
+
+// ── A6: Chunk-level search tests ─────────────────────────────────────────────
+
+#[test]
+fn test_a6_search_memory_finds_chunk_content() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Write a large block with a distinctive keyword buried inside.
+    let mut sentences: Vec<String> = (0..18)
+        .map(|i| format!("Generic filler sentence number {}.", i))
+        .collect();
+    sentences.push("The xylophone_secret_key is stored in the vault.".to_string());
+    sentences.push("End of block content.".to_string());
+    let big_value = sentences.join(" ");
+
+    upsert_memory_block(&db, "a1", "secrets", &big_value, None, None)?;
+    rechunk_block(&db, "a1", "secrets", &big_value, None);
+
+    // Search for the distinctive keyword.
+    let results = super::search_memory(&db, "a1", "xylophone_secret_key")?;
+    assert!(!results.is_empty(), "search should find chunk with xylophone_secret_key");
+
+    let found_label = results.iter().any(|(l, _, _)| l == "secrets");
+    assert!(found_label, "result should reference the 'secrets' block");
+    Ok(())
+}
+
+
+// ── A9: Proactive recall tests ──────────────────────────────────────────────
+
+#[test]
+fn test_a9_recall_chunks_finds_keyword_match() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Write a large block with a distinctive keyword in the middle.
+    let mut sentences: Vec<String> = (0..18)
+        .map(|i| format!("Generic filler sentence number {} for padding. ", i))
+        .collect();
+    sentences.push("The PostgreSQL database connection pool uses 20 threads. ".to_string());
+    sentences.push("End of block content. ".to_string());
+    let big_value = sentences.join("");
+
+    upsert_memory_block(&db, "a1", "infra", &big_value, None, None)?;
+    rechunk_block(&db, "a1", "infra", &big_value, None);
+
+    // Recall with a query that should match the keyword.
+    let results = recall_chunks(&db, "a1", "PostgreSQL connection pool", 3);
+    assert!(!results.is_empty(), "should recall chunks matching PostgreSQL");
+    assert_eq!(results[0].label, "infra");
+    assert!(results[0].chunk_content.contains("PostgreSQL"),
+        "recalled chunk should contain the keyword");
+    Ok(())
+}
+
+#[test]
+fn test_a9_recall_chunks_empty_query_returns_nothing() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let big: String = (0..20).map(|i| format!("Data point {}. ", i)).collect();
+    upsert_memory_block(&db, "a1", "stuff", &big, None, None)?;
+    rechunk_block(&db, "a1", "stuff", &big, None);
+
+    let results = recall_chunks(&db, "a1", "", 3);
+    assert!(results.is_empty(), "empty query should return nothing");
+
+    let results2 = recall_chunks(&db, "a1", "ab cd", 3); // all words < 3 chars
+    assert!(results2.is_empty(), "short-word-only query should return nothing");
+    Ok(())
+}
+
+#[test]
+fn test_a9_recall_chunks_deduplicates_by_label() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Block with the keyword repeated in multiple chunks.
+    let repeated: String = (0..30)
+        .map(|i| format!("Sentence {} mentions the xylophone instrument. ", i))
+        .collect();
+    upsert_memory_block(&db, "a1", "music", &repeated, None, None)?;
+    rechunk_block(&db, "a1", "music", &repeated, None);
+
+    let results = recall_chunks(&db, "a1", "xylophone instrument", 5);
+    // Even though multiple chunks match, we should get at most 1 per label.
+    let label_count = results.iter().filter(|r| r.label == "music").count();
+    assert_eq!(label_count, 1, "should deduplicate to 1 result per label, got {label_count}");
     Ok(())
 }

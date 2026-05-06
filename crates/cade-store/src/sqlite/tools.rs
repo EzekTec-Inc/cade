@@ -286,6 +286,46 @@ pub fn search_memory(
     // Phase 3: Semantic search (removed).
     // Merge semantic results with keyword results using Reciprocal Rank Fusion.
 
+    // A6: Chunk-level keyword search — search within `memory_chunks` for
+    // finer-grained matches on large blocks. Chunk hits surface the relevant
+    // portion of a block rather than the whole blob.
+    {
+        let conn = db.lock();
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = conn.prepare(
+            "SELECT b.label, c.content, c.chunk_index
+             FROM memory_chunks c
+             JOIN shared_memory_blocks b ON b.id = c.block_id
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1
+               AND LOWER(c.content) LIKE LOWER(?2) ESCAPE '\\'
+             ORDER BY c.chunk_index ASC
+             LIMIT 5",
+        ).ok();
+        if let Some(ref mut st) = stmt {
+            let chunk_hits: Vec<(String, String, String)> = st
+                .query_map(params![agent_id, pattern], |row| {
+                    let label: String = row.get(0)?;
+                    let content: String = row.get(1)?;
+                    let idx: i64 = row.get(2)?;
+                    let snippet = format!("[chunk {}] {}", idx, content.chars().take(200).collect::<String>());
+                    Ok((label, content, snippet))
+                })
+                .ok()
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default();
+
+            // Merge chunk hits — prefer block-level result if same label already present.
+            let existing_labels: std::collections::HashSet<String> =
+                results.iter().map(|(l, _, _)| l.clone()).collect();
+            for (label, value, snippet) in chunk_hits {
+                if !existing_labels.contains(&label) {
+                    results.push((label, value, snippet));
+                }
+            }
+        }
+    }
+
     // F7: activity-weighted aging — bump access counters for every label we
     // just returned to the agent.  This is an intentional read, so the
     // staleness clock should restart and the access boost should grow.

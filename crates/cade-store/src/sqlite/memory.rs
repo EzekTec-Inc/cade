@@ -245,18 +245,18 @@ pub fn upsert_memory_block(
     // Effective limit: prefer caller-supplied, else stored, else none.
     let effective_limit = max_chars.or_else(|| existing.as_ref().and_then(|(_, _, mc)| *mc));
 
-    // Apply size limit to the incoming value.
-    let final_value: String = if let Some(limit) = effective_limit {
+    // A1: Apply size limit — truncate instead of hard-erroring so the agent
+    // always gets partial data + a `was_truncated` warning rather than nothing.
+    let (final_value, was_truncated): (String, bool) = if let Some(limit) = effective_limit {
         let char_count = value.chars().count();
         if char_count > limit {
-            return Err(crate::error::Error::custom(format!(
-                "Memory block '{}' exceeds character limit ({} > {}). Please edit or summarize to fit.",
-                label, char_count, limit
-            )));
+            let truncated: String = value.chars().take(limit).collect();
+            (truncated, true)
+        } else {
+            (value.to_string(), false)
         }
-        value.to_string()
     } else {
-        value.to_string()
+        (value.to_string(), false)
     };
 
     let ts = now_ts();
@@ -367,7 +367,7 @@ pub fn upsert_memory_block(
     let requested_chars = value.chars().count();
     let stored_chars = final_value.chars().count();
     Ok(WriteResult {
-        was_truncated: false,
+        was_truncated,
         stored_chars,
         requested_chars,
     })
@@ -432,6 +432,295 @@ pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Resu
         params![agent_id, block_id],
     )?;
     Ok(())
+}
+
+// ── A3: Provenance helpers ───────────────────────────────────────────────────
+
+/// Stamp provenance metadata on a memory block after a write.
+///
+/// `source_turn` is the agent's turn counter at write time.
+/// `source_tool_call_id` is the tool_call_id that triggered the write
+/// (stored in the existing `source_te_id` column).
+///
+/// Both are optional — callers outside the agentic loop (e.g. consolidation,
+/// agent creation) may not have a tool_call_id.
+pub fn stamp_provenance(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    source_turn: Option<i64>,
+    source_tool_call_id: Option<&str>,
+) {
+    if source_turn.is_none() && source_tool_call_id.is_none() {
+        return;
+    }
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE shared_memory_blocks
+         SET source_turn = COALESCE(?1, source_turn),
+             source_te_id = COALESCE(?2, source_te_id)
+         WHERE id = (
+             SELECT b.id FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?3 AND b.label = ?4
+         )",
+        params![source_turn, source_tool_call_id, agent_id, label],
+    );
+}
+
+// ── A5: Semantic chunking ─────────────────────────────────────────────────────
+
+/// Blocks shorter than this are not chunked (stored as a single unit).
+pub const CHUNK_THRESHOLD: usize = 500;
+
+/// Target chunk size in characters. Actual chunks may be slightly larger
+/// due to sentence-boundary alignment.
+const CHUNK_TARGET: usize = 300;
+
+/// Overlap in characters between consecutive chunks so retrieval has
+/// context from both sides of a chunk boundary.
+const CHUNK_OVERLAP: usize = 50;
+
+/// A single chunk produced by [`chunk_text`].
+#[derive(Debug, Clone)]
+pub struct TextChunk {
+    pub index: usize,
+    pub content: String,
+}
+
+/// Split `text` into overlapping chunks at sentence boundaries.
+///
+/// Sentences are detected by `. `, `! `, `? `, or `\n`. Each chunk
+/// targets [`CHUNK_TARGET`] characters and overlaps the previous chunk
+/// by [`CHUNK_OVERLAP`] characters. Short texts (below
+/// [`CHUNK_THRESHOLD`]) produce a single chunk.
+pub fn chunk_text(text: &str) -> Vec<TextChunk> {
+    if text.chars().count() <= CHUNK_THRESHOLD {
+        return vec![TextChunk {
+            index: 0,
+            content: text.to_string(),
+        }];
+    }
+
+    // Collect sentence-end byte offsets.
+    let delimiters = [". ", "! ", "? ", "\n"];
+    let mut breaks: Vec<usize> = Vec::new();
+    for delim in &delimiters {
+        let mut start = 0;
+        while let Some(pos) = text[start..].find(delim) {
+            let abs = start + pos + delim.len();
+            breaks.push(abs);
+            start = abs;
+        }
+    }
+    breaks.sort_unstable();
+    breaks.dedup();
+    // Ensure the end of text is always a break point.
+    if breaks.last().copied() != Some(text.len()) {
+        breaks.push(text.len());
+    }
+
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    let mut cursor: usize = 0;
+
+    while cursor < text.len() {
+        let target_end = (cursor + CHUNK_TARGET).min(text.len());
+
+        // Find the nearest sentence break at or after target_end.
+        let end = breaks
+            .iter()
+            .find(|&&b| b >= target_end)
+            .copied()
+            .unwrap_or(text.len());
+
+        let chunk_str = &text[cursor..end];
+        chunks.push(TextChunk {
+            index: chunks.len(),
+            content: chunk_str.to_string(),
+        });
+
+        if end >= text.len() {
+            break;
+        }
+
+        // Next chunk starts OVERLAP chars before the end of this one.
+        cursor = if end > CHUNK_OVERLAP {
+            end - CHUNK_OVERLAP
+        } else {
+            end
+        };
+    }
+    chunks
+}
+
+/// Replace all chunks for a block and insert new ones.
+///
+/// `block_id` is the `shared_memory_blocks.id` for the block that was
+/// just written. This function:
+/// 1. Deletes all existing chunks for the block.
+/// 2. If `value` exceeds [`CHUNK_THRESHOLD`], splits it via [`chunk_text`]
+///    and inserts the resulting rows into `memory_chunks`.
+/// 3. If an embedder is provided, computes per-chunk embeddings.
+///
+/// Called automatically after `upsert_memory_block`.
+pub fn rechunk_block(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    value: &str,
+    embedder: Option<&dyn crate::sqlite::embedding::Embedder>,
+) {
+    let conn = db.lock();
+
+    // Resolve block_id.
+    let block_id: Option<String> = conn
+        .query_row(
+            "SELECT b.id FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND b.label = ?2",
+            params![agent_id, label],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+
+    let Some(block_id) = block_id else {
+        return;
+    };
+
+    // Delete old chunks.
+    let _ = conn.execute(
+        "DELETE FROM memory_chunks WHERE block_id = ?1",
+        params![block_id],
+    );
+
+    // Only chunk if above threshold.
+    if value.chars().count() <= CHUNK_THRESHOLD {
+        return;
+    }
+
+    let chunks = chunk_text(value);
+    for chunk in &chunks {
+        let id = uuid::Uuid::new_v4().to_string();
+        let char_count = chunk.content.chars().count() as i64;
+
+        // Compute embedding if available.
+        let emb_blob: Option<Vec<u8>> = embedder.and_then(|e| {
+            e.embed(&chunk.content).ok().and_then(|vec| {
+                if vec.is_empty() {
+                    None
+                } else {
+                    let mut bytes = Vec::with_capacity(vec.len() * 4);
+                    for f in &vec {
+                        bytes.extend_from_slice(&f.to_le_bytes());
+                    }
+                    Some(bytes)
+                }
+            })
+        });
+
+        let _ = conn.execute(
+            "INSERT INTO memory_chunks (id, block_id, chunk_index, content, char_count, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, block_id, chunk.index as i64, chunk.content, char_count, emb_blob],
+        );
+    }
+}
+
+// ── A9: Proactive recall ──────────────────────────────────────────────────────
+
+/// A recalled chunk with its parent block label and content.
+#[derive(Debug, Clone)]
+pub struct RecalledChunk {
+    pub label: String,
+    pub chunk_content: String,
+    pub chunk_index: i64,
+}
+
+/// Search `memory_chunks` for the top-k chunks matching keywords extracted
+/// from `query`.  Used by the proactive injection path (A9) to surface
+/// relevant memory fragments before the LLM generates a response.
+///
+/// Returns at most `limit` chunks, ordered by the number of keyword hits
+/// (most relevant first).  Chunks from the same block are deduplicated to
+/// the highest-scoring one.
+pub fn recall_chunks(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+    limit: usize,
+) -> Vec<RecalledChunk> {
+    // Extract keywords from the query (min 3 chars, skip stop words).
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.len() >= 3)
+        .map(|w| w.to_lowercase())
+        .collect();
+
+    if words.is_empty() {
+        return Vec::new();
+    }
+
+    let conn = db.lock();
+
+    // Build OR clauses for keyword matching.
+    let conditions: Vec<String> = words
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("LOWER(c.content) LIKE ?{}", i + 3))
+        .collect();
+    let where_clause = conditions.join(" OR ");
+
+    let sql = format!(
+        "SELECT b.label, c.content, c.chunk_index
+         FROM memory_chunks c
+         JOIN shared_memory_blocks b ON b.id = c.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.tier != 'long'
+           AND ({where_clause})
+         ORDER BY c.chunk_index ASC
+         LIMIT ?2"
+    );
+
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    // Build params: agent_id, limit, then one pattern per word.
+    let patterns: Vec<String> = words
+        .iter()
+        .map(|w| format!("%{w}%"))
+        .collect();
+
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    param_values.push(Box::new(agent_id.to_string()));
+    param_values.push(Box::new(limit as i64));
+    for p in &patterns {
+        param_values.push(Box::new(p.clone()));
+    }
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+
+    let results: Vec<RecalledChunk> = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(RecalledChunk {
+                label: row.get(0)?,
+                chunk_content: row.get(1)?,
+                chunk_index: row.get(2)?,
+            })
+        })
+        .ok()
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default();
+
+    // Deduplicate: keep only the first (best) chunk per label.
+    let mut seen = std::collections::HashSet::new();
+    results
+        .into_iter()
+        .filter(|r| seen.insert(r.label.clone()))
+        .take(limit)
+        .collect()
 }
 
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {

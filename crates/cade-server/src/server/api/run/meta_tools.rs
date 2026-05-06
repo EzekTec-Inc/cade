@@ -33,22 +33,22 @@ pub(super) async fn intercept_meta_tool(
         }
         // ── Phase A1: memory tools ────────────────────────────────────
         "update_memory" => {
-            let (output, is_error) = handle_update_memory(state, agent_id, &tc.arguments).await;
+            let (output, is_error) = handle_update_memory(state, agent_id, &tc.arguments, Some(&tc.id)).await;
             Some(mk(output, is_error))
         }
         "update_memory_typed" => {
             let (output, is_error) =
-                handle_update_memory_typed(state, agent_id, &tc.arguments).await;
+                handle_update_memory_typed(state, agent_id, &tc.arguments, Some(&tc.id)).await;
             Some(mk(output, is_error))
         }
         "memory_apply_patch" => {
             let (output, is_error) =
-                handle_memory_apply_patch(state, agent_id, &tc.arguments).await;
+                handle_memory_apply_patch(state, agent_id, &tc.arguments, Some(&tc.id)).await;
             Some(mk(output, is_error))
         }
         "update_memory_field" => {
             let (output, is_error) =
-                handle_update_memory_field(state, agent_id, &tc.arguments).await;
+                handle_update_memory_field(state, agent_id, &tc.arguments, Some(&tc.id)).await;
             Some(mk(output, is_error))
         }
         "link_memory_evidence" => {
@@ -179,10 +179,14 @@ pub(super) async fn intercept_meta_tool(
 /// `ToolRuntime::handle_update_memory` semantics (set / append / delete)
 /// but talks directly to `state.db` instead of over HTTP, so the GUI's
 /// `/v1/agents/:id/run` agentic loop no longer returns "Unknown tool".
+///
+/// A3: `tool_call_id` is passed through so we can stamp provenance after
+/// a successful write. `None` when called from non-agentic paths.
 async fn handle_update_memory(
     state: &AppState,
     agent_id: &str,
     args: &serde_json::Value,
+    tool_call_id: Option<&str>,
 ) -> (String, bool) {
     let label = args["label"].as_str().unwrap_or("").trim().to_string();
     let value = args["value"].as_str().unwrap_or("").to_string();
@@ -234,6 +238,25 @@ async fn handle_update_memory(
         None,
     ) {
         Ok(wr) => {
+            // A3: Stamp provenance — record which turn and tool call wrote this block.
+            let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+            cade_store::sqlite::memory::stamp_provenance(
+                &state.db,
+                agent_id,
+                &label,
+                Some(turn),
+                tool_call_id,
+            );
+
+            // A5: Re-chunk the block for semantic chunk-level search.
+            cade_store::sqlite::memory::rechunk_block(
+                &state.db,
+                agent_id,
+                &label,
+                &final_value,
+                state.embedder.as_ref().map(|e| e.as_ref()),
+            );
+
             let char_info = format!(" ({}/{} chars)", wr.stored_chars, wr.requested_chars);
             if wr.was_truncated {
                 (
@@ -264,6 +287,7 @@ async fn handle_update_memory_typed(
     state: &AppState,
     agent_id: &str,
     args: &serde_json::Value,
+    tool_call_id: Option<&str>,
 ) -> (String, bool) {
     let label = args["label"].as_str().unwrap_or("").trim().to_string();
     let value = args["value"].as_str().unwrap_or("").to_string();
@@ -284,13 +308,25 @@ async fn handle_update_memory_typed(
         Some(memory_type),
         Some(confidence),
     ) {
-        Ok(_) => (
-            format!(
-                "Memory block '{label}' stored as [{memory_type}] (confidence: {:.0}%)",
-                confidence * 100.0
-            ),
-            false,
-        ),
+        Ok(_) => {
+            // A3: Stamp provenance.
+            let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+            cade_store::sqlite::memory::stamp_provenance(
+                &state.db, agent_id, &label, Some(turn), tool_call_id,
+            );
+            // A5: Re-chunk.
+            cade_store::sqlite::memory::rechunk_block(
+                &state.db, agent_id, &label, &value,
+                state.embedder.as_ref().map(|e| e.as_ref()),
+            );
+            (
+                format!(
+                    "Memory block '{label}' stored as [{memory_type}] (confidence: {:.0}%)",
+                    confidence * 100.0
+                ),
+                false,
+            )
+        }
         Err(e) => (format!("Failed to store typed memory: {e}"), true),
     }
 }
@@ -303,6 +339,7 @@ async fn handle_memory_apply_patch(
     state: &AppState,
     agent_id: &str,
     args: &serde_json::Value,
+    tool_call_id: Option<&str>,
 ) -> (String, bool) {
     let label = args["label"].as_str().unwrap_or("").trim().to_string();
     let patch = args["patch"].as_str().unwrap_or("").to_string();
@@ -329,10 +366,22 @@ async fn handle_memory_apply_patch(
             description,
             None,
         ) {
-            Ok(wr) => (
-                format!("Memory block '{label}' patched successfully ({} chars)", wr.stored_chars),
-                false,
-            ),
+            Ok(wr) => {
+                // A3: Stamp provenance.
+                let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+                cade_store::sqlite::memory::stamp_provenance(
+                    &state.db, agent_id, &label, Some(turn), tool_call_id,
+                );
+                // A5: Re-chunk.
+                cade_store::sqlite::memory::rechunk_block(
+                    &state.db, agent_id, &label, &new_value,
+                    state.embedder.as_ref().map(|e| e.as_ref()),
+                );
+                (
+                    format!("Memory block '{label}' patched successfully ({} chars)", wr.stored_chars),
+                    false,
+                )
+            }
             Err(e) => (format!("Failed to save patched memory: {e}"), true),
         },
         Err(e) => (format!("Patch failed: {e}"), true),
@@ -345,6 +394,7 @@ async fn handle_update_memory_field(
     state: &AppState,
     agent_id: &str,
     args: &serde_json::Value,
+    tool_call_id: Option<&str>,
 ) -> (String, bool) {
     let label = args["label"].as_str().unwrap_or("").trim().to_string();
     let pointer = args["path"].as_str().unwrap_or("").to_string();
@@ -411,10 +461,22 @@ async fn handle_update_memory_field(
         None,
         None,
     ) {
-        Ok(_) => (
-            format!("Memory block '{label}' field '{pointer}' updated ({op_str})"),
-            false,
-        ),
+        Ok(_) => {
+            // A3: Stamp provenance.
+            let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+            cade_store::sqlite::memory::stamp_provenance(
+                &state.db, agent_id, &label, Some(turn), tool_call_id,
+            );
+            // A5: Re-chunk.
+            cade_store::sqlite::memory::rechunk_block(
+                &state.db, agent_id, &label, &new_body,
+                state.embedder.as_ref().map(|e| e.as_ref()),
+            );
+            (
+                format!("Memory block '{label}' field '{pointer}' updated ({op_str})"),
+                false,
+            )
+        }
         Err(e) => (format!("Failed to save: {e}"), true),
     }
 }
