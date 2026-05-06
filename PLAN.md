@@ -1262,3 +1262,27 @@ is the new work.
 ```sh
 git checkout cp-eed1f657-eb50-4f31-9c35-2edaf739925e -- .
 ```
+
+---
+**UTC Timestamp:** 2026-05-06 14:25:00Z (approx)
+**Summary of change:** Fix Anthropic 404 — compaction model claude-3-5-haiku-latest → claude-haiku-4-5
+**Files modified:**
+- `crates/cade-server/src/server/consolidation.rs`
+
+**Reason:**
+Anthropic retired `claude-3-5-haiku-latest` model ID. Sleeptime consolidation was
+failing with `404 Not Found` on every trigger, preventing session summaries from
+being created.
+
+**Previous behavior:**
+- `default_compaction_model("anthropic/*")` returned `"anthropic/claude-3-5-haiku-latest"`
+- Every consolidation call failed with 404
+
+**New behavior:**
+- Returns `"anthropic/claude-haiku-4-5"` (current valid cheapest Anthropic model per catalogue)
+- 1 new test added, 2 existing assertions updated
+
+**Rollback steps:**
+```sh
+git checkout cp-5548522b-e039-4f0b-8506-ed91c0e093a6 -- .
+```

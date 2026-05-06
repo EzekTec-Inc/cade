@@ -87,7 +87,7 @@ const CHARS_PER_TOKEN: usize = 3;
 /// loss on the summary task.
 ///
 /// Mapping rules (provider prefix match):
-///   * `anthropic/*`  → `anthropic/claude-3-5-haiku-latest`
+///   * `anthropic/*`  → `anthropic/claude-haiku-4-5`
 ///   * `openai/*`     → `openai/gpt-4o-mini`
 ///   * `gemini/*`     → `gemini/gemini-2.5-flash`
 ///   * `openrouter/*` → `openrouter/z-ai/glm-4.5-air:free` (free tier)
@@ -102,7 +102,7 @@ pub(crate) fn default_compaction_model(primary_model: &str) -> String {
         return "openrouter/z-ai/glm-4.5-air:free".to_string();
     }
     if primary_model.starts_with("anthropic/") {
-        return "anthropic/claude-3-5-haiku-latest".to_string();
+        return "anthropic/claude-haiku-4-5".to_string();
     }
     if primary_model.starts_with("openai/") {
         return "openai/gpt-4o-mini".to_string();
@@ -1882,11 +1882,11 @@ mod tests {
     fn default_compaction_anthropic_uses_haiku() {
         assert_eq!(
             default_compaction_model("anthropic/claude-sonnet-4-5-20250929"),
-            "anthropic/claude-3-5-haiku-latest"
+            "anthropic/claude-haiku-4-5"
         );
         assert_eq!(
             default_compaction_model("anthropic/claude-opus-4-20250514"),
-            "anthropic/claude-3-5-haiku-latest"
+            "anthropic/claude-haiku-4-5"
         );
     }
 
@@ -1940,8 +1940,8 @@ mod tests {
     fn default_compaction_already_cheap_anthropic_idempotent() {
         // Already-haiku must not loop or recurse.
         assert_eq!(
-            default_compaction_model("anthropic/claude-3-5-haiku-latest"),
-            "anthropic/claude-3-5-haiku-latest"
+            default_compaction_model("anthropic/claude-haiku-4-5"),
+            "anthropic/claude-haiku-4-5"
         );
     }
 
@@ -1958,6 +1958,16 @@ mod tests {
         assert_eq!(
             default_compaction_model("gemini/gemini-2.5-flash"),
             "gemini/gemini-2.5-flash"
+        );
+    }
+
+    #[test]
+    fn default_compaction_anthropic_uses_current_haiku_model_id() {
+        // claude-3-5-haiku-latest was retired by Anthropic (404).
+        // Must resolve to claude-haiku-4-5.
+        assert_eq!(
+            default_compaction_model("anthropic/claude-opus-4-6"),
+            "anthropic/claude-haiku-4-5"
         );
     }
 }
