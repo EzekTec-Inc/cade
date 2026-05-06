@@ -1,5 +1,31 @@
 use super::*;
 
+// ── A11: Recency × Frequency scoring ─────────────────────────────────────────
+
+/// Compute a composite score for ranking search results.
+///
+/// `score = frequency_weight × recency_weight` where:
+/// - `frequency_weight = 1.0 + log2(access_count + 1)` — each doubling of
+///   access count adds +1.0 to the weight (diminishing returns).
+/// - `recency_weight = 1.0 / (1.0 + turns_idle × 0.02)` — blocks idle for
+///   50 turns score ~0.5, blocks idle for 100+ turns score ~0.33.
+///
+/// `turns_idle` uses the **maximum** of `last_turn` (last write) and
+/// `last_access_turn` (last search hit), matching the `promote_stale_blocks`
+/// staleness clock.
+pub fn recency_frequency_score(
+    current_turn: i64,
+    last_turn: i64,
+    last_access_turn: i64,
+    access_count: i64,
+) -> f64 {
+    let last_activity = last_turn.max(last_access_turn);
+    let turns_idle = (current_turn - last_activity).max(0) as f64;
+    let recency = 1.0 / (1.0 + turns_idle * 0.02);
+    let frequency = 1.0 + (access_count as f64 + 1.0).log2();
+    recency * frequency
+}
+
 pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
     let conn = db
         .lock();
@@ -212,24 +238,37 @@ pub fn search_memory(
     // Phase 1: LIKE search — acquire and release lock in a scoped block
     // to avoid deadlock with the fuzzy fallback (which also needs the lock).
     let q_lower = query.to_lowercase();
+
+    // A11: Fetch current turn for recency scoring.
+    let current_turn = super::get_turn_counter(db, agent_id).unwrap_or(0);
+
     let mut results: Vec<(String, String, String)> = {
         let conn = db.lock();
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        // A11: Also fetch access_count + last_access_turn for Recency × Frequency scoring.
         let mut stmt = conn.prepare(
-            "SELECT b.label, b.value FROM shared_memory_blocks b
+            "SELECT b.label, b.value, b.access_count, b.last_access_turn, b.last_turn
+             FROM shared_memory_blocks b
              JOIN agent_memory_blocks amb ON amb.block_id = b.id
              WHERE amb.agent_id = ?1
                AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
                     OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
-             ORDER BY b.updated_at DESC
-             LIMIT 10",
+             LIMIT 20",
         )?;
         let rows = stmt.query_map(params![agent_id, pattern], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2).unwrap_or(0),
+                row.get::<_, i64>(3).unwrap_or(0),
+                row.get::<_, i64>(4).unwrap_or(0),
+            ))
         })?;
 
-        rows.filter_map(|r| r.ok())
-            .map(|(label, value)| {
+        // A11: Score = recency_weight × frequency_weight
+        let mut scored: Vec<(f64, String, String, String)> = rows
+            .filter_map(|r| r.ok())
+            .map(|(label, value, access_count, last_access_turn, last_turn)| {
                 let val_lower = value.to_lowercase();
                 let snippet = if let Some(pos) = val_lower.find(&q_lower) {
                     let start = pos.saturating_sub(80);
@@ -250,8 +289,19 @@ pub fn search_memory(
                 } else {
                     value.chars().take(160).collect::<String>()
                 };
-                (label, value, snippet)
+                let score = recency_frequency_score(
+                    current_turn, last_turn, last_access_turn, access_count,
+                );
+                (score, label, value, snippet)
             })
+            .collect();
+
+        // Sort by composite score descending, take top 10.
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored
+            .into_iter()
+            .take(10)
+            .map(|(_, label, value, snippet)| (label, value, snippet))
             .collect()
     }; // conn lock released here
 

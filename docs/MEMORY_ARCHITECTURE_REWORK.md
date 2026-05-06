@@ -1,6 +1,6 @@
 # CADE Memory Architecture Rework Spec
 
-> **Status:** Phases 1–3 COMPLETE, Phases 4–5 pending
+> **Status:** Phases 1–4 COMPLETE, Phase 5 pending
 > **Target:** Address structural amnesia and hallucination root causes.
 
 ## Implementation Status
@@ -10,7 +10,7 @@
 | **Phase 1** | A1 (truncation), A2 (ground truth), A3 (provenance) | ✅ DONE |
 | **Phase 2** | A4 (rich excerpts), A5 (chunking), A6 (chunk search) | ✅ DONE |
 | **Phase 3** | A7 (greedy packing), A8 (overflow manifest), A9 (proactive injection) | ✅ DONE |
-| **Phase 4** | A10 (access tracking), A11 (decay scoring), A12 (staleness nudge) | ⏳ Next |
+| **Phase 4** | A10 (access tracking), A11 (decay scoring), A12 (staleness nudge) | ✅ DONE |
 | **Phase 5** | A13 (expanded observations), A14 (session eviction), A15 (subagent write-back) | ⏳ Pending |
 
 ## 1. Gap Analysis
@@ -50,10 +50,10 @@
 - **A8:** Context overflow manifest with actionable recovery instructions (`load_skill()`, `search_memory()`). Already existed.
 - **A9:** `recall_chunks()` searches `memory_chunks` against latest user message keywords. Top 3 injected as `# Recalled Context` section. Only runs on user messages (not tool returns).
 
-### Phase 4: Temporal Decay & Freshness (Next)
-- **A10:** Add `access_count` + `last_reinforced_at` to memory blocks. (Schema columns already exist from migration 9.)
-- **A11:** Modify search scoring to weight Recency × Frequency alongside cosine similarity.
-- **A12:** Server-side nudge: inject system warning if `active_goal` stale for 5+ tool calls.
+### Phase 4: Temporal Decay & Freshness ✅
+- **A10:** `access_count` + `last_access_turn` columns already exist (migration 9). `bump_block_access` increments both on every search hit. Already existed.
+- **A11:** `recency_frequency_score()` computes `recency × frequency` composite: `frequency = 1 + log2(access_count + 1)`, `recency = 1 / (1 + turns_idle × 0.02)`. `search_memory` Phase 1 now ranks by this composite score instead of raw `updated_at`.
+- **A12:** Server-side nudge already implemented: `ACTIVE_GOAL_NUDGE_INTERVAL = 5`, injects `⚠️` system message when `active_goal` stale. Already existed.
 
 ### Phase 5: Multi-Agent Consolidation (Pending)
 - **A13:** Expand observation trail to 50 obs/4000 chars (128k) or 75 obs/6000 chars (200k). Add turn offsets.
@@ -62,9 +62,10 @@
 
 ## 3. Test Coverage
 
-16 new tests across Phases 1–3:
+20 new tests across Phases 1–4:
 - Phase 1: 6 tests (3 truncation + 3 provenance)
 - Phase 2: 7 tests (3 chunking logic + 3 chunk storage + 1 chunk search)
 - Phase 3: 3 tests (keyword recall + empty query + deduplication)
+- Phase 4: 4 tests (3 scoring math + 1 end-to-end ranking)
 
 Full workspace: 1,570+ tests, 0 failures, 0 clippy warnings.

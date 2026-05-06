@@ -1185,3 +1185,39 @@ injection) is the new work.
 ```sh
 git checkout cp-3a6ec9fe-7dd9-46bd-80ee-2a6da6fb1155 -- .
 ```
+
+---
+**UTC Timestamp:** 2026-05-05 22:00:00Z (approx)
+**Summary of change:** Phase 4 of Memory Architecture Rework (A10 + A11 + A12)
+**Files modified:**
+- `crates/cade-store/src/sqlite/tools.rs` (A11: recency_frequency_score fn + Recency × Frequency ranking in search_memory)
+- `crates/cade-store/src/sqlite/memory/tests.rs` (4 new tests for scoring + search ranking)
+
+**Reason:**
+Phase 4 of the memory architecture rework. A10 (access_count + last_access_turn) and
+A12 (active_goal staleness nudge) were already implemented. A11 (Recency × Frequency
+scoring) is the new work.
+
+**Previous behavior:**
+- `search_memory` ranked results by `updated_at DESC` — pure write-recency.
+- Frequently-accessed blocks had no ranking advantage over never-accessed ones.
+
+**New behavior:**
+- `recency_frequency_score()` computes `recency_weight × frequency_weight` where:
+  - `frequency_weight = 1 + log2(access_count + 1)` — diminishing returns
+  - `recency_weight = 1 / (1 + turns_idle × 0.02)` — smooth decay
+- `search_memory` Phase 1 (LIKE) now fetches access_count + last_access_turn,
+  scores each result, and sorts by composite score descending.
+- Blocks that are both frequently accessed AND recently active rank higher.
+- 4 new tests validate scoring math, logarithmic diminishing returns, recency decay,
+  and end-to-end search ranking with frequency boost.
+
+**Verification:**
+- `cargo build --workspace` → clean
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean
+- `cargo test --workspace` → 1,570+ tests pass, 0 failures
+
+**Rollback steps:**
+```sh
+git checkout cp-9b757e75-efad-4bba-b54a-b248240cb4d6 -- .
+```

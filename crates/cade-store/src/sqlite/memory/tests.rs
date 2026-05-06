@@ -2020,3 +2020,76 @@ fn test_a9_recall_chunks_deduplicates_by_label() -> Result<()> {
     assert_eq!(label_count, 1, "should deduplicate to 1 result per label, got {label_count}");
     Ok(())
 }
+
+
+// ── A11: Recency × Frequency scoring tests ──────────────────────────────────
+
+#[test]
+fn test_a11_score_fresh_high_access_beats_stale() {
+    use super::super::tools::recency_frequency_score;
+
+    // Block A: recently written (turn 100), accessed 5 times. Current turn = 100.
+    let score_a = recency_frequency_score(100, 100, 100, 5);
+
+    // Block B: written at turn 10, never accessed. Current turn = 100.
+    let score_b = recency_frequency_score(100, 10, 0, 0);
+
+    assert!(score_a > score_b,
+        "fresh+frequent ({score_a:.3}) should beat stale+unread ({score_b:.3})");
+}
+
+#[test]
+fn test_a11_score_frequency_boost_is_logarithmic() {
+    use super::super::tools::recency_frequency_score;
+
+    // Same recency (turn 50, current 50), different access counts.
+    let score_0 = recency_frequency_score(50, 50, 50, 0);
+    let score_10 = recency_frequency_score(50, 50, 50, 10);
+    let score_100 = recency_frequency_score(50, 50, 50, 100);
+
+    assert!(score_10 > score_0, "10 accesses should score higher than 0");
+    assert!(score_100 > score_10, "100 accesses should score higher than 10");
+    // Logarithmic: the gap between 0→10 should be larger than 10→100.
+    let delta_0_10 = score_10 - score_0;
+    let delta_10_100 = score_100 - score_10;
+    assert!(delta_0_10 > delta_10_100 * 0.5,
+        "diminishing returns: 0→10 gap ({delta_0_10:.3}) should be significant vs 10→100 ({delta_10_100:.3})");
+}
+
+#[test]
+fn test_a11_score_recency_decay() {
+    use super::super::tools::recency_frequency_score;
+
+    // Same access count (5), different staleness.
+    let fresh = recency_frequency_score(100, 100, 100, 5);  // 0 turns idle
+    let mid   = recency_frequency_score(100, 50, 50, 5);    // 50 turns idle
+    let stale = recency_frequency_score(100, 0, 0, 5);      // 100 turns idle
+
+    assert!(fresh > mid, "fresh ({fresh:.3}) should beat mid-stale ({mid:.3})");
+    assert!(mid > stale, "mid-stale ({mid:.3}) should beat very stale ({stale:.3})");
+    // At 50 turns idle, recency weight ≈ 0.5.
+    assert!(mid < fresh * 0.7, "50-turn-idle block should score significantly less than fresh");
+}
+
+#[test]
+fn test_a11_search_memory_ranks_frequent_block_higher() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Both blocks contain the keyword "database".
+    upsert_memory_block(&db, "a1", "old_db_info", "The database uses PostgreSQL", None, None)?;
+    upsert_memory_block(&db, "a1", "new_db_info", "The database connection pool is 20", None, None)?;
+
+    // Bump access on old_db_info many times to boost its frequency.
+    for _ in 0..8 {
+        bump_block_access(&db, "a1", &["old_db_info"]);
+    }
+
+    let results = super::super::tools::search_memory(&db, "a1", "database")?;
+    assert!(results.len() >= 2, "should find both blocks");
+
+    // The frequently-accessed block should rank first despite being written first.
+    assert_eq!(results[0].0, "old_db_info",
+        "frequently-accessed block should rank higher");
+    Ok(())
+}
