@@ -1547,3 +1547,23 @@ Updated the fallback substring matching to also compare against `n.display_name`
 ```sh
 git checkout HEAD^ -- crates/cade-cli/src/cli/repl/commands_theme.rs crates/cade-server/src/server/api/run/mod.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T16:55:00Z
+**Summary of change:** Remove background colors from user and assistant messages in the timeline viewport.
+**Files modified:**
+- `crates/cade-tui/src/app/timeline/mod.rs`
+- `crates/cade-tui/src/colors.rs`
+
+**Reason:**
+The user requested the removal of the gray background color rendered behind CADE's responses and the user's own prompt/chat in the viewport to fully preserve terminal transparency. Previously, the `CardStyle::User` and `CardStyle::Assistant` branches applied `.style(colors.bg_card_style())`, which explicitly set a background color across the entire paragraph block. Additionally, the `c_bg_input` mapping was fixed to correctly map to `bg.panel` instead of the non-existent `bg.surface` token in `colors.rs`.
+
+**Previous behavior:**
+Messages in the timeline used `colors.bg_card_style()`, which applied an opaque background color (e.g. `cade.tool_success_bg` / `bg.elevated` via fallback).
+
+**New behavior:**
+Replaced `.style(colors.bg_card_style())` with `.style(colors.text_primary())` in `render_timeline_viewport`. This leaves the terminal background untouched (transparent) for conversation messages while preserving the correct foreground text color. Also correctly mapped `c_bg_input()` to `bg.panel`.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/timeline/mod.rs crates/cade-tui/src/colors.rs
+```

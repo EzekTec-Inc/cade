@@ -203,7 +203,7 @@ impl ThemeColorsExt for ThemeColors {
     
     fn c_bash_mode(&self) -> RC { resolve_fallback(self, "warning", "cade.warning") }
     fn c_bg_card(&self) -> RC { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
-    fn c_bg_input(&self) -> RC { self.color("bg.surface").into() }
+    fn c_bg_input(&self) -> RC { resolve_fallback(self, "bg.panel", "cade.user_message_bg") }
     fn c_selected_bg(&self) -> RC { self.color("bg.selection").into() }
     fn c_tool_success_bg(&self) -> RC { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
     fn c_tool_error_bg(&self) -> RC { resolve_fallback(self, "bg.highlight", "cade.selected_bg") }
