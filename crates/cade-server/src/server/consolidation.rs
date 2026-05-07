@@ -74,7 +74,7 @@ const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
 /// Fraction of the estimated history budget used as the threshold: turns that
 /// fit within `char_budget * HISTORY_BUDGET_FRACTION` are considered "in
 /// context"; everything older is considered "dropped" and summarised.
-const HISTORY_BUDGET_FRACTION: f64 = 0.40;
+const HISTORY_BUDGET_FRACTION: f64 = crate::server::api::messages::PROACTIVE_CONSOLIDATION_THRESHOLD;
 
 /// Characters per token approximation (conservative).
 const CHARS_PER_TOKEN: usize = 3;
@@ -249,7 +249,20 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     let mut in_context = 0usize;
     let mut used = 0usize;
     for turn in turns.iter().rev() {
-        let chars: usize = turn.iter().map(|(_, t)| t.chars().count()).sum();
+        let mut total_tokens = 0usize;
+        let mut fallback_chars = 0usize;
+        for (_, text) in turn {
+            if !text.is_empty() {
+                total_tokens += cade_ai::count_tokens(&agent.model, text);
+            }
+            fallback_chars += text.chars().count();
+        }
+        let chars = if total_tokens == 0 && fallback_chars > 0 {
+            fallback_chars
+        } else {
+            cade_ai::chars_for_tokens(total_tokens)
+        };
+
         if used + chars <= history_budget {
             in_context += 1;
             used += chars;

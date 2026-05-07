@@ -1323,3 +1323,29 @@ being created.
 ```sh
 git checkout cp-5548522b-e039-4f0b-8506-ed91c0e093a6 -- .
 ```
+
+---
+**UTC Timestamp:** 2026-05-07T13:00:00Z
+**Summary of change:** Fix CADE amnesia loops (RC-1, RC-2, RC-3/RC-6).
+**Files modified:**
+- `crates/cade-server/src/server/consolidation.rs`
+- `crates/cade-server/src/server/reflection.rs`
+- `docs/AMNESIA_ROOT_CAUSE_REPORT.md` (new)
+
+**Reason:**
+Agent repeatedly lost track of tasks mid-flight across sessions due to architectural bugs in consolidation and reflection.
+Implemented three major fixes from the Amnesia Survival Guide:
+1. RC-2: Added recency and regression guards to `auto_update_active_goal` so the LLM doesn't blindly overwrite accurate task state.
+2. RC-3 & RC-6: Included `tool` roles in the reflection loop (with heavy truncation) and updated the reflection prompt so CADE can automatically detect completed tasks based on tool outputs (like passing tests or successful git commits).
+3. RC-1: Synchronized budget calculation between `consolidate_agent` and `build_context` so the background consolidation task doesn't summarize turns that the main agent is still seeing in full context (resolving "double vision").
+
+**Previous behavior:**
+Consolidation hallucinated task states, reflection ignored tool outputs, and budget mismatches caused conflicting contexts.
+
+**New behavior:**
+Task states are accurately retained, completed tasks are automatically detected by reflection, and the context window and consolidation are fully synchronized.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-server/src/server/consolidation.rs crates/cade-server/src/server/reflection.rs
+```
