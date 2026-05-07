@@ -1410,3 +1410,23 @@ Re-applied the fix: the `@` file picker correctly uses `render_overlay_shell` to
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-07T14:55:00Z
+**Summary of change:** Fix opaque `/theme` backdrop overlay to properly dim content.
+**Files modified:**
+- `crates/cade-tui/src/app/layout/helpers.rs`
+
+**Reason:**
+The TUI overlays (like the `/theme` picker) were using a solid background color (`c_bg_base`) to clear the entire screen behind the popup, completely hiding the user's conversation timeline, instead of properly "dimming" it as the documentation stated.
+
+**Previous behavior:**
+`render_backdrop` used a `ratatui::widgets::Paragraph` with `.bg(colors.c_bg_base())` composed entirely of spaces to wipe the screen.
+
+**New behavior:**
+`render_backdrop` now directly accesses the terminal cell buffer using `frame.buffer_mut()`, applying `ratatui::style::Modifier::DIM` to the existing characters. This allows the timeline and background text to remain visible (and properly styled with live-previewed theme colors) but correctly dimmed to allow the active modal to stand out.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/layout/helpers.rs
+```
