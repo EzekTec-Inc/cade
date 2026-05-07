@@ -1349,3 +1349,23 @@ Task states are accurately retained, completed tasks are automatically detected 
 ```sh
 git checkout HEAD^ -- crates/cade-server/src/server/consolidation.rs crates/cade-server/src/server/reflection.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-07T13:30:00Z
+**Summary of change:** Fix `@` file picker overlay transparency
+**Files modified:**
+- `crates/cade-tui/src/app/layout/pickers.rs`
+
+**Reason:**
+Following the dynamic overlay stack refactor (`ae34cd3e`), the `@` file picker was receiving the full terminal area instead of its calculated bottom-anchored area. Because it did not render a backdrop or clear the area underneath it, the timeline text bled through, rendering it effectively transparent and unusable.
+
+**Previous behavior:**
+The `@` picker rendered a raw `Paragraph` without a `Clear` widget or shell, causing transparency.
+
+**New behavior:**
+The `@` file picker now correctly uses `render_overlay_shell` to draw a centered, opaque floating window with a "Select File" title, dim backdrop, and proper background coloring.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
+```
