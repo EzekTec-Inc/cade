@@ -1487,3 +1487,23 @@ Mapped background and border color accesses correctly to the standard Opaline to
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/colors.rs crates/cade-gui/src/theme.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T16:05:00Z
+**Summary of change:** Fix global gray background overlay in custom themes due to missing Opaline tokens.
+**Files modified:**
+- `crates/cade-tui/src/colors.rs`
+- `crates/cade-gui/src/theme.rs`
+
+**Reason:**
+The previous fix to correct Opaline token mappings assumed all themes would define standard tokens like `bg.panel`, `bg.elevated`, `success`, etc. However, custom user `.json` themes migrated to `.toml` using the `migrate_themes.py` script only mapped the original `cade.*` namespace tokens. Because the new standard tokens were completely absent from the users' existing `.toml` themes, Opaline correctly returned `OpalineColor::FALLBACK` (RGB: 128, 128, 128) for almost every UI element. This led to a solid gray background being painted over the entire terminal and UI for anyone using a migrated custom theme (like Dracula or Ayu Dark).
+
+**Previous behavior:**
+If a standard token (like `bg.panel` or `success`) was missing from the loaded theme, the UI would silently render it as Gray (128, 128, 128).
+
+**New behavior:**
+Implemented a `resolve_fallback` helper in both `ThemeColorsExt` (TUI) and `EguiThemeExt` (GUI). It safely intercepts the Opaline token resolution: if a standard token (like `bg.panel`) returns the fallback gray value (128, 128, 128), it automatically falls back to querying the legacy custom `cade.` token (e.g., `cade.user_message_bg`). This ensures 100% backward compatibility for users' existing migrated custom themes while preserving the correct standard token lookups for Opaline's 39 built-in themes.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/colors.rs crates/cade-gui/src/theme.rs
+```

@@ -55,27 +55,37 @@ impl OpalineColorEguiExt for opaline::color::OpalineColor {
     }
 }
 
+
+fn resolve_fallback(theme: &CoreThemeColors, primary: &str, fallback: &str) -> Color32 {
+    let c = theme.color(primary);
+    if c.r == 128 && c.g == 128 && c.b == 128 {
+        theme.color(fallback).to_egui_color()
+    } else {
+        c.to_egui_color()
+    }
+}
+
 impl EguiThemeExt for CoreThemeColors {
     fn bg_base(&self) -> Color32 { self.color("bg.base").to_egui_color() }
-    fn bg_surface0(&self) -> Color32 { self.color("bg.panel").to_egui_color() }
-    fn bg_surface1(&self) -> Color32 { self.color("bg.elevated").to_egui_color() }
-    fn bg_surface2(&self) -> Color32 { self.color("bg.highlight").to_egui_color() }
-    fn bg_card(&self) -> Color32 { self.color("cade.bg_card").to_egui_color() }
-    fn bg_input(&self) -> Color32 { self.color("bg.panel").to_egui_color() }
-    fn border_base(&self) -> Color32 { self.color("border.unfocused").to_egui_color() }
-    fn border_focus(&self) -> Color32 { self.color("border.focused").to_egui_color() }
+    fn bg_surface0(&self) -> Color32 { resolve_fallback(self, "bg.panel", "cade.user_message_bg") }
+    fn bg_surface1(&self) -> Color32 { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
+    fn bg_surface2(&self) -> Color32 { resolve_fallback(self, "bg.highlight", "cade.selected_bg") }
+    fn bg_card(&self) -> Color32 { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
+    fn bg_input(&self) -> Color32 { resolve_fallback(self, "bg.panel", "cade.user_message_bg") }
+    fn border_base(&self) -> Color32 { resolve_fallback(self, "border.unfocused", "cade.border") }
+    fn border_focus(&self) -> Color32 { resolve_fallback(self, "border.focused", "cade.border_accent") }
     fn primary(&self) -> Color32 { self.color("accent.primary").to_egui_color() }
-    fn success(&self) -> Color32 { self.color("success").to_egui_color() }
-    fn error(&self) -> Color32 { self.color("error").to_egui_color() }
-    fn warning(&self) -> Color32 { self.color("warning").to_egui_color() }
+    fn success(&self) -> Color32 { resolve_fallback(self, "success", "cade.success") }
+    fn error(&self) -> Color32 { resolve_fallback(self, "error", "cade.error") }
+    fn warning(&self) -> Color32 { resolve_fallback(self, "warning", "cade.warning") }
     fn accent_dim(&self) -> Color32 { self.color("text.dim").to_egui_color() }
     fn text_primary(&self) -> Color32 { self.color("text.primary").to_egui_color() }
     fn text_muted(&self) -> Color32 { self.color("text.muted").to_egui_color() }
     fn text_dim(&self) -> Color32 { self.color("text.dim").to_egui_color() }
-    fn teal(&self) -> Color32 { self.color("cade.syntax_type").to_egui_color() }
-    fn purple(&self) -> Color32 { self.color("cade.syntax_keyword").to_egui_color() }
-    fn diff_added(&self) -> Color32 { self.color("cade.tool_diff_added").to_egui_color() }
-    fn diff_removed(&self) -> Color32 { self.color("cade.tool_diff_removed").to_egui_color() }
+    fn teal(&self) -> Color32 { resolve_fallback(self, "code.type", "cade.syntax_type") }
+    fn purple(&self) -> Color32 { resolve_fallback(self, "code.keyword", "cade.syntax_keyword") }
+    fn diff_added(&self) -> Color32 { resolve_fallback(self, "success", "cade.success") }
+    fn diff_removed(&self) -> Color32 { resolve_fallback(self, "error", "cade.error") }
     
     fn overlay_backdrop(&self) -> Color32 {
         let base = self.bg_base();

@@ -139,74 +139,84 @@ pub trait ThemeColorsExt {
     fn c_border_style(&self) -> ratatui::widgets::BorderType;
 }
 
+
+fn resolve_fallback(theme: &ThemeColors, primary: &str, fallback: &str) -> RC {
+    let c = theme.color(primary);
+    if c.r == 128 && c.g == 128 && c.b == 128 {
+        theme.color(fallback).into()
+    } else {
+        c.into()
+    }
+}
+
 impl ThemeColorsExt for ThemeColors {
     fn c_bg_base(&self) -> RC { self.color("bg.base").into() }
-    fn c_bg_surface0(&self) -> RC { self.color("bg.panel").into() }
-    fn c_bg_surface1(&self) -> RC { self.color("bg.elevated").into() }
-    fn c_bg_surface2(&self) -> RC { self.color("bg.highlight").into() }
+    fn c_bg_surface0(&self) -> RC { resolve_fallback(self, "bg.panel", "cade.user_message_bg") }
+    fn c_bg_surface1(&self) -> RC { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
+    fn c_bg_surface2(&self) -> RC { resolve_fallback(self, "bg.highlight", "cade.selected_bg") }
     
     fn c_primary(&self) -> RC { self.color("accent.primary").into() }
-    fn c_success(&self) -> RC { self.color("success").into() }
-    fn c_error(&self) -> RC { self.color("error").into() }
-    fn c_warning(&self) -> RC { self.color("warning").into() }
+    fn c_success(&self) -> RC { resolve_fallback(self, "success", "cade.success") }
+    fn c_error(&self) -> RC { resolve_fallback(self, "error", "cade.error") }
+    fn c_warning(&self) -> RC { resolve_fallback(self, "warning", "cade.warning") }
     
     fn c_text_primary(&self) -> RC { self.color("text.primary").into() }
     fn c_text_muted(&self) -> RC { self.color("text.muted").into() }
     fn c_text_dim(&self) -> RC { self.color("text.dim").into() }
     
-    fn c_border_base(&self) -> RC { self.color("border.unfocused").into() }
-    fn c_border_focus(&self) -> RC { self.color("border.focused").into() }
-    fn c_border_muted(&self) -> RC { self.color("border.unfocused").into() }
-    fn c_border_accent(&self) -> RC { self.color("border.focused").into() }
+    fn c_border_base(&self) -> RC { resolve_fallback(self, "border.unfocused", "cade.border") }
+    fn c_border_focus(&self) -> RC { resolve_fallback(self, "border.focused", "cade.border_accent") }
+    fn c_border_muted(&self) -> RC { resolve_fallback(self, "border.unfocused", "cade.border") }
+    fn c_border_accent(&self) -> RC { resolve_fallback(self, "border.focused", "cade.border_accent") }
     
-    fn c_diff_added(&self) -> RC { self.color("cade.tool_diff_added").into() }
-    fn c_diff_removed(&self) -> RC { self.color("cade.tool_diff_removed").into() }
-    fn c_diff_context(&self) -> RC { self.color("cade.tool_diff_context").into() }
+    fn c_diff_added(&self) -> RC { resolve_fallback(self, "success", "cade.success") }
+    fn c_diff_removed(&self) -> RC { resolve_fallback(self, "error", "cade.error") }
+    fn c_diff_context(&self) -> RC { self.color("text.muted").into() }
     
-    fn c_md_heading(&self) -> RC { self.color("cade.md_heading").into() }
-    fn c_md_link(&self) -> RC { self.color("cade.md_link").into() }
-    fn c_md_link_url(&self) -> RC { self.color("cade.md_link_url").into() }
-    fn c_md_code(&self) -> RC { self.color("cade.md_code").into() }
-    fn c_md_code_block(&self) -> RC { self.color("cade.md_code_block").into() }
-    fn c_md_code_block_border(&self) -> RC { self.color("cade.md_code_block_border").into() }
-    fn c_md_quote(&self) -> RC { self.color("cade.md_quote").into() }
-    fn c_md_quote_border(&self) -> RC { self.color("cade.md_quote_border").into() }
-    fn c_md_hr(&self) -> RC { self.color("cade.md_hr").into() }
-    fn c_md_list_bullet(&self) -> RC { self.color("cade.md_list_bullet").into() }
+    fn c_md_heading(&self) -> RC { resolve_fallback(self, "warning", "cade.warning") }
+    fn c_md_link(&self) -> RC { self.color("accent.primary").into() }
+    fn c_md_link_url(&self) -> RC { self.color("text.muted").into() }
+    fn c_md_code(&self) -> RC { self.color("accent.secondary").into() }
+    fn c_md_code_block(&self) -> RC { self.color("text.primary").into() }
+    fn c_md_code_block_border(&self) -> RC { resolve_fallback(self, "border.unfocused", "cade.border") }
+    fn c_md_quote(&self) -> RC { self.color("text.muted").into() }
+    fn c_md_quote_border(&self) -> RC { resolve_fallback(self, "border.unfocused", "cade.border") }
+    fn c_md_hr(&self) -> RC { resolve_fallback(self, "border.unfocused", "cade.border") }
+    fn c_md_list_bullet(&self) -> RC { self.color("accent.primary").into() }
     
-    fn c_syntax_comment(&self) -> RC { self.color("cade.syntax_comment").into() }
-    fn c_syntax_keyword(&self) -> RC { self.color("cade.syntax_keyword").into() }
-    fn c_syntax_function(&self) -> RC { self.color("cade.syntax_function").into() }
-    fn c_syntax_variable(&self) -> RC { self.color("cade.syntax_variable").into() }
-    fn c_syntax_string(&self) -> RC { self.color("cade.syntax_string").into() }
-    fn c_syntax_number(&self) -> RC { self.color("cade.syntax_number").into() }
-    fn c_syntax_type(&self) -> RC { self.color("cade.syntax_type").into() }
-    fn c_syntax_operator(&self) -> RC { self.color("cade.syntax_operator").into() }
-    fn c_syntax_punctuation(&self) -> RC { self.color("cade.syntax_punctuation").into() }
+    fn c_syntax_comment(&self) -> RC { resolve_fallback(self, "code.comment", "cade.syntax_comment") }
+    fn c_syntax_keyword(&self) -> RC { resolve_fallback(self, "code.keyword", "cade.syntax_keyword") }
+    fn c_syntax_function(&self) -> RC { resolve_fallback(self, "code.function", "cade.syntax_function") }
+    fn c_syntax_variable(&self) -> RC { self.color("text.primary").into() }
+    fn c_syntax_string(&self) -> RC { resolve_fallback(self, "code.string", "cade.syntax_string") }
+    fn c_syntax_number(&self) -> RC { resolve_fallback(self, "code.number", "cade.syntax_number") }
+    fn c_syntax_type(&self) -> RC { resolve_fallback(self, "code.type", "cade.syntax_type") }
+    fn c_syntax_operator(&self) -> RC { resolve_fallback(self, "code.keyword", "cade.syntax_keyword") }
+    fn c_syntax_punctuation(&self) -> RC { self.color("text.muted").into() }
     
-    fn c_thinking_off(&self) -> RC { self.color("cade.thinking_off").into() }
-    fn c_thinking_minimal(&self) -> RC { self.color("cade.thinking_minimal").into() }
-    fn c_thinking_low(&self) -> RC { self.color("cade.thinking_low").into() }
-    fn c_thinking_medium(&self) -> RC { self.color("cade.thinking_medium").into() }
-    fn c_thinking_high(&self) -> RC { self.color("cade.thinking_high").into() }
-    fn c_thinking_xhigh(&self) -> RC { self.color("cade.thinking_xhigh").into() }
+    fn c_thinking_off(&self) -> RC { self.color("text.dim").into() }
+    fn c_thinking_minimal(&self) -> RC { self.color("accent.primary").into() }
+    fn c_thinking_low(&self) -> RC { self.color("accent.secondary").into() }
+    fn c_thinking_medium(&self) -> RC { resolve_fallback(self, "success", "cade.success") }
+    fn c_thinking_high(&self) -> RC { resolve_fallback(self, "warning", "cade.warning") }
+    fn c_thinking_xhigh(&self) -> RC { resolve_fallback(self, "error", "cade.error") }
     
-    fn c_bash_mode(&self) -> RC { self.color("cade.bash_mode").into() }
-    fn c_bg_card(&self) -> RC { self.color("cade.bg_card").into() }
+    fn c_bash_mode(&self) -> RC { resolve_fallback(self, "warning", "cade.warning") }
+    fn c_bg_card(&self) -> RC { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
     fn c_bg_input(&self) -> RC { self.color("bg.surface").into() }
     fn c_selected_bg(&self) -> RC { self.color("bg.selection").into() }
-    fn c_tool_success_bg(&self) -> RC { self.color("cade.tool_success_bg").into() }
-    fn c_tool_error_bg(&self) -> RC { self.color("cade.tool_error_bg").into() }
-    fn c_tool_pending_bg(&self) -> RC { self.color("cade.tool_pending_bg").into() }
+    fn c_tool_success_bg(&self) -> RC { resolve_fallback(self, "bg.elevated", "cade.tool_success_bg") }
+    fn c_tool_error_bg(&self) -> RC { resolve_fallback(self, "bg.highlight", "cade.selected_bg") }
+    fn c_tool_pending_bg(&self) -> RC { resolve_fallback(self, "bg.panel", "cade.user_message_bg") }
 
-    fn c_ctx_bar_system(&self) -> RC { self.color("cade.ctx_bar_system").into() }
-    fn c_ctx_bar_native_tools(&self) -> RC { self.color("cade.ctx_bar_native_tools").into() }
-    fn c_ctx_bar_mcp_tools(&self) -> RC { self.color("cade.ctx_bar_mcp_tools").into() }
-    fn c_ctx_bar_memory(&self) -> RC { self.color("cade.ctx_bar_memory").into() }
-    fn c_ctx_bar_skills(&self) -> RC { self.color("cade.ctx_bar_skills").into() }
-    fn c_ctx_bar_messages(&self) -> RC { self.color("cade.ctx_bar_messages").into() }
-    fn c_ctx_bar_free(&self) -> RC { self.color("cade.ctx_bar_free").into() }
-    fn c_ctx_bar_buffer(&self) -> RC { self.color("cade.ctx_bar_buffer").into() }
+    fn c_ctx_bar_system(&self) -> RC { self.color("text.dim").into() }
+    fn c_ctx_bar_native_tools(&self) -> RC { self.color("accent.secondary").into() }
+    fn c_ctx_bar_mcp_tools(&self) -> RC { self.color("accent.tertiary").into() }
+    fn c_ctx_bar_memory(&self) -> RC { resolve_fallback(self, "warning", "cade.warning") }
+    fn c_ctx_bar_skills(&self) -> RC { self.color("accent.primary").into() }
+    fn c_ctx_bar_messages(&self) -> RC { self.color("accent.deep").into() }
+    fn c_ctx_bar_free(&self) -> RC { self.color("text.dim").into() }
+    fn c_ctx_bar_buffer(&self) -> RC { resolve_fallback(self, "border.unfocused", "cade.border") }
     fn c_spinner_0(&self) -> RC { self.color("accent.primary").into() }
     fn c_spinner_1(&self) -> RC { self.color("accent.primary").into() }
     fn c_spinner_2(&self) -> RC { self.color("accent.primary").into() }
