@@ -149,13 +149,34 @@ pub(crate) fn render_theme_picker(
     // Dim backdrop behind the overlay
     super::helpers::render_backdrop(frame, area, colors);
 
-    frame.render_widget(Clear, area);
+    // -- B5/A2: derive builtin names from the single source of truth
+    let builtin_names: Vec<String> = opaline::list_available_themes()
+        .into_iter()
+        .map(|info| info.name)
+        .collect();
+
+    let w = (area.width / 2).max(40).min(area.width.saturating_sub(4));
+    let has_builtins = tp.filtered_indices.iter().any(|&i| builtin_names.contains(&tp.themes[i].meta.name));
+    let has_custom = tp.filtered_indices.iter().any(|&i| !builtin_names.contains(&tp.themes[i].meta.name));
+    let header_rows = has_builtins as u16 + has_custom as u16;
+    let max_visible = area.height.saturating_sub(8);
+    let n = (tp.filtered_indices.len() as u16 + header_rows).max(1).min(max_visible);
+    let h = (n + 4).clamp(5, area.height.saturating_sub(4));
+
+    let r = ratatui::layout::Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, r);
 
     // Split into table area + filter box
     let [table_area, filter_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(4), Constraint::Length(3)])
-        .areas(area);
+        .areas(r);
 
     // -- Outer block
     let total = tp.filtered_indices.len();
@@ -178,12 +199,6 @@ pub(crate) fn render_theme_picker(
 
     let inner_table_area = outer_block.inner(table_area);
     frame.render_widget(outer_block, table_area);
-
-    // -- B5/A2: derive builtin names from the single source of truth
-    let builtin_names: Vec<String> = opaline::list_available_themes()
-        .into_iter()
-        .map(|info| info.name)
-        .collect();
 
     // -- B2+A1: simplified selection + flat_cursor that accounts for header rows.
     // We iterate filtered_indices once, partitioning into built-in and custom,

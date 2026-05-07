@@ -1447,3 +1447,22 @@ The previous fix for `render_backdrop` used `ratatui::style::Modifier::DIM`. How
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/layout/helpers.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T15:45:00Z
+**Summary of change:** Fix full-screen opaque background caused by unconstrained theme picker popup.
+**Files modified:**
+- `crates/cade-tui/src/app/layout/pickers.rs`
+
+**Reason:**
+The previous fix to `render_backdrop` successfully prevented the terminal's global dimming from destroying transparency. However, the user still saw an opaque background because the `/theme` picker popup itself had lost its dimensional constraints during a previous automated refactoring. It was drawing a `Block` with `bg_surface0` over the *entire terminal area* instead of drawing a centered modal window, which completely masked the timeline and ruined transparency.
+
+**Previous behavior:**
+`render_theme_picker` used the full `area` for its layout boundaries, painting the popup over the entire screen.
+
+**New behavior:**
+`render_theme_picker` computes a centered bounding box `r` and renders the picker modal exclusively within that region, leaving the rest of the screen fully visible (and correctly dimmed by the backdrop).
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
+```
