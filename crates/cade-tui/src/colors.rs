@@ -141,23 +141,23 @@ pub trait ThemeColorsExt {
 
 impl ThemeColorsExt for ThemeColors {
     fn c_bg_base(&self) -> RC { self.color("bg.base").into() }
-    fn c_bg_surface0(&self) -> RC { self.color("bg.surface").into() }
-    fn c_bg_surface1(&self) -> RC { self.color("bg.overlay").into() }
+    fn c_bg_surface0(&self) -> RC { self.color("bg.panel").into() }
+    fn c_bg_surface1(&self) -> RC { self.color("bg.elevated").into() }
     fn c_bg_surface2(&self) -> RC { self.color("bg.highlight").into() }
     
     fn c_primary(&self) -> RC { self.color("accent.primary").into() }
-    fn c_success(&self) -> RC { self.color("accent.success").into() }
-    fn c_error(&self) -> RC { self.color("accent.error").into() }
-    fn c_warning(&self) -> RC { self.color("accent.warning").into() }
+    fn c_success(&self) -> RC { self.color("success").into() }
+    fn c_error(&self) -> RC { self.color("error").into() }
+    fn c_warning(&self) -> RC { self.color("warning").into() }
     
     fn c_text_primary(&self) -> RC { self.color("text.primary").into() }
     fn c_text_muted(&self) -> RC { self.color("text.muted").into() }
     fn c_text_dim(&self) -> RC { self.color("text.dim").into() }
     
-    fn c_border_base(&self) -> RC { self.color("border.base").into() }
-    fn c_border_focus(&self) -> RC { self.color("border.focus").into() }
-    fn c_border_muted(&self) -> RC { self.color("border.muted").into() }
-    fn c_border_accent(&self) -> RC { self.color("border.accent").into() }
+    fn c_border_base(&self) -> RC { self.color("border.unfocused").into() }
+    fn c_border_focus(&self) -> RC { self.color("border.focused").into() }
+    fn c_border_muted(&self) -> RC { self.color("border.unfocused").into() }
+    fn c_border_accent(&self) -> RC { self.color("border.focused").into() }
     
     fn c_diff_added(&self) -> RC { self.color("cade.tool_diff_added").into() }
     fn c_diff_removed(&self) -> RC { self.color("cade.tool_diff_removed").into() }

@@ -146,9 +146,6 @@ pub(crate) fn render_theme_picker(
         return;
     }
 
-    // Dim backdrop behind the overlay
-    super::helpers::render_backdrop(frame, area, colors);
-
     // -- B5/A2: derive builtin names from the single source of truth
     let builtin_names: Vec<String> = opaline::list_available_themes()
         .into_iter()
@@ -169,6 +166,9 @@ pub(crate) fn render_theme_picker(
         width: w,
         height: h,
     };
+
+    // Dim backdrop behind the overlay
+    super::helpers::render_backdrop(frame, area, colors);
 
     frame.render_widget(Clear, r);
 

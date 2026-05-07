@@ -1466,3 +1466,24 @@ The previous fix to `render_backdrop` successfully prevented the terminal's glob
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T15:55:00Z
+**Summary of change:** Fix global gray background overlay by correcting Opaline token mapping.
+**Files modified:**
+- `crates/cade-tui/src/colors.rs`
+- `crates/cade-gui/src/theme.rs`
+- `crates/cade-tui/src/app/layout/pickers.rs` (Resolved git conflict)
+
+**Reason:**
+After refactoring to `opaline`, the entire UI (side-tray, input field, help menu, modals, and viewport) had a gray background. This happened because the custom UI code queried Opaline for semantic tokens that do not exist in standard Opaline themes (e.g., `bg.surface`, `bg.overlay`, `accent.error`). When Opaline cannot resolve a token, it returns `OpalineColor::FALLBACK`, which is a neutral gray (`128, 128, 128`).
+
+**Previous behavior:**
+Queried undefined tokens (e.g. `bg.surface`), resulting in default gray color (`128, 128, 128`) everywhere.
+
+**New behavior:**
+Mapped background and border color accesses correctly to the standard Opaline token palette (e.g., `bg.panel`, `bg.elevated`, `success`, `error`, `border.unfocused`). This correctly resolves theme backgrounds for all 39 built-in themes instead of falling back to gray. Also resolved lingering git conflict in `pickers.rs` leftover from a previous stash operation.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/colors.rs crates/cade-gui/src/theme.rs
+```

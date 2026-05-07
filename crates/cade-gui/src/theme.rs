@@ -57,17 +57,17 @@ impl OpalineColorEguiExt for opaline::color::OpalineColor {
 
 impl EguiThemeExt for CoreThemeColors {
     fn bg_base(&self) -> Color32 { self.color("bg.base").to_egui_color() }
-    fn bg_surface0(&self) -> Color32 { self.color("bg.surface").to_egui_color() }
-    fn bg_surface1(&self) -> Color32 { self.color("bg.overlay").to_egui_color() }
+    fn bg_surface0(&self) -> Color32 { self.color("bg.panel").to_egui_color() }
+    fn bg_surface1(&self) -> Color32 { self.color("bg.elevated").to_egui_color() }
     fn bg_surface2(&self) -> Color32 { self.color("bg.highlight").to_egui_color() }
     fn bg_card(&self) -> Color32 { self.color("cade.bg_card").to_egui_color() }
-    fn bg_input(&self) -> Color32 { self.color("bg.surface").to_egui_color() }
-    fn border_base(&self) -> Color32 { self.color("border.base").to_egui_color() }
-    fn border_focus(&self) -> Color32 { self.color("border.focus").to_egui_color() }
+    fn bg_input(&self) -> Color32 { self.color("bg.panel").to_egui_color() }
+    fn border_base(&self) -> Color32 { self.color("border.unfocused").to_egui_color() }
+    fn border_focus(&self) -> Color32 { self.color("border.focused").to_egui_color() }
     fn primary(&self) -> Color32 { self.color("accent.primary").to_egui_color() }
-    fn success(&self) -> Color32 { self.color("accent.success").to_egui_color() }
-    fn error(&self) -> Color32 { self.color("accent.error").to_egui_color() }
-    fn warning(&self) -> Color32 { self.color("accent.warning").to_egui_color() }
+    fn success(&self) -> Color32 { self.color("success").to_egui_color() }
+    fn error(&self) -> Color32 { self.color("error").to_egui_color() }
+    fn warning(&self) -> Color32 { self.color("warning").to_egui_color() }
     fn accent_dim(&self) -> Color32 { self.color("text.dim").to_egui_color() }
     fn text_primary(&self) -> Color32 { self.color("text.primary").to_egui_color() }
     fn text_muted(&self) -> Color32 { self.color("text.muted").to_egui_color() }
