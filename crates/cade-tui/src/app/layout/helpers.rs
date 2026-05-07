@@ -4,12 +4,19 @@ use crate::colors::ThemeColorsExt;
 
 /// Render a dim backdrop over the full frame area. Call before rendering an
 /// overlay to provide visual separation from the content underneath.
-pub(crate) fn render_backdrop(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, _colors: &ThemeColors) {
+pub(crate) fn render_backdrop(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, colors: &ThemeColors) {
     let buf = frame.buffer_mut();
     for x in area.left()..area.right() {
         for y in area.top()..area.bottom() {
             if let Some(cell) = buf.cell_mut(ratatui::layout::Position { x, y }) {
-                cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
+                // Many terminal emulators (e.g. GNOME Terminal on Pop!_OS) implement Modifier::DIM
+                // by blending the background, which breaks terminal transparency and causes an opaque
+                // color overlay. Instead, we safely "dim" by forcing all foreground text to a muted
+                // color and leaving the background untouched.
+                let mut style = cell.style();
+                style.add_modifier = style.add_modifier.difference(ratatui::style::Modifier::DIM);
+                style.fg = Some(colors.c_text_dim());
+                cell.set_style(style);
             }
         }
     }

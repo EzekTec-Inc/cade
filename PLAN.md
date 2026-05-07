@@ -1412,8 +1412,6 @@ git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
 ```
 
 ---
-**UTC Timestamp:** 2026-05-07T14:55:00Z
-**Summary of change:** Fix opaque `/theme` backdrop overlay to properly dim content.
 **Files modified:**
 - `crates/cade-tui/src/app/layout/helpers.rs`
 
@@ -1425,6 +1423,25 @@ The TUI overlays (like the `/theme` picker) were using a solid background color 
 
 **New behavior:**
 `render_backdrop` now directly accesses the terminal cell buffer using `frame.buffer_mut()`, applying `ratatui::style::Modifier::DIM` to the existing characters. This allows the timeline and background text to remain visible (and properly styled with live-previewed theme colors) but correctly dimmed to allow the active modal to stand out.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/layout/helpers.rs
+```
+---
+**UTC Timestamp:** 2026-05-07T15:10:00Z
+**Summary of change:** Fix terminal background color overlay caused by `Modifier::DIM`.
+**Files modified:**
+- `crates/cade-tui/src/app/layout/helpers.rs`
+
+**Reason:**
+The previous fix for `render_backdrop` used `ratatui::style::Modifier::DIM`. However, on many terminal emulators (e.g. GNOME Terminal on Pop!_OS / `tmux-256color`), `DIM` is implemented by blending the entire cell background, which destroys terminal transparency and renders an opaque color overlay over the entire screen.
+
+**Previous behavior:**
+`render_backdrop` applied `Modifier::DIM` to every cell, causing unintended opaque background overlays on terminals without full DIM support.
+
+**New behavior:**
+`render_backdrop` now avoids `Modifier::DIM` entirely. Instead, it iterates over the terminal buffer and updates only the foreground (`fg`) color of the text to `colors.c_text_dim()`, leaving the background completely untouched. This achieves the visual "dimming" effect for the modal backdrop while perfectly preserving terminal transparency.
 
 **Rollback steps:**
 ```sh
