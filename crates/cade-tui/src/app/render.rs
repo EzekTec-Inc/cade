@@ -433,7 +433,7 @@ pub(crate) fn render_frame(
         ];
         frame.render_widget(
             Paragraph::new(Line::from(prefix_spans))
-                .style(Style::default().bg(colors.c_bg_input())),
+                .style(Style::default()),
             input_chunks[0],
         );
 
@@ -445,15 +445,14 @@ pub(crate) fn render_frame(
 
         textarea.set_placeholder_text(input_placeholder);
         textarea.set_placeholder_style(colors.text_muted());
-        textarea.set_cursor_line_style(Style::default().bg(colors.c_bg_input()));
+        textarea.set_cursor_line_style(Style::default());
         textarea.set_cursor_style(
             Style::default()
                 .fg(colors.c_bg_base())
                 .bg(colors.c_primary()),
         );
-        // Apply bg_input as the textarea base style so the whole row has the
-        // themed background even when the line is shorter than the terminal width.
-        textarea.set_style(Style::default().bg(colors.c_bg_input()));
+        // Apply default base style so the whole row is transparent
+        textarea.set_style(Style::default());
 
         frame.render_widget(&*textarea, input_chunks[1]);
         input_cursor_pos = Some((

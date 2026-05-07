@@ -233,7 +233,7 @@ pub(crate) fn render_question_inline(
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .style(colors.style_surface1()),
+            .style(Style::default()),
         body_area,
     );
 }

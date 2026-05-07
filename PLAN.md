@@ -1507,3 +1507,23 @@ Implemented a `resolve_fallback` helper in both `ThemeColorsExt` (TUI) and `Egui
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/colors.rs crates/cade-gui/src/theme.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T16:20:00Z
+**Summary of change:** Remove background color highlight from input field and ask question modal.
+**Files modified:**
+- `crates/cade-tui/src/app/render.rs`
+- `crates/cade-tui/src/app/layout/question.rs`
+
+**Reason:**
+After the Opaline theme refactor, the input field and question modal were rendering with opaque background colors (`bg_input` and `style_surface1` respectively), causing an unwanted highlight block on terminals with transparent backgrounds.
+
+**Previous behavior:**
+The input field applied `.bg(colors.c_bg_input())` to the input prefix, the cursor line, and the base textarea. The question modal applied `.style(colors.style_surface1())` to the overall paragraph. This resulted in solid background blocks.
+
+**New behavior:**
+Removed the `.bg(...)` modifiers and used `Style::default()` for the input field components and the question modal paragraph. This leaves the background completely untouched (transparent), removing the unwanted highlight block while maintaining foreground text colors.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/render.rs crates/cade-tui/src/app/layout/question.rs
+```
