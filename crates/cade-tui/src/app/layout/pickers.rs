@@ -7,19 +7,16 @@ use ratatui::widgets::{Cell, Row};
 
 // region:    --- @ file picker
 
-/// Render the `@` file picker as a floating overlay at the bottom of `area`.
+/// Render the `@` file picker as a floating overlay.
 pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, colors: &ThemeColors) {
     if area.height == 0 {
         return;
     }
-    let w = area.width as usize;
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    
+    // Draw a proper shell overlay centered on screen
+    let inner_area = crate::overlay::render_overlay_shell(frame, area, "Select File", colors);
 
-    // Top dashed separator (matches question-panel style)
-    lines.push(Line::from(Span::styled(
-        "╌".repeat(w),
-        colors.border_muted(),
-    )));
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Header: "@ <query>" + no-match hint
     let no_match = if pk.matches.is_empty() && !pk.query.is_empty() {
@@ -37,21 +34,30 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         Span::styled(no_match, colors.text_muted()),
     ]));
 
-    // Match entries — fill remaining rows (minus sep + header already pushed)
-    let max_entries = (area.height as usize).saturating_sub(lines.len());
+    // Separator under header
+    lines.push(Line::from(Span::styled(
+        "╌".repeat(inner_area.width as usize),
+        colors.border_muted(),
+    )));
+
+    // Match entries
+    let max_entries = (inner_area.height as usize).saturating_sub(lines.len());
     for (i, m) in pk.matches.iter().take(max_entries).enumerate() {
         let selected = i == pk.cursor;
         let (glyph, style) = if selected {
-            ("❯", colors.text_primary().add_modifier(Modifier::BOLD))
+            ("❯", Style::default().bg(colors.c_bg_surface1()).fg(colors.c_primary()).add_modifier(Modifier::BOLD))
         } else {
             (" ", colors.text_muted())
         };
-        lines.push(Line::from(Span::styled(format!(" {glyph} {m}"), style)));
+        // Fill width for background selection effect
+        let text = format!(" {glyph} {m}");
+        let padded_text = format!("{:width$}", text, width = inner_area.width as usize);
+        lines.push(Line::from(Span::styled(padded_text, style)));
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(colors.c_bg_surface1())),
-        area,
+        Paragraph::new(lines),
+        inner_area,
     );
 }
 

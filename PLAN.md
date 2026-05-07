@@ -1391,3 +1391,22 @@ Phases 3, 4, and 5 of the Opaline Refactor plan. Replaced the rigid `ThemeTokens
 ```sh
 git checkout HEAD^ -- crates/cade-core crates/cade-tui crates/cade-gui crates/cade-cli crates/cade-server
 ```
+---
+**UTC Timestamp:** 2026-05-07T14:45:00Z
+**Summary of change:** Re-apply fix for `@` file picker overlay transparency
+**Files modified:**
+- `crates/cade-tui/src/app/layout/pickers.rs`
+
+**Reason:**
+During the massive `opaline` theme refactor across the workspace, the previous fix for the transparent `@` file picker was accidentally reverted. `git restore` was used to clean up a flawed automated refactoring script, which correctly reverted the bad changes but also wiped out the legitimate file picker fix since they were batched together.
+
+**Previous behavior:**
+The `@` picker rendered a raw `Paragraph` without a `Clear` widget or shell, causing transparency.
+
+**New behavior:**
+Re-applied the fix: the `@` file picker correctly uses `render_overlay_shell` to draw a centered, opaque floating window with a "Select File" title, dim backdrop, and proper background coloring via the Opaline theme tokens.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
+```
