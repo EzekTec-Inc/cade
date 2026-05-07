@@ -1527,3 +1527,23 @@ Removed the `.bg(...)` modifiers and used `Style::default()` for the input field
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/render.rs crates/cade-tui/src/app/layout/question.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T16:35:00Z
+**Summary of change:** Fix theme name resolution error for `/theme <display_name>` commands.
+**Files modified:**
+- `crates/cade-cli/src/cli/repl/commands_theme.rs`
+- `crates/cade-server/src/server/api/run/mod.rs`
+
+**Reason:**
+When the user selects a theme from the TUI picker (e.g., `SilkCircuit Glow`), the `ThemePickerState::take_result` formats the command as `/theme SilkCircuit Glow`. The underlying `opaline::load_by_name` expects the internal ID (`silkcircuit-glow`), causing it to fail. The fallback substring matching previously only compared against the internal ID (`n.name`), which also failed because `"silkcircuit-glow".contains("silkcircuit glow")` is false.
+
+**Previous behavior:**
+The fallback substring matching only compared against the `n.name` field.
+
+**New behavior:**
+Updated the fallback substring matching to also compare against `n.display_name`. Additionally, updated the resolution block so the GUI and TUI accurately persist and report `theme.meta.name` instead of the raw input. This ensures perfectly matching display names correctly load the associated theme.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-cli/src/cli/repl/commands_theme.rs crates/cade-server/src/server/api/run/mod.rs
+```

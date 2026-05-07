@@ -119,7 +119,10 @@ impl Repl {
                 let builtins = cade_core::resources::list_available_themes();
                 if let Some(bn) = builtins
                     .iter()
-                    .find(|n| n.name.to_lowercase().contains(&name_lower))
+                    .find(|n| {
+                        n.name.to_lowercase().contains(&name_lower)
+                            || n.display_name.to_lowercase().contains(&name_lower)
+                    })
                 {
                     (cade_core::resources::get_theme(&bn.name).unwrap(), bn.name.to_string())
                 } else if let Some(t) = discovered

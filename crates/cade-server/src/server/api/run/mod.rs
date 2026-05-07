@@ -317,6 +317,22 @@ async fn run_agent_loop(
                     let all = cade_core::resources::discover_themes(&cwd, &agent_dir);
                     all.into_iter()
                         .find(|t| t.meta.name == effective_name)
+                })
+                .or_else(|| {
+                    let name_lower = effective_name.to_lowercase();
+                    let builtins = cade_core::resources::list_available_themes();
+                    if let Some(bn) = builtins
+                        .iter()
+                        .find(|n| {
+                            n.name.to_lowercase().contains(&name_lower)
+                                || n.display_name.to_lowercase().contains(&name_lower)
+                        })
+                    {
+                        cade_core::resources::get_theme(&bn.name)
+                    } else {
+                        let all = cade_core::resources::discover_themes(&cwd, &agent_dir);
+                        all.into_iter().find(|t| t.meta.name.to_lowercase().contains(&name_lower))
+                    }
                 });
 
         if let Some(colors) = colors_opt {
@@ -325,17 +341,18 @@ async fn run_agent_loop(
             // when the lookup already returned the persisted name —
             // writing the same value back is a no-op but clutters
             // audit trails; check string equality to avoid it.)
-            if effective_name != t_name || t_name != "reload" {
+            let true_name = colors.meta.name.clone();
+            if true_name != t_name || t_name != "reload" {
                 let _ = cade_store::sqlite::agents::update_agent_theme(
                     &state2.db,
                     &agent_id2,
-                    Some(&effective_name),
+                    Some(&true_name),
                 );
             }
 
             send(json!({
                 "message_type": "theme_update",
-                "theme_name": effective_name,
+                "theme_name": true_name,
             }))
             .await;
         } else {
