@@ -533,7 +533,7 @@ pub(crate) fn render_success_item(text: &str, out: &mut Vec<Line<'static>>, colo
                 if i == 0 { " OK " } else { "    " },
                 Style::default()
                     .fg(colors.c_success())
-                    .bg(colors.c_bg_surface1())
+                    .bg(colors.c_bg_base())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),

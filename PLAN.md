@@ -1567,3 +1567,22 @@ Replaced `.style(colors.bg_card_style())` with `.style(colors.text_primary())` i
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/timeline/mod.rs crates/cade-tui/src/colors.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T17:15:00Z
+**Summary of change:** Match 'OK' timeline success block background color to the 'INFO' block style.
+**Files modified:**
+- `crates/cade-tui/src/app/timeline/render_item.rs`
+
+**Reason:**
+The user requested that the success entries (`OK` badge, such as Auto-checkpoint saved) in the timeline match the background color of the `INFO` badge, eliminating the solid background block and preserving terminal transparency where possible.
+
+**Previous behavior:**
+The `OK` badge in `render_success_item` used `.bg(colors.c_bg_surface1())`, causing a prominent background highlight block.
+
+**New behavior:**
+The `OK` badge in `render_success_item` now uses `.bg(colors.c_bg_base())`, matching the styling of `render_system_item` which renders the `INFO` badge. This removes the distinct opaque overlay highlight from the badge.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui/src/app/timeline/render_item.rs
+```
