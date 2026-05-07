@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ThemeColorsExt;
 use crate::colors::ThemeColors;
 use ratatui::{
     Frame,
@@ -18,15 +18,15 @@ pub fn render_overlay_shell(
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(colors.border_style.to_ratatui())
-        .style(Style::default().bg(colors.bg_surface2.to_ratatui()))
+        .border_type(colors.c_border_style())
+        .style(Style::default().bg(colors.c_bg_surface2()))
         .border_style(colors.border_accent())
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
                 title.to_string(),
                 Style::default()
-                    .fg(colors.primary.to_ratatui())
+                    .fg(colors.c_primary())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -51,7 +51,7 @@ pub fn render_overlay_hint(frame: &mut Frame, area: Rect, hint: &str, colors: &T
             Span::styled(
                 hint.to_string(),
                 Style::default()
-                    .fg(colors.text_muted.to_ratatui())
+                    .fg(colors.c_text_muted())
                     .add_modifier(Modifier::DIM),
             ),
         ])),
@@ -61,13 +61,13 @@ pub fn render_overlay_hint(frame: &mut Frame, area: Rect, hint: &str, colors: &T
 
 pub fn overlay_selected_style(colors: &ThemeColors) -> Style {
     Style::default()
-        .bg(colors.bg_surface1.to_ratatui())
-        .fg(colors.primary.to_ratatui())
+        .bg(colors.c_bg_surface1())
+        .fg(colors.c_primary())
 }
 
 pub fn overlay_section_style(colors: &ThemeColors) -> Style {
     Style::default()
-        .fg(colors.md_heading.to_ratatui())
+        .fg(colors.c_md_heading())
         .add_modifier(Modifier::BOLD)
 }
 
@@ -77,7 +77,7 @@ pub fn overlay_muted_style(colors: &ThemeColors) -> Style {
 
 pub fn overlay_badge_style(colors: &ThemeColors) -> Style {
     Style::default()
-        .fg(colors.text_primary.to_ratatui())
-        .bg(colors.bg_surface2.to_ratatui())
+        .fg(colors.c_text_primary())
+        .bg(colors.c_bg_surface2())
         .add_modifier(Modifier::BOLD)
 }

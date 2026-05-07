@@ -36,7 +36,7 @@ pub use autocomplete::{
     AutocompleteProvider, Completion, FileAutocompleteProvider, SlashCommandDef,
     SlashCommandProvider,
 };
-pub use colors::{ThemeColors, BorderStyle};
+pub use colors::ThemeColors;
 pub use component::{Component, RenderedLine};
 pub use editor::Editor;
 pub use question::{Question, QuestionAnswer, QuestionOption, QuestionWidget};

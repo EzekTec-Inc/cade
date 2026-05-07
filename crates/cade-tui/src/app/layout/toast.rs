@@ -1,5 +1,6 @@
-use crate::colors::{ColorDefExt, BorderStyleExt};
+
 use crate::app::*;
+use crate::colors::ThemeColorsExt;
 pub(crate) fn render_toast(
     frame: &mut Frame,
     main_area: Rect,
@@ -15,10 +16,10 @@ pub(crate) fn render_toast(
         height: 3,
     };
     let (fg, border) = match toast.level {
-        ToastLevel::Info => (colors.text_primary.to_ratatui(), colors.primary.to_ratatui()),
-        ToastLevel::Success => (colors.text_primary.to_ratatui(), colors.success.to_ratatui()),
-        ToastLevel::Warning => (colors.text_primary.to_ratatui(), colors.warning.to_ratatui()),
-        ToastLevel::Error => (colors.text_primary.to_ratatui(), colors.error.to_ratatui()),
+        ToastLevel::Info => (colors.c_text_primary(), colors.c_primary()),
+        ToastLevel::Success => (colors.c_text_primary(), colors.c_success()),
+        ToastLevel::Warning => (colors.c_text_primary(), colors.c_warning()),
+        ToastLevel::Error => (colors.c_text_primary(), colors.c_error()),
     };
     frame.render_widget(ratatui::widgets::Clear, rect);
     frame.render_widget(
@@ -32,9 +33,9 @@ pub(crate) fn render_toast(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(colors.border_style.to_ratatui())
+                .border_type(colors.c_border_style())
                 .border_style(Style::default().fg(border))
-                .style(Style::default().bg(colors.bg_surface2.to_ratatui())),
+                .style(Style::default().bg(colors.c_bg_surface2())),
         ),
         rect,
     );
@@ -42,10 +43,10 @@ pub(crate) fn render_toast(
 
 pub(crate) fn context_severity_color(context_pct: Option<u8>, colors: &ThemeColors) -> RC {
     match context_pct {
-        Some(p) if p >= 90 => colors.error.to_ratatui(),
-        Some(p) if p >= 80 => colors.warning.to_ratatui(),
-        Some(_) => colors.text_muted.to_ratatui(),
-        None => colors.text_dim.to_ratatui(),
+        Some(p) if p >= 90 => colors.c_error(),
+        Some(p) if p >= 80 => colors.c_warning(),
+        Some(_) => colors.c_text_muted(),
+        None => colors.c_text_dim(),
     }
 }
 

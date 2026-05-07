@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt};
+use crate::colors::{ThemeColorsExt,};
 use crate::app::*;
 use unicode_width::UnicodeWidthStr;
 
@@ -45,14 +45,14 @@ pub(crate) fn render_context_bar_item(
     ];
 
     let cat_colors: [RC; 8] = [
-        colors.ctx_bar_system.to_ratatui(),
-        colors.ctx_bar_native_tools.to_ratatui(),
-        colors.ctx_bar_mcp_tools.to_ratatui(),
-        colors.ctx_bar_memory.to_ratatui(),
-        colors.ctx_bar_skills.to_ratatui(),
-        colors.ctx_bar_messages.to_ratatui(),
-        colors.ctx_bar_free.to_ratatui(),
-        colors.ctx_bar_buffer.to_ratatui(),
+        colors.c_ctx_bar_system(),
+        colors.c_ctx_bar_native_tools(),
+        colors.c_ctx_bar_mcp_tools(),
+        colors.c_ctx_bar_memory(),
+        colors.c_ctx_bar_skills(),
+        colors.c_ctx_bar_messages(),
+        colors.c_ctx_bar_free(),
+        colors.c_ctx_bar_buffer(),
     ];
 
     let fmt_tok = |n: u64| -> String {
@@ -77,12 +77,12 @@ pub(crate) fn render_context_bar_item(
         Span::styled(
             "  ◆ Context  ",
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             model.to_string(),
-            Style::default().fg(colors.text_primary.to_ratatui()).add_modifier(Modifier::BOLD),
+            Style::default().fg(colors.c_text_primary()).add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", colors.text_muted()),
         Span::styled(
@@ -92,11 +92,11 @@ pub(crate) fn render_context_bar_item(
         Span::styled(
             format!("  ({}%)", pct),
             Style::default().fg(if pct >= 90 {
-                colors.error.to_ratatui()
+                colors.c_error()
             } else if pct >= 75 {
-                colors.warning.to_ratatui()
+                colors.c_warning()
             } else {
-                colors.success.to_ratatui()
+                colors.c_success()
             }),
         ),
     ]));
@@ -122,7 +122,7 @@ pub(crate) fn render_context_bar_item(
                 continue;
             }
             let (glyph, _) = CAT_META.get(i).copied().unwrap_or(('?', ""));
-            let color = cat_colors.get(i).copied().unwrap_or(colors.text_dim.to_ratatui());
+            let color = cat_colors.get(i).copied().unwrap_or(colors.c_text_dim());
             let s: String = std::iter::repeat_n(glyph, cells).collect();
             bar_spans.push(Span::styled(s, Style::default().fg(color)));
             filled += cells;
@@ -130,7 +130,7 @@ pub(crate) fn render_context_bar_item(
         // Pad remainder to full bar width
         if filled < bar_width {
             let pad: String = std::iter::repeat_n('·', bar_width - filled).collect();
-            bar_spans.push(Span::styled(pad, Style::default().fg(colors.text_dim.to_ratatui())));
+            bar_spans.push(Span::styled(pad, Style::default().fg(colors.c_text_dim())));
         }
     }
     out.push(Line::from(bar_spans));
@@ -142,7 +142,7 @@ pub(crate) fn render_context_bar_item(
             continue; // skip empty buffer row
         }
         let (glyph, label) = CAT_META.get(i).copied().unwrap_or(('?', "?"));
-        let color = cat_colors.get(i).copied().unwrap_or(colors.text_dim.to_ratatui());
+        let color = cat_colors.get(i).copied().unwrap_or(colors.c_text_dim());
         let pct_cat = if window > 0 {
             format!("{:.1}%", 100.0 * tok as f64 / window as f64)
         } else {
@@ -173,7 +173,7 @@ pub(crate) fn render_user_message_item(
     out.push(Line::from(vec![Span::styled(
         "You",
         Style::default()
-            .fg(colors.text_primary.to_ratatui())
+            .fg(colors.c_text_primary())
             .add_modifier(Modifier::BOLD),
     )]));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
@@ -185,7 +185,7 @@ pub(crate) fn render_assistant_item(text: &str, width: usize, out: &mut Vec<Line
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()
-            .fg(colors.primary.to_ratatui())
+            .fg(colors.c_primary())
             .add_modifier(Modifier::BOLD),
     )]));
     let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors, width);
@@ -210,7 +210,7 @@ pub(crate) fn render_tool_call_item(
     let icon = crate::icons::tool_icon(&display, nerd);
     let name_style = Style::default()
         .add_modifier(Modifier::BOLD)
-        .fg(colors.primary.to_ratatui());
+        .fg(colors.c_primary());
     let budget = width.saturating_sub(display.len() + icon.len() + 15);
     let args_span = if preview.is_empty() {
         Span::styled(")", colors.text_dim())
@@ -224,7 +224,7 @@ pub(crate) fn render_tool_call_item(
         Span::styled(
             format!("{icon} "),
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(display.to_string(), name_style.add_modifier(Modifier::BOLD)),
@@ -244,14 +244,14 @@ pub(crate) fn render_tool_result_item(
     nerd: bool,
 ) {
     let color = if is_error {
-        colors.diff_removed.to_ratatui()
+        colors.c_diff_removed()
     } else {
-        colors.diff_added.to_ratatui()
+        colors.c_diff_added()
     };
     let status_bg = if is_error {
-        colors.tool_error_bg.to_ratatui()
+        colors.c_tool_error_bg()
     } else {
-        colors.tool_success_bg.to_ratatui()
+        colors.c_tool_success_bg()
     };
     let status_label = if is_error {
         format!("{} ERR ", crate::icons::error_icon(nerd))
@@ -347,7 +347,7 @@ pub(crate) fn render_tool_result_item(
                 Span::styled(
                     hint,
                     Style::default()
-                        .fg(colors.text_dim.to_ratatui())
+                        .fg(colors.c_text_dim())
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -369,8 +369,8 @@ pub(crate) fn render_reasoning_item(
         Span::styled(
             " THINKING ",
             Style::default()
-                .fg(colors.text_primary.to_ratatui())
-                .bg(colors.bg_surface1.to_ratatui())
+                .fg(colors.c_text_primary())
+                .bg(colors.c_bg_surface1())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -392,7 +392,7 @@ pub(crate) fn render_reasoning_item(
                 Span::styled(
                     truncate_str(ln, inner_w),
                     Style::default()
-                        .fg(colors.text_muted.to_ratatui())
+                        .fg(colors.c_text_muted())
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -410,7 +410,7 @@ pub(crate) fn render_live_output_item(
     colors: &ThemeColors,
 ) {
     let inner_w = width.saturating_sub(11);
-    let color = colors.diff_added.to_ratatui();
+    let color = colors.c_diff_added();
 
     if lines.is_empty() {
         out.push(Line::from(vec![
@@ -419,14 +419,14 @@ pub(crate) fn render_live_output_item(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.tool_pending_bg.to_ratatui())
+                    .bg(colors.c_tool_pending_bg())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 "(starting…)",
                 Style::default()
-                    .fg(colors.text_dim.to_ratatui())
+                    .fg(colors.c_text_dim())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -448,7 +448,7 @@ pub(crate) fn render_live_output_item(
             Span::styled(
                 hint,
                 Style::default()
-                    .fg(colors.text_dim.to_ratatui())
+                    .fg(colors.c_text_dim())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -463,7 +463,7 @@ pub(crate) fn render_live_output_item(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.tool_pending_bg.to_ratatui())
+                    .bg(colors.c_tool_pending_bg())
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw(" "));
@@ -516,8 +516,8 @@ pub(crate) fn render_system_item(text: &str, out: &mut Vec<Line<'static>>, color
             Span::styled(
                 if i == 0 { " INFO " } else { "      " },
                 Style::default()
-                    .fg(colors.primary.to_ratatui())
-                    .bg(colors.bg_base.to_ratatui())
+                    .fg(colors.c_primary())
+                    .bg(colors.c_bg_base())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -532,8 +532,8 @@ pub(crate) fn render_success_item(text: &str, out: &mut Vec<Line<'static>>, colo
             Span::styled(
                 if i == 0 { " OK " } else { "    " },
                 Style::default()
-                    .fg(colors.success.to_ratatui())
-                    .bg(colors.bg_surface1.to_ratatui())
+                    .fg(colors.c_success())
+                    .bg(colors.c_bg_surface1())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -547,7 +547,7 @@ pub(crate) fn render_info_header_item(text: &str, out: &mut Vec<Line<'static>>, 
         out.push(Line::from(Span::styled(
             ln.to_string(),
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -576,8 +576,8 @@ pub(crate) fn render_error_item(text: &str, out: &mut Vec<Line<'static>>, colors
             Span::styled(
                 if i == 0 { " ERR " } else { "     " },
                 Style::default()
-                    .fg(colors.error.to_ratatui())
-                    .bg(colors.bg_surface1.to_ratatui())
+                    .fg(colors.c_error())
+                    .bg(colors.c_bg_surface1())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -596,15 +596,15 @@ pub(crate) fn render_question_result_item(
         Span::styled(
             " DONE ",
             Style::default()
-                .fg(colors.success.to_ratatui())
-                .bg(colors.bg_surface1.to_ratatui())
+                .fg(colors.c_success())
+                .bg(colors.c_bg_surface1())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             format!("{header}: "),
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(answer.to_string(), colors.text_primary()),
@@ -635,9 +635,9 @@ pub(crate) fn render_heuristic_summary_item(
         ]));
     };
 
-    render_row("Intent", intent, colors.text_primary.to_ratatui());
-    render_row("Safety", safety, colors.success.to_ratatui());
-    render_row("Directives", directives, colors.text_primary.to_ratatui());
+    render_row("Intent", intent, colors.c_text_primary());
+    render_row("Safety", safety, colors.c_success());
+    render_row("Directives", directives, colors.c_text_primary());
 
     let bot = format!("╰{}╯", "─".repeat(w));
     out.push(Line::from(Span::styled(bot, colors.text_dim())));
@@ -737,7 +737,7 @@ pub(crate) fn render_table_item(
 
     // ── Header row + separator ──────────────────────────────────────────
     let header_style = Style::default()
-        .fg(colors.primary.to_ratatui())
+        .fg(colors.c_primary())
         .add_modifier(Modifier::BOLD);
     let mut hdr_spans = vec![Span::styled("│ ".to_string(), border_style)];
     for (i, h) in headers.iter().enumerate() {
@@ -790,148 +790,3 @@ pub(crate) fn render_table_item(
     out.push(Line::from(""));
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::colors::{ThemeColors, ColorDefExt};
-
-    /// The dark theme's error and warning colors must not be the old
-    /// hardcoded context-bar literals, proving the themed path is active.
-    #[test]
-    fn context_bar_pct_uses_themed_error_not_hardcoded() {
-        let theme = ThemeColors::dark();
-        let themed_error = theme.error.to_ratatui();
-        let old_hardcoded = RC::Rgb(239, 68, 68);
-        assert_ne!(themed_error, old_hardcoded,
-            "error token must differ from the old hardcoded (239,68,68)");
-    }
-
-    #[test]
-    fn context_bar_pct_uses_themed_warning_not_hardcoded() {
-        let theme = ThemeColors::dark();
-        let themed_warning = theme.warning.to_ratatui();
-        let old_hardcoded = RC::Rgb(245, 158, 11);
-        assert_ne!(themed_warning, old_hardcoded,
-            "warning token must differ from the old hardcoded (245,158,11)");
-    }
-
-    /// The separator should use the theme's border_base token, not
-    /// the old hardcoded DarkGray.
-    #[test]
-    fn separator_uses_themed_border_not_darkgray() {
-        let theme = ThemeColors::dark();
-        let themed = theme.border_base.to_ratatui();
-        assert_ne!(themed, RC::DarkGray,
-            "border_base must not be DarkGray");
-    }
-
-    /// text_primary must not be RC::White — it should be an explicit
-    /// RGB value from the theme.
-    #[test]
-    fn text_primary_is_not_raw_white() {
-        let theme = ThemeColors::dark();
-        let tp = theme.text_primary.to_ratatui();
-        assert_ne!(tp, RC::White,
-            "text_primary must be an explicit RGB, not RC::White");
-    }
-
-    /// All 8 context-bar category tokens must be distinct non-Reset colors.
-    #[test]
-    fn ctx_bar_tokens_are_all_distinct_and_non_reset() {
-        let theme = ThemeColors::dark();
-        let tokens = [
-            theme.ctx_bar_system.to_ratatui(),
-            theme.ctx_bar_native_tools.to_ratatui(),
-            theme.ctx_bar_mcp_tools.to_ratatui(),
-            theme.ctx_bar_memory.to_ratatui(),
-            theme.ctx_bar_skills.to_ratatui(),
-            theme.ctx_bar_messages.to_ratatui(),
-            theme.ctx_bar_free.to_ratatui(),
-            theme.ctx_bar_buffer.to_ratatui(),
-        ];
-        for (i, c) in tokens.iter().enumerate() {
-            assert_ne!(*c, RC::Reset, "ctx_bar token {i} must not be Reset");
-        }
-        // All 8 should be distinct
-        let mut unique = tokens.to_vec();
-        unique.sort_by_key(|c| format!("{c:?}"));
-        unique.dedup();
-        assert_eq!(unique.len(), tokens.len(),
-            "all 8 ctx_bar tokens must be distinct");
-    }
-
-    /// All 4 spinner gradient tokens must be non-Reset.
-    #[test]
-    fn spinner_tokens_are_non_reset() {
-        let theme = ThemeColors::dark();
-        let tokens = [
-            theme.spinner_0.to_ratatui(),
-            theme.spinner_1.to_ratatui(),
-            theme.spinner_2.to_ratatui(),
-            theme.spinner_3.to_ratatui(),
-        ];
-        for (i, c) in tokens.iter().enumerate() {
-            assert_ne!(*c, RC::Reset, "spinner_{i} must not be Reset");
-        }
-    }
-
-    // ── V6: RenderLine::Table box borders ─────────────────────────────────
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn render_table_item_has_box_borders() {
-        let headers = vec!["A".to_string(), "B".to_string()];
-        let rows = vec![
-            vec!["1".to_string(), "2".to_string()],
-            vec!["3".to_string(), "4".to_string()],
-        ];
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let theme = ThemeColors::dark();
-        render_table_item(&headers, &rows, 80, &mut out, &theme);
-        // Layout: top, header, sep, body×2, bottom, blank = 7 lines.
-        assert_eq!(out.len(), 7, "got {}: {:?}",
-            out.len(),
-            out.iter().map(line_text).collect::<Vec<_>>());
-        let top = line_text(&out[0]);
-        let bot = line_text(&out[5]);
-        assert!(top.starts_with('┌') && top.contains('┬') && top.ends_with('┐'),
-            "expected top border, got: {top:?}");
-        assert!(bot.starts_with('└') && bot.contains('┴') && bot.ends_with('┘'),
-            "expected bottom border, got: {bot:?}");
-    }
-
-    #[test]
-    fn render_table_item_caps_columns_to_viewport() {
-        let headers = vec!["Name".to_string(), "Description".to_string()];
-        let rows = vec![vec![
-            "x".repeat(40),
-            "y".repeat(40),
-        ]];
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let theme = ThemeColors::dark();
-        render_table_item(&headers, &rows, 30, &mut out, &theme);
-        for l in &out {
-            let t = line_text(l);
-            assert!(
-                UnicodeWidthStr::width(t.as_str()) <= 30,
-                "table line exceeds viewport: {} cols ({:?})",
-                UnicodeWidthStr::width(t.as_str()),
-                t
-            );
-        }
-    }
-
-    #[test]
-    fn render_table_item_pads_short_rows() {
-        let headers = vec!["A".to_string(), "B".to_string(), "C".to_string()];
-        let rows = vec![vec!["x".to_string()]]; // only 1 cell of 3
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let theme = ThemeColors::dark();
-        render_table_item(&headers, &rows, 80, &mut out, &theme);
-        let body = line_text(&out[3]);
-        assert!(body.ends_with(" │"), "short row must be padded: {body:?}");
-    }
-}

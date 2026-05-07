@@ -3,7 +3,7 @@
 use super::*;
 
 impl SessionState {
-    pub fn on_theme_update(&mut self, theme: crate::theme::ThemeColors) {
+    pub fn on_theme_update(&mut self, theme: String) {
         if let Self::Connected { theme_update, .. } = self {
             *theme_update = Some(theme);
         }

@@ -312,12 +312,11 @@ async fn run_agent_loop(
 
         // Resolution order: built-in registry first, then on-disk themes.
         let colors_opt =
-            cade_core::resources::themes::ThemeColors::builtin_by_name(&effective_name)
+            cade_core::resources::get_theme(&effective_name)
                 .or_else(|| {
-                    let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-                    all.iter()
-                        .find(|t| t.name == effective_name)
-                        .map(cade_core::resources::themes::ThemeColors::from_theme)
+                    let all = cade_core::resources::discover_themes(&cwd, &agent_dir);
+                    all.into_iter()
+                        .find(|t| t.meta.name == effective_name)
                 });
 
         if let Some(colors) = colors_opt {
@@ -336,15 +335,14 @@ async fn run_agent_loop(
 
             send(json!({
                 "message_type": "theme_update",
-                "theme": colors,
                 "theme_name": effective_name,
             }))
             .await;
         } else {
-            let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-            let mut available: Vec<&str> =
-                cade_core::resources::themes::ThemeColors::builtin_names().to_vec();
-            available.extend(all_themes.iter().map(|t| t.name.as_str()));
+            let all_themes = cade_core::resources::discover_themes(&cwd, &agent_dir);
+            let builtins = cade_core::resources::list_available_themes();
+            let mut available: Vec<String> = builtins.into_iter().map(|b| b.name).collect();
+            available.extend(all_themes.into_iter().map(|t| t.meta.name));
             send(json!({
                 "message_type": "assistant_message",
                 "content": format!("Theme '{}' not found. Available themes: {}", t_name, available.join(", ")),

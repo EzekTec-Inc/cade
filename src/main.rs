@@ -721,21 +721,17 @@ async fn main() -> Result<()> {
 
     // Load active theme before settings is moved into Arc
     let theme_colors = {
-        use cade_core::resources::discover_themes;
-        use cade_tui::ThemeColors;
         let theme_name = settings.global().theme.clone().unwrap_or_default();
-        if theme_name.is_empty() || theme_name == "dark" {
-            ThemeColors::dark()
-        } else if let Some(builtin) = ThemeColors::builtin_by_name(&theme_name) {
-            // B6: try all built-in themes (catppuccin-mocha, tokyo-night, etc.)
-            builtin
+        if theme_name.is_empty() {
+            cade_core::resources::Theme::default()
+        } else if let Some(tc) = cade_core::resources::get_theme(&theme_name) {
+            tc
         } else {
-            let discovered = discover_themes(&cwd, &agent_dir);
+            let discovered = cade_core::resources::discover_themes(&cwd, &agent_dir);
             discovered
-                .iter()
-                .find(|t| t.name == theme_name)
-                .map(ThemeColors::from_theme)
-                .unwrap_or_else(ThemeColors::dark)
+                .into_iter()
+                .find(|t| t.meta.name == theme_name)
+                .unwrap_or_default()
         }
     };
 

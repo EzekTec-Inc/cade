@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ThemeColorsExt;
 use crate::app::*;
 use crate::colors::ThemeColors as TC;
 use ratatui::style::{Modifier, Style};
@@ -31,7 +31,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         Span::styled(
             format!(" @ {}", pk.query),
             Style::default()
-                .fg(colors.thinking_minimal.to_ratatui())
+                .fg(colors.c_thinking_minimal())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(no_match, colors.text_muted()),
@@ -50,7 +50,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(colors.bg_surface1.to_ratatui())),
+        Paragraph::new(lines).style(Style::default().bg(colors.c_bg_surface1())),
         area,
     );
 }
@@ -65,63 +65,51 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
 /// Build the 5-cell swatch spans for a `ThemeColors`.
 /// Returns a `Vec<Span>` of coloured `█` characters.
 fn theme_swatches(tc: &TC) -> Vec<Span<'static>> {
-    [tc.primary.to_ratatui(), tc.success.to_ratatui(), tc.error.to_ratatui(), tc.warning.to_ratatui(), tc.bg_surface2.to_ratatui()]
+    [tc.c_primary(), tc.c_success(), tc.c_error(), tc.c_warning(), tc.c_bg_surface2()]
         .iter()
         .map(|&fg| Span::styled("█", Style::default().fg(fg)))
         .collect()
 }
 
-/// Resolve theme colors for picker swatches.
-///
-/// Built-ins are resolved via `builtin_by_name` (single source of truth).
-/// Custom themes use `from_theme` so their actual colors appear in swatches (B1).
-fn resolve_theme_colors(t: &cade_core::resources::themes::Theme) -> TC {
-    TC::builtin_by_name(&t.name)
-        .unwrap_or_else(|| TC::from_theme(t))
-}
-
-
 /// One theme row: `  ▶/  <swatches> <name>  <description>`.
 fn theme_row<'a>(
-    t: &cade_core::resources::themes::Theme,
+    t: &opaline::Theme,
     is_sel: bool,
     colors: &ThemeColors,
-    tc: &TC,
 ) -> Row<'a> {
     let cursor_span = Span::styled(
         if is_sel { " ❯ " } else { "   " },
-        Style::default().fg(if is_sel { colors.primary.to_ratatui() } else { colors.text_dim.to_ratatui() }),
+        Style::default().fg(if is_sel { colors.c_primary() } else { colors.c_text_dim() }),
     );
 
     // Swatch cell
     let mut swatch_spans = vec![cursor_span];
-    swatch_spans.extend(theme_swatches(tc));
+    swatch_spans.extend(theme_swatches(t));
     swatch_spans.push(Span::raw(" "));
     let swatch_line = ratatui::text::Text::from(Line::from(swatch_spans));
 
     // Name cell
     let name_style = if is_sel {
         Style::default()
-            .fg(colors.text_primary.to_ratatui())
+            .fg(colors.c_text_primary())
             .add_modifier(Modifier::BOLD)
     } else {
         colors.text_primary()
     };
-    let name_cell = Cell::from(Span::styled(t.name.clone(), name_style));
+    let name_cell = Cell::from(Span::styled(t.meta.name.clone(), name_style));
 
     // U2: variant badge after name
-    let variant_badge = match t.variant.as_deref() {
-        Some("dark") => " [dark]",
-        Some("light") => " [light]",
-        _ => "",
+    let variant_badge = match t.meta.variant {
+        opaline::ThemeVariant::Dark => " [dark]",
+        opaline::ThemeVariant::Light => " [light]",
     };
     let badge_cell = Cell::from(Span::styled(
         variant_badge.to_string(),
-        Style::default().fg(colors.text_dim.to_ratatui()).add_modifier(Modifier::DIM),
+        Style::default().fg(colors.c_text_dim()).add_modifier(Modifier::DIM),
     ));
 
     // Description cell
-    let desc = t.description.as_deref().unwrap_or("").to_string();
+    let desc = t.meta.description.as_deref().unwrap_or("").to_string();
     let desc_cell = Cell::from(Span::styled(desc, colors.text_muted()));
 
     let row_style = if is_sel {
@@ -172,23 +160,23 @@ pub(crate) fn render_theme_picker(
     );
     let outer_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(colors.border_style.to_ratatui())
+        .border_type(colors.c_border_style())
         .title(Span::styled(
             title,
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ))
         .border_style(colors.border_accent())
-        .style(Style::default().bg(colors.bg_surface0.to_ratatui()));
+        .style(Style::default().bg(colors.c_bg_surface0()));
 
     let inner_table_area = outer_block.inner(table_area);
     frame.render_widget(outer_block, table_area);
 
     // -- B5/A2: derive builtin names from the single source of truth
-    let builtin_names: Vec<&str> = cade_core::resources::themes::ThemeColors::builtin_listing()
-        .iter()
-        .map(|(n, _, _)| *n)
+    let builtin_names: Vec<String> = opaline::list_available_themes()
+        .into_iter()
+        .map(|info| info.name)
         .collect();
 
     // -- B2+A1: simplified selection + flat_cursor that accounts for header rows.
@@ -200,10 +188,8 @@ pub(crate) fn render_theme_picker(
     for (fi_pos, &orig_idx) in tp.filtered_indices.iter().enumerate() {
         let t = &tp.themes[orig_idx];
         let is_sel = fi_pos == tp.cursor;
-        // B1: resolve actual theme colors — from_theme for custom themes
-        let tc = resolve_theme_colors(t);
-        let row = theme_row(t, is_sel, colors, &tc);
-        if builtin_names.contains(&t.name.as_str()) {
+        let row = theme_row(t, is_sel, colors);
+        if builtin_names.contains(&t.meta.name) {
             builtin_rows.push(row);
         } else {
             custom_rows.push(row);
@@ -221,21 +207,21 @@ pub(crate) fn render_theme_picker(
                 Cell::from(Span::styled(
                     "  Built-in",
                     Style::default()
-                        .fg(colors.accent_dim.to_ratatui())
+                        .fg(colors.c_text_dim())
                         .add_modifier(Modifier::BOLD | Modifier::DIM),
                 )),
                 Cell::from(""),
                 Cell::from(""),
                 Cell::from(""),
             ])
-            .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
+            .style(Style::default().bg(colors.c_bg_surface0())),
         );
         flat_idx += 1; // header row
 
         // Find selected row among builtins
         let mut bi = 0usize;
         for (fi_pos, &orig_idx) in tp.filtered_indices.iter().enumerate() {
-            if builtin_names.contains(&tp.themes[orig_idx].name.as_str()) {
+            if builtin_names.contains(&tp.themes[orig_idx].meta.name) {
                 if fi_pos == tp.cursor {
                     flat_cursor = Some(flat_idx + bi);
                 }
@@ -251,14 +237,14 @@ pub(crate) fn render_theme_picker(
                 Cell::from(Span::styled(
                     "  Custom",
                     Style::default()
-                        .fg(colors.accent_dim.to_ratatui())
+                        .fg(colors.c_text_dim())
                         .add_modifier(Modifier::BOLD | Modifier::DIM),
                 )),
                 Cell::from(""),
                 Cell::from(""),
                 Cell::from(""),
             ])
-            .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
+            .style(Style::default().bg(colors.c_bg_surface0())),
         );
         flat_idx += 1; // header row
 
@@ -266,7 +252,7 @@ pub(crate) fn render_theme_picker(
         if flat_cursor.is_none() {
             let mut ci = 0usize;
             for (fi_pos, &orig_idx) in tp.filtered_indices.iter().enumerate() {
-                if !builtin_names.contains(&tp.themes[orig_idx].name.as_str()) {
+                if !builtin_names.contains(&tp.themes[orig_idx].meta.name) {
                     if fi_pos == tp.cursor {
                         flat_cursor = Some(flat_idx + ci);
                     }
@@ -288,7 +274,7 @@ pub(crate) fn render_theme_picker(
         ],
     )
     .column_spacing(1)
-    .style(Style::default().bg(colors.bg_surface0.to_ratatui()));
+    .style(Style::default().bg(colors.c_bg_surface0()));
 
     let mut ts = ratatui::widgets::TableState::default()
         .with_selected(flat_cursor);
@@ -297,14 +283,14 @@ pub(crate) fn render_theme_picker(
     // -- Filter box
     let filter_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(colors.border_style.to_ratatui())
+        .border_type(colors.c_border_style())
         // U3: shortened title to fit narrow pickers
         .title(Span::styled(
             " ↑↓ nav · Enter ok · Esc cancel · type to filter ",
-            Style::default().fg(colors.text_muted.to_ratatui()).add_modifier(Modifier::DIM),
+            Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::DIM),
         ))
         .border_style(colors.border_accent())
-        .style(Style::default().bg(colors.bg_surface1.to_ratatui()));
+        .style(Style::default().bg(colors.c_bg_surface1()));
     let filter_text = Paragraph::new(format!("> {}█", tp.query))
         .block(filter_block)
         .style(colors.text_primary());
@@ -315,79 +301,4 @@ pub(crate) fn render_theme_picker(
 
 // region:    --- Tests
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_theme_swatches_count() {
-        let tc = TC::dark();
-        let swatches = theme_swatches(&tc);
-        assert_eq!(swatches.len(), 5); // primary, success, error, warning, bg_surface2
-    }
-
-    #[test]
-    fn test_theme_swatches_all_colored() {
-        use ratatui::style::Color;
-        let tc = TC::dark();
-        let swatches = theme_swatches(&tc);
-        for s in &swatches {
-            assert_ne!(
-                s.style.fg.unwrap_or(Color::Reset),
-                Color::Reset,
-                "swatch must have an explicit fg color"
-            );
-        }
-    }
-
-    #[test]
-    fn test_builtin_colors_dark() {
-        let t = cade_core::resources::themes::Theme {
-            name: "dark".to_string(),
-            description: None,
-            author: None,
-            variant: None,
-            vars: Default::default(),
-            colors: Default::default(),
-            source: std::path::PathBuf::new(),
-        };
-        let tc = resolve_theme_colors(&t);
-        assert_ne!(tc.primary.to_ratatui(), ratatui::style::Color::Reset);
-    }
-
-    #[test]
-    fn test_builtin_colors_unknown_falls_back_to_from_theme() {
-        let t = cade_core::resources::themes::Theme {
-            name: "totally-unknown-theme".to_string(),
-            description: None,
-            author: None,
-            variant: None,
-            vars: Default::default(),
-            colors: Default::default(),
-            source: std::path::PathBuf::new(),
-        };
-        // B1: custom themes use from_theme(), not dark() fallback
-        let tc = resolve_theme_colors(&t);
-        // from_theme on default tokens produces default colors — just verify it doesn't panic
-        let _ = tc.primary.to_ratatui();
-    }
-
-    #[test]
-    fn test_builtin_colors_all_named() {
-        for (name, _, _) in cade_core::resources::themes::ThemeColors::builtin_listing() {
-            let t = cade_core::resources::themes::Theme {
-                name: name.to_string(),
-                description: None,
-                author: None,
-                variant: None,
-                vars: Default::default(),
-                colors: Default::default(),
-                source: std::path::PathBuf::new(),
-            };
-            let tc = resolve_theme_colors(&t);
-            assert_ne!(tc.primary.to_ratatui(), ratatui::style::Color::Reset, "theme {name} primary must not be Reset");
-        }
-    }
-}
-
-// endregion: --- Tests

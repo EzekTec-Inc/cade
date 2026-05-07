@@ -1,6 +1,6 @@
 //! Render the command palette overlay.
 
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ThemeColorsExt;
 use crate::app::command_palette::CommandPaletteState;
 use crate::colors::ThemeColors;
 use ratatui::{
@@ -41,19 +41,19 @@ pub(crate) fn render_command_palette(
     // Outer block
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(colors.border_style.to_ratatui())
+        .border_type(colors.c_border_style())
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
                 "Command Palette",
                 Style::default()
-                    .fg(colors.primary.to_ratatui())
+                    .fg(colors.c_primary())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
         ]))
         .border_style(colors.border_accent())
-        .style(Style::default().bg(colors.bg_surface2.to_ratatui()));
+        .style(Style::default().bg(colors.c_bg_surface2()));
 
     let inner = block.inner(r);
     frame.render_widget(block, r);
@@ -83,7 +83,7 @@ pub(crate) fn render_command_palette(
             Span::styled(
                 search_text,
                 Style::default()
-                    .fg(colors.text_primary.to_ratatui())
+                    .fg(colors.c_text_primary())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(no_match, colors.text_muted()),
@@ -129,15 +129,15 @@ pub(crate) fn render_command_palette(
         let (label_style, desc_style, glyph_style) = if is_selected {
             (
                 Style::default()
-                    .fg(colors.primary.to_ratatui())
-                    .bg(colors.selected_bg.to_ratatui())
+                    .fg(colors.c_primary())
+                    .bg(colors.c_selected_bg())
                     .add_modifier(Modifier::BOLD),
                 Style::default()
-                    .fg(colors.primary.to_ratatui())
-                    .bg(colors.selected_bg.to_ratatui()),
+                    .fg(colors.c_primary())
+                    .bg(colors.c_selected_bg()),
                 Style::default()
-                    .fg(colors.primary.to_ratatui())
-                    .bg(colors.selected_bg.to_ratatui()),
+                    .fg(colors.c_primary())
+                    .bg(colors.c_selected_bg()),
             )
         } else {
             (
@@ -165,8 +165,8 @@ pub(crate) fn render_command_palette(
         };
         let section_style = if is_selected {
             Style::default()
-                .fg(colors.text_dim.to_ratatui())
-                .bg(colors.selected_bg.to_ratatui())
+                .fg(colors.c_text_dim())
+                .bg(colors.c_selected_bg())
         } else {
             colors.text_dim()
         };
@@ -175,7 +175,7 @@ pub(crate) fn render_command_palette(
             Span::styled(format!(" {} ", glyph), glyph_style),
             Span::styled(label_padded, label_style),
             Span::styled("  ", if is_selected {
-                Style::default().bg(colors.selected_bg.to_ratatui())
+                Style::default().bg(colors.c_selected_bg())
             } else {
                 Style::default()
             }),
@@ -198,7 +198,7 @@ pub(crate) fn render_command_palette(
         Paragraph::new(Span::styled(
             hint,
             Style::default()
-                .fg(colors.text_muted.to_ratatui())
+                .fg(colors.c_text_muted())
                 .add_modifier(Modifier::DIM),
         )),
         hint_area,

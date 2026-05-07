@@ -258,7 +258,7 @@ pub enum SessionState {
         mcp_error: Option<String>,
 
         /// A pending theme update from the backend.
-        theme_update: Option<crate::theme::ThemeColors>,
+        theme_update: Option<String>,
 
         // ── Model picker overlay ─────────────────────────────────
         /// Whether the model picker overlay is open.

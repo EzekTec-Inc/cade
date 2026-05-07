@@ -28,7 +28,7 @@
 ///
 /// Enter to toggle · ↑↓ navigate · Enter on Submit to confirm · Esc to cancel
 /// ```
-use crate::colors::{ThemeColorsExt, ColorDefExt};
+use crate::colors::{ThemeColorsExt,};
 use crate::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -136,7 +136,7 @@ impl QuestionWidget {
                 lines.push(Line::from(Span::styled(
                     question.header.to_string(),
                     Style::default()
-                        .fg(colors.md_heading.to_ratatui())
+                        .fg(colors.c_md_heading())
                         .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
@@ -165,7 +165,7 @@ impl QuestionWidget {
                     if idx == submit_idx {
                         let label_style = if is_selected {
                             Style::default()
-                                .fg(colors.success.to_ratatui())
+                                .fg(colors.c_success())
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             colors.text_muted()
@@ -191,7 +191,7 @@ impl QuestionWidget {
                             "Type something.".to_string()
                         };
                         let other_style = Style::default()
-                            .fg(colors.text_dim.to_ratatui())
+                            .fg(colors.c_text_dim())
                             .add_modifier(Modifier::ITALIC);
 
                         let prefix = format!(" {}.    ", idx + 1);
@@ -235,7 +235,7 @@ impl QuestionWidget {
                     };
                     let label_style = if is_selected {
                         Style::default()
-                            .fg(colors.text_primary.to_ratatui())
+                            .fg(colors.c_text_primary())
                             .add_modifier(Modifier::BOLD)
                     } else {
                         colors.text_primary()

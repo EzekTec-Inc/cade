@@ -1,4 +1,5 @@
 use super::*;
+use crate::colors::ThemeColorsExt;
 
 impl TuiApp {
     /// Apply a new theme dynamically from the backend and force a redraw.
@@ -390,9 +391,8 @@ impl TuiApp {
             .iter()
             .enumerate()
             .position(|(_, t)| {
-                let tc = crate::colors::ThemeColors::builtin_by_name(&t.name)
-                    .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
-                tc.primary == original_theme.primary && tc.bg_base == original_theme.bg_base
+                let tc = t;
+                tc.c_primary() == original_theme.c_primary() && tc.c_bg_base() == original_theme.c_bg_base()
             })
             .unwrap_or(0);
         let tp = ThemePickerState {

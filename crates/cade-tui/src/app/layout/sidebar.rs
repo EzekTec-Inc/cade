@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt};
+use crate::colors::{ThemeColorsExt,};
 use crate::app::*;
 use crate::app::layout::cursor::input_mode_badge;
 use crate::app::layout::helpers::mode_sep_color;
@@ -74,14 +74,14 @@ pub(crate) fn render_sidebar(
     let inner = Block::default()
         .borders(Borders::LEFT)
         .border_style(colors.border_base())
-        .style(Style::default().bg(colors.bg_surface0.to_ratatui()))
+        .style(Style::default().bg(colors.c_bg_surface0()))
         .padding(Padding::new(1, 1, 0, 0))
         .inner(area);
     frame.render_widget(
         Block::default()
             .borders(Borders::LEFT)
             .border_style(colors.border_base())
-            .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
+            .style(Style::default().bg(colors.c_bg_surface0())),
         area,
     );
 
@@ -100,7 +100,7 @@ pub(crate) fn render_sidebar(
         Line::from(Span::styled(
             " Session ",
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
@@ -128,7 +128,7 @@ pub(crate) fn render_sidebar(
         Line::from(Span::styled(
             " Status ",
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
@@ -142,7 +142,7 @@ pub(crate) fn render_sidebar(
             Span::styled(" input   ", colors.text_muted()),
             Span::styled(
                 input_badge,
-                colors.text_primary().bg(colors.bg_surface2.to_ratatui()),
+                colors.text_primary().bg(colors.c_bg_surface2()),
             ),
         ]),
         Line::from(vec![
@@ -171,9 +171,9 @@ pub(crate) fn render_sidebar(
             Span::styled(
                 if state.mouse_capture_disabled { "FREE" } else { "CAPTURED" },
                 Style::default().fg(if state.mouse_capture_disabled {
-                    colors.success.to_ratatui()
+                    colors.c_success()
                 } else {
-                    colors.text_dim.to_ratatui()
+                    colors.c_text_dim()
                 }),
             ),
         ]),
@@ -192,7 +192,7 @@ pub(crate) fn render_sidebar(
         Line::from(Span::styled(
             " Activity ",
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -203,7 +203,7 @@ pub(crate) fn render_sidebar(
         Line::from(Span::styled(
             " Plan ",
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
@@ -214,7 +214,7 @@ pub(crate) fn render_sidebar(
         Line::from(Span::styled(
             " Keys ",
             Style::default()
-                .fg(colors.primary.to_ratatui())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -272,7 +272,7 @@ pub(crate) fn render_sidebar(
                     .title(Span::styled(
                         " Context % ",
                         Style::default()
-                            .fg(colors.primary.to_ratatui())
+                            .fg(colors.c_primary())
                             .add_modifier(Modifier::BOLD),
                     ))
                     .padding(Padding::new(1, 1, 0, 0)),

@@ -9,7 +9,7 @@
 
 use crate::Result;
 use super::Repl;
-use cade_core::resources::themes::ThemeColors;
+use cade_core::resources::Theme;
 
 impl Repl {
     pub(crate) async fn cmd_theme(
@@ -63,20 +63,16 @@ impl Repl {
 
             self.tui_hdr("Available themes:");
             for t in &discovered {
-                let variant = t.variant.as_deref().unwrap_or("dark");
-                let marker = if t.name == current_name { " ◀ active" } else { "" };
+                let variant = format!("{:?}", t.meta.variant).to_lowercase();
+                let marker = if t.meta.name == current_name { " ◀ active" } else { "" };
                 let desc = t
-                    .description
+                    .meta.description
                     .as_deref()
                     .unwrap_or("");
-                let source = if t.source.as_os_str() == "builtin" {
-                    "built-in"
-                } else {
-                    "custom"
-                };
+                let source = "theme";
                 self.tui_ok(format!(
                     "  {:<22} ({variant}, {source}) {desc}{marker}",
-                    t.name,
+                    t.meta.name,
                 ));
             }
             return Ok(false);
@@ -84,40 +80,18 @@ impl Repl {
 
         // -- `/theme reload` → re-read the current theme from disk
         if new_theme == "reload" {
-            let current_source = self.app.lock().colors.source_path.clone();
-            if let Some(path) = current_source {
-                if path.exists() {
-                    match cade_core::resources::themes::load_theme(&path) {
-                        Ok(theme) => {
-                            let colors = ThemeColors::from_theme(&theme);
-                            self.app.lock().apply_theme(colors);
-                            self.tui_ok(format!(
-                                "  ✓ Theme reloaded from {}",
-                                path.display()
-                            ));
-                        }
-                        Err(e) => {
-                            self.tui_err(format!("  ✗ Failed to reload theme: {e}"));
-                        }
-                    }
-                } else {
-                    self.tui_err("  ✗ Theme source file no longer exists on disk.");
-                }
+            let saved_name = self
+                .settings
+                .lock()
+                .global_settings_mut()
+                .theme
+                .clone()
+                .unwrap_or_else(|| "dark".to_string());
+            if let Some(tc) = cade_core::resources::get_theme(&saved_name) {
+                self.app.lock().apply_theme(tc);
+                self.tui_ok(format!("  ✓ Theme '{saved_name}' reloaded"));
             } else {
-                // Built-in theme — re-resolve from settings
-                let saved_name = self
-                    .settings
-                    .lock()
-                    .global_settings_mut()
-                    .theme
-                    .clone()
-                    .unwrap_or_else(|| "dark".to_string());
-                if let Some(tc) = ThemeColors::builtin_by_name(&saved_name) {
-                    self.app.lock().apply_theme(tc);
-                    self.tui_ok(format!("  ✓ Theme '{saved_name}' reloaded"));
-                } else {
-                    self.tui_err(format!("  ✗ Saved theme '{saved_name}' not found"));
-                }
+                self.tui_err(format!("  ✗ Saved theme '{saved_name}' not found"));
             }
             return Ok(false);
         }
@@ -125,7 +99,7 @@ impl Repl {
         // -- `/theme <name>` → resolve + apply
         let name = new_theme;
         let (target_theme_colors, found_name) = if let Some(tc) =
-            ThemeColors::builtin_by_name(&name)
+            cade_core::resources::get_theme(&name)
         {
             (tc, name.clone())
         } else {
@@ -137,23 +111,24 @@ impl Repl {
                 .unwrap()
                 .to_path_buf();
             let discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-            if let Some(t) = discovered.iter().find(|t| t.name == name) {
-                (ThemeColors::from_theme(t), t.name.clone())
+            if let Some(t) = discovered.iter().find(|t| t.meta.name == name) {
+                (t.clone(), t.meta.name.clone())
             } else {
                 // U9: case-insensitive substring fallback — try builtins first
                 let name_lower = name.to_lowercase();
-                if let Some(&bn) = ThemeColors::builtin_names()
+                let builtins = cade_core::resources::list_available_themes();
+                if let Some(bn) = builtins
                     .iter()
-                    .find(|n| n.to_lowercase().contains(&name_lower))
+                    .find(|n| n.name.to_lowercase().contains(&name_lower))
                 {
-                    (ThemeColors::builtin_by_name(bn).unwrap(), bn.to_string())
+                    (cade_core::resources::get_theme(&bn.name).unwrap(), bn.name.to_string())
                 } else if let Some(t) = discovered
                     .iter()
-                    .find(|t| t.name.to_lowercase().contains(&name_lower))
+                    .find(|t| t.meta.name.to_lowercase().contains(&name_lower))
                 {
-                    (ThemeColors::from_theme(t), t.name.clone())
+                    (t.clone(), t.meta.name.clone())
                 } else {
-                    (ThemeColors::dark(), String::new())
+                    (cade_core::resources::Theme::default(), String::new())
                 }
             }
         };

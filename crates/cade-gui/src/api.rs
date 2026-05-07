@@ -80,7 +80,7 @@ pub enum StreamEvent {
     ///
     /// Boxed because `ThemeColors` is ~300 bytes and would otherwise
     /// dominate the size of every other variant in `StreamEvent`.
-    ThemeUpdate(Box<cade_core::resources::themes::ThemeColors>),
+    ThemeUpdate(String),
     /// A subagent was spawned and started running.
     SubagentStarted {
         subagent_id: String,
@@ -374,10 +374,8 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
             Some(StreamEvent::FinishReason(reason.to_string()))
         }
         "theme_update" => {
-            let t = v.get("theme")?;
-            let colors: cade_core::resources::themes::ThemeColors =
-                serde_json::from_value(t.clone()).ok()?;
-            Some(StreamEvent::ThemeUpdate(Box::new(colors)))
+            let t = v.get("theme_name")?.as_str()?;
+            Some(StreamEvent::ThemeUpdate(t.to_string()))
         }
         "subagent_started" => Some(StreamEvent::SubagentStarted {
             subagent_id: v.get("subagent_id")?.as_str()?.to_string(),

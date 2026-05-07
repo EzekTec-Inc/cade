@@ -2,7 +2,7 @@
 ///
 /// Renders a navigable list of all slash commands grouped by category.
 /// Returns the selected command string (e.g. "/agents") or None if cancelled.
-use crate::colors::{ThemeColorsExt, ColorDefExt};
+use crate::colors::{ThemeColorsExt,};
 use crate::{Result, colors::ThemeColors, overlay};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -492,7 +492,7 @@ pub fn show_command_menu_with_caps(
                         Span::styled(name.clone(), overlay::overlay_section_style(colors)),
                         Span::styled(
                             format!(" {}", "─".repeat(rule_len)),
-                            Style::default().fg(colors.border_base.to_ratatui()),
+                            Style::default().fg(colors.c_border_base()),
                         ),
                     ]))
                 },
@@ -502,18 +502,18 @@ pub fn show_command_menu_with_caps(
                         Span::styled(
                             if is_sel { "  ▶ " } else { "    " }.to_string(),
                             Style::default().fg(if is_sel {
-                                colors.primary.to_ratatui()
+                                colors.c_primary()
                             } else {
-                                colors.text_muted.to_ratatui()
+                                colors.c_text_muted()
                             }),
                         ),
                         Span::styled(
                             format!("{cmd:<22}"),
                             Style::default()
                                 .fg(if is_sel {
-                                    colors.text_primary.to_ratatui()
+                                    colors.c_text_primary()
                                 } else {
-                                    colors.primary.to_ratatui()
+                                    colors.c_primary()
                                 })
                                 .add_modifier(if is_sel {
                                     Modifier::BOLD
@@ -561,16 +561,16 @@ pub fn show_command_menu_with_caps(
                         query_display.clone()
                     },
                     Style::default().fg(if query_display.is_empty() {
-                        colors.text_muted.to_ratatui()
+                        colors.c_text_muted()
                     } else {
-                        colors.text_primary.to_ratatui()
+                        colors.c_text_primary()
                     }),
                 ),
             ]);
             f.render_widget(Paragraph::new(filter_line), filter_area);
 
             let list = List::new(list_items)
-                .block(Block::default().style(Style::default().bg(colors.bg_surface2.to_ratatui())))
+                .block(Block::default().style(Style::default().bg(colors.c_bg_surface2())))
                 .highlight_style(overlay::overlay_selected_style(colors));
             f.render_stateful_widget(list, list_area, &mut ls);
 

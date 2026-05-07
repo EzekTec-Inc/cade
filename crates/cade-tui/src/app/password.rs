@@ -8,10 +8,11 @@
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
 use crate::Result;
+use crate::colors::ThemeColorsExt;
 
 use super::{RenderLine, TuiApp};
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
-use crate::colors::{ColorDefExt, BorderStyleExt, ThemeColors};
+use crate::colors::ThemeColors;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use std::any::Any;
@@ -50,25 +51,25 @@ impl OverlayComponent for PasswordPromptState {
         frame.render_widget(Clear, popup_area);
         let block = Block::default()
             .title(" 🔒 Password ")
-            .title_style(Style::default().fg(colors.primary.to_ratatui()).add_modifier(Modifier::BOLD))
+            .title_style(Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_type(colors.border_style.to_ratatui())
-            .border_style(Style::default().fg(colors.primary.to_ratatui()))
+            .border_type(colors.c_border_style())
+            .border_style(Style::default().fg(colors.c_primary()))
             .style(Style::default()
-                .bg(colors.bg_surface1.to_ratatui())
-                .fg(colors.text_primary.to_ratatui()));
+                .bg(colors.c_bg_surface1())
+                .fg(colors.c_text_primary()));
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
         let prompt_line = Line::from(Span::styled(
             &self.prompt,
             Style::default()
-                .fg(colors.text_primary.to_ratatui())
+                .fg(colors.c_text_primary())
                 .add_modifier(Modifier::BOLD),
         ));
         let mask: String = "*".repeat(self.input.len());
         let input_line = Line::from(vec![
             Span::raw("> "),
-            Span::styled(mask, Style::default().fg(colors.primary.to_ratatui())),
+            Span::styled(mask, Style::default().fg(colors.c_primary())),
             Span::raw("█"),
         ]);
         let rows = Layout::vertical([

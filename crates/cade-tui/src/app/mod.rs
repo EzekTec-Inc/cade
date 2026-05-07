@@ -25,6 +25,7 @@ use parking_lot::Mutex;
 use std::time::Instant;
 
 use crate::Result;
+use crate::colors::ThemeColorsExt;
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture,
@@ -343,11 +344,7 @@ impl ThemePickerState {
             return None;
         }
         let idx = self.filtered_indices[self.cursor];
-        let t = &self.themes[idx];
-        Some(
-            crate::colors::ThemeColors::builtin_by_name(&t.name)
-                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t)),
-        )
+        Some(self.themes[idx].clone())
     }
 
     /// Re-filter the theme list based on the current query and reset cursor.
@@ -360,17 +357,16 @@ impl ThemePickerState {
             .enumerate()
             .filter(|(_, t)| {
                 query_lower.is_empty()
-                    || t.name.to_lowercase().contains(&query_lower)
-                    || t.description
+                    || t.meta.name.to_lowercase().contains(&query_lower)
+                    || t.meta.description
                         .as_deref()
                         .unwrap_or("")
                         .to_lowercase()
                         .contains(&query_lower)
-                    || t.variant
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&query_lower)
+                    || match t.meta.variant {
+                        opaline::ThemeVariant::Dark => "dark",
+                        opaline::ThemeVariant::Light => "light",
+                    }.contains(&query_lower)
             })
             .map(|(i, _)| i)
             .collect();
@@ -439,7 +435,7 @@ impl crate::overlay_component::OverlayComponent for ThemePickerState {
             (KeyCode::Enter, _) => {
                 if !self.filtered_indices.is_empty() {
                     let idx = self.filtered_indices[self.cursor];
-                    let name = self.themes[idx].name.clone();
+                    let name = self.themes[idx].meta.name.clone();
                     self.pending_action =
                         Some(ThemePickerAction::Submit(format!("/theme {}", name)));
                     OverlayInputResult::Dismiss
@@ -965,7 +961,7 @@ impl TuiApp {
             agent_name,
             model,
             reasoning_effort,
-            ThemeColors::dark(),
+            ThemeColors::default(),
         )
     }
 
@@ -1485,7 +1481,7 @@ mod tests {
         };
         let item = TimelineItem::from_render_line(&line);
         assert_eq!(item.kind(), TimelineItemKind::ToolCall);
-        assert!(item.visual_rows(80, false, &ThemeColors::dark(), true) >= 1);
+        assert!(item.visual_rows(80, false, &ThemeColors::default(), true) >= 1);
     }
 
     #[test]
@@ -1537,7 +1533,7 @@ mod tests {
             content: "one\ntwo\nthree".to_string(),
         };
         let entry = TimelineEntry::from_render_line(0, &line);
-        let colors = ThemeColors::dark();
+        let colors = ThemeColors::default();
         let expanded: std::collections::HashSet<TimelineKey> = std::collections::HashSet::new();
         let collapsed_rows = entry.visual_rows_with_state(80, false, &expanded, &colors, true);
 
@@ -1556,7 +1552,7 @@ mod tests {
             RenderLine::SystemMsg("info".to_string()),
         ];
         let entries = build_timeline_entries(&lines);
-        let colors = ThemeColors::dark();
+        let colors = ThemeColors::default();
         let expanded = std::collections::HashSet::new();
         let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors, true);
         assert_eq!(prepared.len(), 3);

@@ -4,7 +4,7 @@
 //! key shortcuts — visible on ALL terminal widths (complements the sidebar
 //! which only appears on wide terminals ≥ 110 cols).
 
-use crate::colors::{ColorDefExt, ThemeColorsExt};
+use crate::colors::ThemeColorsExt;
 use crate::colors::ThemeColors;
 use ratatui::{
     Frame,
@@ -89,14 +89,14 @@ pub(crate) fn render_breadcrumb(
         spans.push(Span::styled(
             hint.to_string(),
             Style::default()
-                .fg(colors.text_muted.to_ratatui())
+                .fg(colors.c_text_muted())
                 .add_modifier(Modifier::DIM),
         ));
     }
 
     frame.render_widget(
         Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(colors.bg_surface1.to_ratatui())),
+            .style(Style::default().bg(colors.c_bg_surface1())),
         area,
     );
 }

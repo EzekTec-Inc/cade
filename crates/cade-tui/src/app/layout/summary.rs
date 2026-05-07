@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt,};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -32,7 +32,7 @@ pub fn render_summary(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(colors.border_style.to_ratatui())
+        .border_type(colors.c_border_style())
         .border_style(colors.border_focus())
         .title(Span::styled(" Conversation Summary ", colors.primary_bold()));
 

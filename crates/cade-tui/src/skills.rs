@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ThemeColorsExt;
 use crate::{Result, colors::ThemeColors, overlay};
 use cade_core::skills::Skill;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -61,7 +61,7 @@ pub fn show_skills_manager(
                     let is_sel = i == selected_idx;
                     let row_style = if is_sel {
                         Style::default()
-                            .bg(colors.bg_surface1.to_ratatui())
+                            .bg(colors.c_bg_surface1())
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -96,14 +96,14 @@ pub fn show_skills_manager(
             .header(
                 Row::new(vec!["Scope", "Name", "Category"]).style(
                     Style::default()
-                        .fg(colors.primary.to_ratatui())
+                        .fg(colors.c_primary())
                         .add_modifier(Modifier::BOLD),
                 ),
             )
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(colors.border_style.to_ratatui())
+                    .border_type(colors.c_border_style())
                     .title(" Skills ")
                     .border_style(colors.border_accent()),
             );
@@ -133,7 +133,7 @@ pub fn show_skills_manager(
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_type(colors.border_style.to_ratatui())
+                        .border_type(colors.c_border_style())
                         .title(" Preview ")
                         .border_style(colors.border_accent()),
                 );

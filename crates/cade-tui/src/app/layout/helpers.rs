@@ -1,12 +1,13 @@
-use crate::colors::ColorDefExt;
+
 use crate::app::*;
+use crate::colors::ThemeColorsExt;
 
 /// Render a dim backdrop over the full frame area. Call before rendering an
 /// overlay to provide visual separation from the content underneath.
 pub(crate) fn render_backdrop(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, colors: &ThemeColors) {
     use ratatui::widgets::Paragraph;
     use ratatui::style::Style;
-    let dim_style = Style::default().bg(colors.bg_base.to_ratatui());
+    let dim_style = Style::default().bg(colors.c_bg_base());
     let blank = " ".repeat(area.width as usize);
     let lines: Vec<ratatui::text::Line<'static>> = (0..area.height)
         .map(|_| ratatui::text::Line::from(ratatui::text::Span::styled(blank.clone(), dim_style)))
@@ -61,19 +62,19 @@ pub(crate) fn abbreviate_cwd(path: &std::path::Path) -> String {
 
 pub(crate) fn mode_sep_color(mode: PermissionMode, colors: &ThemeColors) -> RC {
     match mode {
-        PermissionMode::Default => colors.border_base.to_ratatui(),
-        PermissionMode::AcceptEdits => colors.thinking_minimal.to_ratatui(),
-        PermissionMode::Plan => colors.success.to_ratatui(),
-        PermissionMode::BypassPermissions => colors.error.to_ratatui(),
+        PermissionMode::Default => colors.c_border_base(),
+        PermissionMode::AcceptEdits => colors.c_thinking_minimal(),
+        PermissionMode::Plan => colors.c_success(),
+        PermissionMode::BypassPermissions => colors.c_error(),
     }
 }
 
 pub(crate) fn mode_footer_left<'a>(mode: PermissionMode, colors: &ThemeColors) -> (&'a str, &'a str, RC) {
     match mode {
-        PermissionMode::Default => ("Press / for commands", "", colors.border_base.to_ratatui()),
-        PermissionMode::AcceptEdits => ("accept edits", "⏵⏵", colors.thinking_minimal.to_ratatui()),
-        PermissionMode::Plan => ("plan mode", "⏸", colors.success.to_ratatui()),
-        PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡", colors.error.to_ratatui()),
+        PermissionMode::Default => ("Press / for commands", "", colors.c_border_base()),
+        PermissionMode::AcceptEdits => ("accept edits", "⏵⏵", colors.c_thinking_minimal()),
+        PermissionMode::Plan => ("plan mode", "⏸", colors.c_success()),
+        PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡", colors.c_error()),
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ThemeColorsExt;
 use crate::{Result, colors::ThemeColors, overlay};
 use cade_core::settings::McpServerConfig;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -128,11 +128,11 @@ pub fn show_mcp_manager(
                     };
 
                     let status_color = if s.config.disabled {
-                        colors.text_muted.to_ratatui()
+                        colors.c_text_muted()
                     } else if s.tool_count.is_some() {
-                        colors.success.to_ratatui()
+                        colors.c_success()
                     } else {
-                        colors.error.to_ratatui()
+                        colors.c_error()
                     };
 
                     let kind_str = if s.config.url.is_some() {
@@ -145,14 +145,14 @@ pub fn show_mcp_manager(
                         Cell::from(Span::styled(
                             if is_sel { "▶ " } else { "  " },
                             Style::default().fg(if is_sel {
-                                colors.primary.to_ratatui()
+                                colors.c_primary()
                             } else {
-                                colors.text_muted.to_ratatui()
+                                colors.c_text_muted()
                             }),
                         )),
                         Cell::from(Span::styled(
                             s.key.clone(),
-                            Style::default().fg(if is_sel { colors.text_primary.to_ratatui() } else { colors.text_primary.to_ratatui() }),
+                            Style::default().fg(if is_sel { colors.c_text_primary() } else { colors.c_text_primary() }),
                         )),
                         Cell::from(Span::styled(
                             kind_str,
@@ -176,14 +176,14 @@ pub fn show_mcp_manager(
             .header(
                 Row::new(vec!["", "Server", "Type", "Status"]).style(
                     Style::default()
-                        .fg(colors.primary.to_ratatui())
+                        .fg(colors.c_primary())
                         .add_modifier(Modifier::BOLD),
                 ),
             )
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(colors.border_style.to_ratatui())
+                    .border_type(colors.c_border_style())
                     .title(format!(" MCP Servers {hint}"))
                     .border_style(colors.border_accent()),
             );
@@ -254,7 +254,7 @@ pub fn show_mcp_manager(
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_type(colors.border_style.to_ratatui())
+                        .border_type(colors.c_border_style())
                         .title(" Configuration ")
                         .border_style(colors.border_accent()),
                 );

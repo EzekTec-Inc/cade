@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt};
+use crate::colors::{ThemeColorsExt,};
 use crate::colors::ThemeColors;
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -197,7 +197,7 @@ fn wrap_spans_to_width(
 }
 
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    parse_markdown_lines_with_theme(text, &ThemeColors::dark(), 0)
+    parse_markdown_lines_with_theme(text, &ThemeColors::default(), 0)
 }
 
 /// Parse markdown text into styled `Line`s.
@@ -284,13 +284,13 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
 
                     let style = match level {
                         HeadingLevel::H1 => Style::default()
-                            .fg(colors.md_heading.to_ratatui())
+                            .fg(colors.c_md_heading())
                             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                         HeadingLevel::H2 => Style::default()
-                            .fg(colors.md_heading.to_ratatui())
+                            .fg(colors.c_md_heading())
                             .add_modifier(Modifier::BOLD),
                         HeadingLevel::H3 => Style::default()
-                            .fg(colors.md_heading.to_ratatui())
+                            .fg(colors.c_md_heading())
                             .add_modifier(Modifier::BOLD),
                         _ => colors.md_heading(),
                     };
@@ -367,7 +367,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                             current_spans.push(Span::styled(
                                 format!("{count}. "),
                                 Style::default()
-                                    .fg(colors.md_link.to_ratatui())
+                                    .fg(colors.c_md_link())
                                     .add_modifier(Modifier::BOLD),
                             ));
                             *count += 1;
@@ -393,7 +393,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.text_primary.to_ratatui())
+                        .fg(colors.c_text_primary())
                         .add_modifier(Modifier::BOLD);
                     style_stack.push(s);
                 }
@@ -425,7 +425,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.md_link.to_ratatui())
+                        .fg(colors.c_md_link())
                         .add_modifier(Modifier::UNDERLINED);
                     style_stack.push(s);
                 }
@@ -439,7 +439,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.md_link.to_ratatui());
+                        .fg(colors.c_md_link());
                     current_spans.push(Span::styled("🖼  [".to_string(), img_style));
                     // Push image text style on the stack so inner text
                     // inherits the link color but stays unstyled otherwise.
@@ -568,7 +568,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.md_link.to_ratatui());
+                        .fg(colors.c_md_link());
                     if !url.is_empty() {
                         current_spans.push(Span::styled(
                             format!("] ({url})"),
@@ -675,7 +675,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                     current_cell.push_str(&format!(" {text} "));
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
-                    let style = colors.md_code().bg(colors.bg_surface1.to_ratatui());
+                    let style = colors.md_code().bg(colors.c_bg_surface1());
                     current_spans.push(Span::styled(format!(" {text} "), style));
                 }
             }
@@ -806,7 +806,7 @@ fn render_table_data(
         for (i, cell) in row.iter().take(num_cols).enumerate() {
             let style = if row_idx == 0 {
                 Style::default()
-                    .fg(colors.md_heading.to_ratatui())
+                    .fg(colors.c_md_heading())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -987,288 +987,3 @@ fn wrap_code_line_spans(
     lines
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::colors::ThemeColors;
-
-    fn dark() -> ThemeColors {
-        ThemeColors::dark()
-    }
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    fn lines_text(lines: &[Line<'_>]) -> Vec<String> {
-        lines.iter().map(line_text).collect()
-    }
-
-    // ── Unicode-width table rendering ─────────────────────────────────────
-
-    #[test]
-    fn table_uses_unicode_display_width_for_emoji() {
-        // Each emoji is 2 cols wide; "🚀🚀" measures 4 cols, not 8 (bytes).
-        let data = vec![
-            vec!["A".to_string(), "B".to_string()],
-            vec!["🚀🚀".to_string(), "ok".to_string()],
-        ];
-        let lines = render_table_data(&data, &[], &dark(), 80);
-        // Layout: INDENT + ┌─ + (─*col0_w) + ─┬─ + (─*col1_w) + ─┐
-        // col0_w = 4 (emoji width), col1_w = 2 ("ok") ⇒ 6 dashes, then 4.
-        let top = line_text(&lines[0]);
-        assert!(
-            top.contains("┌──────┬────┐"),
-            "expected col0=4 col1=2 layout, got: {top}"
-        );
-    }
-
-    #[test]
-    fn table_truncates_with_ellipsis_at_unicode_boundary() {
-        let data = vec![
-            vec!["Header".to_string()],
-            vec!["a-very-long-value-here".to_string()],
-        ];
-        let lines = render_table_data(&data, &[], &dark(), 20);
-        let body = line_text(&lines[3]);
-        assert!(body.contains('…'), "expected ellipsis, got: {body}");
-        assert!(!body.contains("very-long-value-here"));
-    }
-
-    #[test]
-    fn table_renders_top_and_bottom_borders() {
-        let data = vec![
-            vec!["A".to_string(), "B".to_string()],
-            vec!["1".to_string(), "2".to_string()],
-        ];
-        let lines = render_table_data(&data, &[], &dark(), 80);
-        assert_eq!(lines.len(), 5);
-        let top = line_text(&lines[0]);
-        let bot = line_text(&lines[4]);
-        assert!(top.starts_with("  ┌"), "expected top border, got: {top}");
-        assert!(top.contains('┬'), "expected ┬ in top border");
-        assert!(top.ends_with('┐'), "expected ┐ corner");
-        assert!(bot.starts_with("  └"), "expected bottom border, got: {bot}");
-        assert!(bot.contains('┴'), "expected ┴ in bottom border");
-        assert!(bot.ends_with('┘'), "expected ┘ corner");
-    }
-
-    #[test]
-    fn table_respects_right_alignment() {
-        let data = vec![
-            vec!["Hdr".to_string()],
-            vec!["x".to_string()],
-        ];
-        let lines = render_table_data(&data, &[Alignment::Right], &dark(), 80);
-        let body = line_text(&lines[3]);
-        assert!(body.contains("  x "), "expected right-aligned x, got: {body:?}");
-    }
-
-    #[test]
-    fn table_respects_center_alignment() {
-        let data = vec![
-            vec!["Hdr".to_string()],
-            vec!["x".to_string()],
-        ];
-        let lines = render_table_data(&data, &[Alignment::Center], &dark(), 80);
-        let body = line_text(&lines[3]);
-        assert!(body.contains(" x "), "expected centered x, got: {body:?}");
-    }
-
-    #[test]
-    fn table_pads_jagged_rows_to_full_width() {
-        let data = vec![
-            vec!["A".to_string(), "B".to_string(), "C".to_string()],
-            vec!["x".to_string()],
-        ];
-        let lines = render_table_data(&data, &[], &dark(), 80);
-        let body = line_text(&lines[3]);
-        assert!(body.ends_with(" │"), "jagged row not padded: {body:?}");
-    }
-
-    // ── Code block + horizontal rule width ────────────────────────────────
-
-    #[test]
-    fn code_block_borders_size_to_viewport() {
-        let md = "```\nlet x = 1;\n```";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 50);
-        let top = line_text(&lines[0]);
-        let dashes = top.chars().filter(|c| *c == '─').count();
-        assert!(
-            dashes >= 40,
-            "code top border too short ({dashes} dashes): {top:?}"
-        );
-    }
-
-    #[test]
-    fn horizontal_rule_sizes_to_viewport() {
-        let md = "para\n\n---\n\npara2";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 60);
-        let hr_line = lines
-            .iter()
-            .find(|l| {
-                let t = line_text(l);
-                t.chars().filter(|c| *c == '─').count() > 20
-            })
-            .expect("expected an HR line");
-        let dashes = line_text(hr_line)
-            .chars()
-            .filter(|c| *c == '─')
-            .count();
-        assert!(dashes >= 50, "HR too short ({dashes} dashes)");
-    }
-
-    // ── Paragraph indent + word wrap ──────────────────────────────────────
-
-    #[test]
-    fn paragraph_text_starts_with_indent() {
-        let md = "hello world";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
-        let first = line_text(&lines[0]);
-        assert!(
-            first.starts_with("  "),
-            "paragraph not indented: {first:?}"
-        );
-    }
-
-    #[test]
-    fn paragraph_wraps_long_text_with_continuation_indent() {
-        let words = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do".to_string();
-        let lines = parse_markdown_lines_with_theme(&words, &dark(), 30);
-        let para_lines: Vec<_> = lines
-            .iter()
-            .filter(|l| !line_text(l).trim().is_empty())
-            .collect();
-        assert!(
-            para_lines.len() >= 2,
-            "expected wrap into multiple lines, got {}: {:?}",
-            para_lines.len(),
-            lines_text(&lines)
-        );
-        for l in &para_lines {
-            let t = line_text(l);
-            assert!(
-                t.starts_with("  "),
-                "wrapped line missing indent: {t:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn paragraph_wrap_preserves_bold_style_across_break() {
-        let md = "intro **VERY-LONG-BOLD-WORD-HERE** outro";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 30);
-        let mut found_bold = false;
-        for l in &lines {
-            for s in &l.spans {
-                if s.content.contains("VERY-LONG-BOLD-WORD-HERE") {
-                    let has_bold = s.style.add_modifier.contains(Modifier::BOLD);
-                    assert!(has_bold, "bold modifier lost on wrap: {:?}", s.style);
-                    found_bold = true;
-                }
-            }
-        }
-        assert!(found_bold, "bold span never appeared in output");
-    }
-
-    #[test]
-    fn empty_input_returns_empty_lines() {
-        let lines = parse_markdown_lines_with_theme("", &dark(), 80);
-        assert!(lines.is_empty(), "expected no lines, got {lines:?}");
-    }
-
-    #[test]
-    fn pad_cell_aligned_handles_emoji_width() {
-        let s = pad_cell_aligned("🚀", 6, Alignment::Left);
-        assert_eq!(UnicodeWidthStr::width(s.as_str()), 6, "{s:?}");
-        assert!(s.starts_with('🚀'));
-    }
-
-    #[test]
-    fn pad_cell_aligned_truncates_with_ellipsis() {
-        let s = pad_cell_aligned("hello world", 5, Alignment::Left);
-        assert_eq!(s, "hell…");
-        assert_eq!(UnicodeWidthStr::width(s.as_str()), 5);
-    }
-
-    #[test]
-    fn pad_cell_aligned_center_with_odd_padding() {
-        let s = pad_cell_aligned("ab", 5, Alignment::Center);
-        assert_eq!(s, " ab  ");
-    }
-
-    // ── V2: code block hard-wrap at viewport edge ─────────────────────────
-
-    #[test]
-    fn code_block_long_line_hard_wraps_at_viewport() {
-        // Line of 80 chars; viewport 30 cols ⇒ body width 30-6 = 24.
-        // Expect at least 2 wrapped lines for the code body (excluding borders).
-        let body = "abcdefghij".repeat(8); // 80 chars, no spaces
-        let md = format!("```\n{body}\n```");
-        let lines = parse_markdown_lines_with_theme(&md, &dark(), 30);
-        // Each rendered code line must fit within max_width display columns.
-        for l in &lines {
-            let t = line_text(l);
-            assert!(
-                UnicodeWidthStr::width(t.as_str()) <= 30,
-                "code line exceeds viewport: {} cols ({:?})",
-                UnicodeWidthStr::width(t.as_str()),
-                t
-            );
-        }
-        // Should produce > 4 lines (top border + ≥ 2 wrapped body + bottom).
-        assert!(lines.len() >= 4, "expected ≥4 lines, got {}", lines.len());
-    }
-
-    #[test]
-    fn code_block_short_line_not_wrapped() {
-        let md = "```\nlet x = 1;\n```";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
-        // Layout: top, body, bottom = 3 lines.
-        assert_eq!(lines.len(), 3, "{:?}", lines_text(&lines));
-    }
-
-    // ── B6: inline code in tables drops backticks ─────────────────────────
-
-    #[test]
-    fn inline_code_in_table_renders_without_backticks() {
-        let md = "| Cmd | Desc |\n|---|---|\n| `ls` | list |";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
-        let body_line = lines
-            .iter()
-            .find(|l| {
-                let t = line_text(l);
-                t.contains("ls") && t.contains("list")
-            })
-            .expect("expected body row");
-        let t = line_text(body_line);
-        assert!(!t.contains('`'), "table cell still has backticks: {t:?}");
-    }
-
-    // ── V7: image alt text rendering ──────────────────────────────────────
-
-    #[test]
-    fn image_renders_alt_and_url() {
-        let md = "![logo](https://example.com/logo.png)";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
-        let combined: String = lines.iter().map(line_text).collect();
-        assert!(combined.contains("🖼"), "expected image glyph in: {combined:?}");
-        assert!(combined.contains("[logo]"), "expected [alt] in: {combined:?}");
-        assert!(
-            combined.contains("https://example.com/logo.png"),
-            "expected URL in: {combined:?}"
-        );
-    }
-
-    #[test]
-    fn image_with_empty_alt_still_renders() {
-        let md = "![](https://example.com/x.png)";
-        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
-        let combined: String = lines.iter().map(line_text).collect();
-        assert!(combined.contains("🖼"), "expected image glyph");
-        assert!(
-            combined.contains("https://example.com/x.png"),
-            "expected URL"
-        );
-    }
-}

@@ -1369,3 +1369,25 @@ The `@` file picker now correctly uses `render_overlay_shell` to draw a centered
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/layout/pickers.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-07T14:30:00Z
+**Summary of change:** Replaced `ThemeColors` with `opaline::Theme` across workspace.
+**Files modified:**
+- `crates/cade-core/src/resources/themes.rs`
+- `crates/cade-core/src/resources/mod.rs`
+- `crates/cade-tui/src/colors.rs`
+- `crates/cade-tui/src/app/*.rs`
+- `crates/cade-gui/src/theme.rs`
+- `crates/cade-gui/src/api.rs`
+- `crates/cade-gui/src/session/mod.rs`
+- `crates/cade-cli/src/cli/repl/commands_theme.rs`
+- `crates/cade-server/src/server/api/run/mod.rs`
+
+**Reason:**
+Phases 3, 4, and 5 of the Opaline Refactor plan. Replaced the rigid `ThemeTokens` struct in `cade-core` with `opaline::Theme`. Refactored `cade-tui` to use a `ThemeColorsExt` trait applied to `Theme` to prevent rewriting 650+ lines of UI code, resolving color definitions directly from Opaline semantic tokens. Rewrote `EguiThemeExt` in `cade-gui` to dynamically resolve `Color32` values from `opaline::color::OpalineColor`. Adapted SSE payload to broadcast theme names rather than serializing the entire theme payload. `cargo test --workspace` verified cleanly.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-core crates/cade-tui crates/cade-gui crates/cade-cli crates/cade-server
+```

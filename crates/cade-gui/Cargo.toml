@@ -21,6 +21,7 @@ serde_json.workspace = true
 # egui is not cfg-gated so that `theme.rs` (pure colour constants + tests)
 # compiles and is testable on native targets.
 egui                 = "0.34"
+opaline = { version = "0.4", features = ["egui", "builtin-themes"] }
 
 # -- Browser-only dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
