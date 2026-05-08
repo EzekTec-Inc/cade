@@ -161,23 +161,19 @@ MCP (Model Context Protocol) servers are spawned in parallel using `tokio::task:
 
 ## Theme System
 
-CADE uses a unified theme system defined in `cade-core/src/resources/themes/`:
+CADE uses a unified token-based theme engine via [Opaline](https://github.com/hyperb1iss/opaline). Themes are defined as TOML files that resolve a palette of colors to semantic tokens.
 
 ```
-ThemeColors (cade-core)
+opaline::Theme (Core)
     │
-    ├── cade-tui/src/colors.rs
-    │   ThemeColorsExt trait → ratatui::style::Style
-    │   ColorDefExt trait    → ratatui::style::Color
-    │   BorderStyleExt trait → ratatui::widgets::BorderType
+    ├── cade-tui
+    │   Resolves tokens to ratatui::style::Color/Style via ThemeColorsExt
     │
-    └── cade-gui/src/theme.rs
-        EguiThemeExt trait   → egui::Color32
-        EguiColorExt trait   → egui::Color32
-        apply_theme()        → sets egui::Visuals + spacing
+    └── cade-gui
+        Resolves tokens to egui::Color32 via EguiThemeExt
 ```
 
-Both UIs consume the same `ThemeColors` struct. Themes are defined as TOML files on disk and can be switched at runtime via the `/theme <name>` command, which broadcasts a `theme_update` SSE event to connected clients.
+Both UIs consume the same `opaline::Theme` engine. Themes can be switched at runtime via the `/theme <name>` command, which broadcasts a `theme_update` SSE event to connected clients. Opaline's token-based system enables instant runtime theme swapping without re-instantiating complex color structs.
 
 The GUI follows a "TUI-fied" design language: zero corner rounding, no shadows, compact spacing, monospace fonts for role headers, and a full-width command palette — matching the terminal aesthetic of the TUI.
 

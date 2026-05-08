@@ -1730,3 +1730,19 @@ Added a `Restricted` variant to the `SubagentTools` enum which holds both `allow
 ```sh
 git checkout HEAD^ -- crates/cade-agent/src/subagents/mod.rs crates/cade-agent/src/subagents/config.rs crates/cade-agent/src/tools/runtime/mod.rs crates/cade-agent/src/tools/manager.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-cli/src/cli/headless.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T21:40:00Z
+**Summary of change:** Updated `ARCHITECTURE.md` to reflect Opaline migration.
+**Files modified:**
+- `ARCHITECTURE.md`
+
+**Reason:**
+The previous architectural documentation still described the legacy JSON `ThemeColors` struct and manual trait-based mapping, which was replaced during the migration to `opaline`.
+
+**New behavior:**
+`ARCHITECTURE.md` now correctly describes the `opaline::Theme` token-based architecture, illustrating how both TUI and GUI frontends now resolve UI colors and styles from semantic tokens provided by the engine.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- ARCHITECTURE.md
+```
