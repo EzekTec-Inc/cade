@@ -291,9 +291,9 @@ impl ThemeColorsExt for ThemeColors {
 }
 
 #[cfg(feature = "syntax-highlighting")]
-pub fn generate_syntect_theme(colors: &ThemeColors) -> syntect::highlighting::Theme {
-    use syntect::highlighting::{Color, ThemeItem, ThemeSettings, ScopeSelectors};
-    let mut theme = syntect::highlighting::Theme {
+pub fn generate_syntect_theme(_colors: &ThemeColors) -> syntect::highlighting::Theme {
+    use syntect::highlighting::{Color, ThemeSettings};
+    let theme = syntect::highlighting::Theme {
         name: Some("CadeDynamic".to_string()),
         author: Some("CADE".to_string()),
         settings: ThemeSettings {

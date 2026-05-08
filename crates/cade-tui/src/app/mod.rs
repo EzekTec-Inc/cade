@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 use std::time::Instant;
 
 use crate::Result;
-use crate::colors::ThemeColorsExt;
+
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture,

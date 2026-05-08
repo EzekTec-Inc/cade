@@ -222,6 +222,7 @@ impl Repl {
                     &hooks,
                     on_output.clone(),
                     cfg.max_tokens_budget,
+                    cfg.resolve_allowed_paths(def_opt.as_ref()),
                 );
 
                 let result = tokio::select! {

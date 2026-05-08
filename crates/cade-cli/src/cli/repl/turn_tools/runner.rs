@@ -695,7 +695,7 @@ impl Repl {
                 // fall through to native dispatch / MCP.
                 match tokio::time::timeout(
                     TOOL_TIMEOUT,
-                    dispatch(call_id.to_string(), tool_name, args, mcp),
+                    dispatch(call_id.to_string(), tool_name, args, mcp, None),
                 )
                 .await
                 {

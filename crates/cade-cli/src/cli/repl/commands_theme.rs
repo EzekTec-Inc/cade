@@ -9,7 +9,7 @@
 
 use crate::Result;
 use super::Repl;
-use cade_core::resources::Theme;
+
 
 impl Repl {
     pub(crate) async fn cmd_theme(

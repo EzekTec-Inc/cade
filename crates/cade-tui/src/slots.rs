@@ -29,7 +29,7 @@ use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::colors::ThemeColors;
-use crate::colors::ThemeColorsExt;
+
 
 /// Well-known UI regions where a [`SlotComponent`] can be installed.
 ///

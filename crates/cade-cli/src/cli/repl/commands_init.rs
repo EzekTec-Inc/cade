@@ -64,6 +64,7 @@ impl Repl {
                             &hooks,
                             None,
                             None,
+                            None,
                         )
                         .await;
                         let _ = client.delete_agent(&sub.id).await;

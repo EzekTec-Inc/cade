@@ -6,7 +6,7 @@ use crossterm::event::{
 };
 
 use crate::Result;
-use crate::colors::ThemeColorsExt;
+
 
 use super::{FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
 use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};

@@ -271,6 +271,7 @@ async fn run_task(
         &hooks,
         None,
         None,
+        None,
     );
     let (final_output, _stats) =
         tokio::time::timeout(std::time::Duration::from_secs(task.timeout_secs), run_fut)

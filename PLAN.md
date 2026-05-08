@@ -1746,3 +1746,26 @@ The previous architectural documentation still described the legacy JSON `ThemeC
 ```sh
 git checkout HEAD^ -- ARCHITECTURE.md
 ```
+---
+**UTC Timestamp:** 2026-05-07T23:55:00Z
+**Summary of change:** Clean up compiler warnings related to the Opaline theme refactor.
+**Files modified:**
+- `crates/cade-tui/src/app/input.rs`
+- `crates/cade-tui/src/colors.rs`
+- `crates/cade-tui/src/slots.rs`
+- `crates/cade-tui/src/app/mod.rs`
+- `crates/cade-cli/src/cli/repl/commands_theme.rs`
+
+**Reason:**
+The recent Opaline theme refactoring and related fixes left behind unused imports and mutable bindings in the codebase. Cleaning these up keeps `cargo check` warnings at 0, adhering to the project's strict compilation standards.
+
+**Previous behavior:**
+Compiling the workspace generated several warnings about unused imports (`ThemeColorsExt`, `ScopeSelectors`, `ThemeItem`, `cade_core::resources::Theme`), an unused variable (`colors`), and an unnecessary `mut` binding in `generate_syntect_theme`.
+
+**New behavior:**
+Removed the unused imports and fixed the variable bindings. `cargo check --workspace` is now completely warning-free.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-tui crates/cade-cli
+```
