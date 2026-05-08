@@ -196,6 +196,7 @@ impl Repl {
                     &mcp_ref,
                     &hooks,
                     on_output.clone(),
+                    cfg.max_tokens_budget,
                 )
                 .await;
 
@@ -501,4 +502,87 @@ impl Repl {
             }),
         }
     }
+
+    pub(crate) async fn handle_run_parallel_subagents(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<cade_agent::tools::ToolResult> {
+        use cade_agent::tools::ToolResult;
+
+        let tasks_val = match args.get("tasks").and_then(|v| v.as_array()) {
+            Some(t) => t,
+            None => {
+                return Ok(ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "run_parallel_subagents".to_string(),
+                    output: "error: 'tasks' array is required".to_string(),
+                    is_error: true,
+                });
+            }
+        };
+
+        if tasks_val.is_empty() {
+            return Ok(ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "run_parallel_subagents".to_string(),
+                output: "error: 'tasks' array cannot be empty".to_string(),
+                is_error: true,
+            });
+        }
+
+        // Show progress
+        self.tui_dim(format!(
+            "  Launching {} parallel subagents…",
+            tasks_val.len()
+        ));
+
+        // Prepare futures
+        let mut futures = Vec::new();
+        for (idx, task_args) in tasks_val.iter().enumerate() {
+            let task_call_id = format!("{}_{}", call_id, idx);
+            
+            // We reuse handle_run_subagent for each. We don't want background=true inside the task args to conflict,
+            // but the `handle_run_subagent` will just do its thing.
+            let task_args_c = task_args.clone();
+
+            futures.push(async move {
+                self.handle_run_subagent(&task_call_id, &task_args_c).await
+            });
+        }
+
+        // Wait for all to complete. Because `handle_run_subagent` spawns background tasks if `background: true`,
+        // we should actually force `background: false` or just rely on it.
+        // The implementation here executes them concurrently via join_all.
+        let results = futures::future::join_all(futures).await;
+
+        // Aggregate
+        let mut aggregated = Vec::new();
+        for (idx, res) in results.into_iter().enumerate() {
+            match res {
+                Ok(tr) => {
+                    aggregated.push(serde_json::json!({
+                        "task_index": idx,
+                        "output": tr.output,
+                        "is_error": tr.is_error,
+                    }));
+                }
+                Err(e) => {
+                    aggregated.push(serde_json::json!({
+                        "task_index": idx,
+                        "output": format!("task failed: {e}"),
+                        "is_error": true,
+                    }));
+                }
+            }
+        }
+
+        Ok(ToolResult {
+            tool_call_id: call_id.to_string(),
+            tool_name: "run_parallel_subagents".to_string(),
+            output: serde_json::to_string_pretty(&aggregated).unwrap_or_else(|e| format!("error serializing results: {e}")),
+            is_error: false,
+        })
+    }
+
 }

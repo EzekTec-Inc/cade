@@ -1632,3 +1632,30 @@ Implemented tracking of cumulative prompt and completion tokens during the subag
 ```sh
 git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-agent/src/tools/meta.rs crates/cade-cli/src/cli/headless.rs crates/cade-server/src/server/api/run/subagent.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T21:05:00Z
+**Summary of change:** Implement Phase 2 of Subagent Polish Plan: Parallel Subagents (Map-Reduce).
+**Files modified:**
+- `crates/cade-agent/src/tools/meta.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+- `crates/cade-server/src/server/api/run/meta_tools.rs`
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs`
+- `crates/cade-cli/src/cli/repl/turn_tools/runner.rs`
+
+**Reason:**
+Phase 2 of the Subagent Polish Plan. Allowing the parent agent to spawn multiple subagents simultaneously (Map-Reduce pattern) significantly speeds up parallelizable tasks like analyzing multiple independent files.
+
+**Previous behavior:**
+The parent agent could only spawn a single subagent per tool call using `run_subagent`.
+
+**New behavior:**
+Added a new tool `run_parallel_subagents` that accepts a `tasks` array. 
+On both the server and CLI:
+- It spawns a concurrent `tokio::spawn` (or `Box::pin`) task for each subagent config.
+- These tasks race to complete, utilizing the same execution loop as `run_subagent` and respecting the `subagent_semaphore` limit.
+- `futures::future::join_all` aggregates their final text outputs and returns them together as a JSON array to the parent agent.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-server/src/server/api/run/meta_tools.rs crates/cade-cli/src/cli/repl/tool_intercepts.rs crates/cade-cli/src/cli/repl/turn_tools/runner.rs
+```

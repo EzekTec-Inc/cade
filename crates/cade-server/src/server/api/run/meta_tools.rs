@@ -31,6 +31,11 @@ pub(super) async fn intercept_meta_tool(
                 serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
             Some(super::subagent::handle_run_subagent_tool(state, agent_id, &tc.id, &args, sse_tx).await)
         }
+        "run_parallel_subagents" => {
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+            Some(super::subagent::handle_run_parallel_subagents_tool(state, agent_id, &tc.id, &args, sse_tx).await)
+        }
         // ── Phase A1: memory tools ────────────────────────────────────
         "update_memory" => {
             let (output, is_error) = handle_update_memory(state, agent_id, &tc.arguments, Some(&tc.id)).await;

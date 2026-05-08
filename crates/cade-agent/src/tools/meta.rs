@@ -46,6 +46,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_run_skill_script(),
         schema_load_skill_ref(),
         schema_run_subagent(),
+        schema_run_parallel_subagents(),
         schema_list_agents(),
         schema_message_agent(),
         schema_create_checkpoint(),
@@ -385,6 +386,36 @@ fn schema_run_subagent() -> Value {
                 }
             },
             "required": ["prompt"]
+        }
+    })
+}
+
+fn schema_run_parallel_subagents() -> Value {
+    json!({
+        "name": "run_parallel_subagents",
+        "description": "Spawn multiple subagents simultaneously to analyze different files or solve independent problems, then aggregate their results.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "description": "List of subagent configuration objects. Each object must have a 'prompt' and optionally 'mode', 'model', 'system_prompt', 'description', 'test_command', 'max_tokens_budget'.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": { "type": "string" },
+                            "mode": { "type": "string" },
+                            "model": { "type": "string" },
+                            "system_prompt": { "type": "string" },
+                            "description": { "type": "string" },
+                            "test_command": { "type": "string" },
+                            "max_tokens_budget": { "type": "integer" }
+                        },
+                        "required": ["prompt"]
+                    }
+                }
+            },
+            "required": ["tasks"]
         }
     })
 }

@@ -507,3 +507,77 @@ pub(super) async fn handle_run_subagent_tool(
         is_error,
     }
 }
+
+
+pub(super) async fn handle_run_parallel_subagents_tool(
+    state: &AppState,
+    parent_agent_id: &str,
+    tool_call_id: &str,
+    args: &serde_json::Value,
+    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::tools::manager::ToolResult;
+
+    let tasks_val = match args.get("tasks").and_then(|v| v.as_array()) {
+        Some(t) => t,
+        None => {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_parallel_subagents".to_string(),
+                output: "error: 'tasks' array is required".to_string(),
+                is_error: true,
+            };
+        }
+    };
+
+    if tasks_val.is_empty() {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_parallel_subagents".to_string(),
+            output: "error: 'tasks' array cannot be empty".to_string(),
+            is_error: true,
+        };
+    }
+
+    // Prepare futures
+    let mut futures = Vec::new();
+    for (idx, task_args) in tasks_val.iter().enumerate() {
+        let task_call_id = format!("{}_{}", tool_call_id, idx);
+        
+        let state_c = state.clone();
+        let parent_agent_id_c = parent_agent_id.to_string();
+        let sse_tx_c = sse_tx.clone();
+        let task_args_c = task_args.clone();
+
+        futures.push(Box::pin(async move {
+            handle_run_subagent_tool(
+                &state_c,
+                &parent_agent_id_c,
+                &task_call_id,
+                &task_args_c,
+                sse_tx_c,
+            )
+            .await
+        }));
+    }
+
+    // Join all
+    let results = futures::future::join_all(futures).await;
+
+    // Aggregate
+    let mut aggregated = Vec::new();
+    for (idx, tr) in results.into_iter().enumerate() {
+        aggregated.push(serde_json::json!({
+            "task_index": idx,
+            "output": tr.output,
+            "is_error": tr.is_error,
+        }));
+    }
+
+    ToolResult {
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: "run_parallel_subagents".to_string(),
+        output: serde_json::to_string_pretty(&aggregated).unwrap_or_else(|e| format!("error serializing results: {e}")),
+        is_error: false, // The parallel executor itself succeeded, individual tasks may have failed
+    }
+}

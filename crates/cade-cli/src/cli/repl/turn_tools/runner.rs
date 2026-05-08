@@ -847,6 +847,7 @@ impl Repl {
                 }))
             }
             "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
+            "run_parallel_subagents" => Some(self.handle_run_parallel_subagents(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             "message_agent" => Some(self.handle_message_agent(call_id, args).await),
             // Plan panel — require TuiApp access, intercepted before generic dispatch.
