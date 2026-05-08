@@ -297,8 +297,32 @@ pub(super) async fn handle_run_subagent_tool(
     // REC-1: Wrap the agentic loop in a wall-clock timeout to prevent
     // a hung LLM or tool call from holding the semaphore permit forever.
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
+    let mut cumulative_tokens = 0u64;
     let loop_result = tokio::time::timeout(timeout_dur, async {
         for _iter in 0..max_iters {
+            if let Some(budget) = cfg.max_tokens_budget {
+                let mut iter_input_tokens = 0;
+                for m in &messages {
+                    if !m.content.is_empty() {
+                        iter_input_tokens += cade_ai::count_tokens(&model, &m.content) as u64;
+                    }
+                    if let Some(tcs) = &m.tool_calls {
+                        for tc in tcs {
+                            let json = tc.arguments.to_string();
+                            if !json.is_empty() {
+                                iter_input_tokens += cade_ai::count_tokens(&model, &json) as u64;
+                            }
+                        }
+                    }
+                }
+                
+                if cumulative_tokens + iter_input_tokens > budget {
+                    llm_err = Some(format!("error: subagent token budget exceeded ({} > {})", cumulative_tokens + iter_input_tokens, budget));
+                    break;
+                }
+                cumulative_tokens += iter_input_tokens;
+            }
+
             let llm_req = cade_ai::CompletionRequest {
                 model: model.clone(),
                 messages: messages.clone(),
@@ -314,6 +338,24 @@ pub(super) async fn handle_run_subagent_tool(
                     break;
                 }
             };
+
+            if let Some(budget) = cfg.max_tokens_budget {
+                if let Some(t) = &resp.content {
+                    if !t.is_empty() {
+                        cumulative_tokens += cade_ai::count_tokens(&model, t) as u64;
+                    }
+                }
+                for tc in &resp.tool_calls {
+                    let json = tc.arguments.to_string();
+                    if !json.is_empty() {
+                        cumulative_tokens += cade_ai::count_tokens(&model, &json) as u64;
+                    }
+                }
+                if cumulative_tokens > budget {
+                    llm_err = Some(format!("error: subagent token budget exceeded ({} > {})", cumulative_tokens, budget));
+                    break;
+                }
+            }
 
             // Accumulate the assistant's prose across iterations.
             if let Some(t) = &resp.content

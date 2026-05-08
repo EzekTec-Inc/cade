@@ -59,6 +59,7 @@ pub async fn run_headless(
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
     on_output: Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
+    max_tokens_budget: Option<u64>,
 ) -> Result<(String, HeadlessStats)> {
     tracing::debug!("headless: agent={agent_id}");
 
@@ -102,6 +103,8 @@ pub async fn run_headless(
         &mut stats,
         hooks,
         &on_output,
+        max_tokens_budget,
+        &mut 0, // Cumulative input tokens
     )
     .await?;
 
@@ -418,7 +421,26 @@ async fn process_tool_calls(
     stats: &mut HeadlessStats,
     hooks: &HookEngine,
     on_output: &Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
+    max_tokens_budget: Option<u64>,
+    cumulative_tokens: &mut u64,
 ) -> Result<()> {
+    if let Some(budget) = max_tokens_budget {
+        // Just rough token calculation for budget in CLI loop if model is unknown
+        // We'll approximate 4 chars per token, safe side
+        let mut turn_chars = 0;
+        for m in &messages {
+            if let Some(text) = m.assistant_text() {
+                turn_chars += text.chars().count();
+            }
+            if let Some(tcs) = m.as_tool_call() {
+                turn_chars += tcs.2.to_string().chars().count();
+            }
+        }
+        *cumulative_tokens += (turn_chars / 3) as u64;
+        if *cumulative_tokens > budget {
+            return Err(crate::Error::custom(format!("subagent token budget exceeded ({} > {})", cumulative_tokens, budget)));
+        }
+    }
     let tool_calls: Vec<(String, String, serde_json::Value)> =
         messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
@@ -462,6 +484,8 @@ async fn process_tool_calls(
             stats,
             hooks,
             on_output,
+            max_tokens_budget,
+            cumulative_tokens,
         )).await;
     }
 
@@ -525,6 +549,8 @@ async fn process_tool_calls(
                 stats,
                 hooks,
                 on_output,
+                max_tokens_budget,
+                cumulative_tokens,
             ))
             .await?;
         }
@@ -649,6 +675,8 @@ async fn process_tool_calls(
             stats,
             hooks,
             on_output,
+            max_tokens_budget,
+            cumulative_tokens,
         ))
         .await?;
     }

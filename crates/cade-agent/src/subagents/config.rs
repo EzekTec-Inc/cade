@@ -68,6 +68,9 @@ pub struct SubagentConfig {
     /// Depth counter injected by the dispatcher when a subagent itself calls
     /// `run_subagent`.  Used to enforce the recursion depth cap.
     pub depth: usize,
+
+    /// Maximum combined tokens (prompt + completion) this subagent is allowed to consume.
+    pub max_tokens_budget: Option<u64>,
 }
 
 impl SubagentConfig {
@@ -127,6 +130,8 @@ impl SubagentConfig {
             .map(|n| n as usize)
             .unwrap_or(0);
 
+        let max_tokens_budget = args["max_tokens_budget"].as_u64();
+
         Self {
             prompt,
             mode,
@@ -139,6 +144,7 @@ impl SubagentConfig {
             human_review,
             silent_stream,
             depth,
+            max_tokens_budget,
         }
     }
 

@@ -1608,3 +1608,27 @@ The user reported that CADE doesn't adhere to project rules. Upon investigation,
 ```sh
 git checkout HEAD^ -- crates/cade-core/src/hooks/mod.rs crates/cade-cli/src/cli/repl/mod.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-07T20:00:00Z
+**Summary of change:** Implement subagent token/cost budget limit.
+**Files modified:**
+- `crates/cade-agent/src/subagents/config.rs`
+- `crates/cade-agent/src/tools/meta.rs`
+- `crates/cade-cli/src/cli/headless.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+Phase 1 of the Subagent Polish Plan. To prevent runaway subagents from silently exhausting API credits, a hard token limit per execution is needed.
+
+**Previous behavior:**
+Subagents ran until they finished the task or hit the `max_iters` limit, without any bound on token consumption.
+
+**New behavior:**
+Added `max_tokens_budget` to `SubagentConfig` and the `run_subagent` tool schema.
+Implemented tracking of cumulative prompt and completion tokens during the subagent execution loops in both `server/api/run/subagent.rs` (server-side) and `cli/headless.rs` (local). Before each LLM call, if `cumulative_tokens` exceeds `max_tokens_budget`, the loop forcefully terminates with an error indicating budget exhaustion.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-agent/src/tools/meta.rs crates/cade-cli/src/cli/headless.rs crates/cade-server/src/server/api/run/subagent.rs
+```
