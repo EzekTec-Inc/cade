@@ -107,10 +107,28 @@ impl Drop for EphemeralAgentGuard {
     }
 }
 
-pub(super) fn filter_subagent_tools(schemas: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+pub(super) fn filter_subagent_tools(
+    schemas: Vec<serde_json::Value>,
+    allowed: &cade_agent::subagents::SubagentTools,
+) -> Vec<serde_json::Value> {
     schemas
         .into_iter()
-        .filter(|s| s["name"].as_str() != Some("run_subagent"))
+        .filter(|s| {
+            let name = s["name"].as_str().unwrap_or("");
+            if name == "run_subagent" || name == "run_parallel_subagents" {
+                return false;
+            }
+            match allowed {
+                cade_agent::subagents::SubagentTools::All => true,
+                cade_agent::subagents::SubagentTools::Readonly => {
+                    matches!(name, "bash" | "read_file" | "glob" | "grep" | "search_memory" | "conversation_search" | "archival_memory_search" | "recall")
+                }
+                cade_agent::subagents::SubagentTools::List(names) => names.iter().any(|n| n == name),
+                cade_agent::subagents::SubagentTools::Restricted { allowed_tools, .. } => {
+                    allowed_tools.iter().any(|n| n == name)
+                }
+            }
+        })
         .collect()
 }
 
@@ -303,13 +321,14 @@ pub(super) async fn handle_run_subagent_tool(
                 .filter_map(|t| t.json_schema)
                 .collect()
         };
-        filter_subagent_tools(raw)
+        filter_subagent_tools(raw, def_opt.map(|d| &d.tools).unwrap_or(&cade_agent::subagents::SubagentTools::All))
     };
 
     let mut messages = messages_init;
     let mut last_text = String::new();
     let mut llm_err: Option<String> = None;
     let next_depth = cfg.depth + 1;
+    let allowed_paths = cfg.resolve_allowed_paths(def_opt);
 
     // Create a lightweight ephemeral DB row for the subagent so its
     // meta-tool calls (update_memory, load_skill, etc.) are scoped to
@@ -488,6 +507,7 @@ pub(super) async fn handle_run_subagent_tool(
                         &tc.name,
                         &tc.arguments,
                         &state.mcp,
+                        allowed_paths.as_deref(),
                     )
                     .await
                 };

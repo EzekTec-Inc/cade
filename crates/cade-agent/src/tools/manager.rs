@@ -30,7 +30,32 @@ pub async fn dispatch(
     tool_name: &str,
     arguments: &Value,
     mcp: &McpManager,
+    allowed_paths: Option<&[String]>,
 ) -> ToolResult {
+    // RBAC path check for file I/O
+    if let Some(allowed) = allowed_paths {
+        if matches!(
+            tool_name,
+            "read_file" | "ReadFileGemini" | "write_file" | "WriteFileGemini" | "edit_file" | "Replace" | "apply_patch" | "grep" | "SearchFileContent" | "glob" | "GlobGemini"
+        ) {
+            let target_path = arguments["path"].as_str().or_else(|| arguments["file_path"].as_str()).unwrap_or("");
+            if !target_path.is_empty() {
+                // Ensure target_path resolves to under one of the allowed_paths
+                let target_path = std::path::Path::new(target_path).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(target_path));
+                let target_str = target_path.to_string_lossy().to_string();
+                let is_allowed = allowed.iter().any(|p| target_str.starts_with(p) || target_path.starts_with(p));
+                if !is_allowed {
+                    return ToolResult {
+                        tool_call_id,
+                        tool_name: tool_name.to_string(),
+                        output: format!("[Blocked by RBAC] Path '{}' is outside the allowed sandbox paths: {:?}", target_path.display(), allowed),
+                        is_error: true,
+                    };
+                }
+            }
+        }
+    }
+
     // Try native tools first, fall through to MCP
     let (output, is_error) = match run_native_tool(tool_name, arguments).await {
         Some(Ok(out)) => (out, false),

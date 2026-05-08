@@ -19,6 +19,11 @@ pub enum SubagentTools {
     Readonly,
     /// Explicit list of tool names
     List(Vec<String>),
+    /// Explicit list of tool names and allowed file paths
+    Restricted {
+        allowed_tools: Vec<String>,
+        allowed_paths: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for SubagentTools {
@@ -27,6 +32,9 @@ impl std::fmt::Display for SubagentTools {
             Self::All => write!(f, "all"),
             Self::Readonly => write!(f, "readonly"),
             Self::List(v) => write!(f, "{}", v.join(", ")),
+            Self::Restricted { allowed_tools, allowed_paths } => {
+                write!(f, "restricted (tools: [{}], paths: [{}])", allowed_tools.join(", "), allowed_paths.join(", "))
+            }
         }
     }
 }
@@ -36,13 +44,25 @@ impl SubagentTools {
         match s.trim().to_lowercase().as_str() {
             "all" => Self::All,
             "readonly" | "read-only" | "read_only" => Self::Readonly,
-            other => Self::List(
-                other
-                    .split(',')
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty())
-                    .collect(),
-            ),
+            other => {
+                if other.starts_with('{') {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(other) {
+                        if let (Some(tools), Some(paths)) = (v.get("allowed_tools").and_then(|v| v.as_array()), v.get("allowed_paths").and_then(|v| v.as_array())) {
+                            return Self::Restricted {
+                                allowed_tools: tools.iter().filter_map(|t| t.as_str().map(String::from)).collect(),
+                                allowed_paths: paths.iter().filter_map(|p| p.as_str().map(String::from)).collect(),
+                            };
+                        }
+                    }
+                }
+                Self::List(
+                    other
+                        .split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect(),
+                )
+            }
         }
     }
 }

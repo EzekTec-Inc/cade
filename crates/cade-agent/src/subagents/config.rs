@@ -158,7 +158,16 @@ impl SubagentConfig {
         Ok(())
     }
 
-    // ── System-prompt resolution ─────────────────────────────────────────────
+    // ── Tool resolution ──────────────────────────────────────────────────────
+
+    pub fn resolve_allowed_paths(&self, def: Option<&SubagentDef>) -> Option<Vec<String>> {
+        match def.map(|d| &d.tools).unwrap_or(&crate::subagents::SubagentTools::All) {
+            crate::subagents::SubagentTools::Restricted { allowed_paths, .. } => {
+                Some(allowed_paths.clone())
+            }
+            _ => None,
+        }
+    }
 
     /// Build the final system prompt from the resolution chain:
     ///

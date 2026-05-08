@@ -1706,3 +1706,27 @@ Refactored `write_back_subagent_memory` into an extraction method `extract_subag
 ```sh
 git checkout HEAD^ -- crates/cade-store/src/sqlite/memory.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-server/src/server/consolidation.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T23:30:00Z
+**Summary of change:** Implement Phase 5 of Subagent Polish Plan: Granular Tool RBAC.
+**Files modified:**
+- `crates/cade-agent/src/subagents/mod.rs`
+- `crates/cade-agent/src/subagents/config.rs`
+- `crates/cade-agent/src/tools/runtime/mod.rs`
+- `crates/cade-agent/src/tools/manager.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+- `crates/cade-cli/src/cli/headless.rs`
+
+**Reason:**
+Phase 5 of the Subagent Polish Plan. To provide strict sandbox environments for subagents, preventing them from stepping outside of intended paths and providing better security boundaries.
+
+**Previous behavior:**
+Subagents ran with access to `All`, `Readonly`, or a `List` of specific tools, but could not be restricted to specific directories.
+
+**New behavior:**
+Added a `Restricted` variant to the `SubagentTools` enum which holds both `allowed_tools` and `allowed_paths`. `ToolRuntime` now accepts `allowed_paths` and delegates it down to the tool dispatcher (`crates/cade-agent/src/tools/manager.rs`). For filesystem tools (`read_file`, `write_file`, `grep`, `glob`, etc.), the dispatcher verifies the target path prefix matches an allowed path, returning `[Blocked by RBAC]` if the subagent tries to escape the sandbox.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/subagents/mod.rs crates/cade-agent/src/subagents/config.rs crates/cade-agent/src/tools/runtime/mod.rs crates/cade-agent/src/tools/manager.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-cli/src/cli/headless.rs
+```

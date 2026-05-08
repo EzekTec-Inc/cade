@@ -61,6 +61,8 @@ pub struct ToolRuntime {
     pub log_executions: bool,
     /// Pluggable execution backend (local / docker / ssh / readonly).
     pub backend: Arc<dyn ExecutionBackend>,
+    /// Restrict file I/O tools to these paths. Only paths starting with one of these prefixes are allowed.
+    pub allowed_paths: Option<Vec<String>>,
 }
 
 impl ToolRuntime {
@@ -80,6 +82,7 @@ impl ToolRuntime {
             conversation_id: None,
             log_executions: false,
             backend: Arc::new(LocalBackend),
+            allowed_paths: None,
         }
     }
 
@@ -94,6 +97,7 @@ impl ToolRuntime {
             conversation_id: None,
             log_executions: false,
             backend: Arc::new(LocalBackend),
+            allowed_paths: None,
         }
     }
 
@@ -211,7 +215,7 @@ impl ToolRuntime {
 
             // -- Everything else: native Rust tools + MCP
             _ => {
-                let r = dispatch(tool_call_id.clone(), canonical, args, &self.mcp).await;
+                let r = dispatch(tool_call_id.clone(), canonical, args, &self.mcp, self.allowed_paths.as_deref()).await;
                 (r.output, r.is_error)
             }
         };

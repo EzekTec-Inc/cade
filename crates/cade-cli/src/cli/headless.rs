@@ -60,6 +60,7 @@ pub async fn run_headless(
     hooks: &HookEngine,
     on_output: Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
     max_tokens_budget: Option<u64>,
+    allowed_paths: Option<Vec<String>>,
 ) -> Result<(String, HeadlessStats)> {
     tracing::debug!("headless: agent={agent_id}");
 
@@ -105,6 +106,7 @@ pub async fn run_headless(
         &on_output,
         max_tokens_budget,
         &mut 0, // Cumulative input tokens
+        allowed_paths.as_deref(),
     )
     .await?;
 
@@ -253,6 +255,7 @@ async fn run_one_tool(
     permissions: &PermissionManager,
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
+    allowed_paths: Option<&[String]>,
 ) -> (String, String, String, bool) {
     let canonical_name = cade_agent::tools::manager::canonical_name(&tool_name);
     let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, mcp).await;
@@ -282,12 +285,15 @@ async fn run_one_tool(
 
     // -- Unified dispatch via ToolRuntime (memory, skills, checkpoints, native tools)
     let cwd = std::env::current_dir().unwrap_or_default();
-    let runtime = ToolRuntime::new(
+    let mut runtime = ToolRuntime::new(
         std::sync::Arc::new(client.clone()),
         std::sync::Arc::clone(mcp),
         agent_id.to_string(),
         cwd,
     );
+    if let Some(paths) = allowed_paths {
+        runtime.allowed_paths = Some(paths.to_vec());
+    }
     if let Some(result) = runtime.execute(call_id.clone(), &tool_name, &args).await {
         return finalize_tool_result(
             client,
@@ -311,7 +317,7 @@ async fn run_one_tool(
     let canonical = cade_agent::tools::manager::canonical_name(&tool_name);
     if matches!(
         canonical,
-        "run_subagent" | "ask_user_question" | "EnterPlanMode" | "ExitPlanMode"
+        "run_subagent" | "run_parallel_subagents" | "cancel_subagent" | "ask_user_question" | "EnterPlanMode" | "ExitPlanMode"
     ) {
         let msg = match canonical {
             "run_subagent" => "Nested run_subagent calls are not supported from a headless subagent context. \
@@ -336,7 +342,7 @@ async fn run_one_tool(
 
     // -- Fallback: native + MCP dispatch
     tracing::info!("Executing tool: {tool_name}");
-    let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
+    let result = dispatch(call_id.clone(), &tool_name, &args, mcp, allowed_paths).await;
     finalize_tool_result(
         client,
         agent_id,
@@ -423,6 +429,7 @@ async fn process_tool_calls(
     on_output: &Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
     max_tokens_budget: Option<u64>,
     cumulative_tokens: &mut u64,
+    allowed_paths: Option<&[String]>,
 ) -> Result<()> {
     if let Some(budget) = max_tokens_budget {
         // Just rough token calculation for budget in CLI loop if model is unknown
@@ -486,6 +493,7 @@ async fn process_tool_calls(
             on_output,
             max_tokens_budget,
             cumulative_tokens,
+            allowed_paths,
         )).await;
     }
 
@@ -519,6 +527,7 @@ async fn process_tool_calls(
                 permissions,
                 mcp,
                 hooks,
+                allowed_paths,
             )
             .await;
 
@@ -551,6 +560,7 @@ async fn process_tool_calls(
                 on_output,
                 max_tokens_budget,
                 cumulative_tokens,
+                allowed_paths,
             ))
             .await?;
         }
@@ -588,7 +598,7 @@ async fn process_tool_calls(
                 let perms = permissions.clone();
                 async move {
                     run_one_tool(
-                        &client, &agent_id, call_id, tool_name, args, &perms, mcp, hooks,
+                        &client, &agent_id, call_id, tool_name, args, &perms, mcp, hooks, None
                     )
                     .await
                 }
@@ -643,6 +653,7 @@ async fn process_tool_calls(
                 permissions,
                 mcp,
                 hooks,
+                allowed_paths,
             )
             .await;
 
@@ -677,6 +688,7 @@ async fn process_tool_calls(
             on_output,
             max_tokens_budget,
             cumulative_tokens,
+            allowed_paths,
         ))
         .await?;
     }
@@ -768,6 +780,7 @@ async fn process_tool_calls_stream_json(
                 permissions,
                 mcp,
                 hooks,
+                None,
             )
             .await;
 
@@ -843,6 +856,7 @@ async fn process_tool_calls_stream_json(
                         &perms,
                         mcp,
                         hooks,
+                        None,
                     )
                     .await;
                     (tool_name, r)
@@ -900,6 +914,7 @@ async fn process_tool_calls_stream_json(
                 permissions,
                 mcp,
                 hooks,
+                None,
             )
             .await;
             emit(json!({
