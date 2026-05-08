@@ -1132,14 +1132,13 @@ pub struct WritebackFact {
 /// Called just before the ephemeral subagent DB row is deleted.
 ///
 /// Returns the number of facts written back.
-pub fn write_back_subagent_memory(
+pub fn extract_subagent_memory_for_writeback(
     db: &Db,
     subagent_id: &str,
-    parent_agent_id: &str,
-) -> usize {
+) -> Vec<WritebackFact> {
     let blocks = get_memory_blocks(db, subagent_id).unwrap_or_default();
 
-    let facts: Vec<WritebackFact> = blocks
+    blocks
         .into_iter()
         .filter(|(label, value, _)| {
             // Skip excluded labels.
@@ -1167,7 +1166,15 @@ pub fn write_back_subagent_memory(
             value,
             description: desc,
         })
-        .collect();
+        .collect()
+}
+
+pub fn write_back_subagent_memory(
+    db: &Db,
+    subagent_id: &str,
+    parent_agent_id: &str,
+) -> usize {
+    let facts = extract_subagent_memory_for_writeback(db, subagent_id);
 
     let mut written = 0;
     for fact in &facts {

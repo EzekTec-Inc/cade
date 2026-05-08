@@ -34,20 +34,62 @@ impl EphemeralAgentGuard {
         }
     }
 
-    /// Run write-back + delete explicitly, returning the write-back count.
-    /// Defuses the Drop guard so it won't run a second time.
-    pub(super) fn write_back_and_delete(&mut self) -> usize {
+
+
+    /// Async write-back that supports Smart Memory Merge.
+    pub(super) async fn write_back_and_delete_async(&mut self, state: &AppState) -> usize {
         if self.defused {
             return 0;
         }
         self.defused = true;
-        let count = cade_store::sqlite::memory::write_back_subagent_memory(
+
+        let facts = cade_store::sqlite::memory::extract_subagent_memory_for_writeback(
             &self.db,
             &self.subagent_id,
-            &self.parent_agent_id,
         );
+
+        let parent_blocks = cade_store::sqlite::get_memory_blocks(&self.db, &self.parent_agent_id)
+            .unwrap_or_default();
+
+        let mut written = 0;
+        for fact in &facts {
+            let parent_label = format!("subagent:{}", fact.label);
+            let desc = if fact.description.is_empty() {
+                Some(format!("Written back from subagent {}", self.subagent_id))
+            } else {
+                Some(format!("{} (from subagent {})", fact.description, self.subagent_id))
+            };
+
+            // Smart Memory Merge: If the parent already has this label, do an LLM merge
+            if let Some((_, old_value, _)) = parent_blocks.iter().find(|(l, _, _)| l == &parent_label) {
+                let state_c = state.clone();
+                let parent_id_c = self.parent_agent_id.clone();
+                let parent_label_c = parent_label.clone();
+                let old_val_c = old_value.clone();
+                let new_val_c = fact.value.clone();
+
+                tokio::spawn(async move {
+                    smart_memory_merge(state_c, parent_id_c, parent_label_c, old_val_c, new_val_c).await;
+                });
+                written += 1;
+            } else {
+                if cade_store::sqlite::upsert_memory_block(
+                    &self.db,
+                    &self.parent_agent_id,
+                    &parent_label,
+                    &fact.value,
+                    desc.as_deref(),
+                    None,
+                )
+                .is_ok()
+                {
+                    written += 1;
+                }
+            }
+        }
+
         let _ = cade_store::sqlite::delete_agent(&self.db, &self.subagent_id);
-        count
+        written
     }
 }
 
@@ -485,7 +527,7 @@ pub(super) async fn handle_run_subagent_tool(
     // A15 + REC-2: Explicitly run write-back + delete via the guard.
     // On the happy path this gives us the writeback_count; on panic the
     // Drop impl handles it automatically (count is lost but cleanup happens).
-    let writeback_count = ephemeral_guard.write_back_and_delete();
+    let writeback_count = ephemeral_guard.write_back_and_delete_async(state).await;
 
     let (output, is_error) = match llm_err {
         Some(e) => (format!("Subagent error: {e}"), true),
@@ -654,6 +696,60 @@ pub(super) async fn handle_cancel_subagent_tool(
             tool_name: "cancel_subagent".to_string(),
             output: format!("error: no active subagent found with ID {subagent_id}"),
             is_error: true,
+        }
+    }
+}
+
+pub(super) async fn smart_memory_merge(
+    state: AppState,
+    agent_id: String,
+    label: String,
+    old_value: String,
+    new_value: String,
+) {
+    let prompt = format!(
+        "You are a memory merge sub-agent. The parent agent already has a memory block labeled `{label}`. \
+         A subagent just returned new information for this exact label. Synthesize the old and new facts into a single coherent block.\n\
+         If there are conflicts, resolve them by keeping the most recent/detailed information or by noting the discrepancy.\n\
+         Do not include any preamble, just the final merged content.\n\n\
+         OLD VALUE:\n{old_value}\n\n\
+         NEW VALUE:\n{new_value}"
+    );
+
+    // Grab model (cheapest capable)
+    let model = cade_store::sqlite::get_agent(&state.db, &agent_id)
+        .ok()
+        .flatten()
+        .and_then(|a| a.compaction_model)
+        .unwrap_or_else(|| "claude-3-5-haiku-20241022".to_string());
+    
+    let compaction_model = crate::server::consolidation::default_compaction_model(&model);
+
+    let req = cade_ai::CompletionRequest {
+        model: compaction_model,
+        messages: vec![cade_ai::LlmMessage {
+            role: "user".to_string(),
+            content: prompt,
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }],
+        tools: vec![],
+        max_tokens: 4000,
+        reasoning_effort: None,
+    };
+
+    if let Ok(resp) = state.llm.complete(&req).await {
+        if let Some(merged) = resp.content {
+            let desc = format!("Smart merged after subagent run");
+            let _ = cade_store::sqlite::upsert_memory_block(
+                &state.db,
+                &agent_id,
+                &label,
+                &merged.trim(),
+                Some(&desc),
+                None,
+            );
         }
     }
 }

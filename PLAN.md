@@ -1685,3 +1685,24 @@ Added a `cancel_subagent` tool. Both the server `AppState` and the CLI `Repl` st
 ```sh
 git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/state.rs crates/cade-server/src/server/api/run/meta_tools.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-cli/src/cli/repl/mod.rs crates/cade-cli/src/cli/repl/tool_intercepts.rs crates/cade-cli/src/cli/repl/turn_tools/runner.rs src/bin/cade-server.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T22:30:00Z
+**Summary of change:** Implement Phase 4 of Subagent Polish Plan: Smart Memory Merge.
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+- `crates/cade-server/src/server/consolidation.rs`
+
+**Reason:**
+Phase 4 of the Subagent Polish Plan. Previously, when multiple subagents were spawned (e.g. via `run_parallel_subagents`) and they wrote back memory facts to the parent agent, their facts were simply upserted into the parent's memory with the `subagent:` prefix. This caused earlier subagents' facts to be silently overwritten by later subagents if they used the same label, losing valuable context. 
+
+**Previous behavior:**
+`write_back_subagent_memory` in `cade-store` blindly upserted subagent memory blocks to the parent agent, causing collisions and data loss.
+
+**New behavior:**
+Refactored `write_back_subagent_memory` into an extraction method `extract_subagent_memory_for_writeback` in `cade-store`. Moved the write-back orchestration into `cade-server` via a new `write_back_and_delete_async` method on `EphemeralAgentGuard`. When writing back facts, if the parent agent already has a block with the exact same `subagent:` label, the server now spawns an asynchronous LLM merge task (`smart_memory_merge`) using the compaction model to synthesize the old and new facts into a single coherent block, preventing data loss and resolving conflicts automatically.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-store/src/sqlite/memory.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-server/src/server/consolidation.rs
+```
