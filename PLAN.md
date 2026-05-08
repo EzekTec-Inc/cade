@@ -1586,3 +1586,25 @@ The `OK` badge in `render_success_item` now uses `.bg(colors.c_bg_base())`, matc
 ```sh
 git checkout HEAD^ -- crates/cade-tui/src/app/timeline/render_item.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T18:00:00Z
+**Summary of change:** Fix SessionStart hook missing context injection (R3).
+**Files modified:**
+- `crates/cade-core/src/hooks/mod.rs`
+- `crates/cade-cli/src/cli/repl/mod.rs`
+
+**Reason:**
+The user reported that CADE doesn't adhere to project rules. Upon investigation, I found that the `SessionStart` hook (`.cade/hooks/session-start-rules.sh`) outputs a JSON payload with `additionalContext` intended to inject a compliance reminder. However, `session_start()` in `cade-core/src/hooks/mod.rs` was calling `run_all_fire_forget()`, discarding the output. Consequently, the agent never received the prompt injection.
+
+**Previous behavior:**
+`SessionStart` hooks fired in a non-blocking `fire_and_forget` context, discarding `additionalContext`.
+
+**New behavior:**
+- Updated `HookEngine::session_start` to return `Option<String>` using `run_entries_context`.
+- Updated `cade-cli` REPL loop to capture `session_hook_ctx` and inject it into the very first message sent to the agent as a `[System Note]`.
+- This ensures the rule compliance reminder explicitly reaches the agent context at session start.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-core/src/hooks/mod.rs crates/cade-cli/src/cli/repl/mod.rs
+```

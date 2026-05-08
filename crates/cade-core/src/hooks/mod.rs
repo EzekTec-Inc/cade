@@ -181,15 +181,15 @@ impl HookEngine {
             .await
     }
 
-    /// Fire at session start (non-blocking).
-    pub async fn session_start(&self, agent_id: &str) {
+    /// Fire at session start (gathers context).
+    pub async fn session_start(&self, agent_id: &str) -> Option<String> {
         let input = json!({
             "event_type":        "SessionStart",
             "working_directory": self.cwd,
             "agent_id":          agent_id,
         });
-        self.run_all_fire_forget(&self.hooks.session_start, input)
-            .await;
+        self.run_entries_context(&self.hooks.session_start, "SessionStart", input)
+            .await
     }
 
     /// Fire at session end (non-blocking).

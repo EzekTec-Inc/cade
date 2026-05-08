@@ -554,8 +554,8 @@ impl Repl {
             }
         }
 
-        // SessionStart hook (non-blocking)
-        self.hooks.session_start(&self.agent_id()).await;
+        // SessionStart hook
+        let mut session_hook_ctx = self.hooks.session_start(&self.agent_id()).await;
 
         let mut history: Vec<String> = Vec::new();
         let mut hist_idx: Option<usize> = None;
@@ -778,7 +778,14 @@ impl Repl {
             }
 
             // Send to agent and handle tool loop
-            self.agent_turn_with_images(&mut stdout, &input, submit_images)
+            let mut final_input = input.clone();
+            if let Some(ctx) = session_hook_ctx.take() {
+                if !ctx.trim().is_empty() {
+                    final_input = format!("{final_input}\n\n[System Note: {}]", ctx.trim());
+                }
+            }
+
+            self.agent_turn_with_images(&mut stdout, &final_input, submit_images)
                 .await?;
             let _ = self.app.lock().commit_streaming();
 
