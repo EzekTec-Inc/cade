@@ -270,6 +270,7 @@ async fn run_task(
         &mcp,
         &hooks,
         None,
+        None,
     );
     let (final_output, _stats) =
         tokio::time::timeout(std::time::Duration::from_secs(task.timeout_secs), run_fut)

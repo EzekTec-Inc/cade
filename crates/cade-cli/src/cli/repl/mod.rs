@@ -183,6 +183,9 @@ pub struct Repl {
     /// Semaphore limiting concurrent subagent LLM calls.
     /// Capacity is read from CADE_MAX_SUBAGENTS at startup (default: 4).
     pub(crate) subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Cancellation channels for actively running subagents in the CLI.
+    /// Key: subagent_id, Value: sender to abort the subagent loop.
+    pub(crate) subagent_cancellations: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
     /// Receives a signal whenever a SKILL.MD file changes on disk.
     /// The REPL polls this each loop iteration and triggers a reload.
     pub(crate) skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
@@ -308,6 +311,7 @@ impl Repl {
             conversation_id: Arc::new(Mutex::new(conversation_id)),
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
+            subagent_cancellations: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             skill_reload_rx,
             mcp_reload_rx,
             streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),

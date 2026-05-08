@@ -47,6 +47,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_load_skill_ref(),
         schema_run_subagent(),
         schema_run_parallel_subagents(),
+        schema_cancel_subagent(),
         schema_list_agents(),
         schema_message_agent(),
         schema_create_checkpoint(),
@@ -416,6 +417,23 @@ fn schema_run_parallel_subagents() -> Value {
                 }
             },
             "required": ["tasks"]
+        }
+    })
+}
+
+fn schema_cancel_subagent() -> Value {
+    json!({
+        "name": "cancel_subagent",
+        "description": "Cancel a running background subagent by its ID.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "subagent_id": {
+                    "type": "string",
+                    "description": "The ID of the subagent to cancel"
+                }
+            },
+            "required": ["subagent_id"]
         }
     })
 }

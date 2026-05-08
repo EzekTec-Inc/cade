@@ -63,6 +63,7 @@ impl Repl {
                             &mcp_empty,
                             &hooks,
                             None,
+                            None,
                         )
                         .await;
                         let _ = client.delete_agent(&sub.id).await;

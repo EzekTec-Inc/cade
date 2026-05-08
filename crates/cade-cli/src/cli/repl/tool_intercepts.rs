@@ -160,6 +160,7 @@ impl Repl {
 
         let run_task = {
             let task_id_c = task_id.clone();
+            let cancellations_c = self.subagent_cancellations.clone();
             async move {
                 // Determine agent to use
                 let (sub_agent_id, ephemeral) = if let Some(existing_id) = cfg.agent_id.clone() {
@@ -187,8 +188,32 @@ impl Repl {
                     }
                 };
 
+                let mut cancel_rx = {
+                    let (tx, rx) = tokio::sync::mpsc::channel(1);
+                    cancellations_c.lock().await.insert(sub_agent_id.clone(), tx);
+                    rx
+                };
+
+                struct CancelGuard<'a> {
+                    map: &'a std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+                    id: String,
+                }
+                impl<'a> Drop for CancelGuard<'a> {
+                    fn drop(&mut self) {
+                        let map = self.map.clone();
+                        let id = self.id.clone();
+                        tokio::task::spawn(async move {
+                            map.lock().await.remove(&id);
+                        });
+                    }
+                }
+                let _cancel_guard = CancelGuard {
+                    map: &cancellations_c,
+                    id: sub_agent_id.clone(),
+                };
+
                 // Run headless
-                let result = crate::cli::headless::run_headless(
+                let run_headless_fut = crate::cli::headless::run_headless(
                     &client,
                     &sub_agent_id,
                     &prompt,
@@ -197,8 +222,14 @@ impl Repl {
                     &hooks,
                     on_output.clone(),
                     cfg.max_tokens_budget,
-                )
-                .await;
+                );
+
+                let result = tokio::select! {
+                    res = run_headless_fut => res,
+                    _ = cancel_rx.recv() => {
+                        Err(crate::Error::custom("Task cancelled by parent".to_string()))
+                    }
+                };
 
                 let (mut last_output, mut is_error) = match result {
                     Ok((output, _)) => (output, false),
@@ -585,4 +616,45 @@ impl Repl {
         })
     }
 
+    pub(crate) async fn handle_cancel_subagent(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<cade_agent::tools::ToolResult> {
+        use cade_agent::tools::ToolResult;
+
+        let subagent_id = match args.get("subagent_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => {
+                return Ok(ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "cancel_subagent".to_string(),
+                    output: "error: 'subagent_id' is required".to_string(),
+                    is_error: true,
+                });
+            }
+        };
+
+        let tx_opt = {
+            let map = self.subagent_cancellations.lock().await;
+            map.get(subagent_id).cloned()
+        };
+
+        if let Some(tx) = tx_opt {
+            let _ = tx.send(()).await;
+            Ok(ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "cancel_subagent".to_string(),
+                output: format!("Cancel signal sent to subagent {subagent_id}"),
+                is_error: false,
+            })
+        } else {
+            Ok(ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "cancel_subagent".to_string(),
+                output: format!("error: no active subagent found with ID {subagent_id}"),
+                is_error: true,
+            })
+        }
+    }
 }

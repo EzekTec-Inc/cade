@@ -196,6 +196,10 @@ pub struct AppState {
     /// Key: parent agent_id, Value: vec of completed results.
     pub pending_subagent_results:
         Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
+    /// Cancellation channels for actively running subagents.
+    /// Key: subagent_id, Value: sender to abort the subagent loop.
+    pub subagent_cancellations:
+        Arc<RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
 

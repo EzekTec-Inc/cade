@@ -294,6 +294,32 @@ pub(super) async fn handle_run_subagent_tool(
         parent_agent_id.to_string(),
     );
 
+    // Setup cancellation channel
+    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
+    {
+        let mut cancellations = state.subagent_cancellations.write().await;
+        cancellations.insert(subagent_id.clone(), cancel_tx);
+    }
+
+    struct CancelGuard {
+        map: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+        id: String,
+    }
+    impl Drop for CancelGuard {
+        fn drop(&mut self) {
+            let map = self.map.clone();
+            let id = self.id.clone();
+            tokio::task::spawn(async move {
+                let mut cancellations = map.write().await;
+                cancellations.remove(&id);
+            });
+        }
+    }
+    let _cancel_guard = CancelGuard {
+        map: state.subagent_cancellations.clone(),
+        id: subagent_id.clone(),
+    };
+
     // REC-1: Wrap the agentic loop in a wall-clock timeout to prevent
     // a hung LLM or tool call from holding the semaphore permit forever.
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
@@ -331,10 +357,18 @@ pub(super) async fn handle_run_subagent_tool(
                 reasoning_effort: None,
             };
 
-            let resp = match state.llm.complete(&llm_req).await {
-                Ok(r) => r,
-                Err(e) => {
-                    llm_err = Some(e.to_string());
+            let resp = tokio::select! {
+                res = state.llm.complete(&llm_req) => {
+                    match res {
+                        Ok(r) => r,
+                        Err(e) => {
+                            llm_err = Some(e.to_string());
+                            break;
+                        }
+                    }
+                }
+                _ = cancel_rx.recv() => {
+                    llm_err = Some("Task cancelled by parent".to_string());
                     break;
                 }
             };
@@ -579,5 +613,47 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         tool_name: "run_parallel_subagents".to_string(),
         output: serde_json::to_string_pretty(&aggregated).unwrap_or_else(|e| format!("error serializing results: {e}")),
         is_error: false, // The parallel executor itself succeeded, individual tasks may have failed
+    }
+}
+pub(super) async fn handle_cancel_subagent_tool(
+    state: &AppState,
+    tool_call_id: &str,
+    args: &serde_json::Value,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::tools::manager::ToolResult;
+
+    let subagent_id = match args.get("subagent_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "cancel_subagent".to_string(),
+                output: "error: 'subagent_id' is required".to_string(),
+                is_error: true,
+            };
+        }
+    };
+
+    let tx_opt = {
+        let map = state.subagent_cancellations.read().await;
+        map.get(subagent_id).cloned()
+    };
+
+    if let Some(tx) = tx_opt {
+        // Send cancel signal
+        let _ = tx.send(()).await;
+        ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "cancel_subagent".to_string(),
+            output: format!("Cancel signal sent to subagent {subagent_id}"),
+            is_error: false,
+        }
+    } else {
+        ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "cancel_subagent".to_string(),
+            output: format!("error: no active subagent found with ID {subagent_id}"),
+            is_error: true,
+        }
     }
 }

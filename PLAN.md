@@ -1659,3 +1659,29 @@ On both the server and CLI:
 ```sh
 git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-server/src/server/api/run/meta_tools.rs crates/cade-cli/src/cli/repl/tool_intercepts.rs crates/cade-cli/src/cli/repl/turn_tools/runner.rs
 ```
+---
+**UTC Timestamp:** 2026-05-07T21:30:00Z
+**Summary of change:** Implement Phase 3 of Subagent Polish Plan: Subagent Steering (Interrupts).
+**Files modified:**
+- `crates/cade-agent/src/tools/meta.rs`
+- `crates/cade-server/src/server/state.rs`
+- `crates/cade-server/src/server/api/run/meta_tools.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+- `crates/cade-cli/src/cli/repl/mod.rs`
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs`
+- `crates/cade-cli/src/cli/repl/turn_tools/runner.rs`
+- `src/bin/cade-server.rs`
+
+**Reason:**
+Phase 3 of the Subagent Polish Plan. Previously, when a subagent was launched in the background, the parent agent (or human) had no way to abort its execution if it started hallucinating or proceeding down the wrong path. 
+
+**Previous behavior:**
+Subagents ran uninterrupted until completion, timeout, or hitting iteration limits.
+
+**New behavior:**
+Added a `cancel_subagent` tool. Both the server `AppState` and the CLI `Repl` state now maintain a `subagent_cancellations` hash map linking active `subagent_id`s to a `tokio::sync::mpsc::Sender<()>`. The execution loops in `run_headless` and `handle_run_subagent_tool` were wrapped with `tokio::select!` so they concurrently listen for a cancellation signal. If the parent calls `cancel_subagent`, the token triggers the receiver, gracefully terminating the subagent loop and returning an early cancellation error.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/state.rs crates/cade-server/src/server/api/run/meta_tools.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-cli/src/cli/repl/mod.rs crates/cade-cli/src/cli/repl/tool_intercepts.rs crates/cade-cli/src/cli/repl/turn_tools/runner.rs src/bin/cade-server.rs
+```
