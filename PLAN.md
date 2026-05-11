@@ -2171,3 +2171,28 @@ The reasoning effort setting (changed via the `/reason` command) was previously 
 ```sh
 git checkout HEAD^ -- crates/cade-core crates/cade-cli src/main.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T14:00:00Z
+**Summary of change:** Clean up docs/ directory and co-author Usage Guide and Developer Guide.
+**Files modified:**
+- `docs/usage-guide.md` (created)
+- `docs/developer-guide.md` (created)
+- `docs/memory-architecture-proposal.md` (moved to history)
+- `docs/MEMORY_ARCHITECTURE_REWORK.md` (moved to history)
+- `docs/memory-deficiency-report.md` (moved to history)
+- `docs/AMNESIA_ROOT_CAUSE_REPORT.md` (moved to history)
+
+**Reason:**
+The `docs/` directory contained several obsolete and historical planning documents that cluttered the root documentation space. The user requested a cleanup of the directory and the creation of comprehensive, up-to-date Developer and Usage guides.
+
+**Previous behavior:**
+Historical planning docs were mixed with active documentation. No consolidated Usage Guide or Developer Guide existed.
+
+**New behavior:**
+Moved historical architecture and memory deficiency reports into `docs/history/`. Authored a new `docs/usage-guide.md` covering CLI usage, REPL interactions, slash commands, and subagents. Authored a new `docs/developer-guide.md` outlining the workspace architecture, rust10x standards, memory system, and testing requirements.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- docs/
+```
