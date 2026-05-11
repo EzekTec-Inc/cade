@@ -651,6 +651,7 @@ async fn run_agent_loop(
                     &tc.name,
                     &tc.arguments,
                     &state2.mcp,
+                    None,
                 )
                 .await
             };

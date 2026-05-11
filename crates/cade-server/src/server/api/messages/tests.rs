@@ -500,7 +500,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         max_context_budget: None,
     });
 
-    let state = AppState {
+    let state = AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         db: db.clone(),
         llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
             anthropic_api_key: None,
@@ -702,7 +702,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         allowed_origin: None,
         max_context_budget: None,
     });
-    let state = AppState {
+    let state = AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         db: db.clone(),
         llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
             anthropic_api_key: None,
@@ -916,7 +916,7 @@ fn build_minimal_state(
         allowed_origin: None,
         max_context_budget: None,
     });
-    AppState {
+    AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         db,
         llm,
         llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(

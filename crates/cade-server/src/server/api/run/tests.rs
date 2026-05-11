@@ -350,7 +350,7 @@ use cade_ai::LlmToolCall;
             allowed_origin: None,
             max_context_budget: None,
         });
-        AppState {
+    AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             db,
             llm,
             llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(
@@ -634,7 +634,7 @@ use cade_ai::LlmToolCall;
             serde_json::json!({"name": "run_subagent"}),
             serde_json::json!({"name": "read_file"}),
         ];
-        let filtered = filter_subagent_tools(schemas);
+        let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All);
         let names: Vec<String> = filtered
             .iter()
             .filter_map(|s| s["name"].as_str().map(String::from))

@@ -1769,3 +1769,34 @@ Removed the unused imports and fixed the variable bindings. `cargo check --works
 ```sh
 git checkout HEAD^ -- crates/cade-tui crates/cade-cli
 ```
+---
+**UTC Timestamp:** 2026-05-10T19:35:00Z
+**Summary of change:** Fix compilation errors caused by granular RBAC commit and add subagent cancellations state field.
+**Files modified:**
+- `crates/cade-agent/src/tools/manager.rs`
+- `crates/cade-server/src/server/api/auth_test.rs`
+- `crates/cade-server/src/server/api/compact.rs`
+- `crates/cade-server/src/server/api/complete.rs`
+- `crates/cade-server/src/server/api/context_stats.rs`
+- `crates/cade-server/src/server/api/dashboard_test.rs`
+- `crates/cade-server/src/server/api/evals_test.rs`
+- `crates/cade-server/src/server/api/messages/tests.rs`
+- `crates/cade-server/src/server/api/router_test.rs`
+- `crates/cade-server/src/server/api/run/mod.rs`
+- `crates/cade-server/src/server/api/run/tests.rs`
+- `crates/cade-server/src/server/api/skills.rs`
+- `src/main.rs`
+
+**Reason:**
+A previous subagent introduced granular tool RBAC (commit `a9d3477b`) which modified the signature of `cade_agent::tools::manager::dispatch`, but missed updating several call sites in the codebase resulting in compilation errors. Additionally, `subagent_cancellations` was added to `AppState` but the test mock states were not updated. These missing parameters and fields have been added to restore a clean build.
+
+**Previous behavior:**
+The project failed to compile due to missing arguments in `dispatch` calls and missing fields in `AppState` initializers during test runs.
+
+**New behavior:**
+Added `None` for the `allowed_paths` argument in `dispatch` calls that run with full permissions, and added `subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()))` to all test `AppState` structs. The project and test suite now compile perfectly.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-agent crates/cade-server src/main.rs
+\`\`\`

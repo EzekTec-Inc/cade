@@ -518,6 +518,7 @@ mod tests {
             "run_subagent",
             &serde_json::json!({"prompt": "test"}),
             &mcp,
+            None,
         )
         .await;
         assert!(result.is_error, "run_subagent should error in dispatch");
@@ -536,6 +537,7 @@ mod tests {
             "ask_user_question",
             &serde_json::json!({}),
             &mcp,
+            None,
         )
         .await;
         assert!(result.is_error);
