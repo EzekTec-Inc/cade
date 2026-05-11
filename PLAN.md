@@ -1800,3 +1800,23 @@ Added `None` for the `allowed_paths` argument in `dispatch` calls that run with 
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-agent crates/cade-server src/main.rs
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T19:42:00Z
+**Summary of change:** Add `allowed_paths` to `SessionOptions` in `cade-sdk` to support granular RBAC for file sandboxing.
+**Files modified:**
+- `crates/cade-sdk/src/session.rs`
+
+**Reason:**
+A previous commit (`a9d3477b`) introduced granular RBAC restricting file I/O operations inside `ToolRuntime` and native tool dispatch to a set of `allowed_paths`. The `cade-sdk` was passing an implicit `None` when initializing `ToolRuntime`, meaning custom clients spinning up agents via the SDK had no way to configure file sandboxing.
+
+**Previous behavior:**
+Agents instantiated via `cade-sdk` bypassed granular path sandboxing entirely and had full file system access.
+
+**New behavior:**
+`SessionOptions` now includes an `allowed_paths: Option<Vec<String>>` field (defaulting to `None`). This list is correctly passed down to the `ToolRuntime` configuration, enabling downstream clients to sandbox their embedded agents.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-sdk/src/session.rs
+\`\`\`

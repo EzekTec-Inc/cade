@@ -15,7 +15,6 @@ use crate::Result;
 
 // region:    --- SessionOptions
 
-/// Options for creating an `AgentSession`.
 pub struct SessionOptions {
     /// URL of the cade-server (default: http://localhost:8284).
     pub server_url: String,
@@ -29,6 +28,8 @@ pub struct SessionOptions {
     pub cwd: PathBuf,
     /// Permission mode (default: BypassPermissions for SDK use).
     pub permission_mode: PermissionMode,
+    /// Allowed paths for granular RBAC file sandboxing.
+    pub allowed_paths: Option<Vec<String>>,
 }
 
 impl Default for SessionOptions {
@@ -40,6 +41,7 @@ impl Default for SessionOptions {
             model: None,
             cwd: std::env::current_dir().unwrap_or_default(),
             permission_mode: PermissionMode::BypassPermissions,
+            allowed_paths: None,
         }
     }
 }
@@ -60,7 +62,6 @@ pub struct AgentSession {
 impl AgentSession {
     // -- Constructor
 
-    /// Create or resume an agent session.
     pub async fn create(opts: SessionOptions) -> Result<Self> {
         let client = Arc::new(
             HttpTransport::new(opts.server_url.clone(), opts.api_key.clone())
@@ -99,12 +100,14 @@ impl AgentSession {
         };
 
         let mcp = Arc::new(McpManager::empty());
-        let runtime = ToolRuntime::new(
+        let mut runtime = ToolRuntime::new(
             Arc::clone(&client),
             Arc::clone(&mcp),
             agent_id.clone(),
             opts.cwd,
         );
+        runtime.allowed_paths = opts.allowed_paths;
+        
         let permissions = PermissionManager::new(opts.permission_mode);
 
         Ok(Self {
