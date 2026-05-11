@@ -2196,3 +2196,27 @@ Moved historical architecture and memory deficiency reports into `docs/history/`
 ```sh
 git checkout HEAD^ -- docs/
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T14:30:00Z
+**Summary of change:** Update project documentation to reflect recent architectural refactorings.
+**Files modified:**
+- `docs/memory-system.md`
+- `docs/subagents.md`
+- `docs/permissions.md`
+
+**Reason:**
+A comprehensive documentation update was requested to keep the technical reference material in sync with the massive architectural changes applied in recent sessions (Memory System Rework Phases A-C, Subagent executor decoupling, and Granular RBAC).
+
+**Previous behavior:**
+Documentation stated that subagents do not persist rows into the database, that the `memory-system` was purely flat string-matching without typed relations, and lacked details about provenance tracking, confidence decay, and RBAC file sandboxing.
+
+**New behavior:**
+- Updated `docs/memory-system.md` to detail `memory_type`, `confidence` decay, `source_turn_id` provenance tracking, and the automated LLM extraction during consolidation.
+- Updated `docs/subagents.md` to correctly explain `SubagentExecutor`, `EphemeralEnvironment`, and `smart_memory_merge` syncing back to the parent.
+- Updated `docs/permissions.md` to introduce the Granular RBAC (File I/O Sandboxing) subsystem enforcement.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- docs/
+\`\`\`

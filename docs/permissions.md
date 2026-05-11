@@ -19,6 +19,11 @@ Aliases accepted: `safe`, `edit-freely`, `plan-only`, `full-access`,
 `yolo`. Display names are user-facing; internal names appear in
 `settings.json`.
 
+## File I/O Sandboxing (Granular RBAC)
+
+CADE agents and subagents execute tool calls through `cade_agent::tools::manager::dispatch`, which enforces path-based sandboxing when interacting with the file system (`read_file`, `write_file`, `bash`, etc.).
+If an agent attempts to access a path outside of the provided `allowed_paths`, the tool dispatcher immediately rejects the request with a `[Blocked by RBAC]` error. This sandbox is strictly configurable per session and heavily enforced during subagent execution.
+
 ## Per-tool rules
 
 ```bash

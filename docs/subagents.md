@@ -115,16 +115,14 @@ All six are tunable via env vars; see [configuration.md](configuration.md).
 
 ## Memory & state
 
-A subagent runs **in-memory only**:
+A subagent runs securely via the `SubagentExecutor`:
 
-- **No** ephemeral agent rows are created in `agents`
-- **No** messages are persisted
-- The parent's full tool list (minus `run_subagent`) is dispatched via
+- **Sandboxed Ephemeral Environment:** An ephemeral agent row is created in `agents` so that all meta-tool calls (like `update_memory`) are isolated to the subagent's namespace.
+- **Smart Memory Merge:** When the subagent completes, the `EphemeralEnvironment` Drop guard triggers `write_back_subagent_memory`. Any typed facts the subagent discovered are intelligently merged back into the parent agent's context using an LLM pass, preserving the memory taxonomy and confidence levels.
+- **No** messages are persisted into the parent's conversation stream.
+- The parent's full tool list (minus `run_subagent` and `run_parallel_subagents`) is dispatched via
   the same `cade_agent::tools::manager::dispatch` path
-- Final result is returned as a string to the parent's tool-call result
-
-The reflection subagent is the exception — it explicitly calls
-`update_memory` so its work survives.
+- Final result is returned as a string to the parent's tool-call result. Status updates (`subagent_started` and `subagent_complete`) are streamed natively to the TUI via the `SubagentEventEmitter`.
 
 ## Background runs
 

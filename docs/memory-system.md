@@ -14,9 +14,17 @@ SQLite and are surfaced to the LLM through the system prompt.
 A block becomes archived automatically once 80 turns elapse without it being
 read or written. The system prompt then carries only its label and a short
 FTS snippet — the full body is fetched again the moment it's matched by
-`search_memory()` or referenced by name.
+`search_memory()` or referenced by name. Unused short-term and archived memories
+will gradually decay in confidence over time (losing 5% confidence per 20 turns of idleness).
 
 > **Tip:** Use `/memory pin <label>` to make any block permanently active (immune to archival). Pinned blocks are always injected into the agent's prompt.
+
+## Typed Relationships & Provenance
+
+Each memory block carries strong semantic metadata:
+- **`memory_type`**: Classifies the memory (e.g., `decision`, `convention`, `project_fact`, `constraint`).
+- **`confidence`**: A floating-point score (0.1 to 1.0) indicating certainty.
+- **`source_turn_id` & `source_tool_id`**: Verifiable provenance tracking exactly when and by which tool the fact was recorded.
 
 ## Built-in blocks
 
@@ -67,8 +75,7 @@ background **consolidation pass** in
 4. Append the result to `session_summary`. If `session_summary` would
    exceed `SESSION_SUMMARY_MAX_CHARS`, the previous value is rotated into
    `session_summary_N` (long-term tier — Phase C).
-5. Trigger optional **reflection** subagent to extract durable facts
-   (decisions, preferences, conventions) into typed memory blocks.
+5. **Auto-Extract Facts**: The compaction model automatically scans the dialogue summary and extracts durable knowledge (decisions, constraints, conventions) into typed memory blocks, ensuring long-term project context survives without manual agent action.
 
 You can trigger this manually with `/compact` (or `/consolidate`).
 
@@ -104,7 +111,7 @@ memory for the next prompt.
 
 ### Semantic Search (default)
 
-`search_memory()` uses a **hybrid ranking** pipeline by default. The
+`search_memory(query="...", memory_type="...")` supports filtering by semantic relation types (e.g., searching only for `decision` blocks) and uses a **hybrid ranking** pipeline by default. The
 underlying `semantic-search` feature is enabled in `cade-store`'s default
 feature set (since 2026-04-30); to disable it, build with
 `--no-default-features --features bundled-sqlite` — Phases 1 and 2 still run.
