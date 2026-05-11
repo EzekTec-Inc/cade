@@ -1,3 +1,4 @@
+PLAN.md
 /target
 .cade-db.key
 .cade/
@@ -18,7 +19,6 @@ crates/cade-server/.cade-db.key
 .cade-db.key
 .cade-todo.md
 ARCHITECTURE.md
-PLAN.md
 crates/cade-gui/dist/
 crates/cade-gui/pkg/
 
