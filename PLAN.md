@@ -2098,3 +2098,23 @@ Phase A.3 calls for replacing the purely flat KV search with typed relations to 
 ```sh
 git checkout HEAD^ -- crates/cade-agent crates/cade-server crates/cade-store
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T01:10:00Z
+**Summary of change:** Implement Phase B of Memory System Rework (Automated Extraction).
+**Files modified:**
+- `crates/cade-server/src/server/consolidation.rs`
+
+**Reason:**
+Phase B of the Memory System Rework plan calls for moving away from manual `update_memory` calls by implementing background consolidators that automatically extract durable entities and facts from the conversation stream. We achieve this by adding an `auto_extract_facts` step to `consolidate_agent`.
+
+**Previous behavior:**
+Consolidation only summarized dropped turns into a generic prose `session_summary` and extracted the `active_goal`. Important long-term durable knowledge (decisions, conventions) would be lost unless the agent manually called `update_memory`.
+
+**New behavior:**
+Added `auto_extract_facts` which runs immediately after `auto_update_active_goal`. It issues a targeted prompt to the cheap compaction model requesting a JSON array of any durable facts, decisions, conventions, or constraints present in the dropped history. These facts are then automatically parsed, validated, and injected into the typed persistent `shared_memory_blocks` via `upsert_memory_block_typed`, stamped with provenance (`auto_extraction`), and semantically chunked for future proactive retrieval.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-server/src/server/consolidation.rs
+```
