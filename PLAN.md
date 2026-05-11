@@ -2070,3 +2070,31 @@ Phase A.2 updates `update_memory` tools so every recorded fact points back to th
 ```sh
 git checkout HEAD^ -- crates/cade-store crates/cade-server
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T00:50:00Z
+**Summary of change:** Implement Phase A.3 of Memory System Rework (Proactive Retrieval via Knowledge Graph filtering).
+**Files modified:**
+- `crates/cade-agent/src/tools/meta.rs`
+- `crates/cade-server/src/server/api/run/meta_tools.rs`
+- `crates/cade-store/src/sqlite/embedding.rs`
+- `crates/cade-store/src/sqlite/tools.rs`
+- `crates/cade-store/src/sqlite/memory/tests.rs`
+- `crates/cade-server/src/server/api/agents.rs`
+
+**Reason:**
+Phase A.3 calls for replacing the purely flat KV search with typed relations to enable querying by context (e.g., retrieving only "decision" or "convention" memories). The existing `search_memory` tool API needed to expose an optional `memory_type` parameter and propagate this filter down through the hybrid search and pure semantic search layers into the underlying SQL queries.
+
+**Previous behavior:**
+`search_memory` only allowed searching by a single flat keyword/phrase, matching across the entire corpus of `shared_memory_blocks`.
+
+**New behavior:**
+- The LLM tool schema for `search_memory` now includes an optional `memory_type` parameter.
+- `search_memory`, `search_memory_hybrid`, and `search_memory_semantic` all explicitly accept an `Option<&str>` for `memory_type`.
+- If provided, the SQLite queries actively append `AND b.memory_type = ?` to strictly isolate hits (keyword, fuzzy fallback, chunks, and vector embeddings) to the requested semantic type.
+- Updated all internal caller sites to supply `None` for backward compatibility in areas outside the explicit tool handler.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent crates/cade-server crates/cade-store
+```

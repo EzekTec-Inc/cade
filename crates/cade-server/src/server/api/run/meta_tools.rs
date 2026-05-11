@@ -546,16 +546,13 @@ async fn handle_reflect_meta(
     )
 }
 
-/// Phase A1b handler: `search_memory` server-side.
-/// Searches the agent's memory blocks by keyword directly via the DB.
-/// Uses `spawn_blocking` + timeout to avoid blocking the async runtime
-/// and to prevent runaway queries from hanging the agentic loop.
 async fn handle_search_memory_meta(
     state: &AppState,
     agent_id: &str,
     args: &serde_json::Value,
 ) -> (String, bool) {
     let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    let memory_type = args["memory_type"].as_str().filter(|s| !s.trim().is_empty()).map(|s| s.to_string());
     if query.is_empty() {
         return ("Error: 'query' is required".to_string(), true);
     }
@@ -570,6 +567,7 @@ async fn handle_search_memory_meta(
                 &db,
                 &aid,
                 &q,
+                memory_type.as_deref(),
                 embedder.as_deref(),
             )
         }),

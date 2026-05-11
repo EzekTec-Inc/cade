@@ -225,88 +225,100 @@ pub fn search_messages(
     Ok(result)
 }
 
-/// Search memory blocks for an agent using case-insensitive LIKE.
-/// Returns (label, value, snippet) where snippet is up to 200 chars around
-/// the first match in the value.
-///
-/// Memory blocks are small (< 8 KB each) so LIKE is fast enough without FTS5.
 pub fn search_memory(
     db: &Db,
     agent_id: &str,
     query: &str,
+    memory_type: Option<&str>,
 ) -> Result<Vec<(String, String, String)>> {
-    // Phase 1: LIKE search — acquire and release lock in a scoped block
-    // to avoid deadlock with the fuzzy fallback (which also needs the lock).
     let q_lower = query.to_lowercase();
-
-    // A11: Fetch current turn for recency scoring.
     let current_turn = super::get_turn_counter(db, agent_id).unwrap_or(0);
 
     let mut results: Vec<(String, String, String)> = {
         let conn = db.lock();
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-        // A11: Also fetch access_count + last_access_turn for Recency × Frequency scoring.
-        let mut stmt = conn.prepare(
-            "SELECT b.label, b.value, b.access_count, b.last_access_turn, b.last_turn
-             FROM shared_memory_blocks b
-             JOIN agent_memory_blocks amb ON amb.block_id = b.id
-             WHERE amb.agent_id = ?1
-               AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
-                    OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
-             LIMIT 20",
-        )?;
-        let rows = stmt.query_map(params![agent_id, pattern], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2).unwrap_or(0),
-                row.get::<_, i64>(3).unwrap_or(0),
-                row.get::<_, i64>(4).unwrap_or(0),
-            ))
-        })?;
+        
+        let mut scored: Vec<(f64, String, String, String)> = if let Some(mtype) = memory_type {
+            let mut stmt = conn.prepare(
+                "SELECT b.label, b.value, b.access_count, b.last_access_turn, b.last_turn
+                 FROM shared_memory_blocks b
+                 JOIN agent_memory_blocks amb ON amb.block_id = b.id
+                 WHERE amb.agent_id = ?1
+                   AND b.memory_type = ?3
+                   AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
+                        OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
+                 LIMIT 20",
+            )?;
+            let rows = stmt.query_map(params![agent_id, pattern, mtype], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2).unwrap_or(0),
+                    row.get::<_, i64>(3).unwrap_or(0),
+                    row.get::<_, i64>(4).unwrap_or(0),
+                ))
+            })?;
+            rows.filter_map(|r| r.ok())
+                .map(|(label, value, access_count, last_access_turn, last_turn)| {
+                    let val_lower = value.to_lowercase();
+                    let snippet = if let Some(pos) = val_lower.find(&q_lower) {
+                        let start = pos.saturating_sub(80);
+                        let end = (pos + q_lower.len() + 80).min(value.len());
+                        let prefix = if start > 0 { "…" } else { "" };
+                        let suffix = if end < value.len() { "…" } else { "" };
+                        let s = value.char_indices().map(|(i, _)| i).find(|&i| i >= start).unwrap_or(start);
+                        let e = value.char_indices().map(|(i, _)| i).find(|&i| i >= end).unwrap_or(end);
+                        format!("{prefix}{}{suffix}", &value[s..e])
+                    } else {
+                        value.chars().take(160).collect::<String>()
+                    };
+                    let score = recency_frequency_score(current_turn, last_turn, last_access_turn, access_count);
+                    (score, label, value, snippet)
+                })
+                .collect()
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT b.label, b.value, b.access_count, b.last_access_turn, b.last_turn
+                 FROM shared_memory_blocks b
+                 JOIN agent_memory_blocks amb ON amb.block_id = b.id
+                 WHERE amb.agent_id = ?1
+                   AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
+                        OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
+                 LIMIT 20",
+            )?;
+            let rows = stmt.query_map(params![agent_id, pattern], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2).unwrap_or(0),
+                    row.get::<_, i64>(3).unwrap_or(0),
+                    row.get::<_, i64>(4).unwrap_or(0),
+                ))
+            })?;
+            rows.filter_map(|r| r.ok())
+                .map(|(label, value, access_count, last_access_turn, last_turn)| {
+                    let val_lower = value.to_lowercase();
+                    let snippet = if let Some(pos) = val_lower.find(&q_lower) {
+                        let start = pos.saturating_sub(80);
+                        let end = (pos + q_lower.len() + 80).min(value.len());
+                        let prefix = if start > 0 { "…" } else { "" };
+                        let suffix = if end < value.len() { "…" } else { "" };
+                        let s = value.char_indices().map(|(i, _)| i).find(|&i| i >= start).unwrap_or(start);
+                        let e = value.char_indices().map(|(i, _)| i).find(|&i| i >= end).unwrap_or(end);
+                        format!("{prefix}{}{suffix}", &value[s..e])
+                    } else {
+                        value.chars().take(160).collect::<String>()
+                    };
+                    let score = recency_frequency_score(current_turn, last_turn, last_access_turn, access_count);
+                    (score, label, value, snippet)
+                })
+                .collect()
+        };
 
-        // A11: Score = recency_weight × frequency_weight
-        let mut scored: Vec<(f64, String, String, String)> = rows
-            .filter_map(|r| r.ok())
-            .map(|(label, value, access_count, last_access_turn, last_turn)| {
-                let val_lower = value.to_lowercase();
-                let snippet = if let Some(pos) = val_lower.find(&q_lower) {
-                    let start = pos.saturating_sub(80);
-                    let end = (pos + q_lower.len() + 80).min(value.len());
-                    let prefix = if start > 0 { "…" } else { "" };
-                    let suffix = if end < value.len() { "…" } else { "" };
-                    let s = value
-                        .char_indices()
-                        .map(|(i, _)| i)
-                        .find(|&i| i >= start)
-                        .unwrap_or(start);
-                    let e = value
-                        .char_indices()
-                        .map(|(i, _)| i)
-                        .find(|&i| i >= end)
-                        .unwrap_or(end);
-                    format!("{prefix}{}{suffix}", &value[s..e])
-                } else {
-                    value.chars().take(160).collect::<String>()
-                };
-                let score = recency_frequency_score(
-                    current_turn, last_turn, last_access_turn, access_count,
-                );
-                (score, label, value, snippet)
-            })
-            .collect();
-
-        // Sort by composite score descending, take top 10.
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored
-            .into_iter()
-            .take(10)
-            .map(|(_, label, value, snippet)| (label, value, snippet))
-            .collect()
-    }; // conn lock released here
+        scored.into_iter().take(10).map(|(_, label, value, snippet)| (label, value, snippet)).collect()
+    };
 
-    // Phase 2: Fuzzy fallback — lock is free, safe to call get_memory_blocks.
-    // Split the query into words and match blocks containing ANY word.
     if results.is_empty() {
         let words: Vec<String> = query
             .split_whitespace()
@@ -314,71 +326,103 @@ pub fn search_memory(
             .map(|w| w.to_lowercase())
             .collect();
         if !words.is_empty() {
-            let all_blocks = super::memory::get_memory_blocks(db, agent_id).unwrap_or_default();
+            let conn = db.lock();
+            let mut stmt_sql = String::from("SELECT b.label, b.value FROM shared_memory_blocks b JOIN agent_memory_blocks amb ON amb.block_id = b.id WHERE amb.agent_id = ?1");
+            if memory_type.is_some() {
+                stmt_sql.push_str(" AND b.memory_type = ?2");
+            }
             let mut scored: Vec<(usize, String, String, String)> = Vec::new();
-            for (label, value, _desc) in &all_blocks {
-                let combined = format!("{} {}", label, value).to_lowercase();
-                let hits = words.iter().filter(|w| combined.contains(w.as_str())).count();
-                if hits > 0 {
-                    let snippet = value.chars().take(200).collect::<String>();
-                    scored.push((hits, label.clone(), value.clone(), snippet));
+            
+            if let Some(mtype) = memory_type {
+                if let Ok(mut stmt) = conn.prepare(&stmt_sql) {
+                    if let Ok(rows) = stmt.query_map(params![agent_id, mtype], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                        for row in rows.filter_map(|r| r.ok()) {
+                            let (label, value) = row;
+                            let combined = format!("{} {}", label, value).to_lowercase();
+                            let hits = words.iter().filter(|w| combined.contains(w.as_str())).count();
+                            if hits > 0 {
+                                let snippet = value.chars().take(200).collect::<String>();
+                                scored.push((hits, label, value, snippet));
+                            }
+                        }
+                    }
+                }
+            } else {
+                if let Ok(mut stmt) = conn.prepare(&stmt_sql) {
+                    if let Ok(rows) = stmt.query_map(params![agent_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                        for row in rows.filter_map(|r| r.ok()) {
+                            let (label, value) = row;
+                            let combined = format!("{} {}", label, value).to_lowercase();
+                            let hits = words.iter().filter(|w| combined.contains(w.as_str())).count();
+                            if hits > 0 {
+                                let snippet = value.chars().take(200).collect::<String>();
+                                scored.push((hits, label, value, snippet));
+                            }
+                        }
+                    }
                 }
             }
+            
             scored.sort_by(|a, b| b.0.cmp(&a.0));
-            results = scored
-                .into_iter()
-                .take(10)
-                .map(|(_, label, value, snippet)| (label, value, snippet))
-                .collect();
+            results = scored.into_iter().take(10).map(|(_, label, value, snippet)| (label, value, snippet)).collect();
         }
     }
 
-    // Phase 3: Semantic search (removed).
-    // Merge semantic results with keyword results using Reciprocal Rank Fusion.
-
-    // A6: Chunk-level keyword search — search within `memory_chunks` for
-    // finer-grained matches on large blocks. Chunk hits surface the relevant
-    // portion of a block rather than the whole blob.
     {
         let conn = db.lock();
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-        let mut stmt = conn.prepare(
-            "SELECT b.label, c.content, c.chunk_index
-             FROM memory_chunks c
-             JOIN shared_memory_blocks b ON b.id = c.block_id
-             JOIN agent_memory_blocks amb ON amb.block_id = b.id
-             WHERE amb.agent_id = ?1
-               AND LOWER(c.content) LIKE LOWER(?2) ESCAPE '\\'
-             ORDER BY c.chunk_index ASC
-             LIMIT 5",
-        ).ok();
-        if let Some(ref mut st) = stmt {
-            let chunk_hits: Vec<(String, String, String)> = st
-                .query_map(params![agent_id, pattern], |row| {
+        
+        let chunk_hits: Vec<(String, String, String)> = if let Some(mtype) = memory_type {
+            let mut stmt = conn.prepare(
+                "SELECT b.label, c.content, c.chunk_index
+                 FROM memory_chunks c
+                 JOIN shared_memory_blocks b ON b.id = c.block_id
+                 JOIN agent_memory_blocks amb ON amb.block_id = b.id
+                 WHERE amb.agent_id = ?1
+                   AND b.memory_type = ?3
+                   AND LOWER(c.content) LIKE LOWER(?2) ESCAPE '\\'
+                 ORDER BY c.chunk_index ASC
+                 LIMIT 5",
+            ).ok();
+            if let Some(ref mut st) = stmt {
+                st.query_map(params![agent_id, pattern, mtype], |row| {
                     let label: String = row.get(0)?;
                     let content: String = row.get(1)?;
                     let idx: i64 = row.get(2)?;
                     let snippet = format!("[chunk {}] {}", idx, content.chars().take(200).collect::<String>());
                     Ok((label, content, snippet))
-                })
-                .ok()
-                .map(|rows| rows.filter_map(|r| r.ok()).collect())
-                .unwrap_or_default();
+                }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+            } else { Vec::new() }
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT b.label, c.content, c.chunk_index
+                 FROM memory_chunks c
+                 JOIN shared_memory_blocks b ON b.id = c.block_id
+                 JOIN agent_memory_blocks amb ON amb.block_id = b.id
+                 WHERE amb.agent_id = ?1
+                   AND LOWER(c.content) LIKE LOWER(?2) ESCAPE '\\'
+                 ORDER BY c.chunk_index ASC
+                 LIMIT 5",
+            ).ok();
+            if let Some(ref mut st) = stmt {
+                st.query_map(params![agent_id, pattern], |row| {
+                    let label: String = row.get(0)?;
+                    let content: String = row.get(1)?;
+                    let idx: i64 = row.get(2)?;
+                    let snippet = format!("[chunk {}] {}", idx, content.chars().take(200).collect::<String>());
+                    Ok((label, content, snippet))
+                }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+            } else { Vec::new() }
+        };
 
-            // Merge chunk hits — prefer block-level result if same label already present.
-            let existing_labels: std::collections::HashSet<String> =
-                results.iter().map(|(l, _, _)| l.clone()).collect();
-            for (label, value, snippet) in chunk_hits {
-                if !existing_labels.contains(&label) {
-                    results.push((label, value, snippet));
-                }
+        let existing_labels: std::collections::HashSet<String> = results.iter().map(|(l, _, _)| l.clone()).collect();
+        for (label, value, snippet) in chunk_hits {
+            if !existing_labels.contains(&label) {
+                results.push((label, value, snippet));
             }
         }
     }
 
-    // F7: activity-weighted aging — bump access counters for every label we
-    // just returned to the agent.  This is an intentional read, so the
-    // staleness clock should restart and the access boost should grow.
     if !results.is_empty() {
         let labels: Vec<&str> = results.iter().map(|(l, _, _)| l.as_str()).collect();
         super::memory::bump_block_access(db, agent_id, &labels);
@@ -387,53 +431,28 @@ pub fn search_memory(
     Ok(results)
 }
 
-/// Hybrid keyword + semantic memory search.
-///
-/// Runs the existing keyword path ([`search_memory`]) and, when an
-/// [`Embedder`](super::embedding::Embedder) is supplied, also runs cosine
-/// similarity over stored embeddings ([`search_memory_semantic`](
-/// super::embedding::search_memory_semantic)). The two ranked label lists
-/// are merged via Reciprocal Rank Fusion (RRF, k=60) so that:
-///   * blocks that appear in both lists get the highest combined score, and
-///   * blocks unique to either list are still surfaced.
-///
-/// Returns `(label, value, snippet)` rows in fused-rank order, capped at the
-/// keyword path's existing 10-result limit.
-///
-/// `embedder = None` is equivalent to calling [`search_memory`] directly —
-/// the keyword result list is returned unchanged. This lets the default-
-/// feature build call this function uniformly while paying zero cost.
-///
-/// # Errors
-///
-/// Returns whatever errors [`search_memory`] or the embedder would return.
 pub fn search_memory_hybrid(
     db: &Db,
     agent_id: &str,
     query: &str,
+    memory_type: Option<&str>,
     embedder: Option<&dyn super::embedding::Embedder>,
 ) -> Result<Vec<(String, String, String)>> {
-    // 1. Keyword leg — existing behaviour, unchanged.
-    let kw_results = search_memory(db, agent_id, query)?;
+    let kw_results = search_memory(db, agent_id, query, memory_type)?;
 
-    // 2. If no embedder, return the keyword leg verbatim — preserves the
-    //    legacy contract bit-for-bit when semantic search isn't wired up.
     let Some(emb) = embedder else {
         return Ok(kw_results);
     };
 
-    // 3. Semantic leg — embed the query, run cosine search.
     let q_vec = emb.embed(query)?;
     if q_vec.is_empty() {
-        // NoopEmbedder or embedder returning empty for some reason.
         return Ok(kw_results);
     }
     let sem_hits = {
         let conn = db.lock();
-        super::embedding::search_memory_semantic(&conn, agent_id, &q_vec, 10)?
+        super::embedding::search_memory_semantic(&conn, agent_id, &q_vec, memory_type, 10)?
     };
 
-    // 4. Build label-keyed lookup of full rows from both legs.
     use std::collections::HashMap;
     let mut by_label: HashMap<String, (String, String, String)> = HashMap::new();
     for (label, value, snippet) in &kw_results {
@@ -443,19 +462,15 @@ pub fn search_memory_hybrid(
     }
     for (_id, _score, label, value) in &sem_hits {
         by_label.entry(label.clone()).or_insert_with(|| {
-            // Synthesize a snippet when the row only came in via the
-            // semantic leg (no keyword to highlight).
             let snippet: String = value.chars().take(200).collect();
             (label.clone(), value.clone(), snippet)
         });
     }
 
-    // 5. RRF on the two label lists.
     let kw_labels: Vec<String> = kw_results.iter().map(|(l, _, _)| l.clone()).collect();
     let sem_labels: Vec<String> = sem_hits.iter().map(|(_, _, l, _)| l.clone()).collect();
     let fused = super::embedding::reciprocal_rank_fusion(&kw_labels, &sem_labels, 60.0);
 
-    // 6. Materialise rows in fused order, deduplicated, capped at 10.
     let mut out: Vec<(String, String, String)> = Vec::new();
     for label in fused.iter().take(10) {
         if let Some(row) = by_label.remove(label) {
@@ -877,7 +892,7 @@ pub fn recall(
     let mut all_results: Vec<RecallResult> = Vec::new();
 
     // Source 1: Memory blocks (LIKE + fuzzy)
-    if let Ok(mem_hits) = search_memory(db, agent_id, query) {
+    if let Ok(mem_hits) = search_memory(db, agent_id, query, None) {
         for (rank, (label, _value, snippet)) in mem_hits.into_iter().enumerate() {
             all_results.push(RecallResult {
                 source: "memory".into(),

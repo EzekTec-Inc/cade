@@ -1513,7 +1513,7 @@ fn search_memory_semantic_ranks_by_cosine_similarity() -> Result<()> {
     // Query "a"-direction — should rank `alpha` first.
     let q = LetterEmbedder.embed("alpha query")?;
     let conn = db.lock();
-    let hits = search_memory_semantic(&conn, "a1", &q, 10)?;
+    let hits = search_memory_semantic(&conn, "a1", &q, None, 10)?;
     assert!(!hits.is_empty(), "semantic search returned no rows");
 
     // First hit must be the alpha block.
@@ -1543,7 +1543,7 @@ fn search_memory_semantic_skips_null_embedding_rows() -> Result<()> {
 
     let q = ZeroEmbedder.embed("anything")?;
     let conn = db.lock();
-    let hits = search_memory_semantic(&conn, "a1", &q, 10)?;
+    let hits = search_memory_semantic(&conn, "a1", &q, None, 10)?;
     assert!(hits.is_empty(), "rows without an embedding must not appear in semantic results");
     Ok(())
 }
@@ -1605,7 +1605,7 @@ fn search_memory_hybrid_finds_non_keyword_conceptual_match() -> Result<()> {
 
     // Pure-keyword search for 'deadlock' MUST return zero hits — the value
     // has no keyword overlap. This documents the previous behaviour.
-    let kw = crate::sqlite::tools::search_memory(&db, "a1", "deadlock")?;
+    let kw = crate::sqlite::tools::search_memory(&db, "a1", "deadlock", None)?;
     assert!(
         kw.iter().all(|(l, _, _)| l != "fix_note"),
         "baseline: keyword search must not find 'fix_note' for 'deadlock'; got {kw:?}"
@@ -1613,7 +1613,7 @@ fn search_memory_hybrid_finds_non_keyword_conceptual_match() -> Result<()> {
 
     // Hybrid search WITH the embedder MUST surface 'fix_note' via the
     // semantic path (and via RRF should rank it among the top results).
-    let hybrid = search_memory_hybrid(&db, "a1", "deadlock", Some(&ConceptualEmbedder))?;
+    let hybrid = search_memory_hybrid(&db, "a1", "deadlock", None, Some(&ConceptualEmbedder))?;
     let labels: Vec<&str> = hybrid.iter().map(|(l, _, _)| l.as_str()).collect();
     assert!(
         labels.contains(&"fix_note"),
@@ -1632,11 +1632,11 @@ fn search_memory_hybrid_with_none_embedder_matches_old_behaviour() -> Result<()>
     upsert_memory_block(&db, "a1", "rust_tip", "parking_lot Mutex tips", None, None)?;
     upsert_memory_block(&db, "a1", "other", "irrelevant text", None, None)?;
 
-    let old: Vec<String> = search_memory(&db, "a1", "parking_lot")?
+    let old: Vec<String> = search_memory(&db, "a1", "parking_lot", None)?
         .into_iter()
         .map(|(l, _, _)| l)
         .collect();
-    let new: Vec<String> = search_memory_hybrid(&db, "a1", "parking_lot", None::<&dyn Embedder>)?
+    let new: Vec<String> = search_memory_hybrid(&db, "a1", "parking_lot", None, None::<&dyn Embedder>)?
         .into_iter()
         .map(|(l, _, _)| l)
         .collect();
@@ -1949,7 +1949,7 @@ fn test_a6_search_memory_finds_chunk_content() -> Result<()> {
     rechunk_block(&db, "a1", "secrets", &big_value, None);
 
     // Search for the distinctive keyword.
-    let results = super::search_memory(&db, "a1", "xylophone_secret_key")?;
+    let results = super::search_memory(&db, "a1", "xylophone_secret_key", None)?;
     assert!(!results.is_empty(), "search should find chunk with xylophone_secret_key");
 
     let found_label = results.iter().any(|(l, _, _)| l == "secrets");
@@ -2085,7 +2085,7 @@ fn test_a11_search_memory_ranks_frequent_block_higher() -> Result<()> {
         bump_block_access(&db, "a1", &["old_db_info"]);
     }
 
-    let results = super::super::tools::search_memory(&db, "a1", "database")?;
+    let results = super::super::tools::search_memory(&db, "a1", "database", None)?;
     assert!(results.len() >= 2, "should find both blocks");
 
     // The frequently-accessed block should rank first despite being written first.

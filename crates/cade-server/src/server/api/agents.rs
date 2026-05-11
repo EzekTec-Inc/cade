@@ -757,7 +757,7 @@ pub async fn search_memory_handler(
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(move || {
-            sqlite::tools::search_memory_hybrid(&db, &aid, &q, embedder.as_deref())
+            sqlite::tools::search_memory_hybrid(&db, &aid, &q, None, embedder.as_deref())
         }),
     )
     .await;

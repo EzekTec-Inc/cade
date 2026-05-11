@@ -197,11 +197,12 @@ fn schema_query_event_log() -> Value {
 fn schema_search_memory() -> Value {
     json!({
         "name": "search_memory",
-        "description": "Search your persistent memory blocks by keyword. Returns matching blocks with a contextual excerpt. Archived ('long-term') blocks that match are automatically promoted back to active memory so they reappear in your prompt. Use this whenever you need context that may have been archived.",
+        "description": "Search your persistent memory blocks by keyword or memory type. Returns matching blocks with a contextual excerpt. Archived ('long-term') blocks that match are automatically promoted back to active memory so they reappear in your prompt. Use this whenever you need context that may have been archived.",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Keyword or phrase to search for across memory block labels and values" }
+                "query": { "type": "string", "description": "Keyword or phrase to search for across memory block labels and values" },
+                "memory_type": { "type": "string", "description": "Optional. Filter results by a specific memory semantic type (e.g., 'decision', 'convention', 'procedural')" }
             },
             "required": ["query"]
         }

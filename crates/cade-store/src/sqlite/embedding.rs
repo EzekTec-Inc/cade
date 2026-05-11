@@ -230,45 +230,51 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     Some(dot / (na.sqrt() * nb.sqrt()))
 }
 
-/// Search memory blocks by semantic (cosine) similarity to a query embedding.
-///
-/// Returns `(block_id, similarity, label, value)` tuples ordered by descending
-/// similarity (best match first). Rows whose `embedding` is NULL or whose
-/// stored vector cannot be decoded or whose dimensionality does not match the
-/// query are silently skipped.
-///
-/// Pure Rust — does not depend on the `sqlite-vec` extension. Suitable for
-/// small (≤ a few thousand) memory-block corpora where a brute-force scan is
-/// fast enough; if the corpus grows, swap this implementation for one backed
-/// by `sqlite-vec` without changing the public signature.
 pub fn search_memory_semantic(
     conn: &rusqlite::Connection,
     agent_id: &str,
     query_embedding: &[f32],
+    memory_type: Option<&str>,
     limit: usize,
 ) -> Result<Vec<(String, f64, String, String)>> {
     if query_embedding.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT b.id, b.label, b.value, b.embedding
-         FROM shared_memory_blocks b
-         JOIN agent_memory_blocks amb ON amb.block_id = b.id
-         WHERE amb.agent_id = ?1 AND b.embedding IS NOT NULL",
-    )?;
-
-    let rows = stmt.query_map(rusqlite::params![agent_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Vec<u8>>(3)?,
-        ))
-    })?;
+    let rows = if let Some(mtype) = memory_type {
+        let mut stmt = conn.prepare(
+            "SELECT b.id, b.label, b.value, b.embedding
+             FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND b.memory_type = ?2 AND b.embedding IS NOT NULL",
+        )?;
+        stmt.query_map(rusqlite::params![agent_id, mtype], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })?.filter_map(|r| r.ok()).collect::<Vec<_>>()
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT b.id, b.label, b.value, b.embedding
+             FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND b.embedding IS NOT NULL",
+        )?;
+        stmt.query_map(rusqlite::params![agent_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })?.filter_map(|r| r.ok()).collect::<Vec<_>>()
+    };
 
     let mut scored: Vec<(String, f64, String, String)> = Vec::new();
-    for r in rows.flatten() {
+    for r in rows {
         let (id, label, value, blob) = r;
         let Some(vec) = decode_embedding_blob(&blob) else {
             continue;
@@ -279,7 +285,6 @@ pub fn search_memory_semantic(
         scored.push((id, sim as f64, label, value));
     }
 
-    // Sort by similarity descending; NaN sorts last via partial_cmp fallback.
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
     Ok(scored)
