@@ -1860,3 +1860,26 @@ The loop now relies entirely on the `emitter: Box<dyn SubagentEventEmitter>` tra
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T20:15:00Z
+**Summary of change:** Implement Phase 2 of subagent refactoring (TUI/UI rendering options).
+**Files modified:**
+- `crates/cade-tui/src/app/render.rs`
+- `crates/cade-tui/src/app/timeline/mod.rs`
+- `crates/cade-tui/src/app/timeline/render_item.rs`
+
+**Reason:**
+Phase 2 of the Subagent Architecture Refactoring Plan called for distinct visual modes for subagents and improved rendering of the historical scratchpad to prevent UI bloat.
+
+**Previous behavior:**
+Subagents were rendered with generic borders regardless of their mode, and the `historical_scratchpad` output block was rendered inline as plain text inside the assistant output, bloating the scroll buffer.
+
+**New behavior:**
+- Subagent tracker cards are now color-coded based on mode (`plan` mode gets a success border, `build` mode gets a warning border, others default to primary).
+- The `historical_scratchpad` tags are intercepted during the timeline Markdown parsing. The raw XML-like string is extracted and rendered as a distinct, collapsible `╭ HISTORICAL SCRATCHPAD` summary card within the assistant's timeline item, significantly cleaning up the UI.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-tui
+\`\`\`

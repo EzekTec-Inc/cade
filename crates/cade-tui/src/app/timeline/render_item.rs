@@ -181,19 +181,55 @@ pub(crate) fn render_user_message_item(
     ));
 }
 
-pub(crate) fn render_assistant_item(text: &str, width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_assistant_item(text: &str, width: usize, expand_all: bool, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()
             .fg(colors.c_primary())
             .add_modifier(Modifier::BOLD),
     )]));
-    let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors, width);
+    
+    // Extract historical scratchpad
+    let (body, scratchpad) = if let Some(start) = text.find("<historical_scratchpad>") {
+        if let Some(end) = text.find("</historical_scratchpad>") {
+            let body = format!("{}{}", &text[..start], &text[end + "</historical_scratchpad>".len()..]);
+            let scratchpad = &text[start + "<historical_scratchpad>".len()..end];
+            (body, Some(scratchpad))
+        } else {
+            (text.to_string(), None)
+        }
+    } else {
+        (text.to_string(), None)
+    };
+
+    let md_lines = crate::markdown::parse_markdown_lines_with_theme(&body, colors, width);
     out.extend(md_lines);
+
+    if let Some(sp) = scratchpad {
+        out.push(Line::from(""));
+        out.push(Line::from(vec![
+            Span::styled("╭ ", colors.border_muted()),
+            Span::styled(" HISTORICAL SCRATCHPAD ", Style::default().fg(colors.c_text_primary()).bg(colors.c_bg_surface1()).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(if expand_all { "· expanded" } else { "· ctrl+o to expand" }, colors.text_dim()),
+        ]));
+        if expand_all {
+            let inner_w = width.saturating_sub(4);
+            for ln in sp.trim().lines() {
+                out.push(Line::from(vec![
+                    Span::styled("│ ", colors.border_muted()),
+                    Span::styled(
+                        truncate_str(ln, inner_w),
+                        Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+            }
+        }
+    }
 }
 
-pub(crate) fn render_streaming_assistant_item(text: &str, width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
-    render_assistant_item(text, width, out, colors);
+pub(crate) fn render_streaming_assistant_item(text: &str, width: usize, expand_all: bool, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    render_assistant_item(text, width, expand_all, out, colors);
 }
 
 pub(crate) fn render_tool_call_item(

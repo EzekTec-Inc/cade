@@ -709,11 +709,17 @@ pub(crate) fn render_frame(
 
             frame.render_widget(Clear, rect);
 
+            let border_color = match tracker.mode.as_str() {
+                "plan" => colors.success(),
+                "build" => colors.warning(),
+                _ => colors.primary(),
+            };
+
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_type(colors.c_border_style())
                 .style(colors.style_surface1())
-                .border_style(colors.primary());
+                .border_style(border_color);
             
             let mut spans = vec![
                 Span::styled("⟳ ", colors.warning()),

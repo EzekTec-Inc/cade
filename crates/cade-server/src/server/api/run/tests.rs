@@ -726,14 +726,14 @@ use cade_ai::LlmToolCall;
         );
     }
 
-    // ── REC-2: EphemeralAgentGuard cleanup ────────────────────────────────
+    // ── REC-2: EphemeralEnvironment cleanup ────────────────────────────────
 
-    /// REC-2: An `EphemeralAgentGuard` must delete the ephemeral agent row
+    /// REC-2: An `EphemeralEnvironment` must delete the ephemeral agent row
     /// and write back subagent memory when dropped, even if the agentic
     /// loop panics or returns early.
     #[test]
-    fn ephemeral_agent_guard_cleans_up_on_drop() {
-        use super::subagent::EphemeralAgentGuard;
+    fn ephemeral_environment_cleans_up_on_drop() {
+        use super::subagent::EphemeralEnvironment;
 
         let db = cade_store::sqlite::open(":memory:").unwrap();
         // Create parent agent.
@@ -786,7 +786,7 @@ use cade_ai::LlmToolCall;
 
         // Create guard, then drop it.
         {
-            let _guard = EphemeralAgentGuard::new(
+            let _guard = EphemeralEnvironment::new(
                 db.clone(),
                 "sa_guard".to_string(),
                 "parent_g".to_string(),

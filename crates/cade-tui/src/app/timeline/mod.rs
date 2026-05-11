@@ -205,7 +205,7 @@ impl<'a> TimelineItem<'a> {
                 category_tokens,
             } => render_context_bar_item(model, *window, *pct, category_tokens, width, out, colors),
             Self::User(text) => render_user_message_item(text, width, out, colors),
-            Self::Assistant(text) => render_assistant_item(text, width, out, colors),
+            Self::Assistant(text) => render_assistant_item(text, width, expand_all, out, colors),
             Self::ToolCall { name, preview } => {
                 render_tool_call_item(name, preview, width, expand_all, out, colors, nerd)
             }
@@ -235,7 +235,7 @@ impl<'a> TimelineItem<'a> {
             Self::HeuristicSummary { intent, safety, directives } => {
                 render_heuristic_summary_item(intent, safety, directives, width, out, colors)
             }
-            Self::StreamingAssistant(text) => render_streaming_assistant_item(text, width, out, colors),
+            Self::StreamingAssistant(text) => render_streaming_assistant_item(text, width, expand_all, out, colors),
         }
     }
 
