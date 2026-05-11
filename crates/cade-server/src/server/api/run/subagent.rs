@@ -1,6 +1,6 @@
 //! Subagent spawning and execution within the server-side agentic loop.
 
-use serde_json::json;
+
 
 use crate::server::state::AppState;
 
@@ -153,7 +153,6 @@ fn subagent_timeout_secs() -> u64 {
 pub trait SubagentEventEmitter: Send + Sync {
     fn emit_started<'a>(&'a self, subagent_id: &'a str, task_preview: &'a str, mode: &'a str, model: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
     fn emit_complete<'a>(&'a self, subagent_id: &'a str, is_error: bool, result_preview: &'a str, elapsed: u32, writeback_facts: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
-    fn clone_box(&self) -> Box<dyn SubagentEventEmitter>;
     fn raw_sse_tx(&self) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>;
 }
 
@@ -196,10 +195,6 @@ impl SubagentEventEmitter for SseEventEmitter {
             });
             let _ = tx.send(Ok(axum::response::sse::Event::default().data(ev.to_string()))).await;
         })
-    }
-
-    fn clone_box(&self) -> Box<dyn SubagentEventEmitter> {
-        Box::new(Self { tx: self.tx.clone() })
     }
 
     fn raw_sse_tx(&self) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>> {
