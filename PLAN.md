@@ -1840,3 +1840,23 @@ Introduced `SubagentExecutor` which wraps `AppState`, parent context, and the SS
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T20:00:00Z
+**Summary of change:** Implement Phase 1b and 1c of subagent refactoring (SubagentEventEmitter and EphemeralEnvironment).
+**Files modified:**
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+Continuing the architectural decoupling of the subagent system. By isolating the SSE streaming logic into a `SubagentEventEmitter` trait, the execution engine is now decoupled from the raw HTTP transport layer. This makes the system far more testable and prepares it for alternative emitters (like direct UI manipulation or SDK interception). Additionally, `EphemeralAgentGuard` was logically renamed and shifted towards becoming `EphemeralEnvironment` to better encapsulate the SQLite sandbox logic.
+
+**Previous behavior:**
+The monolithic `handle_run_subagent_tool` directly called `sse_tx.send(...)` with raw JSON string payloads tied directly to the axum SSE endpoint format.
+
+**New behavior:**
+The loop now relies entirely on the `emitter: Box<dyn SubagentEventEmitter>` trait interface, calling `emitter.emit_started` and `emitter.emit_complete`. `handle_run_subagent_tool` handles the injection of `SseEventEmitter` before passing execution into the inner loop.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
+\`\`\`

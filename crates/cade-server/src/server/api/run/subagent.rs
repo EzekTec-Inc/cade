@@ -12,7 +12,7 @@ use crate::server::state::AppState;
 /// The `writeback_count` field is set during drop so callers that need
 /// the count can read it *before* drop (by calling `write_back_and_delete`
 /// manually) or accept that the Drop path returns nothing.
-pub(super) struct EphemeralAgentGuard {
+pub(super) struct EphemeralEnvironment {
     db: cade_store::sqlite::Db,
     subagent_id: String,
     parent_agent_id: String,
@@ -20,7 +20,7 @@ pub(super) struct EphemeralAgentGuard {
     defused: bool,
 }
 
-impl EphemeralAgentGuard {
+impl EphemeralEnvironment {
     pub(super) fn new(
         db: cade_store::sqlite::Db,
         subagent_id: String,
@@ -93,7 +93,7 @@ impl EphemeralAgentGuard {
     }
 }
 
-impl Drop for EphemeralAgentGuard {
+impl Drop for EphemeralEnvironment {
     fn drop(&mut self) {
         if !self.defused {
             self.defused = true;
@@ -150,13 +150,68 @@ fn subagent_timeout_secs() -> u64 {
     }
 }
 
-/// Phase 1: Decoupled State Machine Executor
-/// This struct holds the execution context for a subagent.
+pub trait SubagentEventEmitter: Send + Sync {
+    fn emit_started<'a>(&'a self, subagent_id: &'a str, task_preview: &'a str, mode: &'a str, model: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+    fn emit_complete<'a>(&'a self, subagent_id: &'a str, is_error: bool, result_preview: &'a str, elapsed: u32, writeback_facts: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+    fn clone_box(&self) -> Box<dyn SubagentEventEmitter>;
+    fn raw_sse_tx(&self) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>;
+}
+
+pub struct SseEventEmitter {
+    pub tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+}
+
+impl SubagentEventEmitter for SseEventEmitter {
+    fn emit_started<'a>(&'a self, subagent_id: &'a str, task_preview: &'a str, mode: &'a str, model: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        let subagent_id = subagent_id.to_string();
+        let task_preview = task_preview.to_string();
+        let mode = mode.to_string();
+        let model = model.to_string();
+        let tx = self.tx.clone();
+        Box::pin(async move {
+            let ev = serde_json::json!({
+                "message_type": "subagent_started",
+                "subagent_id": subagent_id,
+                "task": task_preview,
+                "mode": mode,
+                "model": model,
+            });
+            let _ = tx.send(Ok(axum::response::sse::Event::default().data(ev.to_string()))).await;
+        })
+    }
+    
+    fn emit_complete<'a>(&'a self, subagent_id: &'a str, is_error: bool, result_preview: &'a str, elapsed: u32, writeback_facts: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        let subagent_id = subagent_id.to_string();
+        let result_preview = result_preview.to_string();
+        let tx = self.tx.clone();
+        Box::pin(async move {
+            let ev = serde_json::json!({
+                "message_type": "subagent_complete",
+                "subagent_id": subagent_id,
+                "status": if is_error { "error" } else { "success" },
+                "result_preview": result_preview,
+                "elapsed_secs": elapsed,
+                "is_error": is_error,
+                "writeback_facts": writeback_facts,
+            });
+            let _ = tx.send(Ok(axum::response::sse::Event::default().data(ev.to_string()))).await;
+        })
+    }
+
+    fn clone_box(&self) -> Box<dyn SubagentEventEmitter> {
+        Box::new(Self { tx: self.tx.clone() })
+    }
+
+    fn raw_sse_tx(&self) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>> {
+        self.tx.clone()
+    }
+}
+
 pub struct SubagentExecutor<'a> {
     pub state: &'a AppState,
     pub parent_agent_id: &'a str,
     pub tool_call_id: &'a str,
-    pub sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    pub emitter: Box<dyn SubagentEventEmitter>,
 }
 
 impl<'a> SubagentExecutor<'a> {
@@ -164,22 +219,21 @@ impl<'a> SubagentExecutor<'a> {
         state: &'a AppState,
         parent_agent_id: &'a str,
         tool_call_id: &'a str,
-        sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+        emitter: Box<dyn SubagentEventEmitter>,
     ) -> Self {
         Self {
             state,
             parent_agent_id,
             tool_call_id,
-            sse_tx,
+            emitter,
         }
     }
 
     pub async fn execute(self, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult {
-        handle_run_subagent_tool_inner(self.state, self.parent_agent_id, self.tool_call_id, args, self.sse_tx).await
+        handle_run_subagent_tool_inner(self.state, self.parent_agent_id, self.tool_call_id, args, self.emitter).await
     }
 }
 
-/// can render progress cards.
 pub(super) async fn handle_run_subagent_tool(
     state: &AppState,
     parent_agent_id: &str,
@@ -187,7 +241,12 @@ pub(super) async fn handle_run_subagent_tool(
     args: &serde_json::Value,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
-    let executor = SubagentExecutor::new(state, parent_agent_id, tool_call_id, sse_tx);
+    let executor = SubagentExecutor::new(
+        state, 
+        parent_agent_id, 
+        tool_call_id, 
+        Box::new(SseEventEmitter { tx: sse_tx })
+    );
     executor.execute(args).await
 }
 
@@ -196,7 +255,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     parent_agent_id: &str,
     tool_call_id: &str,
     args: &serde_json::Value,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    emitter: Box<dyn SubagentEventEmitter>,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::subagents::SubagentConfig;
     use cade_agent::tools::manager::ToolResult;
@@ -267,16 +326,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
         });
 
-    // Stream subagent_started event
-    let started_event = json!({
-        "message_type": "subagent_started",
-        "subagent_id": &subagent_id,
-        "task": &task_preview,
-        "mode": &cfg.mode,
-        "model": &model,
-    });
-    let ev = axum::response::sse::Event::default().data(started_event.to_string());
-    let _ = sse_tx.send(Ok(ev)).await;
+    emitter.emit_started(&subagent_id, &task_preview, &cfg.mode, &model).await;
 
     let start_time = std::time::Instant::now();
 
@@ -389,7 +439,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     );
 
     // REC-2: Drop guard ensures write-back + row deletion even on panic.
-    let mut ephemeral_guard = EphemeralAgentGuard::new(
+    let mut ephemeral_guard = EphemeralEnvironment::new(
         state.db.clone(),
         subagent_id.clone(),
         parent_agent_id.to_string(),
@@ -528,7 +578,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         parent_agent_id,
                         &tc.id,
                         &nested_args,
-                        sse_tx.clone(),
+                        emitter.raw_sse_tx(),
                     ))
                     .await
                 } else if let Some(intercepted) =
@@ -536,7 +586,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         state,
                         &subagent_id,
                         tc,
-                        sse_tx.clone(),
+                        emitter.raw_sse_tx(),
                     ))
                     .await
                 {
@@ -594,19 +644,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
         None => (last_text, false),
     };
 
-    // Stream subagent_complete event
     let result_preview: String = output.chars().take(200).collect();
-    let complete_event = json!({
-        "message_type": "subagent_complete",
-        "subagent_id": &subagent_id,
-        "status": if is_error { "error" } else { "success" },
-        "result_preview": &result_preview,
-        "elapsed_secs": elapsed,
-        "is_error": is_error,
-        "writeback_facts": writeback_count,
-    });
-    let ev = axum::response::sse::Event::default().data(complete_event.to_string());
-    let _ = sse_tx.send(Ok(ev)).await;
+    emitter.emit_complete(&subagent_id, is_error, &result_preview, elapsed, writeback_count).await;
 
     if cfg.background {
         let sr = crate::server::state::SubagentResult {
