@@ -67,19 +67,23 @@ impl EphemeralEnvironment {
                 let parent_label_c = parent_label.clone();
                 let old_val_c = old_value.clone();
                 let new_val_c = fact.value.clone();
+                let memory_type_c = fact.memory_type.clone();
+                let confidence_c = fact.confidence;
 
                 tokio::spawn(async move {
-                    smart_memory_merge(state_c, parent_id_c, parent_label_c, old_val_c, new_val_c).await;
+                    smart_memory_merge(state_c, parent_id_c, parent_label_c, old_val_c, new_val_c, memory_type_c, confidence_c).await;
                 });
                 written += 1;
             } else {
-                if cade_store::sqlite::upsert_memory_block(
+                if cade_store::sqlite::upsert_memory_block_typed(
                     &self.db,
                     &self.parent_agent_id,
                     &parent_label,
                     &fact.value,
                     desc.as_deref(),
                     None,
+                    Some(&fact.memory_type),
+                    Some(fact.confidence),
                 )
                 .is_ok()
                 {
@@ -807,6 +811,8 @@ pub(super) async fn smart_memory_merge(
     label: String,
     old_value: String,
     new_value: String,
+    memory_type: String,
+    confidence: f64,
 ) {
     let prompt = format!(
         "You are a memory merge sub-agent. The parent agent already has a memory block labeled `{label}`. \
@@ -843,13 +849,15 @@ pub(super) async fn smart_memory_merge(
     if let Ok(resp) = state.llm.complete(&req).await {
         if let Some(merged) = resp.content {
             let desc = format!("Smart merged after subagent run");
-            let _ = cade_store::sqlite::upsert_memory_block(
+            let _ = cade_store::sqlite::upsert_memory_block_typed(
                 &state.db,
                 &agent_id,
                 &label,
                 &merged.trim(),
                 Some(&desc),
                 None,
+                Some(&memory_type),
+                Some(confidence),
             );
         }
     }

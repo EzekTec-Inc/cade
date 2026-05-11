@@ -2118,3 +2118,29 @@ Added `auto_extract_facts` which runs immediately after `auto_update_active_goal
 ```sh
 git checkout HEAD^ -- crates/cade-server/src/server/consolidation.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T01:30:00Z
+**Summary of change:** Implement Phase C of Memory System Rework (Confidence Decay and Multi-Agent Sync).
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+- `crates/cade-server/src/server/consolidation.rs`
+
+**Reason:**
+Phase C finalizes the memory system rework. It addresses the issues of older memory blocks not decaying over time and subagent memory discoveries not cleanly merging their typed parameters (`memory_type`, `confidence`) back into the parent's memory context.
+
+**Previous behavior:**
+- Confidence values for memory blocks remained static forever.
+- `smart_memory_merge` used the base `upsert_memory_block` for returning merged memories, silently losing typing and confidence scores discovered by the subagent.
+
+**New behavior:**
+- Introduced `decay_stale_memories` inside `sqlite/memory.rs`, which applies a 5% confidence penalty (`MAX(0.1, confidence * 0.95)`) to non-pinned blocks that haven't been accessed for a threshold of turns.
+- Hooked this decay logic directly into `consolidate_agent` so it runs continuously in the background during normal operation.
+- Updated `WritebackFact` to extract `memory_type` and `confidence` alongside the base text values.
+- `write_back_subagent_memory` and `smart_memory_merge` now both correctly leverage `upsert_memory_block_typed` to preserve the subagent's typed memory classifications during conflict resolution and write-back.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-store/src/sqlite/memory.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-server/src/server/consolidation.rs
+```

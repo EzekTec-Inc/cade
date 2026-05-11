@@ -674,6 +674,14 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             prune_before,
         );
     }
+
+    // ── P9: Decay confidence of stale memories ─────────────────────────────────
+    // Phase C: Memories that haven't been accessed recently decay in confidence.
+    if let Ok(decayed) = cade_store::sqlite::memory::decay_stale_memories(&state.db, agent_id, current_turn, 20) {
+        if decayed > 0 {
+            tracing::debug!("consolidate [{}]: Phase C decayed confidence for {} stale memory blocks", agent_id, decayed);
+        }
+    }
 }
 
 // ── P7: active_goal auto-update ───────────────────────────────────────────────

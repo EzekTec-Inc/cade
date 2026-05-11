@@ -122,6 +122,27 @@ pub fn list_agents_for_block(db: &Db, block_id: &str) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Returns (label, value, description, memory_type, confidence) tuples ordered by label.
+pub fn get_memory_blocks_with_provenance(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String, f64)>> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare(
+        "SELECT b.label, b.value, b.description, b.memory_type, b.confidence 
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 ORDER BY b.label",
+    )?;
+    let rows = stmt.query_map(params![agent_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2).unwrap_or_default(),
+            row.get::<_, String>(3).unwrap_or_else(|_| "generic".to_string()),
+            row.get::<_, f64>(4).unwrap_or(1.0),
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Like `get_memory_blocks` but includes the block_id as the first tuple element.
 /// Returns (block_id, label, value, description) ordered by label.
 pub fn get_memory_blocks_with_ids(
@@ -946,6 +967,33 @@ pub fn bump_block_access(db: &Db, agent_id: &str, labels: &[&str]) {
     }
 }
 
+/// Phase C: Decay stale memories over time.
+/// Reduces the confidence of blocks that have been idle (not accessed) for a given number of turns.
+/// `pinned` blocks are immune to decay.
+pub fn decay_stale_memories(
+    db: &Db,
+    agent_id: &str,
+    current_turn: i64,
+    idle_threshold: i64,
+) -> Result<usize> {
+    let conn = db.lock();
+    let n = conn.execute(
+        "UPDATE shared_memory_blocks 
+         SET confidence = MAX(0.1, confidence * 0.95)
+         WHERE tier != 'pinned'
+           AND (?1 - MAX(last_turn, last_access_turn)) >= ?2
+           AND id IN (
+               SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?3
+           )",
+        params![current_turn, idle_threshold, agent_id],
+    )?;
+    
+    if n > 0 {
+        tracing::debug!("decay_stale_memories: decayed confidence for {} blocks of agent {}", n, agent_id);
+    }
+    Ok(n)
+}
+
 /// Promote 'short' blocks idle for >= threshold turns to 'long'.
 /// 'pinned' blocks are never promoted. Returns number of blocks promoted.
 ///
@@ -1113,30 +1161,24 @@ const WRITEBACK_EXCLUDE: &[&str] = &[
     "skills",
 ];
 
-/// A fact extracted from the subagent's memory for write-back.
 #[derive(Debug, Clone)]
 pub struct WritebackFact {
     pub label: String,
     pub value: String,
     pub description: String,
+    pub memory_type: String,
+    pub confidence: f64,
 }
 
-/// Extract typed facts from a subagent's memory and write them to the
-/// parent agent's memory, prefixed with `subagent:` so the parent can
-/// distinguish inherited knowledge.
-///
-/// Called just before the ephemeral subagent DB row is deleted.
-///
-/// Returns the number of facts written back.
 pub fn extract_subagent_memory_for_writeback(
     db: &Db,
     subagent_id: &str,
 ) -> Vec<WritebackFact> {
-    let blocks = get_memory_blocks(db, subagent_id).unwrap_or_default();
+    let blocks = get_memory_blocks_with_provenance(db, subagent_id).unwrap_or_default();
 
     blocks
         .into_iter()
-        .filter(|(label, value, _)| {
+        .filter(|(label, value, _, _, _)| {
             // Skip excluded labels.
             if WRITEBACK_EXCLUDE.contains(&label.as_str()) {
                 return false;
@@ -1157,10 +1199,12 @@ pub fn extract_subagent_memory_for_writeback(
             }
             true
         })
-        .map(|(label, value, desc)| WritebackFact {
+        .map(|(label, value, desc, memory_type, confidence)| WritebackFact {
             label,
             value,
             description: desc,
+            memory_type,
+            confidence,
         })
         .collect()
 }
@@ -1182,13 +1226,15 @@ pub fn write_back_subagent_memory(
             Some(format!("{} (from subagent {subagent_id})", fact.description))
         };
 
-        if upsert_memory_block(
+        if crate::sqlite::upsert_memory_block_typed(
             db,
             parent_agent_id,
             &parent_label,
             &fact.value,
             desc.as_deref(),
             None,
+            Some(&fact.memory_type),
+            Some(fact.confidence),
         )
         .is_ok()
         {
