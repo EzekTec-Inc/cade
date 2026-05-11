@@ -165,57 +165,74 @@ impl OpenAiProvider {
             bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
         };
         
-        let messages: Vec<Value> = req
-            .messages
-            .iter()
-            .map(|m| {
-                match m.role.as_str() {
-                    "tool" => json!({
-                        "role": "tool",
-                        // OpenAI rejects null tool_call_id — fall back to empty string
-                        // so the message is at least structurally valid.
-                        "tool_call_id": m.tool_call_id.as_deref().unwrap_or(""),
-                        "content": m.content
-                    }),
-                    "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
-                        let tcs: Vec<Value> = m.tool_calls.as_deref().unwrap_or_default().iter().map(|tc| json!({
+        let mut combined_system = String::new();
+        let mut processed_messages = Vec::new();
+
+        for m in &req.messages {
+            if m.role == "system" {
+                if !combined_system.is_empty() {
+                    combined_system.push_str("\n\n");
+                }
+                combined_system.push_str(&m.content);
+            } else {
+                processed_messages.push(m);
+            }
+        }
+
+        let mut json_messages = Vec::new();
+        
+        if !combined_system.is_empty() {
+            let role = if is_o_series { "developer" } else { "system" };
+            json_messages.push(json!({"role": role, "content": combined_system}));
+        }
+
+        for m in processed_messages {
+            let value = match m.role.as_str() {
+                "tool" => json!({
+                    "role": "tool",
+                    // OpenAI rejects null tool_call_id — fall back to empty string
+                    // so the message is at least structurally valid.
+                    "tool_call_id": m.tool_call_id.as_deref().unwrap_or(""),
+                    "content": m.content
+                }),
+                "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
+                    let tcs: Vec<Value> = m.tool_calls.as_deref().unwrap_or_default().iter().map(|tc| json!({
                         "id": tc.id,
                         "type": "function",
                         "function": { "name": tc.name, "arguments": tc.arguments.to_string() }
                     })).collect();
-                        // OpenAI requires `content` to be null (not "") when tool_calls present
-                        let content = if m.content.is_empty() {
-                            Value::Null
-                        } else {
-                            Value::String(m.content.clone())
-                        };
-                        json!({"role": "assistant", "content": content, "tool_calls": tcs})
-                    }
-                    _ => {
-                        // When images are attached, build a multi-part content array.
-                        // OpenAI vision format: [{"type":"image_url","image_url":{"url":"data:…"}}, …]
-                        if let Some(images) = &m.images
-                            && !images.is_empty()
-                        {
-                            let mut parts: Vec<Value> = images.iter().map(|img| json!({
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": format!("data:{};base64,{}", img.media_type, img.data)
-                                }
-                            })).collect();
-                            if !m.content.is_empty() {
-                                parts.push(json!({"type": "text", "text": m.content}));
+                    // OpenAI requires `content` to be null (not "") when tool_calls present
+                    let content = if m.content.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(m.content.clone())
+                    };
+                    json!({"role": "assistant", "content": content, "tool_calls": tcs})
+                }
+                _ => {
+                    // When images are attached, build a multi-part content array.
+                    if let Some(images) = &m.images
+                        && !images.is_empty()
+                    {
+                        let mut parts: Vec<Value> = images.iter().map(|img| json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", img.media_type, img.data)
                             }
-                            return json!({"role": m.role, "content": parts});
+                        })).collect();
+                        if !m.content.is_empty() {
+                            parts.push(json!({"type": "text", "text": m.content}));
                         }
-                        // o-series models use "developer" instead of "system"
-                        let role = if m.role == "system" && is_o_series { "developer" } else { m.role.as_str() };
-                        json!({"role": role, "content": m.content})
+                        json!({"role": m.role, "content": parts})
+                    } else {
+                        json!({"role": m.role, "content": m.content})
                     }
                 }
-            })
-            .collect();
-        json!(messages)
+            };
+            json_messages.push(value);
+        }
+
+        json!(json_messages)
     }
 
     fn parse_response(body: &Value) -> CompletionResponse {

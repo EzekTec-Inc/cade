@@ -1988,3 +1988,23 @@ A background subagent running the `security-reviewer` skill highlighted several 
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-web
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T23:15:00Z
+**Summary of change:** Fix OpenRouter 400 Bad Request error by collapsing consecutive system messages.
+**Files modified:**
+- `crates/cade-ai/src/openai.rs`
+
+**Reason:**
+CADE injects multiple `system` messages (static vs dynamic memory tiers) into the context window. Google AI Studio models (like `gemma-4-26b-a4b-it:free`) accessed via OpenRouter strictly reject requests with multiple `system` role messages, resulting in a 400 Bad Request error from the upstream provider. 
+
+**Previous behavior:**
+`to_openai_messages` mapped each `LlmMessage` 1:1 to the OpenAI schema format, allowing multiple `system` elements in the `messages` array.
+
+**New behavior:**
+`to_openai_messages` now aggregates and concatenates all `system` messages into a single combined `system` message at the beginning of the payload array. This ensures compatibility with strict providers while retaining full context.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-ai/src/openai.rs
+\`\`\`
