@@ -3,7 +3,7 @@
 /// Provider priority:
 /// 1. Brave Search API (when `BRAVE_SEARCH_API_KEY` is set) — best results
 /// 2. DuckDuckGo Instant Answers API (free, no key) — fallback
-use reqwest::Client;
+
 use serde_json::Value;
 
 use crate::Result;
@@ -46,17 +46,13 @@ pub async fn web_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> 
 // region:    --- Brave Search
 
 async fn brave_search(query: &str, limit: usize, api_key: &str) -> Result<Vec<SearchResult>> {
-    let client = Client::builder()
-        .user_agent("CADE/0.2 (+https://github.com/EzekTec-Inc/CADE)")
-        .build()?;
-
     let url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}&count={}&search_lang=en",
         urlencoding::encode(query),
         limit.min(20)
     );
 
-    let resp = client
+    let resp = crate::SHARED_CLIENT
         .get(&url)
         .header("Accept", "application/json")
         .header("Accept-Encoding", "gzip")
@@ -99,22 +95,14 @@ async fn brave_search(query: &str, limit: usize, api_key: &str) -> Result<Vec<Se
 
 // region:    --- DuckDuckGo
 
-/// DuckDuckGo Instant Answers API — free, no API key required.
-///
-/// Note: This returns instant answers and related topics, not a full
-/// ranked list of search results. For production use, consider Brave API.
 async fn ddg_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-    let client = Client::builder()
-        .user_agent("CADE/0.2 (+https://github.com/EzekTec-Inc/CADE)")
-        .build()?;
-
     // DuckDuckGo Instant Answers API
     let url = format!(
         "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
         urlencoding::encode(query)
     );
 
-    let resp = client.get(&url).send().await?;
+    let resp = crate::SHARED_CLIENT.get(&url).send().await?;
     let body: Value = resp.json().await?;
 
     let mut results: Vec<SearchResult> = Vec::new();

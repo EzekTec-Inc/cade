@@ -90,7 +90,7 @@ fn parse_html(url_str: &str, html: &str, max_chars: usize) -> Result<FetchedDoc>
     let title = extract_title(&document).unwrap_or_else(|| url_str.to_string());
 
     // -- Remove noise elements
-    let noise_selectors = [
+    let noise_selectors_str = [
         "script",
         "style",
         "noscript",
@@ -111,6 +111,10 @@ fn parse_html(url_str: &str, html: &str, max_chars: usize) -> Result<FetchedDoc>
         "input",
         "select",
     ];
+    let noise_selectors: Vec<Selector> = noise_selectors_str
+        .into_iter()
+        .filter_map(|s| Selector::parse(s).ok())
+        .collect();
 
     // -- Extract main content
     // Priority: <main>, <article>, [role=main], then fallback to <body>
@@ -183,7 +187,7 @@ fn extract_text_from_node(
     _document: &Html,
     _html: &str,
     node: &scraper::ElementRef<'_>,
-    _noise_selectors: &[&str],
+    noise_selectors: &[Selector],
 ) -> String {
     // Walk the subtree and collect text from paragraph-level elements
     let mut text = String::new();
@@ -205,13 +209,14 @@ fn extract_text_from_node(
         "article",
     ];
 
-    collect_text_recursive(node, &block_tags, &mut text, 0);
+    collect_text_recursive(node, &block_tags, noise_selectors, &mut text, 0);
     text
 }
 
 fn collect_text_recursive(
     node: &scraper::ElementRef<'_>,
     block_tags: &[&str],
+    noise_selectors: &[Selector],
     out: &mut String,
     depth: usize,
 ) {
@@ -219,24 +224,14 @@ fn collect_text_recursive(
         return;
     } // avoid deep recursion on malformed HTML
 
-    let tag = node.value().name().to_lowercase();
-
-    // Skip noise tags entirely
-    if matches!(
-        tag.as_str(),
-        "script"
-            | "style"
-            | "noscript"
-            | "nav"
-            | "footer"
-            | "header"
-            | "aside"
-            | "form"
-            | "button"
-            | "input"
-    ) {
-        return;
+    // Skip noise elements
+    for selector in noise_selectors {
+        if selector.matches(node) {
+            return;
+        }
     }
+
+    let tag = node.value().name().to_lowercase();
 
     if block_tags.contains(&tag.as_str()) {
         // Collect direct text + recurse into inline children
@@ -250,7 +245,7 @@ fn collect_text_recursive(
         // Recurse into children
         for child in node.children() {
             if let Some(el) = scraper::ElementRef::wrap(child) {
-                collect_text_recursive(&el, block_tags, out, depth + 1);
+                collect_text_recursive(&el, block_tags, noise_selectors, out, depth + 1);
             }
         }
     }

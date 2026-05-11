@@ -1956,3 +1956,35 @@ git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-cli crates/cade-server crates/cade-askpass
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T23:05:00Z
+**Summary of change:** Resolve security vulnerabilities and performance bottlenecks in `cade-web` identified by the subagent review.
+**Files modified:**
+- `crates/cade-web/src/lib.rs`
+- `crates/cade-web/src/fetch.rs`
+- `crates/cade-web/src/search.rs`
+
+**Reason:**
+A background subagent running the `security-reviewer` skill highlighted several issues in the `cade-web` crate:
+1. SSRF vulnerability in `fetch_doc` where malicious URLs could target internal/private networks.
+2. Memory Exhaustion DoS vulnerability in `fetch_doc` where a server could return a massive response that is read completely into memory.
+3. Performance bottleneck where a new `reqwest::Client` was created for every web request.
+4. Unused `noise_selectors` in HTML parsing that left unwanted elements like nav and footer tags in the output.
+
+**Previous behavior:**
+- `fetch_doc` did not resolve domains or block internal IP addresses.
+- `resp.text().await` read the entire HTTP response body indiscriminately before truncating.
+- `Client::builder().build()` was called on every search or fetch.
+- `collect_text_recursive` extracted text from all matching tags, ignoring the `noise_selectors`.
+
+**New behavior:**
+- Created a `SHARED_CLIENT` using `std::sync::LazyLock` in `lib.rs` that is reused by both `fetch.rs` and `search.rs`.
+- `fetch_doc` now resolves the target URL's host to IP addresses using `tokio::net::lookup_host` and enforces a strict blocklist against loopback, unspecified, multicast, private, and link-local IPv4 addresses to mitigate SSRF.
+- `fetch_doc` now checks the `Content-Length` header (rejecting >10MB) and streams the response body using `bytes_stream()`, maintaining a hard 10MB limit during download to mitigate Memory Exhaustion.
+- `collect_text_recursive` and `extract_text_from_node` now properly accept and evaluate the HTML nodes against the compiled CSS `noise_selectors`, skipping `<nav>`, `<footer>`, `.ad`, etc.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-web
+\`\`\`
