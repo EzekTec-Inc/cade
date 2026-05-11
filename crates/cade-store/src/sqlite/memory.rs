@@ -436,35 +436,31 @@ pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Resu
 
 // ── A3: Provenance helpers ───────────────────────────────────────────────────
 
-/// Stamp provenance metadata on a memory block after a write.
-///
-/// `source_turn` is the agent's turn counter at write time.
-/// `source_tool_call_id` is the tool_call_id that triggered the write
-/// (stored in the existing `source_te_id` column).
-///
-/// Both are optional — callers outside the agentic loop (e.g. consolidation,
-/// agent creation) may not have a tool_call_id.
 pub fn stamp_provenance(
     db: &Db,
     agent_id: &str,
     label: &str,
     source_turn: Option<i64>,
+    source_turn_id: Option<&str>,
+    source_tool_id: Option<&str>,
     source_tool_call_id: Option<&str>,
 ) {
-    if source_turn.is_none() && source_tool_call_id.is_none() {
+    if source_turn.is_none() && source_tool_call_id.is_none() && source_turn_id.is_none() && source_tool_id.is_none() {
         return;
     }
     let conn = db.lock();
     let _ = conn.execute(
         "UPDATE shared_memory_blocks
          SET source_turn = COALESCE(?1, source_turn),
-             source_te_id = COALESCE(?2, source_te_id)
+             source_te_id = COALESCE(?2, source_te_id),
+             source_turn_id = COALESCE(?3, source_turn_id),
+             source_tool_id = COALESCE(?4, source_tool_id)
          WHERE id = (
              SELECT b.id FROM shared_memory_blocks b
              JOIN agent_memory_blocks amb ON amb.block_id = b.id
-             WHERE amb.agent_id = ?3 AND b.label = ?4
+             WHERE amb.agent_id = ?5 AND b.label = ?6
          )",
-        params![source_turn, source_tool_call_id, agent_id, label],
+        params![source_turn, source_tool_call_id, source_turn_id, source_tool_id, agent_id, label],
     );
 }
 

@@ -1704,7 +1704,7 @@ fn test_a3_stamp_provenance_sets_columns() -> Result<()> {
     upsert_memory_block(&db, "a1", "fact1", "some fact", None, None)?;
 
     // Stamp provenance
-    stamp_provenance(&db, "a1", "fact1", Some(42), Some("tc-abc-123"));
+    stamp_provenance(&db, "a1", "fact1", Some(42), None, Some("tc-abc-123"), Some("tc-abc-123"));
 
     // Verify columns
     let conn = db.lock();
@@ -1729,9 +1729,9 @@ fn test_a3_stamp_provenance_coalesce_preserves_existing() -> Result<()> {
     upsert_memory_block(&db, "a1", "fact2", "data", None, None)?;
 
     // First stamp sets both
-    stamp_provenance(&db, "a1", "fact2", Some(10), Some("tc-first"));
+    stamp_provenance(&db, "a1", "fact2", Some(10), None, Some("tc-first"), Some("tc-first"));
     // Second stamp with only turn — should not overwrite tc_id
-    stamp_provenance(&db, "a1", "fact2", Some(20), None);
+    stamp_provenance(&db, "a1", "fact2", Some(20), None, None, None);
 
     let conn = db.lock();
     let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
@@ -1755,7 +1755,7 @@ fn test_a3_stamp_provenance_noop_when_both_none() -> Result<()> {
     upsert_memory_block(&db, "a1", "fact3", "data", None, None)?;
 
     // Stamp with both None — should be a no-op
-    stamp_provenance(&db, "a1", "fact3", None, None);
+    stamp_provenance(&db, "a1", "fact3", None, None, None, None);
 
     let conn = db.lock();
     let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(

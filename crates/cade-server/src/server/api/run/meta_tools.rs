@@ -255,6 +255,8 @@ async fn handle_update_memory(
                 agent_id,
                 &label,
                 Some(turn),
+                None,
+                tool_call_id,
                 tool_call_id,
             );
 
@@ -322,7 +324,7 @@ async fn handle_update_memory_typed(
             // A3: Stamp provenance.
             let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
             cade_store::sqlite::memory::stamp_provenance(
-                &state.db, agent_id, &label, Some(turn), tool_call_id,
+                &state.db, agent_id, &label, Some(turn), None, tool_call_id, tool_call_id,
             );
             // A5: Re-chunk.
             cade_store::sqlite::memory::rechunk_block(
@@ -380,7 +382,7 @@ async fn handle_memory_apply_patch(
                 // A3: Stamp provenance.
                 let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
                 cade_store::sqlite::memory::stamp_provenance(
-                    &state.db, agent_id, &label, Some(turn), tool_call_id,
+                    &state.db, agent_id, &label, Some(turn), None, tool_call_id, tool_call_id,
                 );
                 // A5: Re-chunk.
                 cade_store::sqlite::memory::rechunk_block(
@@ -475,7 +477,7 @@ async fn handle_update_memory_field(
             // A3: Stamp provenance.
             let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
             cade_store::sqlite::memory::stamp_provenance(
-                &state.db, agent_id, &label, Some(turn), tool_call_id,
+                &state.db, agent_id, &label, Some(turn), None, tool_call_id, tool_call_id,
             );
             // A5: Re-chunk.
             cade_store::sqlite::memory::rechunk_block(

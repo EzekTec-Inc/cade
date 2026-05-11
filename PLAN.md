@@ -2048,3 +2048,25 @@ Added Migration 14 to inject `source_turn_id` and `source_tool_id` TEXT columns.
 ```sh
 git checkout HEAD^ -- crates/cade-store/src/sqlite/mod.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T00:30:00Z
+**Summary of change:** Implement Phase A.2 of Memory System Rework (Provenance Tracking).
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs`
+- `crates/cade-store/src/sqlite/memory/tests.rs`
+- `crates/cade-server/src/server/api/run/meta_tools.rs`
+
+**Reason:**
+Phase A.2 updates `update_memory` tools so every recorded fact points back to the exact turn and tool that generated it, creating a verifiable chain of truth. `stamp_provenance` now handles explicit `source_turn_id` and `source_tool_id`. 
+
+**Previous behavior:**
+`stamp_provenance` only tracked `source_turn` and `source_tool_call_id` in legacy columns (`source_te_id`).
+
+**New behavior:**
+`stamp_provenance` now updates `source_turn_id` and `source_tool_id` explicitly. The server's `meta_tools.rs` handlers pass the `tool_call_id` to these new provenance parameters. Test calls were also adapted to match the new signature.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-store crates/cade-server
+```
