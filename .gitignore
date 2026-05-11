@@ -1,4 +1,5 @@
 /target
+.cade-db.key
 .cade/
 .fastembed_cache/
 .cargo/
