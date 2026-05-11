@@ -121,7 +121,7 @@ pub(super) fn filter_subagent_tools(
             match allowed {
                 cade_agent::subagents::SubagentTools::All => true,
                 cade_agent::subagents::SubagentTools::Readonly => {
-                    matches!(name, "bash" | "read_file" | "glob" | "grep" | "search_memory" | "conversation_search" | "archival_memory_search" | "recall")
+                    matches!(name, "read_file" | "glob" | "grep" | "search_memory" | "conversation_search" | "archival_memory_search" | "recall")
                 }
                 cade_agent::subagents::SubagentTools::List(names) => names.iter().any(|n| n == name),
                 cade_agent::subagents::SubagentTools::Restricted { allowed_tools, .. } => {
@@ -406,7 +406,14 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 .filter_map(|t| t.json_schema)
                 .collect()
         };
-        filter_subagent_tools(raw, def_opt.map(|d| &d.tools).unwrap_or(&cade_agent::subagents::SubagentTools::All))
+        let tools_filter = def_opt.map(|d| &d.tools).unwrap_or_else(|| {
+            if cfg.mode == "plan" {
+                &cade_agent::subagents::SubagentTools::Readonly
+            } else {
+                &cade_agent::subagents::SubagentTools::All
+            }
+        });
+        filter_subagent_tools(raw, tools_filter)
     };
 
     let mut messages = messages_init;

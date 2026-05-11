@@ -57,7 +57,11 @@ impl Repl {
         // block every write/execute tool. Subagents should have at least the
         // same authority as their parent, otherwise they can only read.
         let permissions = cade_core::permissions::PermissionManager::new(
-            self.permissions.mode(),
+            if cfg.mode == "plan" {
+                cade_core::permissions::PermissionMode::Plan
+            } else {
+                self.permissions.mode()
+            },
         );
         let call_id_owned = call_id.to_string();
         let bg_results = Arc::clone(&self.background_results);
@@ -167,7 +171,8 @@ impl Repl {
                     (existing_id, false)
                 } else {
                     // Build system prompt + model via shared config methods
-                    let final_system_prompt = cfg.resolve_system_prompt(def_opt.as_ref());
+                    let system_prompt_base = cfg.resolve_system_prompt(def_opt.as_ref());
+                    let final_system_prompt = format!("{system_prompt_base}\n\nTask: {prompt}");
                     let final_description   = cfg.ephemeral_description();
                     let model = cfg
                         .resolve_model(def_opt.as_ref())

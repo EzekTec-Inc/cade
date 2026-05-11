@@ -144,7 +144,12 @@ where
     F: Fn(String) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = PasswordResponse> + Send + 'static,
 {
+    use tokio::io::AsyncReadExt;
+    
     let (reader, mut writer) = stream.into_split();
+    // Security: Wrap reader in a 4KB take() limit to prevent Memory Exhaustion DoS
+    // from malicious local processes sending infinite data without newlines.
+    let reader = reader.take(4096);
     let mut lines = BufReader::new(reader).lines();
 
     // ── Phase 1: AUTH handshake ──────────────────────────────────

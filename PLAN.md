@@ -1928,3 +1928,31 @@ Removed the unused `serde_json::json` import and the unused `clone_box` trait me
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T22:30:00Z
+**Summary of change:** Fix background subagent prompt-dropping bug and ensure plan mode restricts destructive operations. Mitigate Memory Exhaustion DoS vulnerability in `cade-askpass`.
+**Files modified:**
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+- `crates/cade-askpass/src/server.rs`
+
+**Reason:**
+1. **Background Subagent Bug:** Background subagents were losing their system prompt context because `prompt` was passed only as an ephemeral user message which could be truncated if the context window filled up during headless looping. This caused subagents to enter a stalled amnesiac state.
+2. **Plan Mode Fix:** `PermissionMode::Plan` blocked write operations natively, but `bash` was incorrectly allowed in `SubagentTools::Readonly` list, providing subagents a loophole.
+3. **Security Review (`cade-askpass`):** A security review identified a Memory Exhaustion DoS (CWE-400) vulnerability where a malicious local process could connect to the IPC TCP server and stream infinite data without a newline, causing OOM crashes since `lines.next_line()` had no bounds limit.
+
+**Previous behavior:**
+- Headless background subagents lost task context when the token budget was exhausted.
+- `bash` was present in `SubagentTools::Readonly`.
+- `cade-askpass` IPC server read unbounded lines into memory during the `AUTH` and `PROMPT` handshakes.
+
+**New behavior:**
+- Appended `\n\nTask: {prompt}` directly to the background subagent's `system_prompt` so it persists immutably.
+- Explicitly removed `bash` from `SubagentTools::Readonly` so that subagents in `plan` mode must rely purely on `read_file`, `grep`, and `glob`.
+- Hard-capped the TCP stream reader in `cade-askpass` using `reader.take(4096)`, mitigating any possibility of memory exhaustion while allowing ample space for credentials and prompt texts.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-cli crates/cade-server crates/cade-askpass
+\`\`\`
