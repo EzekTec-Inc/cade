@@ -748,6 +748,9 @@ async fn main() -> Result<()> {
         std::sync::Arc::from(b)
     };
 
+    // Extract settings values needed for Repl::new before moving `settings` into Arc.
+    let initial_reasoning = args.reasoning.clone().or_else(|| settings.reasoning_effort());
+
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));
     let session_arc = Arc::new(Mutex::new(session));
@@ -760,7 +763,7 @@ async fn main() -> Result<()> {
         agent.name,
         permissions,
         initial_model,
-        args.reasoning.clone(),
+        initial_reasoning,
         settings_arc,
         session_arc,
         cwd.clone(),

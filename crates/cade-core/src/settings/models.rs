@@ -127,6 +127,10 @@ pub struct GlobalSettings {
     /// Capabilities to disable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disable_capabilities: Vec<String>,
+
+    /// Default reasoning effort for models that support it (e.g. o1, o3-mini).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -261,6 +265,9 @@ pub struct LocalSettings {
     /// Overrides project and global settings; use for machine-local servers.
     #[serde(default, rename = "mcpServers")]
     pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
+    /// Local override for reasoning effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 // region:    --- Tests

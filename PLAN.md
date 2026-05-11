@@ -2144,3 +2144,30 @@ Phase C finalizes the memory system rework. It addresses the issues of older mem
 ```sh
 git checkout HEAD^ -- crates/cade-store/src/sqlite/memory.rs crates/cade-server/src/server/api/run/subagent.rs crates/cade-server/src/server/consolidation.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T12:35:00Z
+**Summary of change:** Persist `reasoning_effort` across CADE restarts.
+**Files modified:**
+- `crates/cade-core/src/settings/models.rs`
+- `crates/cade-core/src/settings/resolver.rs`
+- `crates/cade-cli/src/cli/repl/commands.rs`
+- `src/main.rs`
+
+**Reason:**
+The reasoning effort setting (changed via the `/reason` command) was previously ephemeral, resetting to `None` on every restart. To improve UX, this value is now persisted in the local settings (`.cade/settings.local.json`) or global settings fallback, allowing CADE to remember the user's preferred reasoning tier across sessions.
+
+**Previous behavior:**
+- `/reason` updated only the in-memory state of the REPL.
+- CADE initialized with `args.reasoning` falling back to `None`.
+
+**New behavior:**
+- Added `reasoning_effort: Option<String>` to `GlobalSettings` and `LocalSettings`.
+- `SettingsManager` now exposes `reasoning_effort()` and `set_reasoning_effort(effort)` methods, with the latter explicitly saving to local settings.
+- The `/reason` command automatically saves the selected effort to disk via `SettingsManager`.
+- Startup logic in `src/main.rs` falls back to `settings.reasoning_effort()` if the `--reasoning` CLI flag is not provided.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-core crates/cade-cli src/main.rs
+```

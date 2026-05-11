@@ -181,6 +181,18 @@ impl SettingsManager {
         &self.local.pinned_agents
     }
 
+    /// Resolve reasoning effort: command line args (if provided) > local settings > global settings.
+    pub fn reasoning_effort(&self) -> Option<String> {
+        self.local.reasoning_effort.clone()
+            .or_else(|| self.global.reasoning_effort.clone())
+    }
+
+    /// Set reasoning effort and save to local settings.
+    pub fn set_reasoning_effort(&mut self, effort: Option<String>) -> Result<()> {
+        self.local.reasoning_effort = effort;
+        self.save_local()
+    }
+
     pub fn global(&self) -> &GlobalSettings {
         &self.global
     }
@@ -203,6 +215,11 @@ impl SettingsManager {
     /// Persist global settings to disk.
     pub fn save_global(&self) -> Result<()> {
         Self::save_json(&self.global_path, &self.global)
+    }
+
+    /// Persist local settings to disk.
+    pub fn save_local(&self) -> Result<()> {
+        Self::save_json(&self.local_path, &self.local)
     }
     pub fn local(&self) -> &LocalSettings {
         &self.local

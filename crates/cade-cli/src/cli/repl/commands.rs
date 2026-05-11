@@ -388,6 +388,11 @@ impl Repl {
                 } else {
                     let effort = if r == "none" { None } else { Some(r.clone()) };
                     *self.reasoning_effort.lock() = effort.clone();
+                    
+                    if let Err(e) = self.settings.lock().set_reasoning_effort(effort.clone()) {
+                        self.tui_err(format!("Failed to save reasoning effort to settings: {e}"));
+                    }
+
                     {
                         let mut app = self.app.lock();
                         app.reasoning_effort = effort;
