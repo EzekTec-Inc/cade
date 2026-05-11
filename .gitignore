@@ -20,3 +20,5 @@ ARCHITECTURE.md
 PLAN.md
 crates/cade-gui/dist/
 crates/cade-gui/pkg/
+
+.serena/
