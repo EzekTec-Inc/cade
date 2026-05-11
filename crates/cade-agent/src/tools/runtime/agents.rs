@@ -14,7 +14,7 @@ impl ToolRuntime {
         }
 
         // Try to resolve target to an agent ID
-        let target_id = match self.client.list_agents().await {
+        let target_id = match self.storage.list_agents().await {
             Ok(agents) => {
                 if let Some(agent) = agents.iter().find(|a| a.id == target || a.name == target) {
                     agent.id.clone()
@@ -25,25 +25,12 @@ impl ToolRuntime {
             Err(e) => return (format!("Failed to query agents: {e}"), true),
         };
 
-        match self
-            .client
-            .stream_message(&target_id, &message, |_| {})
-            .await
-        {
-            Ok(messages) => {
-                // Ensure we get all tool outputs if it used tools
-                let mut out = String::new();
-                for msg in messages {
-                    if let Some(text) = msg.assistant_text()
-                        && !text.is_empty()
-                    {
-                        out.push_str(text);
-                    }
-                }
-                if out.trim().is_empty() {
+        match self.storage.message_agent(&self.agent_id, &target_id, &message).await {
+            Ok(response) => {
+                if response.trim().is_empty() {
                     ("Target agent returned an empty response".to_string(), false)
                 } else {
-                    (out.trim().to_string(), false)
+                    (response.trim().to_string(), false)
                 }
             }
             Err(e) => (format!("Failed to message agent: {e}"), true),

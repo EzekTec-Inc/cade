@@ -45,6 +45,7 @@ getrandom = { workspace = true }
 # -- Embedded WASM dashboard assets (built by `trunk build` in cade-gui)
 rust-embed = "8.11.0"
 lru = "0.16"
+async-trait.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

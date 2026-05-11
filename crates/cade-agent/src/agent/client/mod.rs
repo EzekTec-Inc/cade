@@ -630,3 +630,4 @@ impl HttpTransport {
 pub mod extensions;
 pub mod memory;
 pub mod messages;
+pub mod storage_impl;

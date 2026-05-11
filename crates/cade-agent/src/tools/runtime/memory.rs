@@ -13,7 +13,7 @@ impl ToolRuntime {
         }
 
         if operation == "delete" {
-            return match self.client.delete_memory(&self.agent_id, &label).await {
+            return match self.storage.delete_memory(&self.agent_id, &label).await {
                 Ok(_) => (format!("Memory block '{label}' deleted"), false),
                 Err(e) => (format!("Failed to delete memory block: {e}"), true),
             };
@@ -27,8 +27,7 @@ impl ToolRuntime {
         }
 
         let final_value = if operation == "append" {
-            let existing = self
-                .client
+            let existing = self.storage
                 .get_memory(&self.agent_id)
                 .await
                 .unwrap_or_default()
@@ -45,9 +44,8 @@ impl ToolRuntime {
             value
         };
 
-        match self
-            .client
-            .upsert_memory(&self.agent_id, &label, &final_value, description.as_deref())
+        match self.storage
+            .upsert_memory_with_limit(&self.agent_id, &label, &final_value, description.as_deref(), None)
             .await
         {
             Ok(_) => (format!("Memory block '{label}' updated"), false),
@@ -58,9 +56,8 @@ impl ToolRuntime {
                     let trimmed = auto_trim_to_limit(&final_value, limit);
                     let orig = final_value.chars().count();
                     let kept = trimmed.chars().count();
-                    match self
-                        .client
-                        .upsert_memory(&self.agent_id, &label, &trimmed, description.as_deref())
+                    match self.storage
+                        .upsert_memory_with_limit(&self.agent_id, &label, &trimmed, description.as_deref(), None)
                         .await
                     {
                         Ok(_) => (
@@ -88,8 +85,7 @@ impl ToolRuntime {
         }
 
         // Get current value
-        let current = self
-            .client
+        let current = self.storage
             .get_memory(&self.agent_id)
             .await
             .unwrap_or_default()
@@ -101,9 +97,8 @@ impl ToolRuntime {
         // Apply unified diff patch
         match apply_unified_diff(&current, &patch) {
             Ok(new_value) => {
-                match self
-                    .client
-                    .upsert_memory(&self.agent_id, &label, &new_value, description.as_deref())
+                match self.storage
+                    .upsert_memory_with_limit(&self.agent_id, &label, &new_value, description.as_deref(), None)
                     .await
                 {
                     Ok(_) => (
@@ -126,8 +121,7 @@ impl ToolRuntime {
             return ("Error: 'content' is required".to_string(), true);
         }
 
-        match self
-            .client
+        match self.storage
             .store_artifact(
                 &self.agent_id,
                 kind,
@@ -155,7 +149,7 @@ impl ToolRuntime {
         let value = args["value"].as_str().unwrap_or("").to_string();
         let memory_type = args["memory_type"].as_str().unwrap_or("generic");
         let confidence = args["confidence"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
-        let tags: Vec<String> = args["tags"]
+        let _tags: Vec<String> = args["tags"]
             .as_array()
             .map(|a| {
                 a.iter()
@@ -168,16 +162,15 @@ impl ToolRuntime {
             return ("Error: 'label' and 'value' are required".to_string(), true);
         }
 
-        match self
-            .client
-            .upsert_typed_memory(
+        match self.storage
+            .upsert_memory_with_options(
                 &self.agent_id,
                 &label,
                 &value,
-                memory_type,
-                confidence,
-                &tags,
+                Some("Auto-updated typed memory"),
                 None,
+                Some(memory_type),
+                Some(confidence),
             )
             .await
         {
@@ -213,8 +206,7 @@ impl ToolRuntime {
         };
 
         // Fetch existing block
-        let current = self
-            .client
+        let current = self.storage
             .get_memory(&self.agent_id)
             .await
             .unwrap_or_default()
@@ -253,9 +245,8 @@ impl ToolRuntime {
 
         // Serialize and persist
         let new_body = cade_core::structured_patch::serialize_back(&root);
-        match self
-            .client
-            .upsert_memory(&self.agent_id, &label, &new_body, None)
+        match self.storage
+            .upsert_memory_with_limit(&self.agent_id, &label, &new_body, None, None)
             .await
         {
             Ok(_) => (
@@ -286,8 +277,7 @@ impl ToolRuntime {
             );
         }
 
-        match self
-            .client
+        match self.storage
             .add_memory_evidence(&self.agent_id, &label, kind, &reference, excerpt.as_deref())
             .await
         {

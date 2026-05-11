@@ -24,13 +24,13 @@ impl ToolRuntime {
 
         // 2. Create server-side checkpoint record
         let conv_id = self.conversation_id.as_deref();
-        match self
-            .client
+        match self.storage
             .create_checkpoint(
                 &self.agent_id,
+                conv_id,
+                Some("main"),
                 Some(&label),
                 description.as_deref(),
-                conv_id,
                 stash_ref.as_deref(),
                 commit_hash.as_deref(),
             )
@@ -61,7 +61,7 @@ impl ToolRuntime {
         }
 
         // Get the checkpoint to find git info
-        let cp = match self.client.get_checkpoint(&self.agent_id, &cp_id).await {
+        let cp = match self.storage.get_checkpoint(&self.agent_id, &cp_id).await {
             Ok(v) => v,
             Err(e) => return (format!("Checkpoint not found: {e}"), true),
         };
@@ -75,7 +75,7 @@ impl ToolRuntime {
         }
 
         // Mark checkpoint as restored on server
-        if let Err(e) = self.client.restore_checkpoint(&self.agent_id, &cp_id).await {
+        if let Err(e) = self.storage.restore_checkpoint(&self.agent_id, &cp_id).await {
             tracing::warn!("restore_checkpoint server update failed: {e}");
         }
 

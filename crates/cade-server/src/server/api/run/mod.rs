@@ -45,8 +45,9 @@ use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve
 use crate::server::state::AppState;
 
 /// Maximum agentic turns per request (prevents infinite loops).
-mod meta_tools;
+
 mod subagent;
+pub mod storage_impl;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -637,19 +638,40 @@ async fn run_agent_loop(
             // parity).  `intercept_meta_tool` returns Some for tools
             // that need access to AppState (DB, agent_id, sse_tx);
             // returns None to fall through to native + MCP dispatch.
-            let result = if let Some(intercepted) =
-                meta_tools::intercept_meta_tool(&state2, &agent_id2, tc, tx.clone()).await
-            {
-                intercepted
+            let storage_backend = std::sync::Arc::new(storage_impl::ServerStorageBackend { state: state2.clone() });
+            let runtime = cade_agent::tools::runtime::ToolRuntime::new(
+                storage_backend,
+                std::sync::Arc::clone(&state2.mcp),
+                agent_id2.clone(),
+                std::env::current_dir().unwrap_or_default(),
+            );
+            
+            // For interactive tools (run_subagent, etc) that ToolRuntime doesn't handle,
+            // we intercept them server-side using the remaining meta_tools logic or subagent dispatcher.
+            let result = if tc.name == "run_subagent" {
+                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                subagent::handle_run_subagent_tool(&state2, &agent_id2, &tc.id, &args, tx.clone()).await
+            } else if tc.name == "run_parallel_subagents" {
+                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                subagent::handle_run_parallel_subagents_tool(&state2, &agent_id2, &tc.id, &args, tx.clone()).await
+            } else if tc.name == "cancel_subagent" {
+                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                subagent::handle_cancel_subagent_tool(&state2, &tc.id, &args).await
+            } else if let Some(executed) = runtime.execute(tc.id.clone(), &tc.name, &tc.arguments).await {
+                cade_agent::tools::manager::ToolResult {
+                    tool_call_id: executed.tool_call_id,
+                    tool_name: executed.tool_name,
+                    output: executed.output,
+                    is_error: executed.is_error,
+                }
             } else {
-                cade_agent::tools::manager::dispatch(
-                    tc.id.clone(),
-                    &tc.name,
-                    &tc.arguments,
-                    &state2.mcp,
-                    None,
-                )
-                .await
+                // Any other interactive tools that reach here but shouldn't 
+                cade_agent::tools::manager::ToolResult {
+                    tool_call_id: tc.id.clone(),
+                    tool_name: tc.name.clone(),
+                    output: format!("Tool '{}' requires interactive TUI context and is not supported in background server loop.", tc.name),
+                    is_error: true,
+                }
             };
 
             // H3: persist the FULL output to the DB so future build_context

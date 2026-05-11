@@ -730,7 +730,7 @@ impl Repl {
                 .or(args["path"].as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let c = runtime.client.clone();
+            let c = runtime.storage.clone();
             let a = runtime.agent_id.clone();
             tokio::spawn(async move {
                 let _ = c.record_recent_edit(&a, &path).await;

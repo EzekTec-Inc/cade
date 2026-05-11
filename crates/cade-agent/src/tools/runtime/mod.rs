@@ -20,7 +20,7 @@ use cade_core::skills::discover_all_skills;
 
 use cade_core::tool_ids::*;
 
-use crate::agent::client::HttpTransport;
+
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
 use crate::tools::dispatch;
@@ -51,7 +51,7 @@ pub mod skills;
 ///
 /// Create once per session and reuse across turns.
 pub struct ToolRuntime {
-    pub client: Arc<HttpTransport>,
+    pub storage: Arc<dyn crate::backends::storage::StorageBackend>,
     pub mcp: Arc<McpManager>,
     pub agent_id: String,
     pub cwd: PathBuf,
@@ -69,13 +69,13 @@ impl ToolRuntime {
     // -- Constructor
 
     pub fn new(
-        client: Arc<HttpTransport>,
+        storage: Arc<dyn crate::backends::storage::StorageBackend>,
         mcp: Arc<McpManager>,
         agent_id: String,
         cwd: PathBuf,
     ) -> Self {
         Self {
-            client,
+            storage,
             mcp,
             agent_id,
             cwd,
@@ -88,14 +88,14 @@ impl ToolRuntime {
 
     /// Convenience constructor that clones the client and wraps an MCP reference.
     pub fn from_refs(
-        client: &HttpTransport,
+        storage: Arc<dyn crate::backends::storage::StorageBackend>,
         mcp: &McpManager,
         agent_id: &str,
         cwd: PathBuf,
     ) -> Self {
         let _ = mcp;
         Self {
-            client: Arc::new(client.clone()),
+            storage,
             mcp: Arc::new(McpManager::empty()),
             agent_id: agent_id.to_string(),
             cwd,
@@ -151,22 +151,22 @@ impl ToolRuntime {
             UPDATE_MEMORY => self.handle_update_memory(args).await,
             MEMORY_APPLY_PATCH => self.handle_memory_apply_patch(args).await,
             ARCHIVAL_MEMORY_INSERT => {
-                store_memory::ArchivalMemoryInsertTool::run(&self.client, &self.agent_id, args)
+                store_memory::ArchivalMemoryInsertTool::run(&*self.storage, &self.agent_id, args)
                     .await
                     .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
             }
             ARCHIVAL_MEMORY_SEARCH => {
-                store_memory::ArchivalMemorySearchTool::run(&self.client, &self.agent_id, args)
+                store_memory::ArchivalMemorySearchTool::run(&*self.storage, &self.agent_id, args)
                     .await
                     .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
             }
             CONVERSATION_SEARCH => {
-                store_memory::ConversationSearchTool::run(&self.client, &self.agent_id, args)
+                store_memory::ConversationSearchTool::run(&*self.storage, &self.agent_id, args)
                     .await
                     .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
             }
             SEARCH_MEMORY => {
-                store_memory::SearchMemoryTool::run(&self.client, &self.agent_id, args)
+                store_memory::SearchMemoryTool::run(&*self.storage, &self.agent_id, args)
                     .await
                     .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
             }
@@ -236,10 +236,13 @@ impl ToolRuntime {
         // Fire-and-forget tool execution logging
         if self.log_executions {
             let duration_ms = t0.elapsed().as_millis() as u64;
-            self.client.log_tool_execution_spawn(
+            self.storage.log_tool_execution_spawn(
                 self.agent_id.clone(),
+                self.conversation_id.clone(),
+                None, // checkpoint ID not easily available here
+                tool_call_id.clone(),
                 tool_name.to_string(),
-                serde_json::to_string(args).unwrap_or_default(),
+                args.clone(),
                 if output.len() > 1024 {
                     format!("{}…", &output[..1024])
                 } else {
@@ -247,7 +250,7 @@ impl ToolRuntime {
                 },
                 is_error,
                 duration_ms,
-            );
+            ).await;
         }
 
         Some(RuntimeToolResult {
@@ -280,7 +283,7 @@ impl ToolRuntime {
     // region:    --- Checkpoint handlers
 
     async fn handle_list_checkpoints(&self) -> (String, bool) {
-        match self.client.list_checkpoints(&self.agent_id).await {
+        match self.storage.list_checkpoints(&self.agent_id).await {
             Ok(list) if list.is_empty() => ("No checkpoints found.".to_string(), false),
             Ok(list) => {
                 let mut out = format!("{} checkpoint(s):\n", list.len());
@@ -339,12 +342,11 @@ impl ToolRuntime {
     async fn handle_reflect(&self, args: &Value) -> (String, bool) {
         let focus = args["focus"].as_str().map(String::from);
 
-        match self
-            .client
+        match self.storage
             .trigger_reflect(&self.agent_id, focus.as_deref())
             .await
         {
-            Ok(summary) => (format!("Reflection complete: {summary}"), false),
+            Ok(_) => ("Reflection triggered".to_string(), false),
             Err(e) => (format!("Reflection failed: {e}"), true),
         }
     }
@@ -356,7 +358,7 @@ impl ToolRuntime {
     // region:    --- Agent handlers
 
     async fn handle_list_agents(&self) -> (String, bool) {
-        match self.client.list_agents().await {
+        match self.storage.list_agents().await {
             Ok(agents) => {
                 if agents.is_empty() {
                     return ("No other agents found.".to_string(), false);

@@ -29,7 +29,7 @@ impl ArchivalMemoryInsertTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::HttpTransport,
+        client: &dyn crate::backends::storage::StorageBackend,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -48,7 +48,7 @@ impl ArchivalMemoryInsertTool {
         }
 
         let id = client
-            .insert_archival_memory(agent_id, content, &tags)
+            .archival_memory_insert(agent_id, content, Some(&tags))
             .await?;
         Ok(format!("Stored in archival memory. ID: {id}"))
     }
@@ -82,7 +82,7 @@ impl ArchivalMemorySearchTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::HttpTransport,
+        client: &dyn crate::backends::storage::StorageBackend,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -94,7 +94,7 @@ impl ArchivalMemorySearchTool {
         }
 
         let results = client
-            .search_archival_memory(agent_id, query, limit)
+            .archival_memory_search(agent_id, query, Some(limit))
             .await?;
         if results.is_empty() {
             return Ok(format!("No archival memory entries matched '{query}'."));
@@ -157,7 +157,7 @@ impl ConversationSearchTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::HttpTransport,
+        client: &dyn crate::backends::storage::StorageBackend,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -171,7 +171,7 @@ impl ConversationSearchTool {
             .filter(|s| !s.is_empty());
 
         let results = client
-            .search_messages(agent_id, query, conversation_id)
+            .conversation_search(agent_id, query, None)
             .await?;
         if results.is_empty() {
             let scope = match conversation_id {
@@ -230,7 +230,7 @@ impl SearchMemoryTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::HttpTransport,
+        client: &dyn crate::backends::storage::StorageBackend,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -239,7 +239,7 @@ impl SearchMemoryTool {
             return Ok("Error: query cannot be empty".to_string());
         }
 
-        let blocks = client.search_memory(agent_id, query).await?;
+        let blocks = client.search_memory(agent_id, query, None).await?;
         if blocks.is_empty() {
             return Ok(format!(
                 "No memory blocks matched '{query}'. \
@@ -336,7 +336,7 @@ pub fn extract_message_text(msg: &Value) -> String {
 pub struct QueryEventLogTool;
 impl QueryEventLogTool {
     pub async fn run(
-        client: &crate::agent::client::HttpTransport,
+        client: &dyn crate::backends::storage::StorageBackend,
         agent_id: &str,
         args: &serde_json::Value,
     ) -> crate::Result<String> {

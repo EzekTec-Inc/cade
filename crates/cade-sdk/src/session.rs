@@ -101,7 +101,7 @@ impl AgentSession {
 
         let mcp = Arc::new(McpManager::empty());
         let mut runtime = ToolRuntime::new(
-            Arc::clone(&client),
+            Arc::clone(&client) as Arc<dyn cade_agent::backends::storage::StorageBackend>,
             Arc::clone(&mcp),
             agent_id.clone(),
             opts.cwd,

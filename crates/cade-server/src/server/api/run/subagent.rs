@@ -668,24 +668,31 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         emitter.raw_sse_tx(),
                     ))
                     .await
-                } else if let Some(intercepted) = Box::pin(super::meta_tools::intercept_meta_tool(
-                    state,
-                    &subagent_id,
-                    tc,
-                    emitter.raw_sse_tx(),
-                ))
-                .await
-                {
-                    intercepted
                 } else {
-                    cade_agent::tools::manager::dispatch(
-                        tc.id.clone(),
-                        &tc.name,
-                        &tc.arguments,
-                        &state.mcp,
-                        allowed_paths.as_deref(),
-                    )
-                    .await
+                    let storage_backend = std::sync::Arc::new(super::storage_impl::ServerStorageBackend { state: state.clone() });
+                    let mut runtime = cade_agent::tools::runtime::ToolRuntime::new(
+                        storage_backend,
+                        std::sync::Arc::clone(&state.mcp),
+                        subagent_id.clone(),
+                        std::env::current_dir().unwrap_or_default(),
+                    );
+                    runtime.allowed_paths = allowed_paths.clone();
+                    
+                    if let Some(executed) = runtime.execute(tc.id.clone(), &tc.name, &tc.arguments).await {
+                        cade_agent::tools::manager::ToolResult {
+                            tool_call_id: executed.tool_call_id,
+                            tool_name: executed.tool_name,
+                            output: executed.output,
+                            is_error: executed.is_error,
+                        }
+                    } else {
+                        cade_agent::tools::manager::ToolResult {
+                            tool_call_id: tc.id.clone(),
+                            tool_name: tc.name.clone(),
+                            output: format!("Tool '{}' requires interactive TUI context and is not supported in subagent background loop.", tc.name),
+                            is_error: true,
+                        }
+                    }
                 };
 
                 if !tool_result.is_error
