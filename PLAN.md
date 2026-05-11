@@ -2008,3 +2008,43 @@ CADE injects multiple `system` messages (static vs dynamic memory tiers) into th
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-ai/src/openai.rs
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-11T00:10:00Z
+**Summary of change:** Implement Phase A.1 of Memory System Rework (Schema Migration 14 for explicit provenance tracking).
+**Files modified:**
+- `crates/cade-store/src/sqlite/mod.rs`
+
+**Reason:**
+The Memory System Rework addresses the gaps in CADE's flat memory architecture. Phase A.1 implements the foundational schema changes to support provenance tracking. `memory_type` and `confidence` columns already existed from previous migrations, so this adds explicit `source_turn_id` and `source_tool_id` to the `shared_memory_blocks` table and updates `apply_schema` for new installations.
+
+**Previous behavior:**
+`shared_memory_blocks` lacked explicit `source_turn_id` and `source_tool_id` columns to track which turn and tool strictly originated a piece of memory (relying only on vague `source_msg_id` and `source_te_id`).
+
+**New behavior:**
+Added Migration 14 to inject `source_turn_id` and `source_tool_id` TEXT columns. Updated `apply_schema` to include them on fresh DB creation.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-store/src/sqlite/mod.rs
+\`\`\`
+
+---
+**UTC Timestamp:** 2026-05-11T00:10:00Z
+**Summary of change:** Implement Phase A.1 of Memory System Rework (Schema Migration 14 for explicit provenance tracking).
+**Files modified:**
+- `crates/cade-store/src/sqlite/mod.rs`
+
+**Reason:**
+The Memory System Rework addresses the gaps in CADE's flat memory architecture. Phase A.1 implements the foundational schema changes to support provenance tracking. `memory_type` and `confidence` columns already existed from previous migrations, so this adds explicit `source_turn_id` and `source_tool_id` to the `shared_memory_blocks` table and updates `apply_schema` for new installations.
+
+**Previous behavior:**
+`shared_memory_blocks` lacked explicit `source_turn_id` and `source_tool_id` columns to track which turn and tool strictly originated a piece of memory (relying only on vague `source_msg_id` and `source_te_id`).
+
+**New behavior:**
+Added Migration 14 to inject `source_turn_id` and `source_tool_id` TEXT columns. Updated `apply_schema` to include them on fresh DB creation.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-store/src/sqlite/mod.rs
+```

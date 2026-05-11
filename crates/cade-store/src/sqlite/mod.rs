@@ -111,7 +111,10 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             access_count       INTEGER NOT NULL DEFAULT 0,
             last_access_turn   INTEGER NOT NULL DEFAULT 0,
             -- A3 (Migration 12): provenance tracking
-            source_turn        INTEGER
+            source_turn        INTEGER,
+            -- A.1 (Migration 14): explicit provenance tracking
+            source_turn_id     TEXT,
+            source_tool_id     TEXT
         );
 
         CREATE TABLE IF NOT EXISTS agent_memory_blocks (
@@ -685,6 +688,25 @@ fn run_migrations(conn: &Connection) -> Result<()> {
              CREATE INDEX IF NOT EXISTS idx_chunks_block ON memory_chunks(block_id, chunk_index);",
         )?;
         conn.execute("PRAGMA user_version = 13", [])?;
+    }
+
+    // ── Migration 14: A.1 Schema Migration (explicit provenance) ────────────────
+    if current_version < 14 {
+        let r1 = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_turn_id TEXT", []);
+        if let Err(e) = r1 {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                tracing::warn!("Migration 14 (A.1-provenance) ADD COLUMN source_turn_id failed: {e}");
+            }
+        }
+        let r2 = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_tool_id TEXT", []);
+        if let Err(e) = r2 {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                tracing::warn!("Migration 14 (A.1-provenance) ADD COLUMN source_tool_id failed: {e}");
+            }
+        }
+        conn.execute("PRAGMA user_version = 14", [])?;
     }
 
     Ok(())
