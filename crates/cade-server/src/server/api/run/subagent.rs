@@ -150,8 +150,48 @@ fn subagent_timeout_secs() -> u64 {
     }
 }
 
+/// Phase 1: Decoupled State Machine Executor
+/// This struct holds the execution context for a subagent.
+pub struct SubagentExecutor<'a> {
+    pub state: &'a AppState,
+    pub parent_agent_id: &'a str,
+    pub tool_call_id: &'a str,
+    pub sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+}
+
+impl<'a> SubagentExecutor<'a> {
+    pub fn new(
+        state: &'a AppState,
+        parent_agent_id: &'a str,
+        tool_call_id: &'a str,
+        sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    ) -> Self {
+        Self {
+            state,
+            parent_agent_id,
+            tool_call_id,
+            sse_tx,
+        }
+    }
+
+    pub async fn execute(self, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult {
+        handle_run_subagent_tool_inner(self.state, self.parent_agent_id, self.tool_call_id, args, self.sse_tx).await
+    }
+}
+
 /// can render progress cards.
 pub(super) async fn handle_run_subagent_tool(
+    state: &AppState,
+    parent_agent_id: &str,
+    tool_call_id: &str,
+    args: &serde_json::Value,
+    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+) -> cade_agent::tools::manager::ToolResult {
+    let executor = SubagentExecutor::new(state, parent_agent_id, tool_call_id, sse_tx);
+    executor.execute(args).await
+}
+
+pub(super) async fn handle_run_subagent_tool_inner(
     state: &AppState,
     parent_agent_id: &str,
     tool_call_id: &str,

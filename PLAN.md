@@ -1820,3 +1820,23 @@ Agents instantiated via `cade-sdk` bypassed granular path sandboxing entirely an
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-sdk/src/session.rs
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T19:50:00Z
+**Summary of change:** Introduce `SubagentExecutor` to decouple the subagent state machine.
+**Files modified:**
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+Phase 1 of the Subagent Architecture Refactoring Plan calls for dismantling the monolithic `handle_run_subagent_tool` loop. The first foundational step is creating a dedicated struct (`SubagentExecutor`) to hold the execution context, making it easier to incrementally decouple SSE streaming, database environments, and cancellation logic in subsequent passes.
+
+**Previous behavior:**
+The subagent ran via a single massive `handle_run_subagent_tool` function containing the LLM agentic loop, SSE networking, state management, and memory write-backs deeply intertwined.
+
+**New behavior:**
+Introduced `SubagentExecutor` which wraps `AppState`, parent context, and the SSE channel. `handle_run_subagent_tool` now instantiates this executor and calls its `execute` method, delegating the complex internal logic (`handle_run_subagent_tool_inner`) into a stateful struct context.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
+\`\`\`
