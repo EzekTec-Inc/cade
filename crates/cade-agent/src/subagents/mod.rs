@@ -32,8 +32,16 @@ impl std::fmt::Display for SubagentTools {
             Self::All => write!(f, "all"),
             Self::Readonly => write!(f, "readonly"),
             Self::List(v) => write!(f, "{}", v.join(", ")),
-            Self::Restricted { allowed_tools, allowed_paths } => {
-                write!(f, "restricted (tools: [{}], paths: [{}])", allowed_tools.join(", "), allowed_paths.join(", "))
+            Self::Restricted {
+                allowed_tools,
+                allowed_paths,
+            } => {
+                write!(
+                    f,
+                    "restricted (tools: [{}], paths: [{}])",
+                    allowed_tools.join(", "),
+                    allowed_paths.join(", ")
+                )
             }
         }
     }
@@ -45,16 +53,23 @@ impl SubagentTools {
             "all" => Self::All,
             "readonly" | "read-only" | "read_only" => Self::Readonly,
             other => {
-                if other.starts_with('{') {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(other) {
-                        if let (Some(tools), Some(paths)) = (v.get("allowed_tools").and_then(|v| v.as_array()), v.get("allowed_paths").and_then(|v| v.as_array())) {
+                if other.starts_with('{')
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(other)
+                        && let (Some(tools), Some(paths)) = (
+                            v.get("allowed_tools").and_then(|v| v.as_array()),
+                            v.get("allowed_paths").and_then(|v| v.as_array()),
+                        ) {
                             return Self::Restricted {
-                                allowed_tools: tools.iter().filter_map(|t| t.as_str().map(String::from)).collect(),
-                                allowed_paths: paths.iter().filter_map(|p| p.as_str().map(String::from)).collect(),
+                                allowed_tools: tools
+                                    .iter()
+                                    .filter_map(|t| t.as_str().map(String::from))
+                                    .collect(),
+                                allowed_paths: paths
+                                    .iter()
+                                    .filter_map(|p| p.as_str().map(String::from))
+                                    .collect(),
                             };
                         }
-                    }
-                }
                 Self::List(
                     other
                         .split(',')
@@ -272,10 +287,7 @@ pub fn find_subagent<'a>(name: &str, all: &'a [SubagentDef]) -> Option<&'a Subag
 /// Pure: no I/O, no clones except the trivial `Option<&_>` slot — the caller
 /// decides whether to clone the returned definition.
 #[must_use]
-pub fn resolve_subagent_def<'a>(
-    mode: &str,
-    all: &'a [SubagentDef],
-) -> Option<&'a SubagentDef> {
+pub fn resolve_subagent_def<'a>(mode: &str, all: &'a [SubagentDef]) -> Option<&'a SubagentDef> {
     find_subagent(mode, all).or_else(|| find_subagent("worker", all))
 }
 

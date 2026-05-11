@@ -1,21 +1,18 @@
 //! /pricing command handler.
 
-use crate::Result;
 use super::Repl;
+use crate::Result;
 
 impl Repl {
-    pub(crate) async fn cmd_pricing(
-        &mut self,
-        arg: Option<String>,
-    ) -> Result<bool> {
+    pub(crate) async fn cmd_pricing(&mut self, arg: Option<String>) -> Result<bool> {
         match arg.as_deref() {
             Some("sync") => {
                 self.tui_dim("  Fetching live pricing from OpenRouter…");
                 match fetch_openrouter_pricing().await {
                     Ok(rules) => {
                         let count = rules.len();
-                        if let Some(p) = dirs::home_dir()
-                            .map(|h| h.join(".cade").join("pricing.json"))
+                        if let Some(p) =
+                            dirs::home_dir().map(|h| h.join(".cade").join("pricing.json"))
                         {
                             if let Some(parent) = p.parent() {
                                 let _ = std::fs::create_dir_all(parent);
@@ -87,11 +84,16 @@ fn cache_ratios(model_id: &str) -> (f64, f64) {
 /// CADE `PricingRule` format.
 async fn fetch_openrouter_pricing() -> crate::Result<Vec<cade_ai::PricingRule>> {
     let url = "https://openrouter.ai/api/v1/models";
-    let resp = reqwest::get(url).await.map_err(|e| format!("Request failed: {e}"))?;
+    let resp = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()).into());
     }
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse failed: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse failed: {e}"))?;
     let data = body["data"]
         .as_array()
         .ok_or("Missing 'data' array in response")?;

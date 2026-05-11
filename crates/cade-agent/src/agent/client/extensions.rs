@@ -513,11 +513,7 @@ impl HttpTransport {
     ///
     /// Returns the size (chars) of the resulting `session_summary` block,
     /// suitable for surfacing in a toast to the user.
-    pub async fn compact(
-        &self,
-        agent_id: &str,
-        conversation_id: Option<&str>,
-    ) -> Result<usize> {
+    pub async fn compact(&self, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
         let mut url = self.url(&format!("/agents/{agent_id}/compact"));
         if let Some(c) = conversation_id {
             url.push_str(&format!("?conversation_id={c}"));

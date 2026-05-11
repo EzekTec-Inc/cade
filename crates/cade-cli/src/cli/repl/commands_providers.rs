@@ -154,9 +154,7 @@ impl Repl {
         }
         Ok(())
     }
-    pub(crate) async fn cmd_providers(
-        &mut self,
-    ) -> Result<bool> {
+    pub(crate) async fn cmd_providers(&mut self) -> Result<bool> {
         match self.client.list_providers().await {
             Ok(body) => {
                 let empty = vec![];
@@ -209,24 +207,20 @@ impl Repl {
         preset: Option<String>,
         stdout: &mut std::io::Stdout,
     ) -> Result<bool> {
-            self.handle_connect(preset, stdout).await?;
+        self.handle_connect(preset, stdout).await?;
         Ok(false)
     }
 
-    pub(crate) async fn cmd_disconnect(
-        &mut self,
-        name: String,
-    ) -> Result<bool> {
-            if name.is_empty() {
-                self.tui_err("/disconnect requires a provider name");
-            } else {
-                self.tui_dim(format!("  Disconnecting provider '{name}'…"));
-                match self.client.remove_provider(&name).await {
-                    Ok(_) => self.tui_ok(format!("  ✓ Provider '{name}' removed")),
-                    Err(e) => self.tui_err(e.to_string()),
-                }
+    pub(crate) async fn cmd_disconnect(&mut self, name: String) -> Result<bool> {
+        if name.is_empty() {
+            self.tui_err("/disconnect requires a provider name");
+        } else {
+            self.tui_dim(format!("  Disconnecting provider '{name}'…"));
+            match self.client.remove_provider(&name).await {
+                Ok(_) => self.tui_ok(format!("  ✓ Provider '{name}' removed")),
+                Err(e) => self.tui_err(e.to_string()),
             }
+        }
         Ok(false)
     }
-
 }

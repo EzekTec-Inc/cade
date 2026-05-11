@@ -1,4 +1,6 @@
-use crate::colors::{ThemeColorsExt,};
+use crate::app::SummaryState;
+use crate::colors::ThemeColors;
+use crate::colors::ThemeColorsExt;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -6,17 +8,14 @@ use ratatui::{
     text::Span,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use crate::colors::ThemeColors;
-use crate::app::SummaryState;
 
-pub fn render_summary(
-    frame: &mut Frame,
-    state: &SummaryState,
-    area: Rect,
-    colors: &ThemeColors,
-) {
-    let w = (area.width * 80 / 100).max(40).min(area.width.saturating_sub(4));
-    let h = (area.height * 80 / 100).max(10).min(area.height.saturating_sub(4));
+pub fn render_summary(frame: &mut Frame, state: &SummaryState, area: Rect, colors: &ThemeColors) {
+    let w = (area.width * 80 / 100)
+        .max(40)
+        .min(area.width.saturating_sub(4));
+    let h = (area.height * 80 / 100)
+        .max(10)
+        .min(area.height.saturating_sub(4));
 
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(w)) / 2,
@@ -34,7 +33,10 @@ pub fn render_summary(
         .borders(Borders::ALL)
         .border_type(colors.c_border_style())
         .border_style(colors.border_focus())
-        .title(Span::styled(" Conversation Summary ", colors.primary_bold()));
+        .title(Span::styled(
+            " Conversation Summary ",
+            colors.primary_bold(),
+        ));
 
     let paragraph = Paragraph::new(state.text.as_str())
         .block(block)
@@ -46,12 +48,19 @@ pub fn render_summary(
 
     // Scrollbar-like indicator or instructions
     let instructions = " Esc/Enter to close • Up/Down/PgUp/PgDn to scroll ";
-    let instr_x = rect.x + rect.width.saturating_sub(instructions.chars().count() as u16) / 2;
+    let instr_x = rect.x
+        + rect
+            .width
+            .saturating_sub(instructions.chars().count() as u16)
+            / 2;
     let instr_y = rect.y + rect.height - 1;
-    
+
     if rect.width > instructions.chars().count() as u16 + 2 {
         frame.render_widget(
-            Paragraph::new(Span::styled(instructions, colors.text_dim().add_modifier(Modifier::DIM))),
+            Paragraph::new(Span::styled(
+                instructions,
+                colors.text_dim().add_modifier(Modifier::DIM),
+            )),
             Rect::new(instr_x, instr_y, instructions.chars().count() as u16, 1),
         );
     }

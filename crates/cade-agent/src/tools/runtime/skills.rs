@@ -1,12 +1,15 @@
 use super::*;
-use serde_json::Value;
 use cade_core::skills::discover_all_skills;
+use serde_json::Value;
 
 impl ToolRuntime {
     pub(crate) async fn handle_install_skill(&self, args: &Value) -> (String, bool) {
         let url = args["url"].as_str().unwrap_or("").trim().to_string();
         let scope = args["scope"].as_str().unwrap_or("project");
-        let skill_name = args["skill"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
+        let skill_name = args["skill"]
+            .as_str()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
         if url.is_empty() {
             return ("Error: 'url' is required".to_string(), true);
         }
@@ -126,5 +129,4 @@ impl ToolRuntime {
             Err(e) => (format!("Failed to read reference '{doc}': {e}"), true),
         }
     }
-
 }

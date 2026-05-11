@@ -1,5 +1,5 @@
-use crate::Result;
 use super::super::Repl;
+use crate::Result;
 
 impl Repl {
     /// Interactive reasoning tier picker — full-screen on TuiApp terminal.

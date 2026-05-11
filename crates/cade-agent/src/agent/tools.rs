@@ -1,7 +1,7 @@
 use crate::Result;
 use serde_json::{Value, json};
 
-use super::client::{HttpTransport, CreateToolRequest, ToolDef};
+use super::client::{CreateToolRequest, HttpTransport, ToolDef};
 use crate::tools::schemas_for_toolset;
 use cade_core::toolsets::Toolset;
 
@@ -9,7 +9,10 @@ use cade_core::toolsets::Toolset;
 ///
 /// Skips already-registered tools (by name) to stay idempotent across restarts.
 /// Returns the full list of `ToolDef`s — needed for `attach_agent_tools()`.
-pub async fn register_mcp_tools(client: &HttpTransport, schemas: Vec<Value>) -> Result<Vec<ToolDef>> {
+pub async fn register_mcp_tools(
+    client: &HttpTransport,
+    schemas: Vec<Value>,
+) -> Result<Vec<ToolDef>> {
     if schemas.is_empty() {
         return Ok(vec![]);
     }
@@ -19,7 +22,7 @@ pub async fn register_mcp_tools(client: &HttpTransport, schemas: Vec<Value>) -> 
     for mut schema in schemas {
         let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
-        
+
         let is_core = schema["_is_core"].as_bool().unwrap_or(false);
         if let Some(obj) = schema.as_object_mut() {
             obj.remove("_is_core");
@@ -34,7 +37,7 @@ pub async fn register_mcp_tools(client: &HttpTransport, schemas: Vec<Value>) -> 
         if is_core {
             tags.push("core_mcp".to_string());
         }
-        
+
         let req = CreateToolRequest {
             source_code: stub,
             source_type: "python".to_string(),

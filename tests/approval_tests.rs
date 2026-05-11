@@ -94,8 +94,14 @@ mod permission_tests {
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
 
         // -- Check
-        assert!(mgr.resolve("bash", &json!({ "command": "rm -rf /" }), false).is_allow());
-        assert!(mgr.resolve("write_file", &json!({ "path": "/etc/passwd" }), false).is_allow());
+        assert!(
+            mgr.resolve("bash", &json!({ "command": "rm -rf /" }), false)
+                .is_allow()
+        );
+        assert!(
+            mgr.resolve("write_file", &json!({ "path": "/etc/passwd" }), false)
+                .is_allow()
+        );
     }
 
     /// AcceptEdits auto-approves file-mutation tools but asks for deletes.
@@ -105,13 +111,28 @@ mod permission_tests {
         let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
 
         // -- Check — create/edit auto-approved
-        assert!(mgr.resolve("write_file", &json!({ "path": "x.rs" }), false).is_allow());
-        assert!(mgr.resolve("edit_file", &json!({ "path": "x.rs" }), false).is_allow());
-        assert!(mgr.resolve("apply_patch", &json!({ "path": "x.rs" }), false).is_allow());
+        assert!(
+            mgr.resolve("write_file", &json!({ "path": "x.rs" }), false)
+                .is_allow()
+        );
+        assert!(
+            mgr.resolve("edit_file", &json!({ "path": "x.rs" }), false)
+                .is_allow()
+        );
+        assert!(
+            mgr.resolve("apply_patch", &json!({ "path": "x.rs" }), false)
+                .is_allow()
+        );
 
         // -- Check — delete requires approval
-        assert!(mgr.resolve("delete_file", &json!({ "path": "x.rs" }), false).is_ask());
-        assert!(mgr.resolve("bash", &json!({ "command": "rm foo" }), false).is_ask());
+        assert!(
+            mgr.resolve("delete_file", &json!({ "path": "x.rs" }), false)
+                .is_ask()
+        );
+        assert!(
+            mgr.resolve("bash", &json!({ "command": "rm foo" }), false)
+                .is_ask()
+        );
     }
 
     /// Plan mode blocks write tools and write shell commands.
@@ -121,10 +142,22 @@ mod permission_tests {
         let mgr = PermissionManager::new(PermissionMode::Plan);
 
         // -- Check
-        assert!(mgr.resolve("write_file", &json!({ "path": "x.rs" }), false).is_deny());
-        assert!(mgr.resolve("bash", &json!({ "command": "rm foo" }), false).is_deny());
-        assert!(mgr.resolve("bash", &json!({ "command": "ls -la" }), false).is_allow());
-        assert!(mgr.resolve("bash", &json!({ "command": "cargo check" }), false).is_allow());
+        assert!(
+            mgr.resolve("write_file", &json!({ "path": "x.rs" }), false)
+                .is_deny()
+        );
+        assert!(
+            mgr.resolve("bash", &json!({ "command": "rm foo" }), false)
+                .is_deny()
+        );
+        assert!(
+            mgr.resolve("bash", &json!({ "command": "ls -la" }), false)
+                .is_allow()
+        );
+        assert!(
+            mgr.resolve("bash", &json!({ "command": "cargo check" }), false)
+                .is_allow()
+        );
     }
 
     /// add_session_allow is idempotent — duplicate rules are not stored.
@@ -178,7 +211,8 @@ mod back_to_back_tool_tests {
             "second call must be auto-approved"
         );
         assert!(
-            mgr.resolve("bash", &json!({ "command": "cargo test" }), false).is_allow(),
+            mgr.resolve("bash", &json!({ "command": "cargo test" }), false)
+                .is_allow(),
             "third call with different args must also be auto-approved"
         );
     }

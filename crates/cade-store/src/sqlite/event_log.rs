@@ -1,4 +1,4 @@
-use super::{now_ts, Result, Db};
+use super::{Db, Result, now_ts};
 use rusqlite::params;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -87,11 +87,7 @@ pub fn query_event_log(
     Ok(results)
 }
 
-pub fn list_recent_events(
-    db: &Db,
-    agent_id: &str,
-    limit: usize,
-) -> Result<Vec<EventLogEntry>> {
+pub fn list_recent_events(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<EventLogEntry>> {
     let conn = db.lock();
     let mut stmt = conn.prepare_cached(
         r#"
@@ -120,4 +116,3 @@ pub fn list_recent_events(
     }
     Ok(results)
 }
-

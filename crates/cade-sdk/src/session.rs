@@ -107,7 +107,7 @@ impl AgentSession {
             opts.cwd,
         );
         runtime.allowed_paths = opts.allowed_paths;
-        
+
         let permissions = PermissionManager::new(opts.permission_mode);
 
         Ok(Self {
@@ -127,7 +127,7 @@ impl AgentSession {
     // -- Prompting
 
     /// Send a prompt and return the final assistant text.
-    /// 
+    ///
     /// **Security Note:** The `text` parameter is passed directly to the LLM agent. If
     /// your application accepts user input, be aware of Prompt Injection risks. The SDK
     /// does not sanitize this input as it expects valid LLM instructions. Ensure your
@@ -189,7 +189,7 @@ impl AgentSession {
     }
 
     /// Set a memory block.
-    /// 
+    ///
     /// **Security Note:** The `value` parameter is stored as raw text in the agent's
     /// memory and will be injected into future LLM contexts. The SDK does not sanitize
     /// this input. If storing user-generated content, be aware that malicious content

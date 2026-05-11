@@ -1,5 +1,5 @@
-use crate::colors::ThemeColorsExt;
 use crate::colors::ThemeColors;
+use crate::colors::ThemeColorsExt;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},

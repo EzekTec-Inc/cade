@@ -1,15 +1,13 @@
 //! User input loop — read_input and handle_key_input.
 
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 
 use crate::Result;
 
-
-use super::{FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
 use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
+use super::{FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
 
 impl TuiApp {
     // -- Input loop
@@ -168,8 +166,7 @@ impl TuiApp {
             // Alt+Enter  — universal cross-terminal newline.
             // Shift+Enter — kitty keyboard protocol terminals (Kitty, WezTerm, Ghostty).
             // Ctrl+Enter  — Windows Terminal (which reports this as CONTROL+Enter).
-            (KeyCode::Enter, m) if is_newline_shortcut(m) =>
-            {
+            (KeyCode::Enter, m) if is_newline_shortcut(m) => {
                 self.editor.insert_newline();
             }
             (KeyCode::Enter, _) => {
@@ -335,14 +332,14 @@ impl TuiApp {
 
             // -- Command Palette (Ctrl+P)
             (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
-                self.overlays.push(Box::new(super::command_palette::CommandPaletteState::new()));
+                self.overlays
+                    .push(Box::new(super::command_palette::CommandPaletteState::new()));
             }
 
             // -- Toggle Plan Panel (Ctrl+T)
             // Match both the Kitty-protocol form (Char('t') + CONTROL) and
             // the legacy VT form (raw control character \x14).
-            (KeyCode::Char('t'), KeyModifiers::CONTROL)
-            | (KeyCode::Char('\x14'), _) => {
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) | (KeyCode::Char('\x14'), _) => {
                 if let Some(plan) = &mut self.active_plan {
                     plan.is_visible = !plan.is_visible;
                     let msg = if plan.is_visible {
@@ -496,12 +493,30 @@ mod tests {
 
     #[test]
     fn test_is_newline_shortcut() {
-        assert!(is_newline_shortcut(KeyModifiers::SHIFT), "Shift+Enter should be recognized as a newline shortcut");
-        assert!(is_newline_shortcut(KeyModifiers::ALT), "Alt+Enter should be recognized as a newline shortcut");
-        assert!(is_newline_shortcut(KeyModifiers::CONTROL), "Ctrl+Enter should be recognized as a newline shortcut");
-        assert!(is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::CONTROL), "Ctrl+Shift+Enter should be recognized");
-        assert!(is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::ALT), "Alt+Shift+Enter should be recognized");
-        assert!(!is_newline_shortcut(KeyModifiers::NONE), "Plain Enter should not be recognized as a newline shortcut");
+        assert!(
+            is_newline_shortcut(KeyModifiers::SHIFT),
+            "Shift+Enter should be recognized as a newline shortcut"
+        );
+        assert!(
+            is_newline_shortcut(KeyModifiers::ALT),
+            "Alt+Enter should be recognized as a newline shortcut"
+        );
+        assert!(
+            is_newline_shortcut(KeyModifiers::CONTROL),
+            "Ctrl+Enter should be recognized as a newline shortcut"
+        );
+        assert!(
+            is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            "Ctrl+Shift+Enter should be recognized"
+        );
+        assert!(
+            is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::ALT),
+            "Alt+Shift+Enter should be recognized"
+        );
+        assert!(
+            !is_newline_shortcut(KeyModifiers::NONE),
+            "Plain Enter should not be recognized as a newline shortcut"
+        );
     }
 
     #[test]

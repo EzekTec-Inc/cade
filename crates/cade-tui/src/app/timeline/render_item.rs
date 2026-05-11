@@ -1,11 +1,14 @@
-use crate::colors::{ThemeColorsExt,};
 use crate::app::*;
+use crate::colors::ThemeColorsExt;
 use unicode_width::UnicodeWidthStr;
-
 
 // -- Line renderers
 
-pub(crate) fn render_separator_item(width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_separator_item(
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
     out.push(Line::from(Span::styled(
         "─".repeat(width),
         colors.border_muted(),
@@ -82,7 +85,9 @@ pub(crate) fn render_context_bar_item(
         ),
         Span::styled(
             model.to_string(),
-            Style::default().fg(colors.c_text_primary()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors.c_text_primary())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", colors.text_muted()),
         Span::styled(
@@ -107,10 +112,7 @@ pub(crate) fn render_context_bar_item(
     let mut bar_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
 
     if window == 0 {
-        bar_spans.push(Span::styled(
-            "?".repeat(bar_width),
-            colors.text_muted(),
-        ));
+        bar_spans.push(Span::styled("?".repeat(bar_width), colors.text_muted()));
     } else {
         let mut filled = 0usize;
         for (i, &tok) in category_tokens.iter().enumerate() {
@@ -151,10 +153,7 @@ pub(crate) fn render_context_bar_item(
         out.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(glyph.to_string(), Style::default().fg(color)),
-            Span::styled(
-                format!("  {:<18}", label),
-                colors.text_muted(),
-            ),
+            Span::styled(format!("  {:<18}", label), colors.text_muted()),
             Span::styled(
                 format!("{:>7}  {:>6}", fmt_tok(tok), pct_cat),
                 colors.text_muted(),
@@ -181,18 +180,28 @@ pub(crate) fn render_user_message_item(
     ));
 }
 
-pub(crate) fn render_assistant_item(text: &str, width: usize, expand_all: bool, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_assistant_item(
+    text: &str,
+    width: usize,
+    expand_all: bool,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()
             .fg(colors.c_primary())
             .add_modifier(Modifier::BOLD),
     )]));
-    
+
     // Extract historical scratchpad
     let (body, scratchpad) = if let Some(start) = text.find("<historical_scratchpad>") {
         if let Some(end) = text.find("</historical_scratchpad>") {
-            let body = format!("{}{}", &text[..start], &text[end + "</historical_scratchpad>".len()..]);
+            let body = format!(
+                "{}{}",
+                &text[..start],
+                &text[end + "</historical_scratchpad>".len()..]
+            );
             let scratchpad = &text[start + "<historical_scratchpad>".len()..end];
             (body, Some(scratchpad))
         } else {
@@ -209,9 +218,22 @@ pub(crate) fn render_assistant_item(text: &str, width: usize, expand_all: bool, 
         out.push(Line::from(""));
         out.push(Line::from(vec![
             Span::styled("╭ ", colors.border_muted()),
-            Span::styled(" HISTORICAL SCRATCHPAD ", Style::default().fg(colors.c_text_primary()).bg(colors.c_bg_surface1()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " HISTORICAL SCRATCHPAD ",
+                Style::default()
+                    .fg(colors.c_text_primary())
+                    .bg(colors.c_bg_surface1())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" "),
-            Span::styled(if expand_all { "· expanded" } else { "· ctrl+o to expand" }, colors.text_dim()),
+            Span::styled(
+                if expand_all {
+                    "· expanded"
+                } else {
+                    "· ctrl+o to expand"
+                },
+                colors.text_dim(),
+            ),
         ]));
         if expand_all {
             let inner_w = width.saturating_sub(4);
@@ -220,7 +242,9 @@ pub(crate) fn render_assistant_item(text: &str, width: usize, expand_all: bool, 
                     Span::styled("│ ", colors.border_muted()),
                     Span::styled(
                         truncate_str(ln, inner_w),
-                        Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(colors.c_text_muted())
+                            .add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }
@@ -228,7 +252,13 @@ pub(crate) fn render_assistant_item(text: &str, width: usize, expand_all: bool, 
     }
 }
 
-pub(crate) fn render_streaming_assistant_item(text: &str, width: usize, expand_all: bool, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_streaming_assistant_item(
+    text: &str,
+    width: usize,
+    expand_all: bool,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
     render_assistant_item(text, width, expand_all, out, colors);
 }
 
@@ -578,7 +608,11 @@ pub(crate) fn render_success_item(text: &str, out: &mut Vec<Line<'static>>, colo
     }
 }
 
-pub(crate) fn render_info_header_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_info_header_item(
+    text: &str,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
     for ln in text.lines() {
         out.push(Line::from(Span::styled(
             ln.to_string(),
@@ -598,7 +632,13 @@ pub(crate) fn render_dim_item(text: &str, out: &mut Vec<Line<'static>>, colors: 
     }
 }
 
-pub(crate) fn render_pair_item(label: &str, value: &str, width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_pair_item(
+    label: &str,
+    value: &str,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
     let val_w = width.saturating_sub(26);
     out.push(Line::from(vec![
         Span::styled(format!("  {label:<24}"), colors.text_dim()),
@@ -656,7 +696,10 @@ pub(crate) fn render_heuristic_summary_item(
     colors: &ThemeColors,
 ) {
     let w = width.max(40).saturating_sub(4);
-    let top = format!("╭── ⚡ Context & Memory Synchronized {}╮", "─".repeat(w.saturating_sub(35)));
+    let top = format!(
+        "╭── ⚡ Context & Memory Synchronized {}╮",
+        "─".repeat(w.saturating_sub(35))
+    );
     out.push(Line::from(Span::styled(top, colors.text_dim())));
 
     let mut render_row = |label: &str, value: &str, val_color: ratatui::style::Color| {
@@ -825,4 +868,3 @@ pub(crate) fn render_table_item(
 
     out.push(Line::from(""));
 }
-

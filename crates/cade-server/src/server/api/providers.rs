@@ -6,8 +6,8 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::server::state::AppState;
-use cade_store::sqlite::{self, ProviderRow};
 use cade_ai::{LlmRouter, provider_registry::ProviderRegistry};
+use cade_store::sqlite::{self, ProviderRow};
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     tracing::error!("500 providers: {msg}");
@@ -100,7 +100,8 @@ pub async fn add_provider(
     // Preset shortcut: if kind == "preset" or kind == name and it matches a PresetDef, auto-fill base_url
     let base_url = if kind == "openai-compatible" || kind == "preset" || kind == name {
         if let Some(preset_url) = provider_registry
-            .get_all_providers().iter()
+            .get_all_providers()
+            .iter()
             .find(|p| p.name == name.as_str())
             .map(|p| p.chat_url.to_string())
         {
@@ -192,7 +193,8 @@ pub async fn list_presets() -> Json<Value> {
     let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
 
     let presets: Vec<Value> = provider_registry
-        .get_all_providers().iter()
+        .get_all_providers()
+        .iter()
         .map(|p| {
             json!({
                 "name":     p.name,

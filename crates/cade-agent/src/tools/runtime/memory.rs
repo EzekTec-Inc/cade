@@ -20,7 +20,10 @@ impl ToolRuntime {
         }
 
         if value.is_empty() && operation != "delete" {
-            return ("Error: 'value' is required for set/append operations".to_string(), true);
+            return (
+                "Error: 'value' is required for set/append operations".to_string(),
+                true,
+            );
         }
 
         let final_value = if operation == "append" {
@@ -233,13 +236,18 @@ impl ToolRuntime {
         // Parse as JSON
         let mut root = match cade_core::structured_patch::parse_block(&current) {
             Ok(v) => v,
-            Err(e) => return (format!("Error: {e}. Use update_memory(set,...) to seed JSON."), true),
+            Err(e) => {
+                return (
+                    format!("Error: {e}. Use update_memory(set,...) to seed JSON."),
+                    true,
+                );
+            }
         };
 
         // Apply the patch
-        if let Err(e) = cade_core::structured_patch::apply_pointer_patch(
-            &mut root, &pointer, op, value,
-        ) {
+        if let Err(e) =
+            cade_core::structured_patch::apply_pointer_patch(&mut root, &pointer, op, value)
+        {
             return (format!("Patch error: {e}"), true);
         }
 
@@ -290,5 +298,4 @@ impl ToolRuntime {
             Err(e) => (format!("Failed to link evidence: {e}"), true),
         }
     }
-
 }

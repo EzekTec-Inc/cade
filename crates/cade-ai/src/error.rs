@@ -87,7 +87,10 @@ mod tests {
 
     #[test]
     fn provider_413_is_overflow() {
-        let e = Error::Provider { status: 413, msg: "Payload Too Large".into() };
+        let e = Error::Provider {
+            status: 413,
+            msg: "Payload Too Large".into(),
+        };
         assert!(e.is_context_overflow());
     }
 
@@ -111,7 +114,10 @@ mod tests {
 
     #[test]
     fn rate_limit_is_not_overflow() {
-        let e = Error::Provider { status: 429, msg: "rate_limited".into() };
+        let e = Error::Provider {
+            status: 429,
+            msg: "rate_limited".into(),
+        };
         assert!(!e.is_context_overflow());
     }
 

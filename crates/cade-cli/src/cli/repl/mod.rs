@@ -185,7 +185,9 @@ pub struct Repl {
     pub(crate) subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     /// Cancellation channels for actively running subagents in the CLI.
     /// Key: subagent_id, Value: sender to abort the subagent loop.
-    pub(crate) subagent_cancellations: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+    pub(crate) subagent_cancellations: std::sync::Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>,
+    >,
     /// Receives a signal whenever a SKILL.MD file changes on disk.
     /// The REPL polls this each loop iteration and triggers a reload.
     pub(crate) skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
@@ -311,7 +313,9 @@ impl Repl {
             conversation_id: Arc::new(Mutex::new(conversation_id)),
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
-            subagent_cancellations: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            subagent_cancellations: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             skill_reload_rx,
             mcp_reload_rx,
             streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -783,11 +787,10 @@ impl Repl {
 
             // Send to agent and handle tool loop
             let mut final_input = input.clone();
-            if let Some(ctx) = session_hook_ctx.take() {
-                if !ctx.trim().is_empty() {
+            if let Some(ctx) = session_hook_ctx.take()
+                && !ctx.trim().is_empty() {
                     final_input = format!("{final_input}\n\n[System Note: {}]", ctx.trim());
                 }
-            }
 
             self.agent_turn_with_images(&mut stdout, &final_input, submit_images)
                 .await?;

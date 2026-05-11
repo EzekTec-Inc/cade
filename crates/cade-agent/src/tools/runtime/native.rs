@@ -55,5 +55,4 @@ impl ToolRuntime {
             Err(e) => (format!("Read failed: {e}"), true),
         }
     }
-
 }

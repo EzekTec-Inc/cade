@@ -3,7 +3,7 @@
 /// This module owns the JSON schemas and server-registration logic for all
 /// meta tools.  Previously these lived in `src/main.rs`; centralising them
 /// here lets `ToolRuntime` and `headless.rs` share a single source of truth.
-use crate::agent::client::{HttpTransport, CreateToolRequest};
+use crate::agent::client::{CreateToolRequest, HttpTransport};
 use serde_json::{Value, json};
 
 // region:    --- Public API
@@ -67,7 +67,6 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schemas.push(cade_web::FetchDocTool::schema());
         schemas.push(cade_web::BrowserScreenshotTool::schema());
     }
-
 
     schemas
 }

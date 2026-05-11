@@ -22,10 +22,7 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
     //                        the user pastes their key into the form.
     //   /dashboard/*       — future WASM asset bundle (M2+).
     let path = req.uri().path();
-    if path == "/v1/health"
-        || path == "/dashboard"
-        || path.starts_with("/dashboard/")
-    {
+    if path == "/v1/health" || path == "/dashboard" || path.starts_with("/dashboard/") {
         return next.run(req).await;
     }
 

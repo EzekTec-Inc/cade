@@ -1,5 +1,5 @@
-use crate::colors::{ThemeColorsExt,};
 use crate::colors::ThemeColors;
+use crate::colors::ThemeColorsExt;
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color as RC, Modifier, Style},
@@ -206,7 +206,11 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
 /// it is used to cap table column widths and truncate long code-block
 /// lines so that rendered content stays within the viewport.  Pass `0`
 /// to disable width-capping (legacy callers).
-pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_width: usize) -> Vec<Line<'static>> {
+pub fn parse_markdown_lines_with_theme(
+    text: &str,
+    colors: &ThemeColors,
+    max_width: usize,
+) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -373,10 +377,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                             *count += 1;
                         } else {
                             current_spans.push(Span::raw(format!("{INDENT}  {indent_padding}")));
-                            current_spans.push(Span::styled(
-                                "• ",
-                                colors.md_list_bullet(),
-                            ));
+                            current_spans.push(Span::styled("• ", colors.md_list_bullet()));
                         }
                     }
                 }
@@ -570,10 +571,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .unwrap_or_default()
                         .fg(colors.c_md_link());
                     if !url.is_empty() {
-                        current_spans.push(Span::styled(
-                            format!("] ({url})"),
-                            img_style,
-                        ));
+                        current_spans.push(Span::styled(format!("] ({url})"), img_style));
                     } else {
                         current_spans.push(Span::styled("]".to_string(), img_style));
                     }
@@ -589,14 +587,10 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                     //   max_width − INDENT(2) − CODE_INDENT(4)  = max_width − 6
                     // Falls back to 0 (no wrap) when max_width is unknown.
                     let body_width = max_width.saturating_sub(6);
-                    let prefix_span = Span::styled(
-                        format!("{INDENT}{CODE_INDENT}"),
-                        code_border_style(colors),
-                    );
-                    let cont_prefix_span = Span::styled(
-                        format!("{INDENT}{CODE_INDENT}"),
-                        code_border_style(colors),
-                    );
+                    let prefix_span =
+                        Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
+                    let cont_prefix_span =
+                        Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
 
                     #[cfg(feature = "syntax-highlighting")]
                     if let Some(ref mut h) = highlighter {
@@ -644,10 +638,8 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         // Plain rendering without syntax highlighting.
                         let _ = &highlighter; // suppress unused warning
                         for raw_line in text.lines() {
-                            let body = vec![Span::styled(
-                                raw_line.to_string(),
-                                colors.text_primary(),
-                            )];
+                            let body =
+                                vec![Span::styled(raw_line.to_string(), colors.text_primary())];
                             let wrapped = wrap_code_line_spans(
                                 vec![prefix_span.clone()],
                                 body,
@@ -986,4 +978,3 @@ fn wrap_code_line_spans(
 
     lines
 }
-

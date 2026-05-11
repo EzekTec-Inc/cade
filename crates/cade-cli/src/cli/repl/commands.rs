@@ -107,10 +107,7 @@ pub(crate) fn build_session_handoff(
 
 /// Tags for session handoff archival entries.
 pub(crate) fn session_handoff_tags() -> Vec<String> {
-    vec![
-        "session_handoff".to_string(),
-        "slash_new".to_string(),
-    ]
+    vec!["session_handoff".to_string(), "slash_new".to_string()]
 }
 
 impl Repl {
@@ -183,9 +180,10 @@ impl Repl {
 
                 match summary {
                     Some(text) if !text.is_empty() => {
-                        self.app.lock().overlays.push(
-                            Box::new(crate::ui::app::SummaryState { text, scroll_y: 0 }),
-                        );
+                        self.app
+                            .lock()
+                            .overlays
+                            .push(Box::new(crate::ui::app::SummaryState { text, scroll_y: 0 }));
                         let _ = self.app.lock().draw();
                     }
                     _ => {
@@ -388,7 +386,7 @@ impl Repl {
                 } else {
                     let effort = if r == "none" { None } else { Some(r.clone()) };
                     *self.reasoning_effort.lock() = effort.clone();
-                    
+
                     if let Err(e) = self.settings.lock().set_reasoning_effort(effort.clone()) {
                         self.tui_err(format!("Failed to save reasoning effort to settings: {e}"));
                     }
@@ -451,11 +449,7 @@ impl Repl {
                         // P4: Build a structured session handoff before clearing state.
                         // Collects active_goal + recent_edits + session_summary into a
                         // rich snapshot that survives in archival memory.
-                        let blocks = self
-                            .client
-                            .get_memory(&agent_id)
-                            .await
-                            .unwrap_or_default();
+                        let blocks = self.client.get_memory(&agent_id).await.unwrap_or_default();
                         let active_goal = blocks
                             .iter()
                             .find(|b| b.label == "active_goal")

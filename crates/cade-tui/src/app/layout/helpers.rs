@@ -1,10 +1,13 @@
-
 use crate::app::*;
 use crate::colors::ThemeColorsExt;
 
 /// Render a dim backdrop over the full frame area. Call before rendering an
 /// overlay to provide visual separation from the content underneath.
-pub(crate) fn render_backdrop(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, colors: &ThemeColors) {
+pub(crate) fn render_backdrop(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    colors: &ThemeColors,
+) {
     let buf = frame.buffer_mut();
     for x in area.left()..area.right() {
         for y in area.top()..area.bottom() {
@@ -76,7 +79,10 @@ pub(crate) fn mode_sep_color(mode: PermissionMode, colors: &ThemeColors) -> RC {
     }
 }
 
-pub(crate) fn mode_footer_left<'a>(mode: PermissionMode, colors: &ThemeColors) -> (&'a str, &'a str, RC) {
+pub(crate) fn mode_footer_left<'a>(
+    mode: PermissionMode,
+    colors: &ThemeColors,
+) -> (&'a str, &'a str, RC) {
     match mode {
         PermissionMode::Default => ("Press / for commands", "", colors.c_border_base()),
         PermissionMode::AcceptEdits => ("accept edits", "⏵⏵", colors.c_thinking_minimal()),
@@ -153,5 +159,3 @@ mod tests {
         assert_eq!(format_token_count(1_500_000), "1.5M");
     }
 }
-
-

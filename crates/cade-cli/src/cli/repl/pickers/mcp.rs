@@ -1,5 +1,5 @@
-use crate::Result;
 use super::super::Repl;
+use crate::Result;
 
 impl Repl {
     /// `/mcp` interactive picker

@@ -33,28 +33,48 @@ pub async fn dispatch(
     allowed_paths: Option<&[String]>,
 ) -> ToolResult {
     // RBAC path check for file I/O
-    if let Some(allowed) = allowed_paths {
-        if matches!(
+    if let Some(allowed) = allowed_paths
+        && matches!(
             tool_name,
-            "read_file" | "ReadFileGemini" | "write_file" | "WriteFileGemini" | "edit_file" | "Replace" | "apply_patch" | "grep" | "SearchFileContent" | "glob" | "GlobGemini"
+            "read_file"
+                | "ReadFileGemini"
+                | "write_file"
+                | "WriteFileGemini"
+                | "edit_file"
+                | "Replace"
+                | "apply_patch"
+                | "grep"
+                | "SearchFileContent"
+                | "glob"
+                | "GlobGemini"
         ) {
-            let target_path = arguments["path"].as_str().or_else(|| arguments["file_path"].as_str()).unwrap_or("");
+            let target_path = arguments["path"]
+                .as_str()
+                .or_else(|| arguments["file_path"].as_str())
+                .unwrap_or("");
             if !target_path.is_empty() {
                 // Ensure target_path resolves to under one of the allowed_paths
-                let target_path = std::path::Path::new(target_path).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(target_path));
+                let target_path = std::path::Path::new(target_path)
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(target_path));
                 let target_str = target_path.to_string_lossy().to_string();
-                let is_allowed = allowed.iter().any(|p| target_str.starts_with(p) || target_path.starts_with(p));
+                let is_allowed = allowed
+                    .iter()
+                    .any(|p| target_str.starts_with(p) || target_path.starts_with(p));
                 if !is_allowed {
                     return ToolResult {
                         tool_call_id,
                         tool_name: tool_name.to_string(),
-                        output: format!("[Blocked by RBAC] Path '{}' is outside the allowed sandbox paths: {:?}", target_path.display(), allowed),
+                        output: format!(
+                            "[Blocked by RBAC] Path '{}' is outside the allowed sandbox paths: {:?}",
+                            target_path.display(),
+                            allowed
+                        ),
                         is_error: true,
                     };
                 }
             }
         }
-    }
 
     // Try native tools first, fall through to MCP
     let (output, is_error) = match run_native_tool(tool_name, arguments).await {
@@ -98,21 +118,25 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
         "apply_patch" => ApplyPatchTool::run(args).await,
         "grep" | "SearchFileContent" => GrepTool::run(args).await,
         "glob" | "GlobGemini" => GlobTool::run(args).await,
-        "EnterPlanMode" => Err(crate::Error::custom("Permission denied: agent mode changes are disabled in settings.json")),
-        "ExitPlanMode" => Err(crate::Error::custom("Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings.")),
+        "EnterPlanMode" => Err(crate::Error::custom(
+            "Permission denied: agent mode changes are disabled in settings.json",
+        )),
+        "ExitPlanMode" => Err(crate::Error::custom(
+            "Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings.",
+        )),
         // TodoWrite — file persistence; SetPlan/UpdatePlan are intercepted in
         // try_native_intercept (they need TuiApp access) before reaching here.
         // WriteTodos is kept as a backward-compat alias for TodoWrite.
         "TodoWrite" | "WriteTodos" => TodoWriteTool::run(args).await,
         // Desktop extensions
         #[cfg(feature = "desktop")]
-        "desktop_screenshot"   => DesktopCaptureTool::run(args).await,
+        "desktop_screenshot" => DesktopCaptureTool::run(args).await,
         #[cfg(feature = "desktop")]
         "desktop_list_windows" => DesktopListWindowsTool::run(args).await,
         #[cfg(feature = "desktop")]
-        "desktop_control"      => DesktopControlTool::run(args).await,
+        "desktop_control" => DesktopControlTool::run(args).await,
         #[cfg(feature = "desktop")]
-        "desktop_notify"       => DesktopNotifyTool::run(args).await,
+        "desktop_notify" => DesktopNotifyTool::run(args).await,
         _other => return None,
     })
 }
@@ -481,10 +505,7 @@ mod tests {
     #[test]
     fn strip_mcp_prefix_handles_double_underscore_in_tool_name() {
         // hypothetical MCP tool whose base name contains `__`
-        assert_eq!(
-            strip_mcp_prefix("server__nested__tool"),
-            "nested__tool"
-        );
+        assert_eq!(strip_mcp_prefix("server__nested__tool"), "nested__tool");
     }
 
     // -- Schema validation

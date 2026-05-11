@@ -77,11 +77,9 @@ impl IntoResponse for Error {
                     Json(json!({ "error": format!("JSON serialization error: {err}") })),
                 )
                     .into_response(),
-                StoreError::Custom(msg) => (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": msg })),
-                )
-                    .into_response(),
+                StoreError::Custom(msg) => {
+                    (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
+                }
 
                 // 5xx — internal, generic body + log correlation id.
                 StoreError::Sqlite(err) => internal_error_response(&format!("sqlite: {err}")),
@@ -95,11 +93,9 @@ impl IntoResponse for Error {
                 StoreError::Base64(err) => internal_error_response(&format!("base64: {err}")),
                 StoreError::FromUtf8(err) => internal_error_response(&format!("from_utf8: {err}")),
             },
-            Error::Custom(msg) => (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": msg })),
-            )
-                .into_response(),
+            Error::Custom(msg) => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
+            }
         }
     }
 }

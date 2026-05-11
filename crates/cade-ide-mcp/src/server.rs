@@ -300,10 +300,7 @@ impl IdeMcpServer {
     /// Returns `ErrorData::invalid_params` (JSON-RPC -32602) when the
     /// path is not currently open — the agent should not trigger a
     /// filesystem read fallback; the adapter owns buffer state.
-    async fn get_file_content_impl(
-        &self,
-        path: String,
-    ) -> Result<GetFileContentOut, ErrorData> {
+    async fn get_file_content_impl(&self, path: String) -> Result<GetFileContentOut, ErrorData> {
         let open = self.state.open_files_snapshot().await;
         let hit = open
             .into_iter()
@@ -620,7 +617,11 @@ mod tests {
         assert!(
             router.has_route("get_active_file"),
             "expected get_active_file in tool list, got {:?}",
-            router.list_all().iter().map(|t| t.name.clone()).collect::<Vec<_>>()
+            router
+                .list_all()
+                .iter()
+                .map(|t| t.name.clone())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -669,8 +670,14 @@ mod tests {
         let sel = Selection {
             path: "/tmp/a.rs".into(),
             range: Range {
-                start: Position { line: 1, character: 0 },
-                end:   Position { line: 1, character: 5 },
+                start: Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 5,
+                },
             },
             text: "hello".into(),
         };
@@ -695,8 +702,14 @@ mod tests {
         let d = Diagnostic {
             path: "/tmp/a.rs".into(),
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end:   Position { line: 0, character: 4 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 4,
+                },
             },
             severity: DiagnosticSeverity::Warning,
             message: "unused import".into(),
@@ -834,8 +847,14 @@ mod tests {
             path: "/tmp/a.rs".into(),
             text_edits: vec![TextEdit {
                 range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end:   Position { line: 0, character: 0 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 0,
+                    },
                 },
                 new_text: "// hi\n".into(),
             }],
@@ -933,8 +952,14 @@ mod tests {
         let server = IdeMcpServer::new(EditorState::new(), channel.clone());
 
         let range = Range {
-            start: Position { line: 2, character: 3 },
-            end:   Position { line: 2, character: 8 },
+            start: Position {
+                line: 2,
+                character: 3,
+            },
+            end: Position {
+                line: 2,
+                character: 8,
+            },
         };
         server
             .set_selection_impl("/tmp/a.rs".to_string(), range)
@@ -970,10 +995,7 @@ mod tests {
             fn is_connected(&self) -> bool {
                 true
             }
-            async fn save(
-                &self,
-                path: Option<String>,
-            ) -> Result<(), rmcp::model::ErrorData> {
+            async fn save(&self, path: Option<String>) -> Result<(), rmcp::model::ErrorData> {
                 self.calls.lock().unwrap().push(path);
                 Ok(())
             }
@@ -994,10 +1016,7 @@ mod tests {
             .expect("save_all should succeed");
 
         let calls = channel.calls.lock().unwrap();
-        assert_eq!(
-            calls.as_slice(),
-            &[Some("/tmp/a.rs".to_string()), None]
-        );
+        assert_eq!(calls.as_slice(), &[Some("/tmp/a.rs".to_string()), None]);
     }
 
     #[test]
@@ -1039,7 +1058,10 @@ mod tests {
             .run_task_impl("build".to_string())
             .await
             .expect("run_task should succeed");
-        assert_eq!(channel.calls.lock().unwrap().as_slice(), &["build".to_string()]);
+        assert_eq!(
+            channel.calls.lock().unwrap().as_slice(),
+            &["build".to_string()]
+        );
     }
 
     #[test]
@@ -1127,13 +1149,18 @@ mod tests {
             .start_debug_impl("unit-tests".to_string())
             .await
             .expect("start_debug should succeed");
-        server.stop_debug_impl().await.expect("stop_debug should succeed");
+        server
+            .stop_debug_impl()
+            .await
+            .expect("stop_debug should succeed");
 
         let calls = channel.calls.lock().unwrap();
         assert_eq!(
             calls.as_slice(),
             &[
-                DebugAction::Start { config: "unit-tests".into() },
+                DebugAction::Start {
+                    config: "unit-tests".into()
+                },
                 DebugAction::Stop,
             ]
         );

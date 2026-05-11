@@ -11,8 +11,8 @@ use crate::Result;
 use crate::colors::ThemeColorsExt;
 
 use super::{RenderLine, TuiApp};
-use crate::overlay_component::{OverlayComponent, OverlayInputResult};
 use crate::colors::ThemeColors;
+use crate::overlay_component::{OverlayComponent, OverlayInputResult};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use std::any::Any;
@@ -34,10 +34,10 @@ impl OverlayComponent for PasswordPromptState {
     }
 
     fn render_overlay(&mut self, frame: &mut Frame, _area: Rect, colors: &ThemeColors) {
-        use ratatui::widgets::{Block, Borders, Clear, Paragraph};
         use ratatui::layout::{Constraint, Layout};
         use ratatui::style::{Modifier, Style};
         use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph};
         let area = frame.area();
         let popup_w = 50u16.min(area.width.saturating_sub(4));
         let popup_h = 5u16;
@@ -51,13 +51,19 @@ impl OverlayComponent for PasswordPromptState {
         frame.render_widget(Clear, popup_area);
         let block = Block::default()
             .title(" 🔒 Password ")
-            .title_style(Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD))
+            .title_style(
+                Style::default()
+                    .fg(colors.c_primary())
+                    .add_modifier(Modifier::BOLD),
+            )
             .borders(Borders::ALL)
             .border_type(colors.c_border_style())
             .border_style(Style::default().fg(colors.c_primary()))
-            .style(Style::default()
-                .bg(colors.c_bg_surface1())
-                .fg(colors.c_text_primary()));
+            .style(
+                Style::default()
+                    .bg(colors.c_bg_surface1())
+                    .fg(colors.c_text_primary()),
+            );
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
         let prompt_line = Line::from(Span::styled(
@@ -72,10 +78,7 @@ impl OverlayComponent for PasswordPromptState {
             Span::styled(mask, Style::default().fg(colors.c_primary())),
             Span::raw("█"),
         ]);
-        let rows = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ]).split(inner);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(inner);
         frame.render_widget(Paragraph::new(prompt_line), rows[0]);
         frame.render_widget(Paragraph::new(input_line), rows[1]);
     }
@@ -98,9 +101,7 @@ impl OverlayComponent for PasswordPromptState {
                 self.input.clear();
                 OverlayInputResult::Consumed
             }
-            (KeyCode::Char(c), m)
-                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
-            {
+            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
                 self.input.push(c);
                 OverlayInputResult::Consumed
             }
@@ -136,7 +137,10 @@ impl TuiApp {
                     let res = top.handle_input(key);
                     if matches!(res, OverlayInputResult::Dismiss) {
                         let mut pop = self.overlays.pop().unwrap();
-                        let result = pop.take_result().and_then(|any| any.downcast::<Option<String>>().ok().map(|b| *b)).flatten();
+                        let result = pop
+                            .take_result()
+                            .and_then(|any| any.downcast::<Option<String>>().ok().map(|b| *b))
+                            .flatten();
                         break result;
                     }
                 }
@@ -185,7 +189,10 @@ impl TuiApp {
                 let res = top.handle_input(key);
                 if matches!(res, OverlayInputResult::Dismiss) {
                     let mut pop = self.overlays.pop().unwrap();
-                    let result = pop.take_result().and_then(|any| any.downcast::<Option<String>>().ok().map(|b| *b)).flatten();
+                    let result = pop
+                        .take_result()
+                        .and_then(|any| any.downcast::<Option<String>>().ok().map(|b| *b))
+                        .flatten();
                     break result;
                 }
             }

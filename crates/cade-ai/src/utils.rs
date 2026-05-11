@@ -1,5 +1,5 @@
 use crate::{Error, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Which HTTP status codes are worth retrying (transient / rate-limit errors).
 /// 400, 401, 403, 404 are permanent — fail fast.
@@ -164,11 +164,12 @@ fn inline_refs_with_defs(v: &mut Value, defs: &serde_json::Map<String, Value>, d
             // before we mutate `*v`.
             if let Some(ref_str) = map.get("$ref").and_then(|r| r.as_str()).map(String::from)
                 && let Some(type_name) = ref_str.strip_prefix("#/$defs/")
-                    && let Some(def) = defs.get(type_name) {
-                        *v = def.clone();
-                        inline_refs_with_defs(v, defs, depth + 1);
-                        return;
-                    }
+                && let Some(def) = defs.get(type_name)
+            {
+                *v = def.clone();
+                inline_refs_with_defs(v, defs, depth + 1);
+                return;
+            }
             for val in map.values_mut() {
                 inline_refs_with_defs(val, defs, depth);
             }

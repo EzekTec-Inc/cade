@@ -152,12 +152,13 @@ pub fn show_mcp_manager(
                         )),
                         Cell::from(Span::styled(
                             s.key.clone(),
-                            Style::default().fg(if is_sel { colors.c_text_primary() } else { colors.c_text_primary() }),
+                            Style::default().fg(if is_sel {
+                                colors.c_text_primary()
+                            } else {
+                                colors.c_text_primary()
+                            }),
                         )),
-                        Cell::from(Span::styled(
-                            kind_str,
-                            colors.text_muted(),
-                        )),
+                        Cell::from(Span::styled(kind_str, colors.text_muted())),
                         Cell::from(Span::styled(status_str, Style::default().fg(status_color))),
                     ])
                     .style(style)
@@ -192,62 +193,61 @@ pub fn show_mcp_manager(
             f.render_stateful_widget(table, top_chunks[0], &mut ts);
 
             // -- Right Pane (Preview)
-            let preview_text =
-                if !servers.is_empty() {
-                    let s = &servers[selected_idx];
+            let preview_text = if !servers.is_empty() {
+                let s = &servers[selected_idx];
 
-                    let mut meta = String::new();
-                    meta.push_str(&format!("ID: {}\n", s.key));
+                let mut meta = String::new();
+                meta.push_str(&format!("ID: {}\n", s.key));
 
-                    if s.config.disabled {
-                        meta.push_str("Status: Disabled\n");
-                    } else if let Some(tc) = s.tool_count {
-                        meta.push_str(&format!("Status: Connected ({} tools)\n", tc));
-                    } else {
-                        meta.push_str("Status: Connection Failed / Retrying\n");
-                    }
-
-                    if let Some(url) = &s.config.url {
-                        meta.push_str(&format!("Transport: HTTP\nURL: {}\n", url));
-                        if s.config.auth_token.is_some() {
-                            meta.push_str("Auth: Bearer Token (set)\n");
-                        }
-                        if let Some(headers) = &s.config.headers
-                            && !headers.is_empty()
-                        {
-                            meta.push_str("Headers:\n");
-                            for (k, v) in headers {
-                                meta.push_str(&format!("  {}: {}\n", k, v));
-                            }
-                        }
-                    } else {
-                        meta.push_str(&format!(
-                            "Transport: Stdio\nCommand: {}\n",
-                            s.config.command
-                        ));
-                        if !s.config.args.is_empty() {
-                            meta.push_str(&format!("Args: [{}]\n", s.config.args.join(", ")));
-                        }
-                    }
-
-                    if !s.config.env.is_empty() {
-                        meta.push_str("Env:\n");
-                        for (k, v) in &s.config.env {
-                            meta.push_str(&format!("  {}={}\n", k, v));
-                        }
-                    }
-
-                    if !s.config.write_tools.is_empty() {
-                        meta.push_str(&format!(
-                            "Write Tools: [{}]\n",
-                            s.config.write_tools.join(", ")
-                        ));
-                    }
-
-                    meta
+                if s.config.disabled {
+                    meta.push_str("Status: Disabled\n");
+                } else if let Some(tc) = s.tool_count {
+                    meta.push_str(&format!("Status: Connected ({} tools)\n", tc));
                 } else {
-                    String::new()
-                };
+                    meta.push_str("Status: Connection Failed / Retrying\n");
+                }
+
+                if let Some(url) = &s.config.url {
+                    meta.push_str(&format!("Transport: HTTP\nURL: {}\n", url));
+                    if s.config.auth_token.is_some() {
+                        meta.push_str("Auth: Bearer Token (set)\n");
+                    }
+                    if let Some(headers) = &s.config.headers
+                        && !headers.is_empty()
+                    {
+                        meta.push_str("Headers:\n");
+                        for (k, v) in headers {
+                            meta.push_str(&format!("  {}: {}\n", k, v));
+                        }
+                    }
+                } else {
+                    meta.push_str(&format!(
+                        "Transport: Stdio\nCommand: {}\n",
+                        s.config.command
+                    ));
+                    if !s.config.args.is_empty() {
+                        meta.push_str(&format!("Args: [{}]\n", s.config.args.join(", ")));
+                    }
+                }
+
+                if !s.config.env.is_empty() {
+                    meta.push_str("Env:\n");
+                    for (k, v) in &s.config.env {
+                        meta.push_str(&format!("  {}={}\n", k, v));
+                    }
+                }
+
+                if !s.config.write_tools.is_empty() {
+                    meta.push_str(&format!(
+                        "Write Tools: [{}]\n",
+                        s.config.write_tools.join(", ")
+                    ));
+                }
+
+                meta
+            } else {
+                String::new()
+            };
 
             let preview = Paragraph::new(preview_text)
                 .wrap(Wrap { trim: false })

@@ -446,7 +446,11 @@ impl HttpTransport {
     }
 
     /// Update the compaction model for an existing agent.
-    pub async fn patch_agent_compaction_model(&self, agent_id: &str, model: Option<&str>) -> Result<()> {
+    pub async fn patch_agent_compaction_model(
+        &self,
+        agent_id: &str,
+        model: Option<&str>,
+    ) -> Result<()> {
         let resp = self
             .client
             .patch(self.url(&format!("/agents/{agent_id}")))

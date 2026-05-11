@@ -1,6 +1,6 @@
-use crate::cli::repl::SubagentPickerResult;
-use crate::Result;
 use super::super::Repl;
+use crate::Result;
+use crate::cli::repl::SubagentPickerResult;
 
 impl Repl {
     /// `/subagents` interactive picker
@@ -37,7 +37,10 @@ impl Repl {
             } else {
                 format!(" [Filter: {}] ", filter_query)
             };
-            let hint = format!("{}{}", f_disp, " ↑↓ Navigate  Enter Select  e Edit  Esc/q Cancel ");
+            let hint = format!(
+                "{}{}",
+                f_disp, " ↑↓ Navigate  Enter Select  e Edit  Esc/q Cancel "
+            );
 
             let rows: Vec<Row> = filtered_indices
                 .iter()

@@ -23,11 +23,12 @@ fn meta_tool_capability(name: &str) -> Option<Capability> {
         "store_artifact" => Some(Capability::Agentic),
 
         // Advanced memory pack
-        "update_memory_typed" | "link_memory_evidence" | "update_memory_field" => Some(Capability::AdvancedMemory),
+        "update_memory_typed" | "link_memory_evidence" | "update_memory_field" => {
+            Some(Capability::AdvancedMemory)
+        }
 
         // Web pack
         "web_search" | "fetch_doc" | "browser_screenshot" => Some(Capability::Web),
-
 
         // Core tools — always available
         // update_memory, memory_apply_patch, archival_memory_insert,

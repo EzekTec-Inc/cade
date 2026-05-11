@@ -22,7 +22,7 @@ pub fn render_skills_overlay(
     let h = (screen.height() * 0.7)
         .max(300.0)
         .min(screen.height() - 40.0);
-        
+
     let rect = crate::responsive::overlay_rect(ctx, w, h, None);
     let w = rect.width();
     let h = rect.height();

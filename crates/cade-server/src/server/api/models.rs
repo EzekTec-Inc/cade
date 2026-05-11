@@ -40,7 +40,12 @@ pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     let all_known: std::collections::HashSet<String> = KNOWN
         .iter()
         .map(|s| s.to_string())
-        .chain(provider_registry.get_all_providers().iter().map(|p| p.name.clone()))
+        .chain(
+            provider_registry
+                .get_all_providers()
+                .iter()
+                .map(|p| p.name.clone()),
+        )
         .collect();
     let custom_providers: Vec<String> = live_names
         .into_iter()

@@ -40,11 +40,7 @@ const ALLOWED_HOSTS_EXACT: &[&str] = &[
 /// `"anthropic.com"` allows `console.anthropic.com`, `api.anthropic.com`,
 /// etc. but **not** `anthropic.com.evil.com` (enforced by the leading
 /// dot match).
-const ALLOWED_HOST_SUFFIXES: &[&str] = &[
-    "anthropic.com",
-    "openai.com",
-    "googleapis.com",
-];
+const ALLOWED_HOST_SUFFIXES: &[&str] = &["anthropic.com", "openai.com", "googleapis.com"];
 
 /// Reason an outbound URL was rejected by [`validate_outbound_url`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

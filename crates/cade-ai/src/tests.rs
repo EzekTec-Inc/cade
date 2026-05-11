@@ -456,8 +456,8 @@ fn inline_schema_refs_resolves_nested_chain() {
     inline_schema_refs(&mut schema);
 
     // Full chain resolved: designSystem.theme.font.fontSize
-    let font_size = &schema["properties"]["designSystem"]["properties"]["theme"]
-        ["properties"]["font"]["properties"]["fontSize"];
+    let font_size = &schema["properties"]["designSystem"]["properties"]["theme"]["properties"]["font"]
+        ["properties"]["fontSize"];
     assert_eq!(font_size["type"], "string");
 }
 
@@ -610,7 +610,10 @@ fn gemini_tool_prep_end_to_end() {
     assert!(!result.contains("$ref"), "no $ref should remain");
     assert!(!result.contains("$defs"), "no $defs should remain");
     assert!(!result.contains("x-google"), "no x-google-* should remain");
-    assert!(!result.contains("additionalProperties"), "no additionalProperties should remain");
+    assert!(
+        !result.contains("additionalProperties"),
+        "no additionalProperties should remain"
+    );
 
     // Valid content preserved
     assert!(result.contains("bodyFont"));

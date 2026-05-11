@@ -9,7 +9,8 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff, clean_openai_schema, seal_top_level_additional_properties
+    bare_model, clean_openai_schema, provider_error, retry_with_backoff,
+    seal_top_level_additional_properties,
 };
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -94,7 +95,7 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
     let mut req_builder = client
         .get(models_url)
         .header("Authorization", format!("Bearer {api_key}"));
-    
+
     if models_url.contains("openrouter.ai") {
         req_builder = req_builder
             .header("HTTP-Referer", "https://github.com/EzekTec-Inc/CADE")
@@ -143,12 +144,14 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
-        let mut builder = Client::builder()
-            .tcp_keepalive(std::time::Duration::from_secs(60));
-        
+        let mut builder = Client::builder().tcp_keepalive(std::time::Duration::from_secs(60));
+
         if base.contains("openrouter.ai") {
             let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert("HTTP-Referer", reqwest::header::HeaderValue::from_static("https://github.com/EzekTec-Inc/CADE"));
+            headers.insert(
+                "HTTP-Referer",
+                reqwest::header::HeaderValue::from_static("https://github.com/EzekTec-Inc/CADE"),
+            );
             headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
             builder = builder.default_headers(headers);
         }
@@ -164,7 +167,7 @@ impl OpenAiProvider {
             let bare = bare_model(&req.model).to_lowercase();
             bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
         };
-        
+
         let mut combined_system = String::new();
         let mut processed_messages = Vec::new();
 
@@ -180,7 +183,7 @@ impl OpenAiProvider {
         }
 
         let mut json_messages = Vec::new();
-        
+
         if !combined_system.is_empty() {
             let role = if is_o_series { "developer" } else { "system" };
             json_messages.push(json!({"role": role, "content": combined_system}));
@@ -242,7 +245,10 @@ impl OpenAiProvider {
             .unwrap_or("stop")
             .to_string();
         let msg = &choice["message"];
-        let mut content = msg["content"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let mut content = msg["content"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         if let Some(reasoning) = msg["reasoning"].as_str().filter(|s| !s.is_empty()) {
             if let Some(c) = &mut content {
                 *c = format!("<reasoning>\n{}\n</reasoning>\n\n{}", reasoning, c);
@@ -349,9 +355,13 @@ impl OpenAiProvider {
                 }
                 _ => {
                     // o-series models use "developer" instead of "system"
-                    let role = if m.role == "system" && is_o_series { "developer" } else { m.role.as_str() };
+                    let role = if m.role == "system" && is_o_series {
+                        "developer"
+                    } else {
+                        m.role.as_str()
+                    };
                     items.push(json!({"role": role, "content": m.content}))
-                },
+                }
             }
         }
         json!(items)

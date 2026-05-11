@@ -1,7 +1,7 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
 use cade_agent::subagents::{
-    discover_all_subagents, resolve_subagent_def, should_emit_completion_bell, SubagentConfig,
+    SubagentConfig, discover_all_subagents, resolve_subagent_def, should_emit_completion_bell,
 };
 use std::sync::Arc;
 
@@ -37,10 +37,10 @@ impl Repl {
 
         // Convenience aliases used throughout the function
         let subagent_mode = cfg.mode.clone();
-        let background    = cfg.background;
+        let background = cfg.background;
         let silent_stream = cfg.silent_stream;
-        let human_review  = cfg.human_review;
-        let prompt        = cfg.prompt_with_test_command();
+        let human_review = cfg.human_review;
+        let prompt = cfg.prompt_with_test_command();
 
         // Show progress
         self.tui_dim(format!(
@@ -56,13 +56,11 @@ impl Repl {
         // `Verdict::Ask` as deny — using a `default()` PermissionManager would
         // block every write/execute tool. Subagents should have at least the
         // same authority as their parent, otherwise they can only read.
-        let permissions = cade_core::permissions::PermissionManager::new(
-            if cfg.mode == "plan" {
-                cade_core::permissions::PermissionMode::Plan
-            } else {
-                self.permissions.mode()
-            },
-        );
+        let permissions = cade_core::permissions::PermissionManager::new(if cfg.mode == "plan" {
+            cade_core::permissions::PermissionMode::Plan
+        } else {
+            self.permissions.mode()
+        });
         let call_id_owned = call_id.to_string();
         let bg_results = Arc::clone(&self.background_results);
         let mcp_ref = std::sync::Arc::clone(&self.mcp);
@@ -99,68 +97,67 @@ impl Repl {
 
         let buffer = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
 
-        let on_output: Option<std::sync::Arc<dyn for<'a> Fn(crate::cli::headless::HeadlessEvent<'a>) + Send + Sync>> =
-            if let Some(idx) = live_idx {
-                let app_arc = app_arc.clone();
-                let buffer = buffer.clone();
-                Some(std::sync::Arc::new(move |evt| {
+        let on_output: Option<
+            std::sync::Arc<dyn for<'a> Fn(crate::cli::headless::HeadlessEvent<'a>) + Send + Sync>,
+        > = if let Some(idx) = live_idx {
+            let app_arc = app_arc.clone();
+            let buffer = buffer.clone();
+            Some(std::sync::Arc::new(move |evt| match evt {
+                crate::cli::headless::HeadlessEvent::Text(chunk) => {
+                    let mut buf = buffer.lock();
+                    buf.push_str(chunk);
+                    while let Some(pos) = buf.find('\n') {
+                        let line = buf[..pos].to_string();
+                        buf.replace_range(..=pos, "");
+                        let _ = app_arc.lock().append_live_output_line(idx, line);
+                    }
+                }
+                crate::cli::headless::HeadlessEvent::ToolCall(tname) => {
+                    let mut buf = buffer.lock();
+                    let msg = format!("  [Calling {}...]\n", tname);
+                    buf.push_str(&msg);
+                    while let Some(pos) = buf.find('\n') {
+                        let line = buf[..pos].to_string();
+                        buf.replace_range(..=pos, "");
+                        let _ = app_arc.lock().append_live_output_line(idx, line);
+                    }
+                }
+            }))
+        } else if background {
+            let app_arc = app_arc.clone();
+            let tid = task_id.clone();
+            let smode = subagent_mode.clone();
+
+            // Initialize the tracker in the TUI state
+            {
+                let mut app = app_arc.lock();
+                app.subagent_trackers
+                    .push(cade_tui::subagent_tracker::SubagentTracker::new(
+                        tid.clone(),
+                        smode,
+                    ));
+                app.draw_dirty = true;
+            }
+
+            Some(std::sync::Arc::new(move |evt| {
+                let mut app = app_arc.lock();
+                if let Some(tracker) = app.subagent_trackers.iter_mut().find(|t| t.task_id == tid) {
                     match evt {
-                        crate::cli::headless::HeadlessEvent::Text(chunk) => {
-                            let mut buf = buffer.lock();
-                            buf.push_str(chunk);
-                            while let Some(pos) = buf.find('\n') {
-                                let line = buf[..pos].to_string();
-                                buf.replace_range(..=pos, "");
-                                let _ = app_arc
-                                    .lock()
-                                    .append_live_output_line(idx, line);
-                            }
+                        crate::cli::headless::HeadlessEvent::Text(_) => {
+                            tracker.output_lines += 1;
+                            tracker.current_tool = None;
                         }
                         crate::cli::headless::HeadlessEvent::ToolCall(tname) => {
-                            let mut buf = buffer.lock();
-                            let msg = format!("  [Calling {}...]\n", tname);
-                            buf.push_str(&msg);
-                            while let Some(pos) = buf.find('\n') {
-                                let line = buf[..pos].to_string();
-                                buf.replace_range(..=pos, "");
-                                let _ = app_arc
-                                    .lock()
-                                    .append_live_output_line(idx, line);
-                            }
+                            tracker.tool_calls += 1;
+                            tracker.current_tool = Some(tname.to_string());
                         }
                     }
-                }))
-            } else if background {
-                let app_arc = app_arc.clone();
-                let tid = task_id.clone();
-                let smode = subagent_mode.clone();
-                
-                // Initialize the tracker in the TUI state
-                {
-                    let mut app = app_arc.lock();
-                    app.subagent_trackers.push(cade_tui::subagent_tracker::SubagentTracker::new(tid.clone(), smode));
                     app.draw_dirty = true;
                 }
-
-                Some(std::sync::Arc::new(move |evt| {
-                    let mut app = app_arc.lock();
-                    if let Some(tracker) = app.subagent_trackers.iter_mut().find(|t| t.task_id == tid) {
-                        match evt {
-                            crate::cli::headless::HeadlessEvent::Text(_) => {
-                                tracker.output_lines += 1;
-                                tracker.current_tool = None;
-                            }
-                            crate::cli::headless::HeadlessEvent::ToolCall(tname) => {
-                                tracker.tool_calls += 1;
-                                tracker.current_tool = Some(tname.to_string());
-                            }
-                        }
-                        app.draw_dirty = true;
-                    }
-                }))
-            } else {
-                Some(std::sync::Arc::new(|_| {}))
-            };
+            }))
+        } else {
+            Some(std::sync::Arc::new(|_| {}))
+        };
 
         let run_task = {
             let task_id_c = task_id.clone();
@@ -173,11 +170,13 @@ impl Repl {
                     // Build system prompt + model via shared config methods
                     let system_prompt_base = cfg.resolve_system_prompt(def_opt.as_ref());
                     let final_system_prompt = format!("{system_prompt_base}\n\nTask: {prompt}");
-                    let final_description   = cfg.ephemeral_description();
+                    let final_description = cfg.ephemeral_description();
                     let model = cfg
                         .resolve_model(def_opt.as_ref())
                         .map(|s| s.to_string())
-                        .unwrap_or_else(|| cade_ai::catalogue::fast_model_for_main_model(&main_model));
+                        .unwrap_or_else(|| {
+                            cade_ai::catalogue::fast_model_for_main_model(&main_model)
+                        });
 
                     let req = cade_agent::agent::client::CreateAgentRequest {
                         name: Some(cfg.ephemeral_agent_name(&task_id_c)),
@@ -195,12 +194,19 @@ impl Repl {
 
                 let mut cancel_rx = {
                     let (tx, rx) = tokio::sync::mpsc::channel(1);
-                    cancellations_c.lock().await.insert(sub_agent_id.clone(), tx);
+                    cancellations_c
+                        .lock()
+                        .await
+                        .insert(sub_agent_id.clone(), tx);
                     rx
                 };
 
                 struct CancelGuard<'a> {
-                    map: &'a std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+                    map: &'a std::sync::Arc<
+                        tokio::sync::Mutex<
+                            std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>,
+                        >,
+                    >,
                     id: String,
                 }
                 impl<'a> Drop for CancelGuard<'a> {
@@ -246,32 +252,37 @@ impl Repl {
                 if ephemeral {
                     let _ = client.delete_agent(&sub_agent_id).await;
                 }
-                
+
                 // Verify Proof of Work
-                if !is_error
-                    && let Some(cmd) = cfg.test_command.as_deref() {
-                        match std::process::Command::new("bash")
-                            .arg("-c")
-                            .arg(cmd)
-                            .current_dir(&cwd_c)
-                            .output()
-                        {
-                            Ok(output) => {
-                                if !output.status.success() {
-                                    is_error = true;
-                                    let stdout = String::from_utf8_lossy(&output.stdout);
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                    last_output = format!("PROOF OF WORK FAILED: Subagent claimed success, but the test command `{cmd}` failed on the host.\n\nSubagent output:\n{last_output}\n\nTest stdout:\n{stdout}\nTest stderr:\n{stderr}\n\nYou must re-run the subagent or fix the remaining issues yourself.");
-                                } else {
-                                    last_output.push_str(&format!("\n\n[PROOF OF WORK VERIFIED: `{cmd}` exited with code 0]"));
-                                }
-                            }
-                            Err(e) => {
+                if !is_error && let Some(cmd) = cfg.test_command.as_deref() {
+                    match std::process::Command::new("bash")
+                        .arg("-c")
+                        .arg(cmd)
+                        .current_dir(&cwd_c)
+                        .output()
+                    {
+                        Ok(output) => {
+                            if !output.status.success() {
                                 is_error = true;
-                                last_output = format!("PROOF OF WORK FAILED: Failed to execute test command `{cmd}`: {e}\n\nSubagent output:\n{last_output}");
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                last_output = format!(
+                                    "PROOF OF WORK FAILED: Subagent claimed success, but the test command `{cmd}` failed on the host.\n\nSubagent output:\n{last_output}\n\nTest stdout:\n{stdout}\nTest stderr:\n{stderr}\n\nYou must re-run the subagent or fix the remaining issues yourself."
+                                );
+                            } else {
+                                last_output.push_str(&format!(
+                                    "\n\n[PROOF OF WORK VERIFIED: `{cmd}` exited with code 0]"
+                                ));
                             }
                         }
+                        Err(e) => {
+                            is_error = true;
+                            last_output = format!(
+                                "PROOF OF WORK FAILED: Failed to execute test command `{cmd}`: {e}\n\nSubagent output:\n{last_output}"
+                            );
+                        }
                     }
+                }
 
                 (last_output, is_error)
             }
@@ -345,7 +356,10 @@ impl Repl {
                 // The REPL outer loop still owns the actual notification
                 // drain — this byte just nudges the user to press Enter so
                 // the drain can fire.
-                if should_emit_completion_bell(bg_silent, std::io::IsTerminal::is_terminal(&std::io::stdout())) {
+                if should_emit_completion_bell(
+                    bg_silent,
+                    std::io::IsTerminal::is_terminal(&std::io::stdout()),
+                ) {
                     use std::io::Write;
                     let mut out = std::io::stdout().lock();
                     let _ = out.write_all(b"\x07");
@@ -373,14 +387,10 @@ impl Repl {
             if let Some(idx) = live_idx {
                 let mut buf = buffer.lock();
                 if !buf.is_empty() {
-                    let _ = app_arc
-                        .lock()
-                        .append_live_output_line(idx, buf.clone());
+                    let _ = app_arc.lock().append_live_output_line(idx, buf.clone());
                     buf.clear();
                 }
-                let _ = app_arc
-                    .lock()
-                    .finish_live_output(idx);
+                let _ = app_arc.lock().finish_live_output(idx);
             }
 
             // SubagentStop hook — can block (exit 2 continues the agent)
@@ -398,16 +408,22 @@ impl Repl {
             // background subagents that the parent hasn't consumed yet.
             {
                 let own_label = format!("subagent:{}:{}", subagent_mode, task_id_c);
-                let _ = self.client.delete_memory(&parent_agent_id, &own_label).await;
+                let _ = self
+                    .client
+                    .delete_memory(&parent_agent_id, &own_label)
+                    .await;
             }
 
             // Store full output in Archival Memory if it's large, but DO NOT pollute active memory.
             if output.chars().count() > 1500 {
-                let _ = self.client.insert_archival_memory(
-                    &parent_agent_id,
-                    &output,
-                    &["subagent".to_string(), task_id_c.clone()],
-                ).await;
+                let _ = self
+                    .client
+                    .insert_archival_memory(
+                        &parent_agent_id,
+                        &output,
+                        &["subagent".to_string(), task_id_c.clone()],
+                    )
+                    .await;
             }
 
             // If hook blocked, append its reason to the output so the agent sees it
@@ -432,11 +448,11 @@ impl Repl {
                     allow_other: true,
                     progress: None,
                 };
-                
+
                 // Use a block to ensure we don't hold the app lock across await if this was an issue
                 // ask_question is blocking, which blocks the executor thread temporarily.
                 let ans_opt = self.app.lock().ask_question(&q).unwrap_or(None);
-                
+
                 if let Some(ans) = ans_opt {
                     let val = ans.as_str();
                     if val != "Approve" {
@@ -578,14 +594,13 @@ impl Repl {
         let mut futures = Vec::new();
         for (idx, task_args) in tasks_val.iter().enumerate() {
             let task_call_id = format!("{}_{}", call_id, idx);
-            
+
             // We reuse handle_run_subagent for each. We don't want background=true inside the task args to conflict,
             // but the `handle_run_subagent` will just do its thing.
             let task_args_c = task_args.clone();
 
-            futures.push(async move {
-                self.handle_run_subagent(&task_call_id, &task_args_c).await
-            });
+            futures
+                .push(async move { self.handle_run_subagent(&task_call_id, &task_args_c).await });
         }
 
         // Wait for all to complete. Because `handle_run_subagent` spawns background tasks if `background: true`,
@@ -617,7 +632,8 @@ impl Repl {
         Ok(ToolResult {
             tool_call_id: call_id.to_string(),
             tool_name: "run_parallel_subagents".to_string(),
-            output: serde_json::to_string_pretty(&aggregated).unwrap_or_else(|e| format!("error serializing results: {e}")),
+            output: serde_json::to_string_pretty(&aggregated)
+                .unwrap_or_else(|e| format!("error serializing results: {e}")),
             is_error: false,
         })
     }

@@ -1,6 +1,6 @@
-use crossterm::event::KeyCode;
-use crate::Result;
 use super::super::Repl;
+use crate::Result;
+use crossterm::event::KeyCode;
 
 impl Repl {
     /// `/resume` conversation picker — full-screen on TuiApp terminal.

@@ -1,6 +1,6 @@
 use std::path::Path;
 pub type Theme = opaline::Theme;
-pub use opaline::{list_available_themes, ThemeInfo};
+pub use opaline::{ThemeInfo, list_available_themes};
 
 /// Discover all custom themes from standard locations.
 /// Opaline can load TOML themes.
@@ -24,10 +24,10 @@ pub fn discover_themes_with_builtins(cwd: &Path, agent_dir: &Path) -> Vec<opalin
     let mut themes = discover_themes(cwd, agent_dir);
 
     for builtin in opaline::list_available_themes() {
-        if !themes.iter().any(|t| t.meta.name == builtin.name) {
-            if let Some(theme) = opaline::load_by_name(&builtin.name) {
-                themes.push(theme);
-            }
+        if !themes.iter().any(|t| t.meta.name == builtin.name)
+            && let Some(theme) = opaline::load_by_name(&builtin.name)
+        {
+            themes.push(theme);
         }
     }
 

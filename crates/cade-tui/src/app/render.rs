@@ -1,6 +1,8 @@
-use crate::colors::ThemeColorsExt;
 use crate::app::layout::breadcrumb::render_breadcrumb;
-use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str, format_token_count};
+use crate::app::layout::helpers::{
+    format_token_count, mode_footer_left, mode_sep_color, truncate_str,
+};
+use crate::colors::ThemeColorsExt;
 
 /// Pick the animated spinner color for the current elapsed ms.
 /// Cycles through the theme's 4-step spinner gradient.
@@ -32,19 +34,17 @@ use crate::colors::ThemeColors;
 use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
-use super::{
-    PlanState, RenderLine,
-    Toast,
-    BRAILLE, DOTS, FIXED_ROWS,
-    MAX_INPUT_ROWS, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH,
-};
-use super::timeline::{
-    PreparedTimelineEntry, TimelineEntry, TimelineKey,
-    build_timeline_entries, prepare_timeline_entries, render_timeline_viewport,
-};
 use super::layout::cursor::{calc_input_rows, input_mode_badge};
-use super::layout::sidebar::{render_sidebar, SidebarState};
+use super::layout::sidebar::{SidebarState, render_sidebar};
 use super::layout::toast::render_toast;
+use super::timeline::{
+    PreparedTimelineEntry, TimelineEntry, TimelineKey, build_timeline_entries,
+    prepare_timeline_entries, render_timeline_viewport,
+};
+use super::{
+    BRAILLE, DOTS, FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT,
+    SIDEBAR_WIDTH, Toast,
+};
 
 // -- Scroll helpers
 
@@ -156,7 +156,9 @@ pub(crate) fn render_frame(
     let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
     let available_w = main_area.width;
-    let inline_h = top_overlay.map(|o| o.inline_height(main_area.height)).unwrap_or(0);
+    let inline_h = top_overlay
+        .map(|o| o.inline_height(main_area.height))
+        .unwrap_or(0);
     let mut input_rows =
         calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
@@ -165,17 +167,12 @@ pub(crate) fn render_frame(
     }
 
     // A-02: footer_extra adds one row below the normal footer when present.
-    let footer_extra_h: u16 = if footer_extra.is_some() {
-        1
-    } else {
-        0
-    };
+    let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
     let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
 
     if main_area.height <= bottom_rows + 1 {
         frame.render_widget(
-            Paragraph::new("Terminal too small")
-                .style(colors.error()),
+            Paragraph::new("Terminal too small").style(colors.error()),
             main_area,
         );
         return (0, None);
@@ -193,13 +190,13 @@ pub(crate) fn render_frame(
 
     let chunks = if plan_h > 0 {
         Layout::vertical([
-            Constraint::Fill(1),                // [0] content  (fluid)
-            Constraint::Length(0),              // [1] unused
-            Constraint::Length(plan_h),         // [2] plan panel
-            Constraint::Length(1),              // [3] status
-            Constraint::Length(1),              // [4] top separator
-            Constraint::Length(input_rows),     // [5] input or question
-            Constraint::Length(1),              // [6] bottom separator
+            Constraint::Fill(1),                    // [0] content  (fluid)
+            Constraint::Length(0),                  // [1] unused
+            Constraint::Length(plan_h),             // [2] plan panel
+            Constraint::Length(1),                  // [3] status
+            Constraint::Length(1),                  // [4] top separator
+            Constraint::Length(input_rows),         // [5] input or question
+            Constraint::Length(1),                  // [6] bottom separator
             Constraint::Length(1 + footer_extra_h), // [7] footer
         ])
         .split(main_area)
@@ -207,13 +204,13 @@ pub(crate) fn render_frame(
         // No question: same 6-slot layout, pad with two dummy zero-height slots
         // so all index references below are uniform (we only use 0,3..7 in this branch).
         Layout::vertical([
-            Constraint::Fill(1),                // [0] content
-            Constraint::Length(0),              // [1] (unused)
-            Constraint::Length(0),              // [2] (unused)
-            Constraint::Length(1),              // [3] status
-            Constraint::Length(1),              // [4] top separator
-            Constraint::Length(input_rows),     // [5] input or question
-            Constraint::Length(1),              // [6] bottom separator
+            Constraint::Fill(1),                    // [0] content
+            Constraint::Length(0),                  // [1] (unused)
+            Constraint::Length(0),                  // [2] (unused)
+            Constraint::Length(1),                  // [3] status
+            Constraint::Length(1),                  // [4] top separator
+            Constraint::Length(input_rows),         // [5] input or question
+            Constraint::Length(1),                  // [6] bottom separator
             Constraint::Length(1 + footer_extra_h), // [7] footer
         ])
         .split(main_area)
@@ -249,11 +246,8 @@ pub(crate) fn render_frame(
 
     // -- Breadcrumb bar (only on narrow terminals where sidebar is absent)
     let messages_area = if sidebar_area.is_none() && messages_area.height > 4 {
-        let [breadcrumb_rect, rest] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(messages_area);
+        let [breadcrumb_rect, rest] =
+            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(messages_area);
         render_breadcrumb(
             frame,
             breadcrumb_rect,
@@ -321,10 +315,7 @@ pub(crate) fn render_frame(
             } else {
                 DOTS[(ms / 100) as usize % DOTS.len()]
             };
-            (
-                format!("{} {}", spinner, t),
-                spinner_color(ms, colors),
-            )
+            (format!("{} {}", spinner, t), spinner_color(ms, colors))
         } else {
             (t.to_string(), colors.c_primary())
         };
@@ -417,23 +408,23 @@ pub(crate) fn render_frame(
     } else {
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
         let prefix_w = badge_text.chars().count() as u16 + 3;
-        
-        let input_chunks = Layout::horizontal([
-            Constraint::Length(prefix_w),
-            Constraint::Fill(1),
-        ]).split(chunks[5]);
+
+        let input_chunks = Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)])
+            .split(chunks[5]);
 
         let prefix_spans = vec![
             Span::styled(
                 badge_text.to_string(),
-                colors.text_primary().bg(badge_color).add_modifier(Modifier::BOLD),
+                colors
+                    .text_primary()
+                    .bg(badge_color)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled("> ", colors.text_dim()),
         ];
         frame.render_widget(
-            Paragraph::new(Line::from(prefix_spans))
-                .style(Style::default()),
+            Paragraph::new(Line::from(prefix_spans)).style(Style::default()),
             input_chunks[0],
         );
 
@@ -543,19 +534,13 @@ pub(crate) fn render_frame(
     footer.push(Span::raw(" ".repeat(pad)));
     footer.push(Span::styled(mid_cwd, colors.text_muted()));
     if !right_agent.is_empty() {
-        footer.push(Span::styled(
-            right_agent,
-            colors.thinking_minimal(),
-        ));
+        footer.push(Span::styled(right_agent, colors.thinking_minimal()));
     }
     if !right_model.is_empty() {
         footer.push(Span::styled(right_model, colors.text_dim()));
     }
     if !right_reasoning.is_empty() {
-        footer.push(Span::styled(
-            right_reasoning,
-            colors.warning(),
-        ));
+        footer.push(Span::styled(right_reasoning, colors.warning()));
     }
     if !right_ctx.is_empty() {
         footer.push(Span::styled(
@@ -564,10 +549,7 @@ pub(crate) fn render_frame(
         ));
     }
     if !right_tokens.is_empty() {
-        footer.push(Span::styled(
-            right_tokens,
-            colors.text_dim(),
-        ));
+        footer.push(Span::styled(right_tokens, colors.text_dim()));
     }
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
@@ -619,7 +601,9 @@ pub(crate) fn render_frame(
     if let Some(plan) = active_plan
         && plan.is_visible
     {
-        use ratatui::widgets::{List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState};
+        use ratatui::widgets::{
+            List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        };
 
         let mut items = Vec::new();
         for step in &plan.steps {
@@ -678,7 +662,10 @@ pub(crate) fn render_frame(
             // Render inside the border (inset by 1 vertical for top/bottom border)
             frame.render_stateful_widget(
                 scrollbar,
-                plan_area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+                plan_area.inner(ratatui::layout::Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
                 &mut scrollbar_state,
             );
         }
@@ -687,7 +674,7 @@ pub(crate) fn render_frame(
     if !subagent_trackers.is_empty() {
         use ratatui::widgets::Clear;
         let mut y_offset = main_area.y + 1; // start near top
-        
+
         for tracker in subagent_trackers {
             let elapsed = tracker.started.elapsed().as_secs();
             let tool_info = if let Some(ref tool) = tracker.current_tool {
@@ -699,12 +686,18 @@ pub(crate) fn render_frame(
             let width = text.chars().count() as u16 + 4;
             let height = 3;
             let x = main_area.x + main_area.width.saturating_sub(width + 2);
-            
+
             let rect = ratatui::layout::Rect::new(x, y_offset, width, height);
-            
+
             // Drop shadow
             let shadow_rect = ratatui::layout::Rect::new(x + 1, y_offset + 1, width, height);
-            let shadow_text = vec![Line::from(Span::styled("█".repeat(width as usize), Style::default().fg(colors.c_text_dim()))) ; height as usize];
+            let shadow_text = vec![
+                Line::from(Span::styled(
+                    "█".repeat(width as usize),
+                    Style::default().fg(colors.c_text_dim())
+                ));
+                height as usize
+            ];
             frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
 
             frame.render_widget(Clear, rect);
@@ -720,11 +713,17 @@ pub(crate) fn render_frame(
                 .border_type(colors.c_border_style())
                 .style(colors.style_surface1())
                 .border_style(border_color);
-            
+
             let mut spans = vec![
                 Span::styled("⟳ ", colors.warning()),
-                Span::styled(format!("Subagent [{}]", tracker.mode), colors.text_primary_bold()),
-                Span::styled(format!(" · {elapsed}s · {} tools", tracker.tool_calls), colors.text_dim()),
+                Span::styled(
+                    format!("Subagent [{}]", tracker.mode),
+                    colors.text_primary_bold(),
+                ),
+                Span::styled(
+                    format!(" · {elapsed}s · {} tools", tracker.tool_calls),
+                    colors.text_dim(),
+                ),
             ];
             if let Some(ref tool) = tracker.current_tool {
                 spans.push(Span::styled(format!(" · {tool}"), colors.warning()));
@@ -732,11 +731,10 @@ pub(crate) fn render_frame(
             let p = Paragraph::new(Line::from(spans)).block(block);
 
             frame.render_widget(p, rect);
-            
+
             y_offset += height + 1;
         }
     }
 
     (max_skip, input_cursor_pos) // V-04: returned so draw_impl can clamp self.scroll
 }
-

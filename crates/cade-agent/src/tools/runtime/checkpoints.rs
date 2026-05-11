@@ -1,6 +1,6 @@
 use super::*;
-use serde_json::Value;
 use crate::tools::git_checkpoint;
+use serde_json::Value;
 
 impl ToolRuntime {
     pub(crate) async fn handle_create_checkpoint(&self, args: &Value) -> (String, bool) {
@@ -85,5 +85,4 @@ impl ToolRuntime {
             false,
         )
     }
-
 }

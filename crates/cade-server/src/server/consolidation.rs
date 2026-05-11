@@ -74,7 +74,8 @@ const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
 /// Fraction of the estimated history budget used as the threshold: turns that
 /// fit within `char_budget * HISTORY_BUDGET_FRACTION` are considered "in
 /// context"; everything older is considered "dropped" and summarised.
-const HISTORY_BUDGET_FRACTION: f64 = crate::server::api::messages::PROACTIVE_CONSOLIDATION_THRESHOLD;
+const HISTORY_BUDGET_FRACTION: f64 =
+    crate::server::api::messages::PROACTIVE_CONSOLIDATION_THRESHOLD;
 
 /// Characters per token approximation (conservative).
 const CHARS_PER_TOKEN: usize = 3;
@@ -315,7 +316,11 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             // P3: High-priority messages get 2× preview cap to preserve detail.
             let base_cap = preview_limit_for_role(role);
             let priority_boost = is_high_priority_message(role, trimmed);
-            let preview_cap = if priority_boost { base_cap * 2 } else { base_cap };
+            let preview_cap = if priority_boost {
+                base_cap * 2
+            } else {
+                base_cap
+            };
             let preview: String = if trimmed.chars().count() > preview_cap {
                 format!("{}…", trimmed.chars().take(preview_cap).collect::<String>())
             } else {
@@ -365,9 +370,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
                     continue;
                 }
                 let entry = format!("[{role}] {trimmed}\n\n");
-                if payload.chars().count() + entry.chars().count()
-                    > MAX_ARCHIVAL_PAYLOAD_CHARS
-                {
+                if payload.chars().count() + entry.chars().count() > MAX_ARCHIVAL_PAYLOAD_CHARS {
                     payload.push_str("\n[…remaining dropped turns truncated for archival cap…]");
                     truncated = true;
                     break 'outer;
@@ -599,16 +602,16 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         let marker_ts = {
             let conn = state.db.lock();
             conn.query_row(
-                    "SELECT created_at FROM messages WHERE id = ?1",
-                    rusqlite::params![bid],
-                    |r| r.get::<_, i64>(0),
-                )
-                .unwrap_or_else(|_| {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64
-                })
+                "SELECT created_at FROM messages WHERE id = ?1",
+                rusqlite::params![bid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64
+            })
         };
 
         let marker_content = serde_json::json!({
@@ -664,7 +667,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // mark; anything older than `current_turn - 100` is stale.
     let current_turn = sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
     let prune_before = (current_turn - 100).max(0);
-    if let Ok(pruned) = sqlite::observations::prune_old_observations(&state.db, agent_id, prune_before)
+    if let Ok(pruned) =
+        sqlite::observations::prune_old_observations(&state.db, agent_id, prune_before)
         && pruned > 0
     {
         tracing::debug!(
@@ -677,11 +681,15 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 
     // ── P9: Decay confidence of stale memories ─────────────────────────────────
     // Phase C: Memories that haven't been accessed recently decay in confidence.
-    if let Ok(decayed) = cade_store::sqlite::memory::decay_stale_memories(&state.db, agent_id, current_turn, 20) {
-        if decayed > 0 {
-            tracing::debug!("consolidate [{}]: Phase C decayed confidence for {} stale memory blocks", agent_id, decayed);
+    if let Ok(decayed) =
+        cade_store::sqlite::memory::decay_stale_memories(&state.db, agent_id, current_turn, 20)
+        && decayed > 0 {
+            tracing::debug!(
+                "consolidate [{}]: Phase C decayed confidence for {} stale memory blocks",
+                agent_id,
+                decayed
+            );
         }
-    }
 }
 
 // ── P7: active_goal auto-update ───────────────────────────────────────────────
@@ -800,10 +808,7 @@ async fn auto_update_active_goal(
     };
 
     if goal_text.is_empty() || goal_text == "UNCHANGED" {
-        tracing::debug!(
-            "consolidate [{}]: P7 active_goal unchanged",
-            agent_id
-        );
+        tracing::debug!("consolidate [{}]: P7 active_goal unchanged", agent_id);
         return;
     }
 
@@ -889,8 +894,12 @@ async fn auto_extract_facts(
             return;
         }
     };
-    
-    let clean_json = response_text.trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+
+    let clean_json = response_text
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
 
     if clean_json.is_empty() || clean_json == "[]" {
         return;
@@ -900,7 +909,10 @@ async fn auto_extract_facts(
         let mut count = 0;
         for fact in facts {
             let label = fact["label"].as_str().unwrap_or("").to_string();
-            let memory_type = fact["memory_type"].as_str().unwrap_or("generic").to_string();
+            let memory_type = fact["memory_type"]
+                .as_str()
+                .unwrap_or("generic")
+                .to_string();
             let value = fact["value"].as_str().unwrap_or("").to_string();
             let confidence = fact["confidence"].as_f64().unwrap_or(1.0);
 
@@ -918,26 +930,47 @@ async fn auto_extract_facts(
                 Some(&memory_type),
                 Some(confidence),
             ) {
-                tracing::debug!("consolidate [{}]: auto-extraction failed to save block {}: {}", agent_id, label, e);
+                tracing::debug!(
+                    "consolidate [{}]: auto-extraction failed to save block {}: {}",
+                    agent_id,
+                    label,
+                    e
+                );
             } else {
                 // A2 Provenance: we attribute it to the consolidation turn
                 let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
                 cade_store::sqlite::memory::stamp_provenance(
-                    &state.db, agent_id, &label, Some(turn), None, Some("auto_extraction"), None,
+                    &state.db,
+                    agent_id,
+                    &label,
+                    Some(turn),
+                    None,
+                    Some("auto_extraction"),
+                    None,
                 );
                 // Chunk it for semantic search
                 cade_store::sqlite::memory::rechunk_block(
-                    &state.db, agent_id, &label, &value,
+                    &state.db,
+                    agent_id,
+                    &label,
+                    &value,
                     state.embedder.as_ref().map(|e| e.as_ref()),
                 );
                 count += 1;
             }
         }
         if count > 0 {
-            tracing::info!("consolidate [{}]: Phase B auto-extracted {} durable facts from summary", agent_id, count);
+            tracing::info!(
+                "consolidate [{}]: Phase B auto-extracted {} durable facts from summary",
+                agent_id,
+                count
+            );
         }
     } else {
-        tracing::debug!("consolidate [{}]: Phase B auto-extraction failed to parse JSON", agent_id);
+        tracing::debug!(
+            "consolidate [{}]: Phase B auto-extraction failed to parse JSON",
+            agent_id
+        );
     }
 }
 
@@ -980,12 +1013,7 @@ fn rotate_and_archive_session_summary_db(
         // A7: archive the full evicted content to archival_memory for recovery.
         if !val.trim().is_empty() {
             let tags = vec!["evicted-session-summary".to_string()];
-            let _ = sqlite::insert_archival_memory(
-                db,
-                agent_id,
-                val,
-                &tags,
-            );
+            let _ = sqlite::insert_archival_memory(db, agent_id, val, &tags);
         }
 
         // A7: use a 500-char excerpt instead of first_nonempty_line (~200 chars).
@@ -1939,8 +1967,7 @@ mod tests {
         );
 
         // The cache row carries the F2 tags so it can be filtered later.
-        let combined_tags: Vec<String> =
-            hits.iter().flat_map(|r| r.tags.clone()).collect();
+        let combined_tags: Vec<String> = hits.iter().flat_map(|r| r.tags.clone()).collect();
         assert!(
             combined_tags.iter().any(|t| t == "consolidation"),
             "F2 archival entry must be tagged 'consolidation', got {combined_tags:?}"
@@ -1950,7 +1977,9 @@ mod tests {
             "F2 archival entry must be tagged 'dropped-turns', got {combined_tags:?}"
         );
         assert!(
-            combined_tags.iter().any(|t| t == &format!("agent:{agent_id}")),
+            combined_tags
+                .iter()
+                .any(|t| t == &format!("agent:{agent_id}")),
             "F2 archival entry must be tagged with agent id, got {combined_tags:?}"
         );
     }
@@ -1977,10 +2006,15 @@ mod tests {
                 _req: &cade_ai::CompletionRequest,
             ) -> cade_ai::Result<
                 std::pin::Pin<
-                    Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+                    Box<
+                        dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>>
+                            + Send,
+                    >,
                 >,
             > {
-                Err(cade_ai::Error::custom("forced LLM stream failure for F2 test"))
+                Err(cade_ai::Error::custom(
+                    "forced LLM stream failure for F2 test",
+                ))
             }
         }
 

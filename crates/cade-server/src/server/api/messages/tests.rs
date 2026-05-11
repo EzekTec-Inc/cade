@@ -244,10 +244,14 @@ fn meta_tools_are_tagged_correctly_at_registration() {
     // This test verifies the tag contract so ITS can rely on
     // the "mcp" tag to identify third-party tools.
     let meta_tags = ["cade".to_string(), "meta".to_string()];
-    assert!(!meta_tags.contains(&"mcp".to_string()),
-        "meta tool tags must not include 'mcp'");
-    assert!(meta_tags.contains(&"cade".to_string()),
-        "meta tool tags must include 'cade'");
+    assert!(
+        !meta_tags.contains(&"mcp".to_string()),
+        "meta tool tags must not include 'mcp'"
+    );
+    assert!(
+        meta_tags.contains(&"cade".to_string()),
+        "meta tool tags must include 'cade'"
+    );
 }
 
 #[test]
@@ -255,8 +259,10 @@ fn mcp_tool_tags_contain_mcp() {
     // MCP tools are registered with tags ["cade", "mcp"] (or ["cade", "mcp", "core_mcp"]).
     // ITS uses the "mcp" tag to decide whether to compress a tool's schema.
     let mcp_tags = ["cade".to_string(), "mcp".to_string()];
-    assert!(mcp_tags.contains(&"mcp".to_string()),
-        "MCP tool tags must include 'mcp' for ITS compression to apply");
+    assert!(
+        mcp_tags.contains(&"mcp".to_string()),
+        "MCP tool tags must include 'mcp' for ITS compression to apply"
+    );
 }
 
 #[test]
@@ -268,9 +274,18 @@ fn its_compression_targets_only_mcp_tagged_tools() {
 
     let is_mcp = |tags: &[String]| tags.contains(&"mcp".to_string());
 
-    assert!(!is_mcp(&cade_tool_tags), "meta tools must not be compressed");
-    assert!(!is_mcp(&native_tool_tags), "native tools must not be compressed");
-    assert!(is_mcp(&mcp_tool_tags), "MCP tools should be eligible for compression");
+    assert!(
+        !is_mcp(&cade_tool_tags),
+        "meta tools must not be compressed"
+    );
+    assert!(
+        !is_mcp(&native_tool_tags),
+        "native tools must not be compressed"
+    );
+    assert!(
+        is_mcp(&mcp_tool_tags),
+        "MCP tools should be eligible for compression"
+    );
 }
 
 // ── tool_output_limit + db_row_to_llm per-tool truncation ────────────────
@@ -500,7 +515,10 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         max_context_budget: None,
     });
 
-    let state = AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+    let state = AppState {
+        subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
         db: db.clone(),
         llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
             anthropic_api_key: None,
@@ -521,7 +539,9 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         config,
         mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-        memory_cache: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        memory_cache: std::sync::Arc::new(
+            parking_lot::Mutex::new(std::collections::HashMap::new()),
+        ),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -702,7 +722,10 @@ async fn build_context_caps_oversize_tool_result_messages() {
         allowed_origin: None,
         max_context_budget: None,
     });
-    let state = AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+    let state = AppState {
+        subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
         db: db.clone(),
         llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
             anthropic_api_key: None,
@@ -723,7 +746,9 @@ async fn build_context_caps_oversize_tool_result_messages() {
         config,
         mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-        memory_cache: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        memory_cache: std::sync::Arc::new(
+            parking_lot::Mutex::new(std::collections::HashMap::new()),
+        ),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -916,7 +941,10 @@ fn build_minimal_state(
         allowed_origin: None,
         max_context_budget: None,
     });
-    AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+    AppState {
+        subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
         db,
         llm,
         llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(
@@ -931,7 +959,9 @@ fn build_minimal_state(
         config,
         mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-        memory_cache: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        memory_cache: std::sync::Arc::new(
+            parking_lot::Mutex::new(std::collections::HashMap::new()),
+        ),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),

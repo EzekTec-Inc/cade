@@ -1,3 +1,4 @@
+use crate::Result;
 /// Interactive question/selection widget for CADE.
 ///
 /// Used by both the `ask_user_question` tool handler and the tool-approval dialog.
@@ -28,8 +29,7 @@
 ///
 /// Enter to toggle · ↑↓ navigate · Enter on Submit to confirm · Esc to cancel
 /// ```
-use crate::colors::{ThemeColorsExt,};
-use crate::Result;
+use crate::colors::ThemeColorsExt;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
@@ -127,10 +127,7 @@ impl QuestionWidget {
                 let mut lines: Vec<Line<'static>> = Vec::new();
 
                 // Separator
-                lines.push(Line::from(Span::styled(
-                    sep.clone(),
-                    colors.border_muted(),
-                )));
+                lines.push(Line::from(Span::styled(sep.clone(), colors.border_muted())));
 
                 // Header chip
                 lines.push(Line::from(Span::styled(
@@ -208,10 +205,7 @@ impl QuestionWidget {
                         for (i, chunk) in chunks.into_iter().enumerate() {
                             if i == 0 {
                                 lines.push(Line::from(vec![
-                                    Span::styled(
-                                        selector.to_string(),
-                                        colors.success(),
-                                    ),
+                                    Span::styled(selector.to_string(), colors.success()),
                                     Span::styled(format!("{}{}", prefix, chunk), other_style),
                                 ]));
                             } else {

@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::*;
+use std::sync::Arc;
 
 // -- LLM Router
 //
@@ -62,7 +62,6 @@ pub fn openai_compat_presets() -> Vec<(&'static str, &'static str)> {
         .map(|p| (p.name, p.chat_url))
         .collect()
 }
-
 
 pub struct LlmRouter {
     providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
@@ -624,4 +623,3 @@ impl LlmProvider for LlmRouter {
         provider.stream(&routed).await
     }
 }
-

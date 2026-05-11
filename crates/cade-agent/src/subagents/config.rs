@@ -83,17 +83,9 @@ impl SubagentConfig {
     /// [`Self::validate`] after construction when an error `ToolResult` is
     /// wanted.
     pub fn from_args(args: &Value) -> Self {
-        let prompt = args["prompt"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
 
-        let mode = args["mode"]
-            .as_str()
-            .unwrap_or("build")
-            .trim()
-            .to_string();
+        let mode = args["mode"].as_str().unwrap_or("build").trim().to_string();
 
         let background = args["background"].as_bool().unwrap_or(false);
 
@@ -161,7 +153,10 @@ impl SubagentConfig {
     // ── Tool resolution ──────────────────────────────────────────────────────
 
     pub fn resolve_allowed_paths(&self, def: Option<&SubagentDef>) -> Option<Vec<String>> {
-        match def.map(|d| &d.tools).unwrap_or(&crate::subagents::SubagentTools::All) {
+        match def
+            .map(|d| &d.tools)
+            .unwrap_or(&crate::subagents::SubagentTools::All)
+        {
             crate::subagents::SubagentTools::Restricted { allowed_paths, .. } => {
                 Some(allowed_paths.clone())
             }
@@ -326,11 +321,7 @@ fn cap_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let end = s
-        .char_indices()
-        .nth(max)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+    let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
     format!("{}…", &s[..end])
 }
 
@@ -393,8 +384,14 @@ mod tests {
     fn config_empty_strings_treated_as_none() {
         let args = json!({ "prompt": "x", "model": "   ", "system_prompt": "" });
         let cfg = SubagentConfig::from_args(&args);
-        assert!(cfg.model_override.is_none(), "whitespace-only model must be None");
-        assert!(cfg.custom_system_prompt.is_none(), "empty system_prompt must be None");
+        assert!(
+            cfg.model_override.is_none(),
+            "whitespace-only model must be None"
+        );
+        assert!(
+            cfg.custom_system_prompt.is_none(),
+            "empty system_prompt must be None"
+        );
     }
 
     // -- validate
@@ -489,7 +486,10 @@ mod tests {
         let labels: Vec<&str> = seed.iter().map(|b| b.label.as_str()).collect();
         assert!(labels.contains(&"project"));
         assert!(labels.contains(&"human"));
-        assert!(!labels.contains(&"old_notes"), "long-tier must be filtered out");
+        assert!(
+            !labels.contains(&"old_notes"),
+            "long-tier must be filtered out"
+        );
     }
 
     #[test]
@@ -535,7 +535,10 @@ mod tests {
     fn build_seed_memory_clears_tier() {
         let blocks = vec![mb("project", "info", Some("pinned"))];
         let seed = SubagentConfig::build_seed_memory(blocks);
-        assert!(seed[0].tier.is_none(), "tier must be cleared in seed blocks");
+        assert!(
+            seed[0].tier.is_none(),
+            "tier must be cleared in seed blocks"
+        );
     }
 
     // -- resolve_model

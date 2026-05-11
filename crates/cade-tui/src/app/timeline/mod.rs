@@ -1,5 +1,5 @@
-use crate::colors::ThemeColorsExt;
 use crate::app::timeline::render_item::*;
+use crate::colors::ThemeColorsExt;
 pub mod render_item;
 use super::*;
 
@@ -183,7 +183,15 @@ impl<'a> TimelineItem<'a> {
                 Self::QuestionResult { header, answer }
             }
             RenderLine::Table { headers, rows } => Self::Table { headers, rows },
-            RenderLine::HeuristicSummary { intent, safety, directives } => Self::HeuristicSummary { intent, safety, directives },
+            RenderLine::HeuristicSummary {
+                intent,
+                safety,
+                directives,
+            } => Self::HeuristicSummary {
+                intent,
+                safety,
+                directives,
+            },
         }
     }
 
@@ -232,10 +240,14 @@ impl<'a> TimelineItem<'a> {
                 render_question_result_item(header, answer, out, colors)
             }
             Self::Table { headers, rows } => render_table_item(headers, rows, width, out, colors),
-            Self::HeuristicSummary { intent, safety, directives } => {
-                render_heuristic_summary_item(intent, safety, directives, width, out, colors)
+            Self::HeuristicSummary {
+                intent,
+                safety,
+                directives,
+            } => render_heuristic_summary_item(intent, safety, directives, width, out, colors),
+            Self::StreamingAssistant(text) => {
+                render_streaming_assistant_item(text, width, expand_all, out, colors)
             }
-            Self::StreamingAssistant(text) => render_streaming_assistant_item(text, width, expand_all, out, colors),
         }
     }
 
@@ -493,4 +505,3 @@ pub(crate) fn timeline_key_expanded(
 ) -> bool {
     expand_all || expanded_items.contains(key)
 }
-

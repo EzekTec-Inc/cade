@@ -148,10 +148,7 @@ mod tests {
     #[test]
     fn overlay_input_result_variants_are_distinct() {
         assert_ne!(OverlayInputResult::Consumed, OverlayInputResult::Dismiss);
-        assert_ne!(
-            OverlayInputResult::Consumed,
-            OverlayInputResult::NotHandled
-        );
+        assert_ne!(OverlayInputResult::Consumed, OverlayInputResult::NotHandled);
     }
 
     #[test]

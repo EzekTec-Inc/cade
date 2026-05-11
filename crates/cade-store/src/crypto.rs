@@ -58,9 +58,7 @@ fn get_root_secret() -> Result<String> {
     if path.exists() {
         return std::fs::read_to_string(&path)
             .map(|s| s.trim().to_string())
-            .map_err(|e| {
-                Error::custom(format!("Failed to read {}: {e}", path.display()))
-            });
+            .map_err(|e| Error::custom(format!("Failed to read {}: {e}", path.display())));
     }
 
     // Backwards compatibility: if cade.db exists beside the process, fall
@@ -146,19 +144,10 @@ const ARGON2_P_COST: u32 = 1;
 fn derive_key_argon2id(salt: &[u8]) -> Result<[u8; 32]> {
     let secret = get_root_secret()?;
 
-    let params = argon2::Params::new(
-        ARGON2_M_COST,
-        ARGON2_T_COST,
-        ARGON2_P_COST,
-        Some(32),
-    )
-    .map_err(|e| Error::custom(format!("Argon2id params invalid: {e}")))?;
+    let params = argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(32))
+        .map_err(|e| Error::custom(format!("Argon2id params invalid: {e}")))?;
 
-    let a2 = argon2::Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    );
+    let a2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
 
     let mut key = [0u8; 32];
     a2.hash_password_into(secret.as_bytes(), salt, &mut key)

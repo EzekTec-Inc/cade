@@ -33,9 +33,7 @@ fn resolve_fs_root(
     if let Some(raw) = env_root {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
-            return Some(
-                std::fs::canonicalize(trimmed).unwrap_or_else(|_| PathBuf::from(trimmed)),
-            );
+            return Some(std::fs::canonicalize(trimmed).unwrap_or_else(|_| PathBuf::from(trimmed)));
         }
     }
 
@@ -558,7 +556,10 @@ mod tests {
             resolve_fs_root(None, Some("".into()), cwd.clone()),
             Some(cwd.clone())
         );
-        assert_eq!(resolve_fs_root(None, Some("true".into()), cwd.clone()), Some(cwd));
+        assert_eq!(
+            resolve_fs_root(None, Some("true".into()), cwd.clone()),
+            Some(cwd)
+        );
     }
 
     #[test]

@@ -1,7 +1,5 @@
 //! Subagent spawning and execution within the server-side agentic loop.
 
-
-
 use crate::server::state::AppState;
 
 /// REC-2: Drop guard that ensures the ephemeral agent DB row is cleaned
@@ -34,8 +32,6 @@ impl EphemeralEnvironment {
         }
     }
 
-
-
     /// Async write-back that supports Smart Memory Merge.
     pub(super) async fn write_back_and_delete_async(&mut self, state: &AppState) -> usize {
         if self.defused {
@@ -57,11 +53,16 @@ impl EphemeralEnvironment {
             let desc = if fact.description.is_empty() {
                 Some(format!("Written back from subagent {}", self.subagent_id))
             } else {
-                Some(format!("{} (from subagent {})", fact.description, self.subagent_id))
+                Some(format!(
+                    "{} (from subagent {})",
+                    fact.description, self.subagent_id
+                ))
             };
 
             // Smart Memory Merge: If the parent already has this label, do an LLM merge
-            if let Some((_, old_value, _)) = parent_blocks.iter().find(|(l, _, _)| l == &parent_label) {
+            if let Some((_, old_value, _)) =
+                parent_blocks.iter().find(|(l, _, _)| l == &parent_label)
+            {
                 let state_c = state.clone();
                 let parent_id_c = self.parent_agent_id.clone();
                 let parent_label_c = parent_label.clone();
@@ -71,7 +72,16 @@ impl EphemeralEnvironment {
                 let confidence_c = fact.confidence;
 
                 tokio::spawn(async move {
-                    smart_memory_merge(state_c, parent_id_c, parent_label_c, old_val_c, new_val_c, memory_type_c, confidence_c).await;
+                    smart_memory_merge(
+                        state_c,
+                        parent_id_c,
+                        parent_label_c,
+                        old_val_c,
+                        new_val_c,
+                        memory_type_c,
+                        confidence_c,
+                    )
+                    .await;
                 });
                 written += 1;
             } else {
@@ -125,9 +135,20 @@ pub(super) fn filter_subagent_tools(
             match allowed {
                 cade_agent::subagents::SubagentTools::All => true,
                 cade_agent::subagents::SubagentTools::Readonly => {
-                    matches!(name, "read_file" | "glob" | "grep" | "search_memory" | "conversation_search" | "archival_memory_search" | "recall")
+                    matches!(
+                        name,
+                        "read_file"
+                            | "glob"
+                            | "grep"
+                            | "search_memory"
+                            | "conversation_search"
+                            | "archival_memory_search"
+                            | "recall"
+                    )
                 }
-                cade_agent::subagents::SubagentTools::List(names) => names.iter().any(|n| n == name),
+                cade_agent::subagents::SubagentTools::List(names) => {
+                    names.iter().any(|n| n == name)
+                }
                 cade_agent::subagents::SubagentTools::Restricted { allowed_tools, .. } => {
                     allowed_tools.iter().any(|n| n == name)
                 }
@@ -155,9 +176,24 @@ fn subagent_timeout_secs() -> u64 {
 }
 
 pub trait SubagentEventEmitter: Send + Sync {
-    fn emit_started<'a>(&'a self, subagent_id: &'a str, task_preview: &'a str, mode: &'a str, model: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
-    fn emit_complete<'a>(&'a self, subagent_id: &'a str, is_error: bool, result_preview: &'a str, elapsed: u32, writeback_facts: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
-    fn raw_sse_tx(&self) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>;
+    fn emit_started<'a>(
+        &'a self,
+        subagent_id: &'a str,
+        task_preview: &'a str,
+        mode: &'a str,
+        model: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+    fn emit_complete<'a>(
+        &'a self,
+        subagent_id: &'a str,
+        is_error: bool,
+        result_preview: &'a str,
+        elapsed: u32,
+        writeback_facts: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+    fn raw_sse_tx(
+        &self,
+    ) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>;
 }
 
 pub struct SseEventEmitter {
@@ -165,7 +201,13 @@ pub struct SseEventEmitter {
 }
 
 impl SubagentEventEmitter for SseEventEmitter {
-    fn emit_started<'a>(&'a self, subagent_id: &'a str, task_preview: &'a str, mode: &'a str, model: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    fn emit_started<'a>(
+        &'a self,
+        subagent_id: &'a str,
+        task_preview: &'a str,
+        mode: &'a str,
+        model: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         let subagent_id = subagent_id.to_string();
         let task_preview = task_preview.to_string();
         let mode = mode.to_string();
@@ -179,11 +221,22 @@ impl SubagentEventEmitter for SseEventEmitter {
                 "mode": mode,
                 "model": model,
             });
-            let _ = tx.send(Ok(axum::response::sse::Event::default().data(ev.to_string()))).await;
+            let _ = tx
+                .send(Ok(
+                    axum::response::sse::Event::default().data(ev.to_string())
+                ))
+                .await;
         })
     }
-    
-    fn emit_complete<'a>(&'a self, subagent_id: &'a str, is_error: bool, result_preview: &'a str, elapsed: u32, writeback_facts: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+
+    fn emit_complete<'a>(
+        &'a self,
+        subagent_id: &'a str,
+        is_error: bool,
+        result_preview: &'a str,
+        elapsed: u32,
+        writeback_facts: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         let subagent_id = subagent_id.to_string();
         let result_preview = result_preview.to_string();
         let tx = self.tx.clone();
@@ -197,11 +250,18 @@ impl SubagentEventEmitter for SseEventEmitter {
                 "is_error": is_error,
                 "writeback_facts": writeback_facts,
             });
-            let _ = tx.send(Ok(axum::response::sse::Event::default().data(ev.to_string()))).await;
+            let _ = tx
+                .send(Ok(
+                    axum::response::sse::Event::default().data(ev.to_string())
+                ))
+                .await;
         })
     }
 
-    fn raw_sse_tx(&self) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>> {
+    fn raw_sse_tx(
+        &self,
+    ) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>
+    {
         self.tx.clone()
     }
 }
@@ -229,7 +289,14 @@ impl<'a> SubagentExecutor<'a> {
     }
 
     pub async fn execute(self, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult {
-        handle_run_subagent_tool_inner(self.state, self.parent_agent_id, self.tool_call_id, args, self.emitter).await
+        handle_run_subagent_tool_inner(
+            self.state,
+            self.parent_agent_id,
+            self.tool_call_id,
+            args,
+            self.emitter,
+        )
+        .await
     }
 }
 
@@ -241,10 +308,10 @@ pub(super) async fn handle_run_subagent_tool(
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
     let executor = SubagentExecutor::new(
-        state, 
-        parent_agent_id, 
-        tool_call_id, 
-        Box::new(SseEventEmitter { tx: sse_tx })
+        state,
+        parent_agent_id,
+        tool_call_id,
+        Box::new(SseEventEmitter { tx: sse_tx }),
     );
     executor.execute(args).await
 }
@@ -305,14 +372,14 @@ pub(super) async fn handle_run_subagent_tool_inner(
         }
     };
 
-    let subagent_id   = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let subagent_id = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let task_preview: String = cfg.prompt.chars().take(80).collect();
-    let prompt        = cfg.prompt_with_test_command();
+    let prompt = cfg.prompt_with_test_command();
 
     // Resolve subagent definition + model via shared helpers
     let cwd_for_defs = std::env::current_dir().unwrap_or_default();
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
-    let def_opt  = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
+    let def_opt = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
 
     let model = cfg
         .resolve_model(def_opt)
@@ -325,7 +392,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
         });
 
-    emitter.emit_started(&subagent_id, &task_preview, &cfg.mode, &model).await;
+    emitter
+        .emit_started(&subagent_id, &task_preview, &cfg.mode, &model)
+        .await;
 
     let start_time = std::time::Instant::now();
 
@@ -340,15 +409,19 @@ pub(super) async fn handle_run_subagent_tool_inner(
     // and the active goal.  Uses the shared SubagentConfig helper to
     // ensure filtering and capping are identical in both paths.
     let seed_section: String = {
-        let raw_blocks = cade_store::sqlite::get_active_blocks(&state.db, parent_agent_id)
-            .unwrap_or_default();
+        let raw_blocks =
+            cade_store::sqlite::get_active_blocks(&state.db, parent_agent_id).unwrap_or_default();
         let seed: Vec<cade_agent::agent::client::MemoryBlock> = raw_blocks
             .into_iter()
             .map(|(label, value, description, tier, _last_turn)| {
                 cade_agent::agent::client::MemoryBlock {
                     label,
                     value,
-                    description: if description.is_empty() { None } else { Some(description) },
+                    description: if description.is_empty() {
+                        None
+                    } else {
+                        Some(description)
+                    },
                     tier: if tier.is_empty() { None } else { Some(tier) },
                 }
             })
@@ -459,7 +532,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
     }
 
     struct CancelGuard {
-        map: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+        map: std::sync::Arc<
+            tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>,
+        >,
         id: String,
     }
     impl Drop for CancelGuard {
@@ -498,9 +573,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         }
                     }
                 }
-                
+
                 if cumulative_tokens + iter_input_tokens > budget {
-                    llm_err = Some(format!("error: subagent token budget exceeded ({} > {})", cumulative_tokens + iter_input_tokens, budget));
+                    llm_err = Some(format!(
+                        "error: subagent token budget exceeded ({} > {})",
+                        cumulative_tokens + iter_input_tokens,
+                        budget
+                    ));
                     break;
                 }
                 cumulative_tokens += iter_input_tokens;
@@ -531,11 +610,10 @@ pub(super) async fn handle_run_subagent_tool_inner(
             };
 
             if let Some(budget) = cfg.max_tokens_budget {
-                if let Some(t) = &resp.content {
-                    if !t.is_empty() {
+                if let Some(t) = &resp.content
+                    && !t.is_empty() {
                         cumulative_tokens += cade_ai::count_tokens(&model, t) as u64;
                     }
-                }
                 for tc in &resp.tool_calls {
                     let json = tc.arguments.to_string();
                     if !json.is_empty() {
@@ -543,7 +621,10 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     }
                 }
                 if cumulative_tokens > budget {
-                    llm_err = Some(format!("error: subagent token budget exceeded ({} > {})", cumulative_tokens, budget));
+                    llm_err = Some(format!(
+                        "error: subagent token budget exceeded ({} > {})",
+                        cumulative_tokens, budget
+                    ));
                     break;
                 }
             }
@@ -587,14 +668,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         emitter.raw_sse_tx(),
                     ))
                     .await
-                } else if let Some(intercepted) =
-                    Box::pin(super::meta_tools::intercept_meta_tool(
-                        state,
-                        &subagent_id,
-                        tc,
-                        emitter.raw_sse_tx(),
-                    ))
-                    .await
+                } else if let Some(intercepted) = Box::pin(super::meta_tools::intercept_meta_tool(
+                    state,
+                    &subagent_id,
+                    tc,
+                    emitter.raw_sse_tx(),
+                ))
+                .await
                 {
                     intercepted
                 } else {
@@ -651,7 +731,15 @@ pub(super) async fn handle_run_subagent_tool_inner(
     };
 
     let result_preview: String = output.chars().take(200).collect();
-    emitter.emit_complete(&subagent_id, is_error, &result_preview, elapsed, writeback_count).await;
+    emitter
+        .emit_complete(
+            &subagent_id,
+            is_error,
+            &result_preview,
+            elapsed,
+            writeback_count,
+        )
+        .await;
 
     if cfg.background {
         let sr = crate::server::state::SubagentResult {
@@ -672,11 +760,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     // C2: truncate at a UTF-8 char boundary, never at a raw byte index.
     let output_final = if output.len() > super::SSE_OUTPUT_TRUNCATE_BYTES {
         let head = super::truncate_at_char_boundary(&output, super::SSE_OUTPUT_TRUNCATE_BYTES);
-        format!(
-            "{}…\n[truncated: {} chars total]",
-            head,
-            output.len()
-        )
+        format!("{}…\n[truncated: {} chars total]", head, output.len())
     } else {
         output
     };
@@ -688,7 +772,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
         is_error,
     }
 }
-
 
 pub(super) async fn handle_run_parallel_subagents_tool(
     state: &AppState,
@@ -724,7 +807,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
     let mut futures = Vec::new();
     for (idx, task_args) in tasks_val.iter().enumerate() {
         let task_call_id = format!("{}_{}", tool_call_id, idx);
-        
+
         let state_c = state.clone();
         let parent_agent_id_c = parent_agent_id.to_string();
         let sse_tx_c = sse_tx.clone();
@@ -758,7 +841,8 @@ pub(super) async fn handle_run_parallel_subagents_tool(
     ToolResult {
         tool_call_id: tool_call_id.to_string(),
         tool_name: "run_parallel_subagents".to_string(),
-        output: serde_json::to_string_pretty(&aggregated).unwrap_or_else(|e| format!("error serializing results: {e}")),
+        output: serde_json::to_string_pretty(&aggregated)
+            .unwrap_or_else(|e| format!("error serializing results: {e}")),
         is_error: false, // The parallel executor itself succeeded, individual tasks may have failed
     }
 }
@@ -829,7 +913,7 @@ pub(super) async fn smart_memory_merge(
         .flatten()
         .and_then(|a| a.compaction_model)
         .unwrap_or_else(|| "claude-3-5-haiku-20241022".to_string());
-    
+
     let compaction_model = crate::server::consolidation::default_compaction_model(&model);
 
     let req = cade_ai::CompletionRequest {
@@ -846,19 +930,18 @@ pub(super) async fn smart_memory_merge(
         reasoning_effort: None,
     };
 
-    if let Ok(resp) = state.llm.complete(&req).await {
-        if let Some(merged) = resp.content {
-            let desc = format!("Smart merged after subagent run");
+    if let Ok(resp) = state.llm.complete(&req).await
+        && let Some(merged) = resp.content {
+            let desc = "Smart merged after subagent run".to_string();
             let _ = cade_store::sqlite::upsert_memory_block_typed(
                 &state.db,
                 &agent_id,
                 &label,
-                &merged.trim(),
+                merged.trim(),
                 Some(&desc),
                 None,
                 Some(&memory_type),
                 Some(confidence),
             );
         }
-    }
 }

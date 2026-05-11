@@ -1,8 +1,7 @@
 use super::*;
 
 pub fn get_max_rowid(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<u64> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let sql = if conversation_id.is_some() {
         "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE agent_id = ?1 AND conversation_id = ?2"
     } else {
@@ -22,8 +21,7 @@ pub fn last_assistant_message(
     agent_id: &str,
     conversation_id: Option<&str>,
 ) -> Result<Option<MessageRow>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
@@ -64,8 +62,7 @@ pub fn get_latest_user_message(
     agent_id: &str,
     conversation_id: Option<&str>,
 ) -> Result<Option<String>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     let sql = if conversation_id.is_some() {
         "SELECT content FROM messages
@@ -94,8 +91,7 @@ pub fn get_latest_user_message(
 }
 
 pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     conn.execute(
         "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -136,8 +132,7 @@ pub fn list_messages_since_last_compaction(
     conversation_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MessageRow>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     let sql = if conversation_id.is_some() {
         "WITH boundary AS (
@@ -204,8 +199,7 @@ pub fn list_messages_page(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<MessageRow>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     // Filter: conversation_id IS NULL for legacy messages, or matches given id.
     // Exclude compaction markers — they are DB-level sentinels, not real messages.
     let sql = if conversation_id.is_some() {
@@ -264,8 +258,7 @@ pub fn get_context_window(
     conversation_id: Option<&str>,
     char_budget: usize,
 ) -> Result<Vec<MessageRow>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     // The CTE `boundary` finds the rowid of the most recent compaction marker.
     // If none exists, COALESCE falls back to 0 (scan all messages).
@@ -366,8 +359,7 @@ pub fn compact_old_tool_outputs(
     protect_chars: usize,
     min_chars: usize,
 ) -> Result<usize> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     // Find all tool messages ordered newest-first.
     let sql = if conversation_id.is_some() {
@@ -412,8 +404,7 @@ pub fn compact_old_tool_outputs(
     }
 
     // Compact each eligible row: replace content with a placeholder.
-    let update_sql =
-        "UPDATE messages SET content = ?1, char_count = ?2 WHERE rowid = ?3";
+    let update_sql = "UPDATE messages SET content = ?1, char_count = ?2 WHERE rowid = ?3";
     let mut compacted = 0usize;
     for (rowid, original_chars) in &to_compact {
         let placeholder = serde_json::json!({
@@ -422,10 +413,7 @@ pub fn compact_old_tool_outputs(
         });
         let placeholder_str = placeholder.to_string();
         let new_char_count = placeholder_str.len() as i64;
-        conn.execute(
-            update_sql,
-            params![placeholder_str, new_char_count, rowid],
-        )?;
+        conn.execute(update_sql, params![placeholder_str, new_char_count, rowid])?;
         compacted += 1;
     }
 
@@ -460,7 +448,8 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
-                compaction_model: None, theme: None,
+                compaction_model: None,
+                theme: None,
             },
         )?;
         Ok(())
@@ -729,23 +718,54 @@ mod tests {
         make_agent(&db, "a1")?;
 
         // Insert user, assistant, compaction marker, then another user
-        insert_message_at(&db, &MessageRow {
-            id: "m1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "hello"}), char_count: 5,
-        }, 100)?;
-        insert_message_at(&db, &MessageRow {
-            id: "m2".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "assistant".into(), content: json!({"content": "hi"}), char_count: 2,
-        }, 101)?;
-        insert_message_at(&db, &MessageRow {
-            id: "c1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "compaction".into(),
-            content: json!({"content": "[Compaction marker: 1 turn]"}), char_count: 0,
-        }, 102)?;
-        insert_message_at(&db, &MessageRow {
-            id: "m3".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "next"}), char_count: 4,
-        }, 103)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "hello"}),
+                char_count: 5,
+            },
+            100,
+        )?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "m2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "assistant".into(),
+                content: json!({"content": "hi"}),
+                char_count: 2,
+            },
+            101,
+        )?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "c1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: json!({"content": "[Compaction marker: 1 turn]"}),
+                char_count: 0,
+            },
+            102,
+        )?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "m3".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "next"}),
+                char_count: 4,
+            },
+            103,
+        )?;
 
         // list_messages_page should return 3 messages (no compaction)
         let msgs = list_messages_page(&db, "a1", None, 100, 0)?;
@@ -761,30 +781,53 @@ mod tests {
 
         // Insert 3 old messages, then a compaction marker, then 2 new messages.
         for i in 1..=3 {
-            insert_message_at(&db, &MessageRow {
-                id: format!("old{i}"), agent_id: "a1".into(), conversation_id: None,
-                role: "user".into(),
-                content: json!({"content": format!("old message {i}")}),
-                char_count: 15,
-            }, 100 + i as i64)?;
+            insert_message_at(
+                &db,
+                &MessageRow {
+                    id: format!("old{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "user".into(),
+                    content: json!({"content": format!("old message {i}")}),
+                    char_count: 15,
+                },
+                100 + i as i64,
+            )?;
         }
-        insert_message_at(&db, &MessageRow {
-            id: "compact1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "compaction".into(),
-            content: json!({"content": "[Compaction marker]"}), char_count: 0,
-        }, 104)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "compact1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: json!({"content": "[Compaction marker]"}),
+                char_count: 0,
+            },
+            104,
+        )?;
         for i in 1..=2 {
-            insert_message_at(&db, &MessageRow {
-                id: format!("new{i}"), agent_id: "a1".into(), conversation_id: None,
-                role: "user".into(),
-                content: json!({"content": format!("new message {i}")}),
-                char_count: 15,
-            }, 104 + i as i64)?;
+            insert_message_at(
+                &db,
+                &MessageRow {
+                    id: format!("new{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "user".into(),
+                    content: json!({"content": format!("new message {i}")}),
+                    char_count: 15,
+                },
+                104 + i as i64,
+            )?;
         }
 
         // With a large budget, should only get the 2 new messages (after marker)
         let window = get_context_window(&db, "a1", None, 999_999)?;
-        assert_eq!(window.len(), 2, "should only load messages after compaction marker");
+        assert_eq!(
+            window.len(),
+            2,
+            "should only load messages after compaction marker"
+        );
         assert!(window.iter().all(|m| m.id.starts_with("new")));
         Ok(())
     }
@@ -796,12 +839,18 @@ mod tests {
 
         // Insert 5 messages with no compaction marker
         for i in 1..=5 {
-            insert_message_at(&db, &MessageRow {
-                id: format!("m{i}"), agent_id: "a1".into(), conversation_id: None,
-                role: "user".into(),
-                content: json!({"content": format!("msg {i}")}),
-                char_count: 5,
-            }, 100 + i as i64)?;
+            insert_message_at(
+                &db,
+                &MessageRow {
+                    id: format!("m{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "user".into(),
+                    content: json!({"content": format!("msg {i}")}),
+                    char_count: 5,
+                },
+                100 + i as i64,
+            )?;
         }
 
         // All 5 should load (backward compatible)
@@ -816,32 +865,70 @@ mod tests {
         make_agent(&db, "a1")?;
 
         // Old messages
-        insert_message_at(&db, &MessageRow {
-            id: "old1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "old"}), char_count: 3,
-        }, 100)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "old1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "old"}),
+                char_count: 3,
+            },
+            100,
+        )?;
         // First compaction marker
-        insert_message_at(&db, &MessageRow {
-            id: "c1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "compaction".into(),
-            content: json!({"content": "[marker 1]"}), char_count: 0,
-        }, 101)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "c1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: json!({"content": "[marker 1]"}),
+                char_count: 0,
+            },
+            101,
+        )?;
         // Middle messages
-        insert_message_at(&db, &MessageRow {
-            id: "mid1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "middle"}), char_count: 6,
-        }, 102)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "mid1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "middle"}),
+                char_count: 6,
+            },
+            102,
+        )?;
         // Second (latest) compaction marker
-        insert_message_at(&db, &MessageRow {
-            id: "c2".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "compaction".into(),
-            content: json!({"content": "[marker 2]"}), char_count: 0,
-        }, 103)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "c2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: json!({"content": "[marker 2]"}),
+                char_count: 0,
+            },
+            103,
+        )?;
         // New messages
-        insert_message_at(&db, &MessageRow {
-            id: "new1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "new"}), char_count: 3,
-        }, 104)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "new1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "new"}),
+                char_count: 3,
+            },
+            104,
+        )?;
 
         // Should only get the 1 message after the latest marker
         let window = get_context_window(&db, "a1", None, 999_999)?;
@@ -858,12 +945,18 @@ mod tests {
         make_agent(&db, "a1")?;
 
         for (i, id) in ["m1", "m2", "m3"].iter().enumerate() {
-            insert_message_at(&db, &MessageRow {
-                id: id.to_string(), agent_id: "a1".into(), conversation_id: None,
-                role: "user".into(),
-                content: json!({"content": format!("msg{i}")}),
-                char_count: 4,
-            }, 100 + i as i64)?;
+            insert_message_at(
+                &db,
+                &MessageRow {
+                    id: id.to_string(),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "user".into(),
+                    content: json!({"content": format!("msg{i}")}),
+                    char_count: 4,
+                },
+                100 + i as i64,
+            )?;
         }
 
         let rows = list_messages_since_last_compaction(&db, "a1", None, 100)?;
@@ -878,29 +971,68 @@ mod tests {
         make_agent(&db, "a1")?;
 
         // Pre-marker messages
-        insert_message_at(&db, &MessageRow {
-            id: "pre1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "old"}), char_count: 3,
-        }, 100)?;
-        insert_message_at(&db, &MessageRow {
-            id: "pre2".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "assistant".into(), content: json!({"content": "old reply"}), char_count: 9,
-        }, 101)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "pre1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "old"}),
+                char_count: 3,
+            },
+            100,
+        )?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "pre2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "assistant".into(),
+                content: json!({"content": "old reply"}),
+                char_count: 9,
+            },
+            101,
+        )?;
         // Compaction marker
-        insert_message_at(&db, &MessageRow {
-            id: "c1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "compaction".into(),
-            content: json!({"content": "[compacted 2 turns]"}), char_count: 0,
-        }, 102)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "c1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: json!({"content": "[compacted 2 turns]"}),
+                char_count: 0,
+            },
+            102,
+        )?;
         // Post-marker messages
-        insert_message_at(&db, &MessageRow {
-            id: "post1".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "user".into(), content: json!({"content": "new"}), char_count: 3,
-        }, 103)?;
-        insert_message_at(&db, &MessageRow {
-            id: "post2".into(), agent_id: "a1".into(), conversation_id: None,
-            role: "assistant".into(), content: json!({"content": "new reply"}), char_count: 9,
-        }, 104)?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "post1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "new"}),
+                char_count: 3,
+            },
+            103,
+        )?;
+        insert_message_at(
+            &db,
+            &MessageRow {
+                id: "post2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "assistant".into(),
+                content: json!({"content": "new reply"}),
+                char_count: 9,
+            },
+            104,
+        )?;
 
         let rows = list_messages_since_last_compaction(&db, "a1", None, 100)?;
         // Only post-marker messages, no compaction row itself
@@ -919,16 +1051,22 @@ mod tests {
             (100, "m1", "user"),
             (101, "c1", "compaction"),
             (102, "m2", "user"),
-            (103, "c2", "compaction"),  // latest marker
+            (103, "c2", "compaction"), // latest marker
             (104, "m3", "user"),
             (105, "m4", "assistant"),
         ] {
-            insert_message_at(&db, &MessageRow {
-                id: id.into(), agent_id: "a1".into(), conversation_id: None,
-                role: role.into(),
-                content: json!({"content": id}),
-                char_count: if role == "compaction" { 0 } else { 4 },
-            }, ts)?;
+            insert_message_at(
+                &db,
+                &MessageRow {
+                    id: id.into(),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: role.into(),
+                    content: json!({"content": id}),
+                    char_count: if role == "compaction" { 0 } else { 4 },
+                },
+                ts,
+            )?;
         }
 
         let rows = list_messages_since_last_compaction(&db, "a1", None, 100)?;

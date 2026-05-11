@@ -5,9 +5,7 @@ use crossterm::event::{self, Event};
 
 use crate::Result;
 
-use super::{
-    ActiveQuestionDrawState, ActiveQuestionState, RenderLine, TuiApp,
-};
+use super::{ActiveQuestionDrawState, ActiveQuestionState, RenderLine, TuiApp};
 
 impl TuiApp {
     // -- Interactive Question
@@ -62,7 +60,14 @@ impl TuiApp {
                     let res = top.handle_input(key);
                     if matches!(res, crate::overlay_component::OverlayInputResult::Dismiss) {
                         let mut pop = self.overlays.pop().unwrap();
-                        let result = pop.take_result().and_then(|any| any.downcast::<Option<crate::question::QuestionAnswer>>().ok().map(|b| *b)).flatten();
+                        let result = pop
+                            .take_result()
+                            .and_then(|any| {
+                                any.downcast::<Option<crate::question::QuestionAnswer>>()
+                                    .ok()
+                                    .map(|b| *b)
+                            })
+                            .flatten();
                         break result;
                     }
                 }
@@ -145,7 +150,14 @@ impl TuiApp {
                 let res = top.handle_input(key_event);
                 if matches!(res, crate::overlay_component::OverlayInputResult::Dismiss) {
                     let mut pop = self.overlays.pop().unwrap();
-                    let result = pop.take_result().and_then(|any| any.downcast::<Option<crate::question::QuestionAnswer>>().ok().map(|b| *b)).flatten();
+                    let result = pop
+                        .take_result()
+                        .and_then(|any| {
+                            any.downcast::<Option<crate::question::QuestionAnswer>>()
+                                .ok()
+                                .map(|b| *b)
+                        })
+                        .flatten();
                     break result;
                 }
             }
@@ -224,5 +236,4 @@ impl TuiApp {
         self.draw()?;
         Ok(rx)
     }
-
 }

@@ -38,15 +38,17 @@ pub async fn run_rpc_server(session: AgentSession) {
             Ok(mut s) => {
                 s.push('\n');
                 s
-            },
+            }
             Err(e) => {
                 let err_resp = json!({ "error": format!("serialization error: {e}") });
-                let mut s = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error": "critical serialization failure"}"#.to_string());
+                let mut s = serde_json::to_string(&err_resp).unwrap_or_else(|_| {
+                    r#"{"error": "critical serialization failure"}"#.to_string()
+                });
                 s.push('\n');
                 s
             }
         };
-        
+
         if out.write_all(out_line.as_bytes()).await.is_err() {
             break;
         }

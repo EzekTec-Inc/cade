@@ -6,7 +6,7 @@
 ///   - Press Enter to select one (returns the checkpoint ID for restore)
 ///   - Press 'n' to start a new conversation from this point
 ///   - Press Esc / 'q' to cancel
-use crate::colors::{ThemeColorsExt,};
+use crate::colors::ThemeColorsExt;
 use crate::{Result, colors::ThemeColors, overlay};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{

@@ -44,8 +44,7 @@ const PASSWORD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300
 fn generate_token() -> String {
     use std::io::Read;
     let mut buf = [0u8; TOKEN_BYTES];
-    let mut rng = std::fs::File::open("/dev/urandom")
-        .expect("cannot open /dev/urandom");
+    let mut rng = std::fs::File::open("/dev/urandom").expect("cannot open /dev/urandom");
     rng.read_exact(&mut buf)
         .expect("failed to read random bytes");
     buf.iter().map(|b| format!("{b:02x}")).collect()
@@ -87,9 +86,7 @@ impl AskpassServer {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .context("bind 127.0.0.1:0 for askpass IPC")?;
-        let addr = listener
-            .local_addr()
-            .context("local_addr after bind")?;
+        let addr = listener.local_addr().context("local_addr after bind")?;
         let token = generate_token();
 
         let server_token = token.clone();
@@ -145,7 +142,7 @@ where
     Fut: std::future::Future<Output = PasswordResponse> + Send + 'static,
 {
     use tokio::io::AsyncReadExt;
-    
+
     let (reader, mut writer) = stream.into_split();
     // Security: Wrap reader in a 4KB take() limit to prevent Memory Exhaustion DoS
     // from malicious local processes sending infinite data without newlines.
@@ -209,7 +206,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{BufReader as TokioBufReader};
+    use tokio::io::BufReader as TokioBufReader;
 
     #[tokio::test]
     async fn server_accepts_valid_token_and_delivers_password() {
@@ -225,13 +222,19 @@ mod tests {
         let mut lines = TokioBufReader::new(reader).lines();
 
         // AUTH
-        writer.write_all(encode_line("AUTH", server.token()).as_bytes()).await.unwrap();
+        writer
+            .write_all(encode_line("AUTH", server.token()).as_bytes())
+            .await
+            .unwrap();
         writer.flush().await.unwrap();
         let ok = lines.next_line().await.unwrap().unwrap();
         assert_eq!(ok, "OK");
 
         // PROMPT
-        writer.write_all(encode_line("PROMPT", "Password:").as_bytes()).await.unwrap();
+        writer
+            .write_all(encode_line("PROMPT", "Password:").as_bytes())
+            .await
+            .unwrap();
         writer.flush().await.unwrap();
         let resp = lines.next_line().await.unwrap().unwrap();
         let (k, v) = decode_line(&resp).unwrap();
@@ -249,7 +252,10 @@ mod tests {
         let (reader, mut writer) = stream.into_split();
         let mut lines = TokioBufReader::new(reader).lines();
 
-        writer.write_all(encode_line("AUTH", "wrong-token").as_bytes()).await.unwrap();
+        writer
+            .write_all(encode_line("AUTH", "wrong-token").as_bytes())
+            .await
+            .unwrap();
         writer.flush().await.unwrap();
         let resp = lines.next_line().await.unwrap().unwrap();
         assert_eq!(resp, "DENY");
@@ -266,13 +272,19 @@ mod tests {
         let mut lines = TokioBufReader::new(reader).lines();
 
         // AUTH
-        writer.write_all(encode_line("AUTH", server.token()).as_bytes()).await.unwrap();
+        writer
+            .write_all(encode_line("AUTH", server.token()).as_bytes())
+            .await
+            .unwrap();
         writer.flush().await.unwrap();
         let ok = lines.next_line().await.unwrap().unwrap();
         assert_eq!(ok, "OK");
 
         // PROMPT → CANCEL
-        writer.write_all(encode_line("PROMPT", "Enter passphrase:").as_bytes()).await.unwrap();
+        writer
+            .write_all(encode_line("PROMPT", "Enter passphrase:").as_bytes())
+            .await
+            .unwrap();
         writer.flush().await.unwrap();
         let resp = lines.next_line().await.unwrap().unwrap();
         assert_eq!(resp, "CANCEL");
@@ -297,11 +309,17 @@ mod tests {
             let (reader, mut writer) = stream.into_split();
             let mut lines = TokioBufReader::new(reader).lines();
 
-            writer.write_all(encode_line("AUTH", server.token()).as_bytes()).await.unwrap();
+            writer
+                .write_all(encode_line("AUTH", server.token()).as_bytes())
+                .await
+                .unwrap();
             writer.flush().await.unwrap();
             let _ok = lines.next_line().await.unwrap().unwrap();
 
-            writer.write_all(encode_line("PROMPT", "pw?").as_bytes()).await.unwrap();
+            writer
+                .write_all(encode_line("PROMPT", "pw?").as_bytes())
+                .await
+                .unwrap();
             writer.flush().await.unwrap();
             let resp = lines.next_line().await.unwrap().unwrap();
             assert!(resp.starts_with("PASSWORD"));

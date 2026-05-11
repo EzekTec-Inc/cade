@@ -518,7 +518,13 @@ Load and follow these skills for all work:
         let skills = parse_required_skills(block);
         assert_eq!(
             skills,
-            vec!["tdd-guide", "strict-project-execution", "caveman", "grill-me", "rust"]
+            vec![
+                "tdd-guide",
+                "strict-project-execution",
+                "caveman",
+                "grill-me",
+                "rust"
+            ]
         );
     }
 

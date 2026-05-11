@@ -14,8 +14,8 @@ pub use context_files::{ContextFile, ContextScope, build_context_block, discover
 pub use packages::{PackageManifest, PackageScope, PackageSource, load_manifest, package_root};
 pub use prompts::{PromptTemplate, discover_prompts, expand_template};
 pub use themes::{
-    Theme, discover_themes, discover_themes_with_builtins, load_theme,
-    get_theme, list_available_themes, ThemeInfo
+    Theme, ThemeInfo, discover_themes, discover_themes_with_builtins, get_theme,
+    list_available_themes, load_theme,
 };
 
 // endregion: --- Re-exports

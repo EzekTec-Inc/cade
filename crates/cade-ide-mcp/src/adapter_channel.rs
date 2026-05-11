@@ -281,20 +281,22 @@ pub(crate) mod tests {
             path: "/tmp/a.rs".into(),
             text_edits: vec![TextEdit {
                 range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end: Position { line: 0, character: 0 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 0,
+                    },
                 },
                 new_text: "// hi\n".into(),
             }],
         };
         let req2 = req.clone();
         let ch2 = ch.clone();
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.apply_edit(req2).await },
-        )
-        .await;
+        let (result, msgs) =
+            round_trip_ok(&ch, &sink, async move { ch2.apply_edit(req2).await }).await;
         assert!(result.is_ok());
         assert_eq!(msgs.len(), 1);
         assert!(
@@ -309,11 +311,9 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.reveal_file("/tmp/b.rs".into()).await },
-        )
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move {
+            ch2.reveal_file("/tmp/b.rs".into()).await
+        })
         .await;
         assert!(result.is_ok());
         assert!(
@@ -329,14 +329,18 @@ pub(crate) mod tests {
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
         let range = Range {
-            start: Position { line: 1, character: 0 },
-            end: Position { line: 1, character: 5 },
+            start: Position {
+                line: 1,
+                character: 0,
+            },
+            end: Position {
+                line: 1,
+                character: 5,
+            },
         };
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.set_selection("/tmp/c.rs".into(), range).await },
-        )
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move {
+            ch2.set_selection("/tmp/c.rs".into(), range).await
+        })
         .await;
         assert!(result.is_ok());
         assert!(matches!(
@@ -353,11 +357,9 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.save(Some("/tmp/d.rs".into())).await },
-        )
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move {
+            ch2.save(Some("/tmp/d.rs".into())).await
+        })
         .await;
         assert!(result.is_ok());
         assert!(matches!(
@@ -372,12 +374,14 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, msgs) =
-            round_trip_ok(&ch, &sink, async move { ch2.save(None).await }).await;
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move { ch2.save(None).await }).await;
         assert!(result.is_ok());
         assert!(matches!(
             &msgs[0],
-            ServerMessage::CallbackRequest { op: CallbackOp::Save { path: None }, .. }
+            ServerMessage::CallbackRequest {
+                op: CallbackOp::Save { path: None },
+                ..
+            }
         ));
     }
 
@@ -388,11 +392,9 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.run_task("cargo-build".into()).await },
-        )
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move {
+            ch2.run_task("cargo-build".into()).await
+        })
         .await;
         assert!(result.is_ok());
         assert!(matches!(
@@ -409,11 +411,9 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.run_terminal("cargo test".into()).await },
-        )
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move {
+            ch2.run_terminal("cargo test".into()).await
+        })
         .await;
         assert!(result.is_ok());
         assert!(matches!(
@@ -430,16 +430,12 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, msgs) = round_trip_ok(
-            &ch,
-            &sink,
-            async move {
-                ch2.debug_control(DebugAction::Start {
-                    config: "unit-tests".into(),
-                })
-                .await
-            },
-        )
+        let (result, msgs) = round_trip_ok(&ch, &sink, async move {
+            ch2.debug_control(DebugAction::Start {
+                config: "unit-tests".into(),
+            })
+            .await
+        })
         .await;
         assert!(result.is_ok());
         assert!(matches!(
@@ -457,11 +453,9 @@ pub(crate) mod tests {
         let sink = CaptureSink::new();
         let ch = make_channel(sink.clone());
         let ch2 = ch.clone();
-        let (result, _) = round_trip_ok(
-            &ch,
-            &sink,
-            async move { ch2.debug_control(DebugAction::Stop).await },
-        )
+        let (result, _) = round_trip_ok(&ch, &sink, async move {
+            ch2.debug_control(DebugAction::Stop).await
+        })
         .await;
         assert!(result.is_ok());
     }
@@ -471,10 +465,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn sink_write_error_surfaces_as_internal_error() {
         let ch = ProtocolEditorChannel::new("broken", Arc::new(ErrorSink));
-        let err = ch
-            .run_task("build".into())
-            .await
-            .expect_err("should fail");
+        let err = ch.run_task("build".into()).await.expect_err("should fail");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::INTERNAL_ERROR.0);
         assert!(err.message.contains("write failed"), "msg={}", err.message);
     }

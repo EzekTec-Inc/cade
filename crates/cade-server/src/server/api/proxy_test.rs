@@ -82,8 +82,7 @@ fn rejects_unknown_host() {
 fn rejects_similar_but_not_matching_host() {
     // `api.anthropic.com.evil.com` must not be allowed just because it
     // contains `api.anthropic.com` as a substring.
-    let err =
-        validate_outbound_url("https://api.anthropic.com.evil.com/v1/messages").unwrap_err();
+    let err = validate_outbound_url("https://api.anthropic.com.evil.com/v1/messages").unwrap_err();
     assert_eq!(err, UrlRejection::HostNotAllowed);
 }
 
@@ -103,7 +102,10 @@ fn allows_exact_openai_host() {
 fn allows_google_generativelanguage_host() {
     let allowed =
         validate_outbound_url("https://generativelanguage.googleapis.com/v1/models").unwrap();
-    assert_eq!(allowed.host_str(), Some("generativelanguage.googleapis.com"));
+    assert_eq!(
+        allowed.host_str(),
+        Some("generativelanguage.googleapis.com")
+    );
 }
 
 #[test]

@@ -24,8 +24,12 @@ pub fn render(
             ui.horizontal(|ui| {
                 if !viewport.is_desktop() {
                     let btn = egui::Button::new(
-                        egui::RichText::new("☰").size(16.0).color(theme.text_primary())
-                    ).fill(egui::Color32::TRANSPARENT).frame(false);
+                        egui::RichText::new("☰")
+                            .size(16.0)
+                            .color(theme.text_primary()),
+                    )
+                    .fill(egui::Color32::TRANSPARENT)
+                    .frame(false);
                     if ui.add(btn).clicked() {
                         toggle_sidebar = true;
                     }

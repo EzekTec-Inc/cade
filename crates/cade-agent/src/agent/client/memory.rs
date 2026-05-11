@@ -98,25 +98,25 @@ impl HttpTransport {
             .await
     }
 
-    /// Record a recent edit by smartly deduplicating and limiting the recent edits list 
+    /// Record a recent edit by smartly deduplicating and limiting the recent edits list
     /// at the bottom of the recent_edits block, avoiding blind truncation.
     pub async fn record_recent_edit(&self, agent_id: &str, path: &str) -> Result<()> {
         let label = "recent_edits";
         let target_line = format!("Recently edited: {path}");
-        
+
         let blocks = self.get_memory(agent_id).await.unwrap_or_default();
         let ws = blocks.into_iter().find(|b| b.label == label);
-        
+
         let mut lines: Vec<String> = if let Some(block) = ws {
             block.value.lines().map(String::from).collect()
         } else {
             Vec::new()
         };
-        
+
         // Remove any existing identical "Recently edited:" lines
         lines.retain(|l| l != &target_line);
         lines.push(target_line);
-        
+
         // Count how many "Recently edited:" lines exist
         let mut recent_edits: Vec<usize> = lines
             .iter()
@@ -124,7 +124,7 @@ impl HttpTransport {
             .filter(|(_, l)| l.starts_with("Recently edited:"))
             .map(|(i, _)| i)
             .collect();
-            
+
         // Keep only the last 10 unique edits
         while recent_edits.len() > 10 {
             let oldest_idx = recent_edits.remove(0);
@@ -134,9 +134,10 @@ impl HttpTransport {
                 *idx -= 1;
             }
         }
-        
+
         let new_value = lines.join("\n");
-        self.upsert_memory_with_limit(agent_id, label, &new_value, None, Some(2000)).await
+        self.upsert_memory_with_limit(agent_id, label, &new_value, None, Some(2000))
+            .await
     }
 
     pub async fn upsert_memory_with_options(
@@ -412,7 +413,12 @@ impl HttpTransport {
     }
 
     /// Query the immutable event log for an agent.
-    pub async fn query_event_log(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
+    pub async fn query_event_log(
+        &self,
+        agent_id: &str,
+        keyword: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<Value>> {
         let mut query_params = vec![("q", keyword.to_string())];
         if let Some(l) = limit {
             query_params.push(("limit", l.to_string()));
@@ -435,7 +441,13 @@ impl HttpTransport {
     }
 
     /// Insert an event into the immutable event log.
-    pub async fn insert_event_log(&self, agent_id: &str, conversation_id: Option<&str>, event_type: &str, content: &str) -> Result<String> {
+    pub async fn insert_event_log(
+        &self,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+        event_type: &str,
+        content: &str,
+    ) -> Result<String> {
         let req_body = json!({
             "conversation_id": conversation_id,
             "event_type": event_type,

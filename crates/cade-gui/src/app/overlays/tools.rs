@@ -13,7 +13,6 @@ pub fn render_tools_overlay(
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
-
     let rect = crate::responsive::overlay_rect(ctx, 560.0, 480.0, None);
     let w = rect.width();
     let h = rect.height();
@@ -165,7 +164,7 @@ pub fn render_question_widget(
     // Height scales with option count.
     let option_rows = question.options.len().max(1) as f32;
     let h = (160.0 + option_rows * 52.0).min(screen.height() - 80.0);
-    
+
     let rect = crate::responsive::overlay_rect(ctx, w, h, None);
     let w = rect.width();
     let h = rect.height();

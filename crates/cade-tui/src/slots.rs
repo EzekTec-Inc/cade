@@ -30,7 +30,6 @@ use ratatui::{Frame, layout::Rect};
 
 use crate::colors::ThemeColors;
 
-
 /// Well-known UI regions where a [`SlotComponent`] can be installed.
 ///
 /// Additional variants may be added in future milestones (e.g.
@@ -183,10 +182,7 @@ mod tests {
         // Old occupant returned to caller.
         assert!(prev.is_some());
         // Footer now holds the new one.
-        assert_eq!(
-            m.get_mut(UiSlot::Footer).unwrap().preferred_height(),
-            2
-        );
+        assert_eq!(m.get_mut(UiSlot::Footer).unwrap().preferred_height(), 2);
     }
 
     #[test]

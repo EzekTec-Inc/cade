@@ -12,8 +12,7 @@ use crate::sqlite::Db;
 /// Disable a skill for an agent (add to blacklist).
 /// Idempotent — safe to call if the row already exists.
 pub fn disable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     conn.execute(
         "INSERT OR IGNORE INTO agent_skill_blacklist (agent_id, skill_id) VALUES (?1, ?2)",
         rusqlite::params![agent_id, skill_id],
@@ -24,8 +23,7 @@ pub fn disable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
 /// Enable a skill for an agent (remove from blacklist).
 /// Idempotent — safe to call even if the row does not exist.
 pub fn enable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     conn.execute(
         "DELETE FROM agent_skill_blacklist WHERE agent_id = ?1 AND skill_id = ?2",
         rusqlite::params![agent_id, skill_id],
@@ -35,11 +33,9 @@ pub fn enable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
 
 /// Return the set of skill IDs that are disabled for `agent_id`.
 pub fn get_disabled_skills(db: &Db, agent_id: &str) -> Result<Vec<String>> {
-    let conn = db
-        .lock();
-    let mut stmt = conn.prepare(
-        "SELECT skill_id FROM agent_skill_blacklist WHERE agent_id = ?1",
-    )?;
+    let conn = db.lock();
+    let mut stmt =
+        conn.prepare("SELECT skill_id FROM agent_skill_blacklist WHERE agent_id = ?1")?;
     let rows = stmt
         .query_map(rusqlite::params![agent_id], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok())
@@ -49,8 +45,7 @@ pub fn get_disabled_skills(db: &Db, agent_id: &str) -> Result<Vec<String>> {
 
 /// Return `true` if `skill_id` is disabled for `agent_id`.
 pub fn is_skill_disabled(db: &Db, agent_id: &str, skill_id: &str) -> Result<bool> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM agent_skill_blacklist WHERE agent_id = ?1 AND skill_id = ?2",
         rusqlite::params![agent_id, skill_id],
@@ -66,7 +61,7 @@ pub fn is_skill_disabled(db: &Db, agent_id: &str, skill_id: &str) -> Result<bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlite::{open, create_agent, AgentRow};
+    use crate::sqlite::{AgentRow, create_agent, open};
 
     fn mem_db() -> Db {
         open(":memory:").expect("in-memory db")

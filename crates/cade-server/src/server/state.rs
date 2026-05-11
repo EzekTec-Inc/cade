@@ -177,8 +177,9 @@ pub struct AppState {
     /// LRU cache for `build_context` outputs to avoid recomputing history loops.
     /// Key: `format!("{agent_id}:{conversation_id}")`
     /// Value: `(max_rowid, cached_context_tuple)`
-    pub context_cache:
-        Arc<parking_lot::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
+    pub context_cache: Arc<
+        parking_lot::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>,
+    >,
 
     // ── Skills ──────────────────────────────────────────────────────────────
     /// All discovered skills (global + project). Populated at boot from

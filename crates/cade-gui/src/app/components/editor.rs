@@ -78,7 +78,9 @@ pub fn render(
                         };
 
                         // Calculate available width by subtracting the badge, prefix, spacing, and send button
-                        let used_w = badge_resp.rect.width() + prefix_resp.rect.width() + ui.spacing().item_spacing.x * 3.0;
+                        let used_w = badge_resp.rect.width()
+                            + prefix_resp.rect.width()
+                            + ui.spacing().item_spacing.x * 3.0;
                         let btn_w = 24.0;
                         let desired_w = (total_avail_w - used_w - btn_w - 16.0).max(100.0);
 

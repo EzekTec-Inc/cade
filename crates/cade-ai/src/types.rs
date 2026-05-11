@@ -1,8 +1,8 @@
+use crate::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_stream::Stream;
-use crate::Result;
 
 #[derive(Debug, Clone)]
 pub struct AiConfig {
@@ -107,4 +107,3 @@ pub trait LlmProvider: Send + Sync {
         req: &CompletionRequest,
     ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
 }
-

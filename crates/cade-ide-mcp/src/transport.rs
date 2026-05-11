@@ -26,11 +26,7 @@
 //! Written to `~/.cade/ide/<pid>.json` on bind, removed on clean exit.
 //! The VS Code extension reads this file to know which port to connect on.
 
-use std::{
-    net::SocketAddr,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -67,8 +63,7 @@ impl TcpSink {
 #[async_trait]
 impl MessageSink for TcpSink {
     async fn send(&self, msg: ServerMessage) -> Result<(), String> {
-        let mut line =
-            serde_json::to_string(&msg).map_err(|e| format!("serialize error: {e}"))?;
+        let mut line = serde_json::to_string(&msg).map_err(|e| format!("serialize error: {e}"))?;
         line.push('\n');
         self.writer
             .lock()
@@ -104,7 +99,10 @@ fn write_discovery(addr: SocketAddr) -> Option<PathBuf> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok()?;
     }
-    let info = DiscoveryInfo { pid, addr: addr.to_string() };
+    let info = DiscoveryInfo {
+        pid,
+        addr: addr.to_string(),
+    };
     let json = serde_json::to_string_pretty(&info).ok()?;
     std::fs::write(&path, json).ok()?;
     Some(path)
@@ -145,17 +143,15 @@ async fn apply_snapshot(state: &EditorState, snap: StateSnapshot) {
     state.set_active_file(snap.active_file).await;
     state.set_selection(snap.selection).await;
     state.replace_diagnostics(snap.diagnostics).await;
-    state.replace_workspace_folders(snap.workspace_folders).await;
+    state
+        .replace_workspace_folders(snap.workspace_folders)
+        .await;
     state.set_visible_range(snap.visible_range).await;
 }
 
 // ── Per-connection read loop ──────────────────────────────────────────────────
 
-async fn handle_connection(
-    stream: TcpStream,
-    state: EditorState,
-    slot: ChannelSlot,
-) {
+async fn handle_connection(stream: TcpStream, state: EditorState, slot: ChannelSlot) {
     let peer = stream.peer_addr().ok();
     tracing::info!(peer = ?peer, "adapter connected");
 
@@ -178,7 +174,10 @@ async fn handle_connection(
         }
     };
     let label = match hello {
-        AdapterMessage::Hello { label, protocol_version } => {
+        AdapterMessage::Hello {
+            label,
+            protocol_version,
+        } => {
             tracing::info!(label, protocol_version, "received Hello");
             label
         }
@@ -194,7 +193,9 @@ async fn handle_connection(
 
     // Send HelloAck before installing the channel.
     if let Err(e) = sink
-        .send(ServerMessage::HelloAck { protocol_version: 1 })
+        .send(ServerMessage::HelloAck {
+            protocol_version: 1,
+        })
         .await
     {
         tracing::warn!("failed to send HelloAck: {e}");
@@ -230,7 +231,10 @@ async fn handle_connection(
     }
 
     // ── Step 4: revert to null channel on disconnect ────────────────────────
-    tracing::info!("adapter '{}' disconnected — reverting to NullEditorChannel", label);
+    tracing::info!(
+        "adapter '{}' disconnected — reverting to NullEditorChannel",
+        label
+    );
     slot.set(Arc::new(NullEditorChannel)).await;
 }
 
@@ -321,9 +325,11 @@ mod tests {
         let (server_read, server_write) = server_stream.into_split();
 
         let sink = TcpSink::new(server_write);
-        sink.send(ServerMessage::HelloAck { protocol_version: 1 })
-            .await
-            .unwrap();
+        sink.send(ServerMessage::HelloAck {
+            protocol_version: 1,
+        })
+        .await
+        .unwrap();
 
         // Read one line from the client side.
         let mut reader = BufReader::new(client);
@@ -331,7 +337,12 @@ mod tests {
         reader.read_line(&mut line).await.unwrap();
 
         let msg: ServerMessage = serde_json::from_str(line.trim()).unwrap();
-        assert!(matches!(msg, ServerMessage::HelloAck { protocol_version: 1 }));
+        assert!(matches!(
+            msg,
+            ServerMessage::HelloAck {
+                protocol_version: 1
+            }
+        ));
         drop(server_read); // silence unused warning
     }
 
@@ -378,10 +389,7 @@ mod tests {
         };
         apply_snapshot(&state, snap).await;
         assert_eq!(state.open_file_count().await, 1);
-        assert_eq!(
-            state.active_file().await.as_deref(),
-            Some("/tmp/a.rs")
-        );
+        assert_eq!(state.active_file().await.as_deref(), Some("/tmp/a.rs"));
         assert_eq!(state.visible_range().await, Some((0, 20)));
     }
 
@@ -399,8 +407,7 @@ mod tests {
         // Spawn the accept loop.
         let s = state.clone();
         let sl = slot.clone();
-        let loop_handle =
-            tokio::spawn(run_accept_loop(s, sl, shutdown_rx, Some(addr_tx)));
+        let loop_handle = tokio::spawn(run_accept_loop(s, sl, shutdown_rx, Some(addr_tx)));
 
         // Wait for the bound address.
         let addr = addr_rx.await.expect("addr");
@@ -422,25 +429,28 @@ mod tests {
         // Expect HelloAck.
         let ack_line = reader.next_line().await.unwrap().unwrap();
         let ack: ServerMessage = serde_json::from_str(&ack_line).unwrap();
-        assert!(matches!(ack, ServerMessage::HelloAck { protocol_version: 1 }));
+        assert!(matches!(
+            ack,
+            ServerMessage::HelloAck {
+                protocol_version: 1
+            }
+        ));
 
         // Send a StateUpdate.
-        let update = serde_json::to_string(&AdapterMessage::StateUpdate(
-            StateSnapshot {
-                open_files: vec![OpenFile {
-                    path: Some("/tmp/hello.rs".into()),
-                    text: "fn main() {}\n".into(),
-                    language_id: "rust".into(),
-                    version: 1,
-                    is_dirty: false,
-                }],
-                active_file: Some("/tmp/hello.rs".into()),
-                selection: None,
-                diagnostics: vec![],
-                workspace_folders: vec![],
-                visible_range: None,
-            },
-        ))
+        let update = serde_json::to_string(&AdapterMessage::StateUpdate(StateSnapshot {
+            open_files: vec![OpenFile {
+                path: Some("/tmp/hello.rs".into()),
+                text: "fn main() {}\n".into(),
+                language_id: "rust".into(),
+                version: 1,
+                is_dirty: false,
+            }],
+            active_file: Some("/tmp/hello.rs".into()),
+            selection: None,
+            diagnostics: vec![],
+            workspace_folders: vec![],
+            visible_range: None,
+        }))
         .unwrap()
             + "\n";
         write_half.write_all(update.as_bytes()).await.unwrap();
@@ -449,10 +459,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 
         assert_eq!(state.open_file_count().await, 1);
-        assert_eq!(
-            state.active_file().await.as_deref(),
-            Some("/tmp/hello.rs")
-        );
+        assert_eq!(state.active_file().await.as_deref(), Some("/tmp/hello.rs"));
 
         // Verify the slot now holds the real channel.
         assert_eq!(slot.get().await.label(), "test-adapter");
@@ -474,8 +481,7 @@ mod tests {
 
         let s = state.clone();
         let sl = slot.clone();
-        let _loop =
-            tokio::spawn(run_accept_loop(s, sl, shutdown_rx, Some(addr_tx)));
+        let _loop = tokio::spawn(run_accept_loop(s, sl, shutdown_rx, Some(addr_tx)));
 
         let addr = addr_rx.await.expect("addr");
 
@@ -505,21 +511,18 @@ mod tests {
         let channel = slot.get().await;
         let ch_clone = channel.clone();
 
-        let call_handle = tokio::spawn(async move {
-            ch_clone
-                .run_task("cargo-build".into())
-                .await
-        });
+        let call_handle =
+            tokio::spawn(async move { ch_clone.run_task("cargo-build".into()).await });
 
         // Adapter side: read the CallbackRequest, send CallbackResponse.
         let req_line = reader.next_line().await.unwrap().unwrap();
         let req: ServerMessage = serde_json::from_str(&req_line).unwrap();
         let id = match req {
-            ServerMessage::CallbackRequest { id, op: CallbackOp::RunTask { ref name }, .. }
-                if name == "cargo-build" =>
-            {
-                id
-            }
+            ServerMessage::CallbackRequest {
+                id,
+                op: CallbackOp::RunTask { ref name },
+                ..
+            } if name == "cargo-build" => id,
             other => panic!("unexpected: {other:?}"),
         };
 

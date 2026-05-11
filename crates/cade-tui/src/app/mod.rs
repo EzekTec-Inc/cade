@@ -1,12 +1,12 @@
 pub mod clipboard;
 pub mod command_palette;
 pub mod input;
+pub mod layout;
 pub mod password;
 pub mod questions;
 pub mod render;
-pub mod layout;
-pub mod timeline;
 pub mod state;
+pub mod timeline;
 pub(crate) use timeline::*;
 
 pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
@@ -19,17 +19,16 @@ pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
     re.replace_all(text, "")
 }
 
+use parking_lot::Mutex;
 use std::io::Write;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::time::Instant;
 
 use crate::Result;
 
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
 use ratatui::{
@@ -47,8 +46,8 @@ use crate::editor::{Editor, ImageEntry};
 pub(crate) use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
-pub use layout::helpers::{cycle_mode, cycle_mode_back, truncate_str};
 use layout::helpers::{abbreviate_cwd, display_tool_name};
+pub use layout::helpers::{cycle_mode, cycle_mode_back, truncate_str};
 use render::{count_wrapped_rows, render_frame};
 
 // -- Constants
@@ -175,9 +174,7 @@ pub enum FilePickerAction {
         query_len_before: usize,
     },
     /// Backspace with empty query — host should delete the `@` and dismiss.
-    DeleteAt {
-        at_pos: usize,
-    },
+    DeleteAt { at_pos: usize },
     /// User typed a character — host should insert it into the editor.
     InsertChar {
         /// Byte offset where the char should go.
@@ -241,8 +238,8 @@ impl crate::overlay_component::OverlayComponent for PickerState {
         &mut self,
         key: crossterm::event::KeyEvent,
     ) -> crate::overlay_component::OverlayInputResult {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use crate::overlay_component::OverlayInputResult;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) => OverlayInputResult::Dismiss,
@@ -284,9 +281,7 @@ impl crate::overlay_component::OverlayComponent for PickerState {
                     OverlayInputResult::Consumed
                 }
             }
-            (KeyCode::Char(c), m)
-                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
-            {
+            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
                 let insert_pos = self.at_pos + 1 + self.query.len();
                 self.pending_action = Some(FilePickerAction::InsertChar {
                     position: insert_pos,
@@ -358,7 +353,8 @@ impl ThemePickerState {
             .filter(|(_, t)| {
                 query_lower.is_empty()
                     || t.meta.name.to_lowercase().contains(&query_lower)
-                    || t.meta.description
+                    || t.meta
+                        .description
                         .as_deref()
                         .unwrap_or("")
                         .to_lowercase()
@@ -366,7 +362,8 @@ impl ThemePickerState {
                     || match t.meta.variant {
                         opaline::ThemeVariant::Dark => "dark",
                         opaline::ThemeVariant::Light => "light",
-                    }.contains(&query_lower)
+                    }
+                    .contains(&query_lower)
             })
             .map(|(i, _)| i)
             .collect();
@@ -411,14 +408,13 @@ impl crate::overlay_component::OverlayComponent for ThemePickerState {
         &mut self,
         key: crossterm::event::KeyEvent,
     ) -> crate::overlay_component::OverlayInputResult {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use crate::overlay_component::OverlayInputResult;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match (key.code, key.modifiers) {
             // Cancel → revert
             (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.pending_action =
-                    Some(ThemePickerAction::Revert(self.original_theme.clone()));
+                self.pending_action = Some(ThemePickerAction::Revert(self.original_theme.clone()));
                 OverlayInputResult::Dismiss
             }
             // Navigate up
@@ -451,9 +447,7 @@ impl crate::overlay_component::OverlayComponent for ThemePickerState {
                 OverlayInputResult::Consumed
             }
             // Filter: type char
-            (KeyCode::Char(c), m)
-                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
-            {
+            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
                 self.query.push(c);
                 self.update_filter();
                 OverlayInputResult::Consumed
@@ -496,8 +490,8 @@ impl crate::overlay_component::OverlayComponent for SummaryState {
         &mut self,
         key: crossterm::event::KeyEvent,
     ) -> crate::overlay_component::OverlayInputResult {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use crate::overlay_component::OverlayInputResult;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _)
@@ -627,8 +621,19 @@ impl OverlayComponent for ActiveQuestionState {
 
     fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
         let sep_area = Rect::new(area.x, area.y, area.width, 1);
-        let body_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
-        crate::app::layout::question::render_question_inline(frame, &self.draw_state, sep_area, body_area, colors);
+        let body_area = Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        );
+        crate::app::layout::question::render_question_inline(
+            frame,
+            &self.draw_state,
+            sep_area,
+            body_area,
+            colors,
+        );
     }
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
@@ -987,9 +992,7 @@ impl TuiApp {
         // Shift+Enter works where supported.
         let _ = crossterm::execute!(
             std::io::stdout(),
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            )
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         );
         Self {
             terminal,
@@ -1052,39 +1055,11 @@ impl TuiApp {
         // theme picker triggered two full draws per keystroke.
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // -- Live output (streaming bash)
-
-
-
 
     // -- Config updates
 
-
-
     // -- Thinking animation
-
-
-
 
     // -- Rendering
 
@@ -1094,9 +1069,10 @@ impl TuiApp {
         self.last_draw_at = Instant::now();
         // Auto-dismiss expired toasts
         if let Some(t) = &self.toast
-            && t.is_expired() {
-                self.toast = None;
-            }
+            && t.is_expired()
+        {
+            self.toast = None;
+        }
         self.tick_streaming_reveal();
         self.tick_smooth_scroll();
         self.draw_impl()
@@ -1228,10 +1204,7 @@ impl TuiApp {
         let agent_name = self.agent_name.clone();
         let model = self.model.clone();
         let last_status = self.last_status.clone();
-        let thinking_text = self
-            .thinking
-            .as_ref()
-            .map(|ts| ts.text.lock().clone());
+        let thinking_text = self.thinking.as_ref().map(|ts| ts.text.lock().clone());
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
         let expanded_items = self.expanded_items.clone();
@@ -1300,7 +1273,9 @@ impl TuiApp {
                 &last_status,
                 thinking_text.as_deref(),
                 thinking_elapsed,
-                overlay_stack.last().map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
+                overlay_stack
+                    .last()
+                    .map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
                 pending_lines,
                 queued_count,
                 &cwd,
@@ -1385,10 +1360,7 @@ impl TuiApp {
                 crossterm::cursor::Show
             );
         } else {
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                crossterm::cursor::Hide
-            );
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide);
         }
 
         // CSI 2026: end synchronized output — terminal flushes the buffered
@@ -1408,17 +1380,10 @@ impl TuiApp {
         }
         Ok(())
     }
-
-
-
-
-
 }
-
 
 /// Called from repl.rs after each usage_statistics SSE event.
-impl TuiApp {
-}
+impl TuiApp {}
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
@@ -1433,7 +1398,6 @@ impl Drop for TuiApp {
     }
 }
 
-
 // region:    --- Tests
 
 #[cfg(test)]
@@ -1441,8 +1405,8 @@ mod tests {
     #[allow(unused)]
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
-    use super::*;
     use super::render::count_wrapped_segment;
+    use super::*;
 
     #[test]
     fn test_app_question_result_formatting() {
@@ -1579,13 +1543,13 @@ mod tests {
 
     #[test]
     fn test_snap_to_char_boundary_emoji() {
-        let s = "a🎉b";  // 🎉 is 4 bytes
+        let s = "a🎉b"; // 🎉 is 4 bytes
         // Byte layout: a(1) 🎉(4) b(1) = 6 bytes
-        assert_eq!(snap_to_char_boundary(s, 1), 1);  // after 'a'
-        assert_eq!(snap_to_char_boundary(s, 2), 1);  // inside emoji, snap back to after 'a'
-        assert_eq!(snap_to_char_boundary(s, 3), 1);  // still inside emoji
-        assert_eq!(snap_to_char_boundary(s, 4), 1);  // still inside emoji
-        assert_eq!(snap_to_char_boundary(s, 5), 5);  // after emoji — valid
+        assert_eq!(snap_to_char_boundary(s, 1), 1); // after 'a'
+        assert_eq!(snap_to_char_boundary(s, 2), 1); // inside emoji, snap back to after 'a'
+        assert_eq!(snap_to_char_boundary(s, 3), 1); // still inside emoji
+        assert_eq!(snap_to_char_boundary(s, 4), 1); // still inside emoji
+        assert_eq!(snap_to_char_boundary(s, 5), 5); // after emoji — valid
     }
     #[test]
     fn test_toast_expires_after_ttl() {
@@ -1637,7 +1601,11 @@ mod tests {
         let wrote = tick_bg_pending_toast(4, &mut last, &mut toast);
         assert!(wrote);
         assert!(
-            toast.as_ref().unwrap().message.contains("4 subagents finished"),
+            toast
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("4 subagents finished"),
             "got: {}",
             toast.unwrap().message
         );
@@ -1669,7 +1637,11 @@ mod tests {
     #[test]
     fn plan_state_has_scroll_offset_defaulting_to_zero() {
         let plan = PlanState {
-            steps: vec![PlanStep { id: 1, description: "task".into(), is_done: false }],
+            steps: vec![PlanStep {
+                id: 1,
+                description: "task".into(),
+                is_done: false,
+            }],
             is_visible: true,
             scroll_offset: 0,
         };
@@ -1693,7 +1665,11 @@ mod tests {
         // First incomplete is step 11 (index 10).
         // Should scroll so step 11 is visible.
         // With 8 visible rows, offset should be at least 10 - 7 = 3
-        assert!(plan.scroll_offset >= 3, "scroll_offset={}", plan.scroll_offset);
+        assert!(
+            plan.scroll_offset >= 3,
+            "scroll_offset={}",
+            plan.scroll_offset
+        );
         assert!(plan.scroll_offset <= 10);
     }
 

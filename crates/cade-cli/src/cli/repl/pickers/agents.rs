@@ -1,7 +1,7 @@
-use cade_agent::agent::client::AgentState;
-use crate::cli::repl::AgentPickerResult;
-use crate::Result;
 use super::super::Repl;
+use crate::Result;
+use crate::cli::repl::AgentPickerResult;
+use cade_agent::agent::client::AgentState;
 
 impl Repl {
     /// `/agents` TUI picker — full-screen on TuiApp terminal.
@@ -130,13 +130,7 @@ impl Repl {
                 selected_idx = agents.len().saturating_sub(1);
             }
 
-            do_draw(
-                &app_arc,
-                agents,
-                selected_idx,
-                &marked,
-                &current,
-            )?;
+            do_draw(&app_arc, agents, selected_idx, &marked, &current)?;
 
             if !event::poll(std::time::Duration::from_millis(200))? {
                 continue;

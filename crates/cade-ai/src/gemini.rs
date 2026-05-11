@@ -2,17 +2,17 @@ use crate::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
+use parking_lot::Mutex;
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff, clean_gemini_schema, inline_schema_refs
+    bare_model, clean_gemini_schema, inline_schema_refs, provider_error, retry_with_backoff,
 };
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -81,7 +81,7 @@ struct GeminiCacheEntry {
 /// Below 60s the API rejects with 400; above ~604_800s (7 days) it caps.
 const GEMINI_TTL_MIN_SECS: u64 = 60;
 const GEMINI_TTL_MAX_SECS: u64 = 86_400; // 1 day — anything longer is wasted
-                                         // because skill/memory edits invalidate the hash anyway.
+// because skill/memory edits invalidate the hash anyway.
 /// Default TTL used when the env override is absent/invalid.
 /// 1 hour matches the previous hardcoded value; it's a reasonable middle
 /// ground for typical coding sessions.
@@ -390,8 +390,7 @@ impl GeminiProvider {
                     // turns cause Gemini 400 "function call turn ordering" errors.
                     let merged = if let Some(last) = contents.last_mut() {
                         if last.get("role").and_then(|v| v.as_str()) == Some("model") {
-                            if let Some(arr) =
-                                last.get_mut("parts").and_then(|v| v.as_array_mut())
+                            if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut())
                             {
                                 arr.append(&mut all_parts);
                                 true

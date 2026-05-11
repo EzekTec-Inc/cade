@@ -13,12 +13,12 @@ pub mod dashboard;
 pub mod dashboard_assets;
 pub mod evals;
 pub mod health;
+pub mod mcp;
 pub mod memory_evidence;
 pub mod messages;
 pub mod models;
 pub mod providers;
 pub mod proxy;
-pub mod mcp;
 pub mod run;
 pub mod runs;
 pub mod skills;
@@ -52,14 +52,8 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/:id/messages/stream",
             post(messages::stream_message),
         )
-        .route(
-            "/v1/agents/:id/complete",
-            post(complete::complete),
-        )
-        .route(
-            "/v1/agents/:id/run",
-            post(run::run_agent),
-        )
+        .route("/v1/agents/:id/complete", post(complete::complete))
+        .route("/v1/agents/:id/run", post(run::run_agent))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -133,14 +127,8 @@ pub fn router(state: AppState) -> Router {
                 .put(blocks::update_block)
                 .delete(blocks::delete_block),
         )
-        .route(
-            "/v1/agents/:id/blocks/attach",
-            post(blocks::attach_block),
-        )
-        .route(
-            "/v1/agents/:id/blocks/detach",
-            post(blocks::detach_block),
-        )
+        .route("/v1/agents/:id/blocks/attach", post(blocks::attach_block))
+        .route("/v1/agents/:id/blocks/detach", post(blocks::detach_block))
         .route(
             "/v1/agents/:id/archival",
             post(agents::insert_archival_memory_handler),
@@ -182,10 +170,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/:id/reflect",
             post(memory_evidence::trigger_reflect),
         )
-        .route(
-            "/v1/agents/:id/compact",
-            post(compact::compact_handler),
-        )
+        .route("/v1/agents/:id/compact", post(compact::compact_handler))
         .route(
             "/v1/agents/:id/reflection",
             get(memory_evidence::list_reflection),
@@ -204,26 +189,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/:run_id/stream", get(runs::stream_run))
         // Skills
         .route("/v1/skills", get(skills::list_all_skills))
-        .route(
-            "/v1/agents/:id/skills",
-            get(skills::list_agent_skills),
-        )
-        .route(
-            "/v1/agents/:id/skills/load",
-            post(skills::load_skill),
-        )
-        .route(
-            "/v1/agents/:id/skills/unload",
-            post(skills::unload_skill),
-        )
-        .route(
-            "/v1/agents/:id/skills/disable",
-            post(skills::disable_skill),
-        )
-        .route(
-            "/v1/agents/:id/skills/enable",
-            post(skills::enable_skill),
-        )
+        .route("/v1/agents/:id/skills", get(skills::list_agent_skills))
+        .route("/v1/agents/:id/skills/load", post(skills::load_skill))
+        .route("/v1/agents/:id/skills/unload", post(skills::unload_skill))
+        .route("/v1/agents/:id/skills/disable", post(skills::disable_skill))
+        .route("/v1/agents/:id/skills/enable", post(skills::enable_skill))
         // Tool execution log
         .route(
             "/v1/agents/:id/tool_executions",

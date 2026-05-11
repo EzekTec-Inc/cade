@@ -21,7 +21,8 @@ fn make_agent(db: &Db, id: &str) -> Result<()> {
             description: None,
             system_prompt: None,
             created_at: None,
-            compaction_model: None, theme: None,
+            compaction_model: None,
+            theme: None,
         },
     )?;
     Ok(())
@@ -148,7 +149,11 @@ fn get_active_blocks_excludes_long_tier() -> Result<()> {
     set_memory_tier(&db, "a1", "archived_stuff", "long", false)?;
 
     let active = get_active_blocks(&db, "a1")?;
-    assert_eq!(active.len(), 1, "only pinned+short blocks should be returned");
+    assert_eq!(
+        active.len(),
+        1,
+        "only pinned+short blocks should be returned"
+    );
     assert_eq!(active[0].0, "project");
     Ok(())
 }
@@ -254,7 +259,10 @@ fn test_boost_confidence() -> Result<()> {
 
     // Default confidence is 1.0
     let c0 = get_block_confidence(&db, "a1", "project")?;
-    assert!((c0 - 1.0).abs() < f64::EPSILON, "default confidence should be 1.0, got {c0}");
+    assert!(
+        (c0 - 1.0).abs() < f64::EPSILON,
+        "default confidence should be 1.0, got {c0}"
+    );
 
     // Boost once
     assert!(boost_confidence(&db, "a1", "project")?);
@@ -302,7 +310,10 @@ fn test_high_confidence_resists_demotion() -> Result<()> {
         boost_confidence(&db, "a1", "important")?;
     }
     let c = get_block_confidence(&db, "a1", "important")?;
-    assert!(c >= CONFIDENCE_RETENTION_THRESHOLD, "confidence {c} should be >= {CONFIDENCE_RETENTION_THRESHOLD}");
+    assert!(
+        c >= CONFIDENCE_RETENTION_THRESHOLD,
+        "confidence {c} should be >= {CONFIDENCE_RETENTION_THRESHOLD}"
+    );
 
     // Advance turns way past threshold
     for _ in 0..50 {
@@ -315,11 +326,25 @@ fn test_high_confidence_resists_demotion() -> Result<()> {
 
     // "forgettable" should be demoted, "important" should resist
     let full = get_memory_blocks_full(&db, "a1")?;
-    let important_tier = full.iter().find(|(l, _, _, _)| l == "important").map(|t| &t.3);
-    let forgettable_tier = full.iter().find(|(l, _, _, _)| l == "forgettable").map(|t| &t.3);
+    let important_tier = full
+        .iter()
+        .find(|(l, _, _, _)| l == "important")
+        .map(|t| &t.3);
+    let forgettable_tier = full
+        .iter()
+        .find(|(l, _, _, _)| l == "forgettable")
+        .map(|t| &t.3);
 
-    assert_eq!(important_tier, Some(&"short".to_string()), "high-confidence block should stay short");
-    assert_eq!(forgettable_tier, Some(&"long".to_string()), "low-confidence block should be demoted");
+    assert_eq!(
+        important_tier,
+        Some(&"short".to_string()),
+        "high-confidence block should stay short"
+    );
+    assert_eq!(
+        forgettable_tier,
+        Some(&"long".to_string()),
+        "low-confidence block should be demoted"
+    );
     assert_eq!(promoted, 1, "only one block should be demoted");
 
     Ok(())
@@ -386,7 +411,14 @@ fn survival_active_goal_persists_across_reopen() -> Result<()> {
         let task = "Current task: implement Phase B.\n\
                     Files modified: crates/cade-embed/*\n\
                     Next: wire hybrid retrieval.";
-        upsert_memory_block(&db, "survivor", "active_goal", task, Some("active task"), None)?;
+        upsert_memory_block(
+            &db,
+            "survivor",
+            "active_goal",
+            task,
+            Some("active task"),
+            None,
+        )?;
 
         // Simulate many idle turns elapsing WITHOUT touching active_goal
         for _ in 0..200 {
@@ -517,7 +549,14 @@ fn schema_snapshot_locks_known_tables() -> Result<()> {
 
     // -- messages
     let msg_cols = column_names(&conn, "messages")?;
-    for required in &["id", "agent_id", "role", "content", "char_count", "created_at"] {
+    for required in &[
+        "id",
+        "agent_id",
+        "role",
+        "content",
+        "char_count",
+        "created_at",
+    ] {
         assert!(
             msg_cols.iter().any(|c| c == required),
             "messages.{required} missing"
@@ -573,7 +612,10 @@ fn export_round_trips_blocks_and_archival() -> Result<()> {
     )?;
 
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let out_dir = std::env::temp_dir().join(format!("cade_export_{nanos}"));
 
     let report = export_memory_to_rag_dir(&db, "a1", &out_dir)?;
@@ -594,7 +636,8 @@ fn export_round_trips_blocks_and_archival() -> Result<()> {
 
     // -- Verify archival
     let archival_dir = out_dir.join("archival");
-    let entries: Vec<_> = std::fs::read_dir(&archival_dir)?.collect::<std::result::Result<_, _>>()?;
+    let entries: Vec<_> =
+        std::fs::read_dir(&archival_dir)?.collect::<std::result::Result<_, _>>()?;
     assert_eq!(entries.len(), 1);
     let archival_body = std::fs::read_to_string(entries[0].path())?;
     assert!(archival_body.contains("tier: archival"));
@@ -614,7 +657,10 @@ fn export_removes_stale_files_on_rerun() -> Result<()> {
     upsert_memory_block(&db, "a1", "foo", "v1", None, None)?;
 
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let out_dir = std::env::temp_dir().join(format!("cade_export_stale_{nanos}"));
 
     export_memory_to_rag_dir(&db, "a1", &out_dir)?;
@@ -645,7 +691,10 @@ fn export_sanitizes_pathological_labels() -> Result<()> {
     upsert_memory_block(&db, "a1", "path/traversal", "content-b", None, None)?;
 
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let out_dir = std::env::temp_dir().join(format!("cade_export_safe_{nanos}"));
 
     let report = export_memory_to_rag_dir(&db, "a1", &out_dir)?;
@@ -664,7 +713,6 @@ fn export_sanitizes_pathological_labels() -> Result<()> {
     let _ = std::fs::remove_dir_all(&out_dir);
     Ok(())
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // M1 — active_goal auto-pin on first non-empty write
@@ -687,7 +735,14 @@ fn m1_active_goal_auto_pins_on_first_nonempty_write() -> Result<()> {
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
-    upsert_memory_block(&db, "a1", "active_goal", "Active task: implement M1", None, None)?;
+    upsert_memory_block(
+        &db,
+        "a1",
+        "active_goal",
+        "Active task: implement M1",
+        None,
+        None,
+    )?;
 
     let active = get_active_blocks(&db, "a1")?;
     let (_, _, _, tier, _) = active
@@ -809,7 +864,10 @@ fn test_create_standalone_block() -> Result<()> {
 
     // NOT in any agent junction
     let agents = list_agents_for_block(&db, &id)?;
-    assert!(agents.is_empty(), "standalone block must not be attached to any agent");
+    assert!(
+        agents.is_empty(),
+        "standalone block must not be attached to any agent"
+    );
     Ok(())
 }
 
@@ -885,7 +943,10 @@ fn test_unlink_shared_memory_block() -> Result<()> {
     assert!(unlink_shared_memory_block(&db, "a1", &id)?);
     let blocks = get_memory_blocks(&db, "a1")?;
     assert!(blocks.is_empty());
-    assert!(get_block_by_id(&db, &id)?.is_some(), "block must still exist");
+    assert!(
+        get_block_by_id(&db, &id)?.is_some(),
+        "block must still exist"
+    );
 
     // Second unlink returns false
     assert!(!unlink_shared_memory_block(&db, "a1", &id)?);
@@ -978,8 +1039,14 @@ fn typed_decision_block_gets_confidence_boost() -> Result<()> {
     make_agent(&db, "a1")?;
 
     upsert_memory_block_typed(
-        &db, "a1", "db_choice", "use postgres", None, None,
-        Some("decision"), None,
+        &db,
+        "a1",
+        "db_choice",
+        "use postgres",
+        None,
+        None,
+        Some("decision"),
+        None,
     )?;
 
     let c = get_block_confidence(&db, "a1", "db_choice")?;
@@ -996,8 +1063,14 @@ fn typed_constraint_block_gets_confidence_boost() -> Result<()> {
     make_agent(&db, "a1")?;
 
     upsert_memory_block_typed(
-        &db, "a1", "no_new_deps", "no new dependencies without approval", None, None,
-        Some("constraint"), None,
+        &db,
+        "a1",
+        "no_new_deps",
+        "no new dependencies without approval",
+        None,
+        None,
+        Some("constraint"),
+        None,
     )?;
 
     let c = get_block_confidence(&db, "a1", "no_new_deps")?;
@@ -1014,8 +1087,14 @@ fn typed_convention_block_gets_confidence_boost() -> Result<()> {
     make_agent(&db, "a1")?;
 
     upsert_memory_block_typed(
-        &db, "a1", "commit_style", "use conventional commits", None, None,
-        Some("convention"), None,
+        &db,
+        "a1",
+        "commit_style",
+        "use conventional commits",
+        None,
+        None,
+        Some("convention"),
+        None,
     )?;
 
     let c = get_block_confidence(&db, "a1", "commit_style")?;
@@ -1032,8 +1111,14 @@ fn typed_generic_block_does_not_get_boost() -> Result<()> {
     make_agent(&db, "a1")?;
 
     upsert_memory_block_typed(
-        &db, "a1", "random_note", "some note", None, None,
-        Some("generic"), None,
+        &db,
+        "a1",
+        "random_note",
+        "some note",
+        None,
+        None,
+        Some("generic"),
+        None,
     )?;
 
     let c = get_block_confidence(&db, "a1", "random_note")?;
@@ -1052,8 +1137,14 @@ fn typed_decision_resists_demotion_after_one_search_hit() -> Result<()> {
     make_agent(&db, "a1")?;
 
     upsert_memory_block_typed(
-        &db, "a1", "arch_choice", "chose microservices", None, None,
-        Some("decision"), None,
+        &db,
+        "a1",
+        "arch_choice",
+        "chose microservices",
+        None,
+        None,
+        Some("decision"),
+        None,
     )?;
 
     // One search hit
@@ -1071,7 +1162,10 @@ fn typed_decision_resists_demotion_after_one_search_hit() -> Result<()> {
     let current_turn = get_turn_counter(&db, "a1")?;
 
     let promoted = promote_stale_blocks(&db, "a1", current_turn, 80)?;
-    assert_eq!(promoted, 0, "decision block with one search hit should resist demotion");
+    assert_eq!(
+        promoted, 0,
+        "decision block with one search hit should resist demotion"
+    );
 
     Ok(())
 }
@@ -1107,7 +1201,10 @@ fn f7_bump_block_access_increments_count_and_stamp() -> Result<()> {
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     assert_eq!(count, 3, "access_count must reflect three reads");
-    assert_eq!(stamp, current_turn, "last_access_turn must equal current turn");
+    assert_eq!(
+        stamp, current_turn,
+        "last_access_turn must equal current turn"
+    );
     Ok(())
 }
 
@@ -1205,7 +1302,10 @@ fn f7_access_bump_is_scoped_to_agent() -> Result<()> {
         |r| r.get(0),
     )?;
     assert_eq!(a1_count, 2, "a1's block must have 2 accesses");
-    assert_eq!(a2_count, 0, "a2's block must NOT have inherited any accesses");
+    assert_eq!(
+        a2_count, 0,
+        "a2's block must NOT have inherited any accesses"
+    );
     Ok(())
 }
 
@@ -1245,21 +1345,21 @@ fn upsert_truncates_when_exceeding_char_limit() -> Result<()> {
 #[test]
 fn extract_keywords_returns_distinctive_terms() -> Result<()> {
     use super::extract_keywords;
-    
+
     let text = "The Rust programming language is a systems programming language that focuses on memory safety. Rust provides zero-cost abstractions and memory management without garbage collection.";
     let keywords = extract_keywords(text, 5);
-    
+
     // Should extract distinctive terms, not stop words
     assert_eq!(keywords.len(), 5);
     assert!(keywords.contains(&"programming".to_string()));
     assert!(keywords.contains(&"rust".to_string()) || keywords.contains(&"memory".to_string()));
     assert!(!keywords.contains(&"the".to_string()));
     assert!(!keywords.contains(&"is".to_string()));
-    
+
     // Empty text should return empty vec
     let empty_keywords = extract_keywords("", 5);
     assert!(empty_keywords.is_empty());
-    
+
     Ok(())
 }
 
@@ -1277,7 +1377,10 @@ fn memory_blocks_fts_exists_after_migration() -> Result<()> {
         [],
         |r| r.get(0),
     )?;
-    assert_eq!(count, 1, "memory_blocks_fts virtual table must exist after migrations");
+    assert_eq!(
+        count, 1,
+        "memory_blocks_fts virtual table must exist after migrations"
+    );
     Ok(())
 }
 
@@ -1300,7 +1403,10 @@ fn memory_blocks_fts_indexes_upserted_blocks() -> Result<()> {
         rusqlite::params!["mutex"],
         |r| r.get(0),
     )?;
-    assert!(hits >= 1, "FTS must index value text — got {hits} hits for 'mutex'");
+    assert!(
+        hits >= 1,
+        "FTS must index value text — got {hits} hits for 'mutex'"
+    );
     Ok(())
 }
 
@@ -1325,7 +1431,10 @@ fn search_memory_blocks_fts_returns_memory_hits_not_messages() -> Result<()> {
         "search_memory_blocks_fts must return memory hits, got 0"
     );
     let labels: Vec<&str> = hits.iter().map(|(_, _, l, _)| l.as_str()).collect();
-    assert!(labels.contains(&"rust_tip"), "expected 'rust_tip' in {labels:?}");
+    assert!(
+        labels.contains(&"rust_tip"),
+        "expected 'rust_tip' in {labels:?}"
+    );
     Ok(())
 }
 
@@ -1383,7 +1492,11 @@ fn upsert_with_embedder_writes_blob() -> Result<()> {
         |r| r.get(0),
     )?;
     let bytes = blob.expect("embedding BLOB must be set");
-    assert_eq!(bytes.len(), 4 * 4, "expected 4 f32 little-endian bytes = 16");
+    assert_eq!(
+        bytes.len(),
+        4 * 4,
+        "expected 4 f32 little-endian bytes = 16"
+    );
 
     // Decode and verify the f32 values round-tripped.
     let mut floats = Vec::with_capacity(4);
@@ -1420,7 +1533,10 @@ fn upsert_with_none_embedder_leaves_embedding_null() -> Result<()> {
         rusqlite::params!["a1", "no_emb"],
         |r| r.get(0),
     )?;
-    assert!(blob.is_none(), "embedding must be NULL when embedder is None");
+    assert!(
+        blob.is_none(),
+        "embedding must be NULL when embedder is None"
+    );
     Ok(())
 }
 
@@ -1506,9 +1622,33 @@ fn search_memory_semantic_ranks_by_cosine_similarity() -> Result<()> {
     make_agent(&db, "a1")?;
 
     // Three blocks, each in its own basis direction.
-    upsert_memory_block_with_embedder(&db, "a1", "alpha", "alpha note", None, None, Some(&LetterEmbedder))?;
-    upsert_memory_block_with_embedder(&db, "a1", "beta",  "bravo note", None, None, Some(&LetterEmbedder))?;
-    upsert_memory_block_with_embedder(&db, "a1", "gamma", "charlie note", None, None, Some(&LetterEmbedder))?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "alpha",
+        "alpha note",
+        None,
+        None,
+        Some(&LetterEmbedder),
+    )?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "beta",
+        "bravo note",
+        None,
+        None,
+        Some(&LetterEmbedder),
+    )?;
+    upsert_memory_block_with_embedder(
+        &db,
+        "a1",
+        "gamma",
+        "charlie note",
+        None,
+        None,
+        Some(&LetterEmbedder),
+    )?;
 
     // Query "a"-direction — should rank `alpha` first.
     let q = LetterEmbedder.embed("alpha query")?;
@@ -1544,7 +1684,10 @@ fn search_memory_semantic_skips_null_embedding_rows() -> Result<()> {
     let q = ZeroEmbedder.embed("anything")?;
     let conn = db.lock();
     let hits = search_memory_semantic(&conn, "a1", &q, None, 10)?;
-    assert!(hits.is_empty(), "rows without an embedding must not appear in semantic results");
+    assert!(
+        hits.is_empty(),
+        "rows without an embedding must not appear in semantic results"
+    );
     Ok(())
 }
 
@@ -1636,14 +1779,17 @@ fn search_memory_hybrid_with_none_embedder_matches_old_behaviour() -> Result<()>
         .into_iter()
         .map(|(l, _, _)| l)
         .collect();
-    let new: Vec<String> = search_memory_hybrid(&db, "a1", "parking_lot", None, None::<&dyn Embedder>)?
-        .into_iter()
-        .map(|(l, _, _)| l)
-        .collect();
-    assert_eq!(old, new, "hybrid with None embedder must equal legacy search_memory");
+    let new: Vec<String> =
+        search_memory_hybrid(&db, "a1", "parking_lot", None, None::<&dyn Embedder>)?
+            .into_iter()
+            .map(|(l, _, _)| l)
+            .collect();
+    assert_eq!(
+        old, new,
+        "hybrid with None embedder must equal legacy search_memory"
+    );
     Ok(())
 }
-
 
 // ── A1: Write-ahead truncation tests ─────────────────────────────────────────
 
@@ -1704,7 +1850,15 @@ fn test_a3_stamp_provenance_sets_columns() -> Result<()> {
     upsert_memory_block(&db, "a1", "fact1", "some fact", None, None)?;
 
     // Stamp provenance
-    stamp_provenance(&db, "a1", "fact1", Some(42), None, Some("tc-abc-123"), Some("tc-abc-123"));
+    stamp_provenance(
+        &db,
+        "a1",
+        "fact1",
+        Some(42),
+        None,
+        Some("tc-abc-123"),
+        Some("tc-abc-123"),
+    );
 
     // Verify columns
     let conn = db.lock();
@@ -1729,7 +1883,15 @@ fn test_a3_stamp_provenance_coalesce_preserves_existing() -> Result<()> {
     upsert_memory_block(&db, "a1", "fact2", "data", None, None)?;
 
     // First stamp sets both
-    stamp_provenance(&db, "a1", "fact2", Some(10), None, Some("tc-first"), Some("tc-first"));
+    stamp_provenance(
+        &db,
+        "a1",
+        "fact2",
+        Some(10),
+        None,
+        Some("tc-first"),
+        Some("tc-first"),
+    );
     // Second stamp with only turn — should not overwrite tc_id
     stamp_provenance(&db, "a1", "fact2", Some(20), None, None, None);
 
@@ -1744,7 +1906,11 @@ fn test_a3_stamp_provenance_coalesce_preserves_existing() -> Result<()> {
     )?;
 
     assert_eq!(turn, Some(20), "turn should be updated to 20");
-    assert_eq!(tc_id.as_deref(), Some("tc-first"), "tc_id should be preserved");
+    assert_eq!(
+        tc_id.as_deref(),
+        Some("tc-first"),
+        "tc_id should be preserved"
+    );
     Ok(())
 }
 
@@ -1772,7 +1938,6 @@ fn test_a3_stamp_provenance_noop_when_both_none() -> Result<()> {
     Ok(())
 }
 
-
 // ── A5: Semantic chunking tests ─────────────────────────────────────────────
 
 #[test]
@@ -1794,19 +1959,28 @@ fn test_a5_chunk_text_long_splits_at_sentences() {
     assert!(text.chars().count() > CHUNK_THRESHOLD);
 
     let chunks = chunk_text(&text);
-    assert!(chunks.len() >= 2, "long text should produce multiple chunks");
+    assert!(
+        chunks.len() >= 2,
+        "long text should produce multiple chunks"
+    );
 
     // All original content should be covered.
     for chunk in &chunks {
         assert!(!chunk.content.is_empty());
-        assert!(chunk.content.len() <= CHUNK_TARGET + 200,
-            "chunk {} is {} bytes, overly large", chunk.index, chunk.content.len());
+        assert!(
+            chunk.content.len() <= CHUNK_TARGET + 200,
+            "chunk {} is {} bytes, overly large",
+            chunk.index,
+            chunk.content.len()
+        );
     }
 
     // Last chunk should end at or near the text end.
     let last = &chunks[chunks.len() - 1];
-    assert!(text.ends_with(last.content.trim_end()),
-        "last chunk should cover the end of text");
+    assert!(
+        text.ends_with(last.content.trim_end()),
+        "last chunk should cover the end of text"
+    );
 }
 
 #[test]
@@ -1819,13 +1993,23 @@ fn test_a5_chunk_text_overlap_exists() {
     let chunks = chunk_text(&text);
     if chunks.len() >= 2 {
         // Check that consecutive chunks have overlapping content.
-        let c0_end: String = chunks[0].content.chars().rev().take(30).collect::<String>()
-            .chars().rev().collect();
+        let c0_end: String = chunks[0]
+            .content
+            .chars()
+            .rev()
+            .take(30)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
         let c1_start: String = chunks[1].content.chars().take(60).collect();
         // The overlap means some substring at the end of chunk 0 appears
         // at the start of chunk 1.
         let overlap_found = c1_start.contains(&c0_end[..c0_end.len().min(20)]);
-        assert!(overlap_found, "chunks should overlap by ~{CHUNK_OVERLAP} chars");
+        assert!(
+            overlap_found,
+            "chunks should overlap by ~{CHUNK_OVERLAP} chars"
+        );
     }
 }
 
@@ -1854,7 +2038,10 @@ fn test_a5_rechunk_block_stores_chunks() -> Result<()> {
         [],
         |r| r.get(0),
     )?;
-    assert!(count >= 2, "big block should have multiple chunks, got {count}");
+    assert!(
+        count >= 2,
+        "big block should have multiple chunks, got {count}"
+    );
     Ok(())
 }
 
@@ -1884,7 +2071,9 @@ fn test_a5_rechunk_replaces_old_chunks() -> Result<()> {
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
-    let big1: String = (0..25).map(|i| format!("Version1 sentence number {} with extra text here. ", i)).collect();
+    let big1: String = (0..25)
+        .map(|i| format!("Version1 sentence number {} with extra text here. ", i))
+        .collect();
     upsert_memory_block(&db, "a1", "evolving", &big1, None, None)?;
     rechunk_block(&db, "a1", "evolving", &big1, None);
 
@@ -1900,7 +2089,9 @@ fn test_a5_rechunk_replaces_old_chunks() -> Result<()> {
     drop(conn);
 
     // Re-write the block with different content.
-    let big2: String = (0..25).map(|i| format!("Version2 updated data point number {}. ", i)).collect();
+    let big2: String = (0..25)
+        .map(|i| format!("Version2 updated data point number {}. ", i))
+        .collect();
     upsert_memory_block(&db, "a1", "evolving", &big2, None, None)?;
     rechunk_block(&db, "a1", "evolving", &big2, None);
 
@@ -1950,13 +2141,15 @@ fn test_a6_search_memory_finds_chunk_content() -> Result<()> {
 
     // Search for the distinctive keyword.
     let results = super::search_memory(&db, "a1", "xylophone_secret_key", None)?;
-    assert!(!results.is_empty(), "search should find chunk with xylophone_secret_key");
+    assert!(
+        !results.is_empty(),
+        "search should find chunk with xylophone_secret_key"
+    );
 
     let found_label = results.iter().any(|(l, _, _)| l == "secrets");
     assert!(found_label, "result should reference the 'secrets' block");
     Ok(())
 }
-
 
 // ── A9: Proactive recall tests ──────────────────────────────────────────────
 
@@ -1978,10 +2171,15 @@ fn test_a9_recall_chunks_finds_keyword_match() -> Result<()> {
 
     // Recall with a query that should match the keyword.
     let results = recall_chunks(&db, "a1", "PostgreSQL connection pool", 3);
-    assert!(!results.is_empty(), "should recall chunks matching PostgreSQL");
+    assert!(
+        !results.is_empty(),
+        "should recall chunks matching PostgreSQL"
+    );
     assert_eq!(results[0].label, "infra");
-    assert!(results[0].chunk_content.contains("PostgreSQL"),
-        "recalled chunk should contain the keyword");
+    assert!(
+        results[0].chunk_content.contains("PostgreSQL"),
+        "recalled chunk should contain the keyword"
+    );
     Ok(())
 }
 
@@ -1998,7 +2196,10 @@ fn test_a9_recall_chunks_empty_query_returns_nothing() -> Result<()> {
     assert!(results.is_empty(), "empty query should return nothing");
 
     let results2 = recall_chunks(&db, "a1", "ab cd", 3); // all words < 3 chars
-    assert!(results2.is_empty(), "short-word-only query should return nothing");
+    assert!(
+        results2.is_empty(),
+        "short-word-only query should return nothing"
+    );
     Ok(())
 }
 
@@ -2017,10 +2218,12 @@ fn test_a9_recall_chunks_deduplicates_by_label() -> Result<()> {
     let results = recall_chunks(&db, "a1", "xylophone instrument", 5);
     // Even though multiple chunks match, we should get at most 1 per label.
     let label_count = results.iter().filter(|r| r.label == "music").count();
-    assert_eq!(label_count, 1, "should deduplicate to 1 result per label, got {label_count}");
+    assert_eq!(
+        label_count, 1,
+        "should deduplicate to 1 result per label, got {label_count}"
+    );
     Ok(())
 }
-
 
 // ── A11: Recency × Frequency scoring tests ──────────────────────────────────
 
@@ -2034,8 +2237,10 @@ fn test_a11_score_fresh_high_access_beats_stale() {
     // Block B: written at turn 10, never accessed. Current turn = 100.
     let score_b = recency_frequency_score(100, 10, 0, 0);
 
-    assert!(score_a > score_b,
-        "fresh+frequent ({score_a:.3}) should beat stale+unread ({score_b:.3})");
+    assert!(
+        score_a > score_b,
+        "fresh+frequent ({score_a:.3}) should beat stale+unread ({score_b:.3})"
+    );
 }
 
 #[test]
@@ -2048,12 +2253,17 @@ fn test_a11_score_frequency_boost_is_logarithmic() {
     let score_100 = recency_frequency_score(50, 50, 50, 100);
 
     assert!(score_10 > score_0, "10 accesses should score higher than 0");
-    assert!(score_100 > score_10, "100 accesses should score higher than 10");
+    assert!(
+        score_100 > score_10,
+        "100 accesses should score higher than 10"
+    );
     // Logarithmic: the gap between 0→10 should be larger than 10→100.
     let delta_0_10 = score_10 - score_0;
     let delta_10_100 = score_100 - score_10;
-    assert!(delta_0_10 > delta_10_100 * 0.5,
-        "diminishing returns: 0→10 gap ({delta_0_10:.3}) should be significant vs 10→100 ({delta_10_100:.3})");
+    assert!(
+        delta_0_10 > delta_10_100 * 0.5,
+        "diminishing returns: 0→10 gap ({delta_0_10:.3}) should be significant vs 10→100 ({delta_10_100:.3})"
+    );
 }
 
 #[test]
@@ -2061,14 +2271,23 @@ fn test_a11_score_recency_decay() {
     use super::super::tools::recency_frequency_score;
 
     // Same access count (5), different staleness.
-    let fresh = recency_frequency_score(100, 100, 100, 5);  // 0 turns idle
-    let mid   = recency_frequency_score(100, 50, 50, 5);    // 50 turns idle
-    let stale = recency_frequency_score(100, 0, 0, 5);      // 100 turns idle
+    let fresh = recency_frequency_score(100, 100, 100, 5); // 0 turns idle
+    let mid = recency_frequency_score(100, 50, 50, 5); // 50 turns idle
+    let stale = recency_frequency_score(100, 0, 0, 5); // 100 turns idle
 
-    assert!(fresh > mid, "fresh ({fresh:.3}) should beat mid-stale ({mid:.3})");
-    assert!(mid > stale, "mid-stale ({mid:.3}) should beat very stale ({stale:.3})");
+    assert!(
+        fresh > mid,
+        "fresh ({fresh:.3}) should beat mid-stale ({mid:.3})"
+    );
+    assert!(
+        mid > stale,
+        "mid-stale ({mid:.3}) should beat very stale ({stale:.3})"
+    );
     // At 50 turns idle, recency weight ≈ 0.5.
-    assert!(mid < fresh * 0.7, "50-turn-idle block should score significantly less than fresh");
+    assert!(
+        mid < fresh * 0.7,
+        "50-turn-idle block should score significantly less than fresh"
+    );
 }
 
 #[test]
@@ -2077,8 +2296,22 @@ fn test_a11_search_memory_ranks_frequent_block_higher() -> Result<()> {
     make_agent(&db, "a1")?;
 
     // Both blocks contain the keyword "database".
-    upsert_memory_block(&db, "a1", "old_db_info", "The database uses PostgreSQL", None, None)?;
-    upsert_memory_block(&db, "a1", "new_db_info", "The database connection pool is 20", None, None)?;
+    upsert_memory_block(
+        &db,
+        "a1",
+        "old_db_info",
+        "The database uses PostgreSQL",
+        None,
+        None,
+    )?;
+    upsert_memory_block(
+        &db,
+        "a1",
+        "new_db_info",
+        "The database connection pool is 20",
+        None,
+        None,
+    )?;
 
     // Bump access on old_db_info many times to boost its frequency.
     for _ in 0..8 {
@@ -2089,11 +2322,12 @@ fn test_a11_search_memory_ranks_frequent_block_higher() -> Result<()> {
     assert!(results.len() >= 2, "should find both blocks");
 
     // The frequently-accessed block should rank first despite being written first.
-    assert_eq!(results[0].0, "old_db_info",
-        "frequently-accessed block should rank higher");
+    assert_eq!(
+        results[0].0, "old_db_info",
+        "frequently-accessed block should rank higher"
+    );
     Ok(())
 }
-
 
 // ── A15: Subagent write-back tests ──────────────────────────────────────────
 
@@ -2104,8 +2338,22 @@ fn test_a15_write_back_copies_custom_blocks() -> Result<()> {
     make_agent(&db, "sa_001")?;
 
     // Subagent writes some facts.
-    upsert_memory_block(&db, "sa_001", "api_design", "REST with HATEOAS links", None, None)?;
-    upsert_memory_block(&db, "sa_001", "db_choice", "PostgreSQL 16", Some("database decision"), None)?;
+    upsert_memory_block(
+        &db,
+        "sa_001",
+        "api_design",
+        "REST with HATEOAS links",
+        None,
+        None,
+    )?;
+    upsert_memory_block(
+        &db,
+        "sa_001",
+        "db_choice",
+        "PostgreSQL 16",
+        Some("database decision"),
+        None,
+    )?;
 
     let written = write_back_subagent_memory(&db, "sa_001", "parent");
     assert_eq!(written, 2, "should write back 2 custom blocks");
@@ -2113,12 +2361,21 @@ fn test_a15_write_back_copies_custom_blocks() -> Result<()> {
     // Verify they exist under parent with subagent: prefix.
     let parent_blocks = get_memory_blocks(&db, "parent")?;
     let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
-    assert!(labels.contains(&"subagent:api_design"), "should have subagent:api_design");
-    assert!(labels.contains(&"subagent:db_choice"), "should have subagent:db_choice");
+    assert!(
+        labels.contains(&"subagent:api_design"),
+        "should have subagent:api_design"
+    );
+    assert!(
+        labels.contains(&"subagent:db_choice"),
+        "should have subagent:db_choice"
+    );
 
     // Verify values were copied correctly.
-    let api_val = parent_blocks.iter().find(|(l, _, _)| l == "subagent:api_design")
-        .map(|(_, v, _)| v.as_str()).unwrap_or("");
+    let api_val = parent_blocks
+        .iter()
+        .find(|(l, _, _)| l == "subagent:api_design")
+        .map(|(_, v, _)| v.as_str())
+        .unwrap_or("");
     assert_eq!(api_val, "REST with HATEOAS links");
     Ok(())
 }
@@ -2135,16 +2392,32 @@ fn test_a15_write_back_excludes_system_blocks() -> Result<()> {
     upsert_memory_block(&db, "sa_002", "project", "Rust project", None, None)?;
     upsert_memory_block(&db, "sa_002", "active_goal", "doing stuff", None, None)?;
     upsert_memory_block(&db, "sa_002", "skill:rust", "rust skill body", None, None)?;
-    upsert_memory_block(&db, "sa_002", "finding", "discovered bug in auth", None, None)?;
+    upsert_memory_block(
+        &db,
+        "sa_002",
+        "finding",
+        "discovered bug in auth",
+        None,
+        None,
+    )?;
 
     let written = write_back_subagent_memory(&db, "sa_002", "parent");
     assert_eq!(written, 1, "only 'finding' should be written back");
 
     let parent_blocks = get_memory_blocks(&db, "parent")?;
     let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
-    assert!(labels.contains(&"subagent:finding"), "should have subagent:finding");
-    assert!(!labels.contains(&"subagent:persona"), "should NOT have subagent:persona");
-    assert!(!labels.contains(&"subagent:skill:rust"), "should NOT have subagent:skill:rust");
+    assert!(
+        labels.contains(&"subagent:finding"),
+        "should have subagent:finding"
+    );
+    assert!(
+        !labels.contains(&"subagent:persona"),
+        "should NOT have subagent:persona"
+    );
+    assert!(
+        !labels.contains(&"subagent:skill:rust"),
+        "should NOT have subagent:skill:rust"
+    );
     Ok(())
 }
 
@@ -2186,7 +2459,14 @@ fn test_a15_write_back_excludes_subagent_prefix() -> Result<()> {
     // Simulate a subagent that inherited `subagent:foo` from a previous
     // write-back cycle (the parent seeded it), plus a genuine new finding.
     upsert_memory_block(&db, "sa_005", "subagent:foo", "inherited data", None, None)?;
-    upsert_memory_block(&db, "sa_005", "subagent:bar:baz", "deeply inherited", None, None)?;
+    upsert_memory_block(
+        &db,
+        "sa_005",
+        "subagent:bar:baz",
+        "deeply inherited",
+        None,
+        None,
+    )?;
     upsert_memory_block(&db, "sa_005", "new_finding", "fresh discovery", None, None)?;
 
     let written = write_back_subagent_memory(&db, "sa_005", "parent");

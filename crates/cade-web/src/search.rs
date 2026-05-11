@@ -3,7 +3,6 @@
 /// Provider priority:
 /// 1. Brave Search API (when `BRAVE_SEARCH_API_KEY` is set) — best results
 /// 2. DuckDuckGo Instant Answers API (free, no key) — fallback
-
 use serde_json::Value;
 
 use crate::Result;

@@ -42,11 +42,7 @@ pub async fn create_block(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let label = body["label"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let label = body["label"].as_str().unwrap_or("").trim().to_string();
     let value = body["value"].as_str().unwrap_or("").to_string();
     let description = body["description"].as_str();
     let max_chars = body["max_chars"].as_u64().map(|n| n as usize);
@@ -77,8 +73,8 @@ pub async fn list_blocks(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let label_filter = params.get("label").map(String::as_str);
-    let blocks = sqlite::list_all_blocks(&state.db, label_filter)
-        .map_err(|e| server_err(e.to_string()))?;
+    let blocks =
+        sqlite::list_all_blocks(&state.db, label_filter).map_err(|e| server_err(e.to_string()))?;
     let arr: Vec<Value> = blocks.iter().map(block_to_json).collect();
     Ok(Json(json!({ "blocks": arr })))
 }
@@ -90,8 +86,8 @@ pub async fn get_block(
     State(state): State<AppState>,
     Path(block_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let info = sqlite::get_block_by_id(&state.db, &block_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let info =
+        sqlite::get_block_by_id(&state.db, &block_id).map_err(|e| server_err(e.to_string()))?;
     match info {
         Some(b) => {
             let agents = sqlite::list_agents_for_block(&state.db, &block_id)
@@ -115,8 +111,8 @@ pub async fn update_block(
     Path(block_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let existing = sqlite::get_block_by_id(&state.db, &block_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let existing =
+        sqlite::get_block_by_id(&state.db, &block_id).map_err(|e| server_err(e.to_string()))?;
     let Some(existing) = existing else {
         return Err((
             StatusCode::NOT_FOUND,
@@ -178,11 +174,7 @@ pub async fn attach_block(
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let block_id = body["block_id"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let block_id = body["block_id"].as_str().unwrap_or("").trim().to_string();
     if block_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -191,8 +183,8 @@ pub async fn attach_block(
     }
 
     // Verify block exists
-    let exists = sqlite::get_block_by_id(&state.db, &block_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let exists =
+        sqlite::get_block_by_id(&state.db, &block_id).map_err(|e| server_err(e.to_string()))?;
     if exists.is_none() {
         return Err((
             StatusCode::NOT_FOUND,
@@ -213,11 +205,7 @@ pub async fn detach_block(
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let block_id = body["block_id"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let block_id = body["block_id"].as_str().unwrap_or("").trim().to_string();
     if block_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -232,7 +220,9 @@ pub async fn detach_block(
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(json!({ "detail": format!("Block '{block_id}' not attached to agent '{agent_id}'") })),
+            Json(
+                json!({ "detail": format!("Block '{block_id}' not attached to agent '{agent_id}'") }),
+            ),
         ))
     }
 }

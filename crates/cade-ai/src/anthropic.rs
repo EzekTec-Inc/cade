@@ -71,9 +71,10 @@ pub(crate) fn supports_adaptive_thinking(model: &str) -> bool {
         let prefix = format!("claude-{family}-");
         if let Some(rest) = bare.strip_prefix(&prefix)
             && let Some(first) = rest.split('-').next()
-                && let Ok(n) = first.parse::<u32>() {
-                    return n >= 4;
-                }
+            && let Ok(n) = first.parse::<u32>()
+        {
+            return n >= 4;
+        }
     }
     false
 }

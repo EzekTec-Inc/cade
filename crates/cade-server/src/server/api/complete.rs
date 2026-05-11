@@ -237,7 +237,10 @@ mod tests {
             allowed_origin: None,
             max_context_budget: None,
         });
-    AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        AppState {
+            subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             db,
             llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
                 anthropic_api_key: None,

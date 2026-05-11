@@ -27,8 +27,7 @@ pub fn recency_frequency_score(
 }
 
 pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     conn.execute(
         "INSERT INTO tools (id, name, description, source_code, json_schema, tags, created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7)
@@ -60,8 +59,7 @@ pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
 /// Delete all messages for an agent (or a specific conversation).
 /// If conversation_id is None, deletes all messages for the agent.
 pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let n = if let Some(conv_id) = conversation_id {
         conn.execute(
             "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id = ?2",
@@ -138,8 +136,7 @@ pub fn search_messages(
     query: &str,
     conversation_id: Option<&str>,
 ) -> Result<Vec<MessageSearchResult>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     // Build safe FTS5 query: wrap the whole phrase in double-quotes to handle
     // spaces and special chars; escape internal quotes.
@@ -237,7 +234,7 @@ pub fn search_memory(
     let mut results: Vec<(String, String, String)> = {
         let conn = db.lock();
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-        
+
         let mut scored: Vec<(f64, String, String, String)> = if let Some(mtype) = memory_type {
             let mut stmt = conn.prepare(
                 "SELECT b.label, b.value, b.access_count, b.last_access_turn, b.last_turn
@@ -259,22 +256,37 @@ pub fn search_memory(
                 ))
             })?;
             rows.filter_map(|r| r.ok())
-                .map(|(label, value, access_count, last_access_turn, last_turn)| {
-                    let val_lower = value.to_lowercase();
-                    let snippet = if let Some(pos) = val_lower.find(&q_lower) {
-                        let start = pos.saturating_sub(80);
-                        let end = (pos + q_lower.len() + 80).min(value.len());
-                        let prefix = if start > 0 { "…" } else { "" };
-                        let suffix = if end < value.len() { "…" } else { "" };
-                        let s = value.char_indices().map(|(i, _)| i).find(|&i| i >= start).unwrap_or(start);
-                        let e = value.char_indices().map(|(i, _)| i).find(|&i| i >= end).unwrap_or(end);
-                        format!("{prefix}{}{suffix}", &value[s..e])
-                    } else {
-                        value.chars().take(160).collect::<String>()
-                    };
-                    let score = recency_frequency_score(current_turn, last_turn, last_access_turn, access_count);
-                    (score, label, value, snippet)
-                })
+                .map(
+                    |(label, value, access_count, last_access_turn, last_turn)| {
+                        let val_lower = value.to_lowercase();
+                        let snippet = if let Some(pos) = val_lower.find(&q_lower) {
+                            let start = pos.saturating_sub(80);
+                            let end = (pos + q_lower.len() + 80).min(value.len());
+                            let prefix = if start > 0 { "…" } else { "" };
+                            let suffix = if end < value.len() { "…" } else { "" };
+                            let s = value
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .find(|&i| i >= start)
+                                .unwrap_or(start);
+                            let e = value
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .find(|&i| i >= end)
+                                .unwrap_or(end);
+                            format!("{prefix}{}{suffix}", &value[s..e])
+                        } else {
+                            value.chars().take(160).collect::<String>()
+                        };
+                        let score = recency_frequency_score(
+                            current_turn,
+                            last_turn,
+                            last_access_turn,
+                            access_count,
+                        );
+                        (score, label, value, snippet)
+                    },
+                )
                 .collect()
         } else {
             let mut stmt = conn.prepare(
@@ -296,27 +308,46 @@ pub fn search_memory(
                 ))
             })?;
             rows.filter_map(|r| r.ok())
-                .map(|(label, value, access_count, last_access_turn, last_turn)| {
-                    let val_lower = value.to_lowercase();
-                    let snippet = if let Some(pos) = val_lower.find(&q_lower) {
-                        let start = pos.saturating_sub(80);
-                        let end = (pos + q_lower.len() + 80).min(value.len());
-                        let prefix = if start > 0 { "…" } else { "" };
-                        let suffix = if end < value.len() { "…" } else { "" };
-                        let s = value.char_indices().map(|(i, _)| i).find(|&i| i >= start).unwrap_or(start);
-                        let e = value.char_indices().map(|(i, _)| i).find(|&i| i >= end).unwrap_or(end);
-                        format!("{prefix}{}{suffix}", &value[s..e])
-                    } else {
-                        value.chars().take(160).collect::<String>()
-                    };
-                    let score = recency_frequency_score(current_turn, last_turn, last_access_turn, access_count);
-                    (score, label, value, snippet)
-                })
+                .map(
+                    |(label, value, access_count, last_access_turn, last_turn)| {
+                        let val_lower = value.to_lowercase();
+                        let snippet = if let Some(pos) = val_lower.find(&q_lower) {
+                            let start = pos.saturating_sub(80);
+                            let end = (pos + q_lower.len() + 80).min(value.len());
+                            let prefix = if start > 0 { "…" } else { "" };
+                            let suffix = if end < value.len() { "…" } else { "" };
+                            let s = value
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .find(|&i| i >= start)
+                                .unwrap_or(start);
+                            let e = value
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .find(|&i| i >= end)
+                                .unwrap_or(end);
+                            format!("{prefix}{}{suffix}", &value[s..e])
+                        } else {
+                            value.chars().take(160).collect::<String>()
+                        };
+                        let score = recency_frequency_score(
+                            current_turn,
+                            last_turn,
+                            last_access_turn,
+                            access_count,
+                        );
+                        (score, label, value, snippet)
+                    },
+                )
                 .collect()
         };
 
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.into_iter().take(10).map(|(_, label, value, snippet)| (label, value, snippet)).collect()
+        scored
+            .into_iter()
+            .take(10)
+            .map(|(_, label, value, snippet)| (label, value, snippet))
+            .collect()
     };
 
     if results.is_empty() {
@@ -327,54 +358,69 @@ pub fn search_memory(
             .collect();
         if !words.is_empty() {
             let conn = db.lock();
-            let mut stmt_sql = String::from("SELECT b.label, b.value FROM shared_memory_blocks b JOIN agent_memory_blocks amb ON amb.block_id = b.id WHERE amb.agent_id = ?1");
+            let mut stmt_sql = String::from(
+                "SELECT b.label, b.value FROM shared_memory_blocks b JOIN agent_memory_blocks amb ON amb.block_id = b.id WHERE amb.agent_id = ?1",
+            );
             if memory_type.is_some() {
                 stmt_sql.push_str(" AND b.memory_type = ?2");
             }
             let mut scored: Vec<(usize, String, String, String)> = Vec::new();
-            
+
             if let Some(mtype) = memory_type {
-                if let Ok(mut stmt) = conn.prepare(&stmt_sql) {
-                    if let Ok(rows) = stmt.query_map(params![agent_id, mtype], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                if let Ok(mut stmt) = conn.prepare(&stmt_sql)
+                    && let Ok(rows) = stmt.query_map(params![agent_id, mtype], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    }) {
                         for row in rows.filter_map(|r| r.ok()) {
                             let (label, value) = row;
                             let combined = format!("{} {}", label, value).to_lowercase();
-                            let hits = words.iter().filter(|w| combined.contains(w.as_str())).count();
+                            let hits = words
+                                .iter()
+                                .filter(|w| combined.contains(w.as_str()))
+                                .count();
                             if hits > 0 {
                                 let snippet = value.chars().take(200).collect::<String>();
                                 scored.push((hits, label, value, snippet));
                             }
                         }
                     }
-                }
             } else {
-                if let Ok(mut stmt) = conn.prepare(&stmt_sql) {
-                    if let Ok(rows) = stmt.query_map(params![agent_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                if let Ok(mut stmt) = conn.prepare(&stmt_sql)
+                    && let Ok(rows) = stmt.query_map(params![agent_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    }) {
                         for row in rows.filter_map(|r| r.ok()) {
                             let (label, value) = row;
                             let combined = format!("{} {}", label, value).to_lowercase();
-                            let hits = words.iter().filter(|w| combined.contains(w.as_str())).count();
+                            let hits = words
+                                .iter()
+                                .filter(|w| combined.contains(w.as_str()))
+                                .count();
                             if hits > 0 {
                                 let snippet = value.chars().take(200).collect::<String>();
                                 scored.push((hits, label, value, snippet));
                             }
                         }
                     }
-                }
             }
-            
+
             scored.sort_by(|a, b| b.0.cmp(&a.0));
-            results = scored.into_iter().take(10).map(|(_, label, value, snippet)| (label, value, snippet)).collect();
+            results = scored
+                .into_iter()
+                .take(10)
+                .map(|(_, label, value, snippet)| (label, value, snippet))
+                .collect();
         }
     }
 
     {
         let conn = db.lock();
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-        
+
         let chunk_hits: Vec<(String, String, String)> = if let Some(mtype) = memory_type {
-            let mut stmt = conn.prepare(
-                "SELECT b.label, c.content, c.chunk_index
+            let mut stmt = conn
+                .prepare(
+                    "SELECT b.label, c.content, c.chunk_index
                  FROM memory_chunks c
                  JOIN shared_memory_blocks b ON b.id = c.block_id
                  JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -383,19 +429,30 @@ pub fn search_memory(
                    AND LOWER(c.content) LIKE LOWER(?2) ESCAPE '\\'
                  ORDER BY c.chunk_index ASC
                  LIMIT 5",
-            ).ok();
+                )
+                .ok();
             if let Some(ref mut st) = stmt {
                 st.query_map(params![agent_id, pattern, mtype], |row| {
                     let label: String = row.get(0)?;
                     let content: String = row.get(1)?;
                     let idx: i64 = row.get(2)?;
-                    let snippet = format!("[chunk {}] {}", idx, content.chars().take(200).collect::<String>());
+                    let snippet = format!(
+                        "[chunk {}] {}",
+                        idx,
+                        content.chars().take(200).collect::<String>()
+                    );
                     Ok((label, content, snippet))
-                }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
-            } else { Vec::new() }
+                })
+                .ok()
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
         } else {
-            let mut stmt = conn.prepare(
-                "SELECT b.label, c.content, c.chunk_index
+            let mut stmt = conn
+                .prepare(
+                    "SELECT b.label, c.content, c.chunk_index
                  FROM memory_chunks c
                  JOIN shared_memory_blocks b ON b.id = c.block_id
                  JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -403,19 +460,30 @@ pub fn search_memory(
                    AND LOWER(c.content) LIKE LOWER(?2) ESCAPE '\\'
                  ORDER BY c.chunk_index ASC
                  LIMIT 5",
-            ).ok();
+                )
+                .ok();
             if let Some(ref mut st) = stmt {
                 st.query_map(params![agent_id, pattern], |row| {
                     let label: String = row.get(0)?;
                     let content: String = row.get(1)?;
                     let idx: i64 = row.get(2)?;
-                    let snippet = format!("[chunk {}] {}", idx, content.chars().take(200).collect::<String>());
+                    let snippet = format!(
+                        "[chunk {}] {}",
+                        idx,
+                        content.chars().take(200).collect::<String>()
+                    );
                     Ok((label, content, snippet))
-                }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
-            } else { Vec::new() }
+                })
+                .ok()
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
         };
 
-        let existing_labels: std::collections::HashSet<String> = results.iter().map(|(l, _, _)| l.clone()).collect();
+        let existing_labels: std::collections::HashSet<String> =
+            results.iter().map(|(l, _, _)| l.clone()).collect();
         for (label, value, snippet) in chunk_hits {
             if !existing_labels.contains(&label) {
                 results.push((label, value, snippet));
@@ -495,8 +563,7 @@ pub fn insert_archival_memory(
     content: &str,
     tags: &[String],
 ) -> Result<String> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let id = uuid::Uuid::new_v4().to_string();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -515,8 +582,7 @@ pub fn search_archival_memory(
     query: &str,
     limit: usize,
 ) -> Result<Vec<ArchivalRecord>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     // FTS5 requires queries to be properly quoted to avoid syntax errors
     let fts_query = format!("\"{}\"", query.replace('\"', "\"\""));
@@ -591,8 +657,7 @@ pub fn pending_tool_results(
 }
 
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name",
     )?;
@@ -651,7 +716,8 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
-                compaction_model: None, theme: None,
+                compaction_model: None,
+                theme: None,
             },
         )?;
         Ok(())
@@ -872,21 +938,16 @@ mod tests {
 /// A single result from the federated recall search.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RecallResult {
-    pub source: String,   // "memory", "conversation", "archival", "event_log"
-    pub label: String,    // block label / message role / archive id / event type
-    pub snippet: String,  // contextual excerpt
-    pub score: f64,       // RRF-combined score (higher = better)
+    pub source: String,  // "memory", "conversation", "archival", "event_log"
+    pub label: String,   // block label / message role / archive id / event type
+    pub snippet: String, // contextual excerpt
+    pub score: f64,      // RRF-combined score (higher = better)
 }
 
 /// C7: Federated search across memory blocks, messages, archival memory,
 /// and event log.  Returns up to `limit` results ranked by reciprocal
 /// rank fusion (RRF) across the four sources.
-pub fn recall(
-    db: &Db,
-    agent_id: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<RecallResult>> {
+pub fn recall(db: &Db, agent_id: &str, query: &str, limit: usize) -> Result<Vec<RecallResult>> {
     const RRF_K: f64 = 60.0; // standard RRF constant
 
     let mut all_results: Vec<RecallResult> = Vec::new();
@@ -942,7 +1003,11 @@ pub fn recall(
     }
 
     // Sort by RRF score descending, take top `limit`.
-    all_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    all_results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     all_results.truncate(limit);
 
     Ok(all_results)

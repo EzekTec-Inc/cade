@@ -32,8 +32,7 @@ impl PatchOp {
 /// Try to parse a block body as JSON.  Returns `Err` with a
 /// user-friendly message when the body is not valid JSON.
 pub fn parse_block(body: &str) -> Result<Value, String> {
-    serde_json::from_str(body)
-        .map_err(|e| format!("Block body is not valid JSON: {e}"))
+    serde_json::from_str(body).map_err(|e| format!("Block body is not valid JSON: {e}"))
 }
 
 /// Serialize a `Value` back to a pretty-printed JSON string.
@@ -116,9 +115,7 @@ fn kind_name(v: &Value) -> &'static str {
 /// Parse RFC 6901 pointer into unescaped segments.
 fn parse_pointer(pointer: &str) -> Result<Vec<String>, String> {
     if !pointer.starts_with('/') {
-        return Err(format!(
-            "JSON pointer must start with '/': got '{pointer}'"
-        ));
+        return Err(format!("JSON pointer must start with '/': got '{pointer}'"));
     }
     Ok(pointer[1..]
         .split('/')
@@ -128,11 +125,7 @@ fn parse_pointer(pointer: &str) -> Result<Vec<String>, String> {
 
 /// Walk the tree, creating intermediate objects as needed, and set the
 /// leaf to `value`.
-fn ensure_path_and_set(
-    root: &mut Value,
-    segments: &[String],
-    value: Value,
-) -> Result<(), String> {
+fn ensure_path_and_set(root: &mut Value, segments: &[String], value: Value) -> Result<(), String> {
     let (parents, leaf) = segments.split_at(segments.len() - 1);
 
     let mut current = root;
@@ -153,7 +146,7 @@ fn ensure_path_and_set(
                 return Err(format!(
                     "Cannot traverse into {}: expected object or array",
                     kind_name(other)
-                ))
+                ));
             }
         };
     }
@@ -209,7 +202,7 @@ fn resolve_pointer_mut<'a>(
                 return Err(format!(
                     "Cannot traverse into {}: expected object or array",
                     kind_name(other)
-                ))
+                ));
             }
         };
     }
@@ -272,8 +265,7 @@ mod tests {
     #[test]
     fn f5_set_scalar_field() {
         let mut root = json!({"status": "running", "count": 0});
-        apply_pointer_patch(&mut root, "/status", PatchOp::Set, Some(json!("done")))
-            .unwrap();
+        apply_pointer_patch(&mut root, "/status", PatchOp::Set, Some(json!("done"))).unwrap();
         assert_eq!(root["status"], json!("done"));
         // count unchanged
         assert_eq!(root["count"], json!(0));
@@ -282,8 +274,7 @@ mod tests {
     #[test]
     fn f5_set_nested_field() {
         let mut root = json!({"a": {"b": 1}});
-        apply_pointer_patch(&mut root, "/a/b", PatchOp::Set, Some(json!(42)))
-            .unwrap();
+        apply_pointer_patch(&mut root, "/a/b", PatchOp::Set, Some(json!(42))).unwrap();
         assert_eq!(root["a"]["b"], json!(42));
     }
 
@@ -305,16 +296,15 @@ mod tests {
     #[test]
     fn f5_append_to_array() {
         let mut root = json!({"items": [1, 2]});
-        apply_pointer_patch(&mut root, "/items", PatchOp::Append, Some(json!(3)))
-            .unwrap();
+        apply_pointer_patch(&mut root, "/items", PatchOp::Append, Some(json!(3))).unwrap();
         assert_eq!(root["items"], json!([1, 2, 3]));
     }
 
     #[test]
     fn f5_append_rejects_non_array() {
         let mut root = json!({"name": "test"});
-        let err = apply_pointer_patch(&mut root, "/name", PatchOp::Append, Some(json!("x")))
-            .unwrap_err();
+        let err =
+            apply_pointer_patch(&mut root, "/name", PatchOp::Append, Some(json!("x"))).unwrap_err();
         assert!(err.contains("not point to an array"), "got: {err}");
     }
 
@@ -354,24 +344,22 @@ mod tests {
     fn f5_invalid_pointer_returns_error() {
         let mut root = json!({"a": 1});
         // Missing leading slash
-        let err = apply_pointer_patch(&mut root, "no_slash", PatchOp::Set, Some(json!(1)))
-            .unwrap_err();
+        let err =
+            apply_pointer_patch(&mut root, "no_slash", PatchOp::Set, Some(json!(1))).unwrap_err();
         assert!(err.contains("must start with '/'"), "got: {err}");
     }
 
     #[test]
     fn f5_remove_nonexistent_key_errors() {
         let mut root = json!({"a": 1});
-        let err =
-            apply_pointer_patch(&mut root, "/missing", PatchOp::Remove, None).unwrap_err();
+        let err = apply_pointer_patch(&mut root, "/missing", PatchOp::Remove, None).unwrap_err();
         assert!(err.contains("not found"), "got: {err}");
     }
 
     #[test]
     fn f5_set_array_element_by_index() {
         let mut root = json!({"arr": [10, 20, 30]});
-        apply_pointer_patch(&mut root, "/arr/1", PatchOp::Set, Some(json!(99)))
-            .unwrap();
+        apply_pointer_patch(&mut root, "/arr/1", PatchOp::Set, Some(json!(99))).unwrap();
         assert_eq!(root["arr"], json!([10, 99, 30]));
     }
 }

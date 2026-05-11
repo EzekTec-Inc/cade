@@ -2,7 +2,7 @@
 ///
 /// Renders a navigable list of all slash commands grouped by category.
 /// Returns the selected command string (e.g. "/agents") or None if cancelled.
-use crate::colors::{ThemeColorsExt,};
+use crate::colors::ThemeColorsExt;
 use crate::{Result, colors::ThemeColors, overlay};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -495,7 +495,7 @@ pub fn show_command_menu_with_caps(
                             Style::default().fg(colors.c_border_base()),
                         ),
                     ]))
-                },
+                }
                 MenuItem::Cmd { cmd, desc } => {
                     let is_sel = i == sel;
                     ListItem::new(Line::from(vec![

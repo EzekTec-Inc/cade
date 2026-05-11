@@ -65,11 +65,7 @@ pub trait EditorChannel: Send + Sync + 'static {
     /// Replace the active selection in `path` with `range`. The file
     /// must be open; the adapter is free to also reveal it. Default
     /// implementation refuses with `ErrorData::method_not_found`.
-    async fn set_selection(
-        &self,
-        _path: String,
-        _range: Range,
-    ) -> Result<(), ErrorData> {
+    async fn set_selection(&self, _path: String, _range: Range) -> Result<(), ErrorData> {
         Err(ErrorData::new(
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
             format!(
@@ -86,10 +82,7 @@ pub trait EditorChannel: Send + Sync + 'static {
     async fn save(&self, _path: Option<String>) -> Result<(), ErrorData> {
         Err(ErrorData::new(
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
-            format!(
-                "editor adapter '{}' does not support save",
-                self.label()
-            ),
+            format!("editor adapter '{}' does not support save", self.label()),
             None,
         ))
     }
@@ -214,8 +207,14 @@ mod tests {
             .set_selection(
                 "/tmp/a.rs".into(),
                 Range {
-                    start: Position { line: 0, character: 0 },
-                    end:   Position { line: 0, character: 0 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 0,
+                    },
                 },
             )
             .await
@@ -264,7 +263,9 @@ mod tests {
         use crate::state::DebugAction;
         let c = NullEditorChannel;
         let err = c
-            .debug_control(DebugAction::Start { config: "unit-tests".into() })
+            .debug_control(DebugAction::Start {
+                config: "unit-tests".into(),
+            })
             .await
             .expect_err("NullEditorChannel must refuse debug_control(Start)");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);

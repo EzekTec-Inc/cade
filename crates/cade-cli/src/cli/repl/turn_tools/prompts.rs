@@ -1,9 +1,9 @@
 use super::super::Repl;
+use super::super::turn_loop::now_epoch_ms;
 use crate::Result;
 use crate::support::text::truncate;
 use crate::ui::RenderLine;
 use std::io;
-use super::super::turn_loop::now_epoch_ms;
 
 impl Repl {
     pub(crate) async fn prompt_approval(
@@ -87,10 +87,8 @@ impl Repl {
             .map_err(|e| crate::Error::custom(format!("approval channel dropped: {e}")))?;
         // Record close time so the tick task's I-01 Enter handler can apply
         // a 300 ms grace period (mirrors the 200 ms Esc grace period).
-        self.last_modal_close_ms.store(
-            now_epoch_ms(),
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        self.last_modal_close_ms
+            .store(now_epoch_ms(), std::sync::atomic::Ordering::SeqCst);
 
         match qa {
             None => {
@@ -142,13 +140,10 @@ impl Repl {
             Ok(q) => q,
             Err(e) => {
                 let msg = format!("Invalid ask_user_question args: {e}");
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: msg.clone(),
-                    });
+                let _ = self.app.lock().push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: msg.clone(),
+                });
                 return Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "ask_user_question".to_string(),
@@ -199,10 +194,8 @@ impl Repl {
                 crate::Error::custom(format!("ask_user_question channel dropped: {e}"))
             })?;
 
-            self.last_modal_close_ms.store(
-                now_epoch_ms(),
-                std::sync::atomic::Ordering::SeqCst,
-            );
+            self.last_modal_close_ms
+                .store(now_epoch_ms(), std::sync::atomic::Ordering::SeqCst);
 
             match qa {
                 None => {
@@ -211,13 +204,10 @@ impl Repl {
                     self.cancel_turn
                         .store(false, std::sync::atomic::Ordering::SeqCst);
                     let msg = "User cancelled the question prompt.".to_string();
-                    let _ = self
-                        .app
-                        .lock()
-                        .push(RenderLine::ToolResult {
-                            is_error: true,
-                            content: msg.clone(),
-                        });
+                    let _ = self.app.lock().push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: msg.clone(),
+                    });
                     return Ok(cade_agent::tools::ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "ask_user_question".to_string(),
@@ -383,5 +373,4 @@ impl Repl {
             _ => None,
         }
     }
-
 }

@@ -1,8 +1,8 @@
 use crate::error::Result;
+use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 // -- Provider row
 
@@ -443,10 +443,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // P1-C: Add optional compaction_model column to agents table.
         // When set, Sleeptime consolidation uses this (cheaper) model instead
         // of the agent's main model.
-        let _ = conn.execute(
-            "ALTER TABLE agents ADD COLUMN compaction_model TEXT",
-            [],
-        );
+        let _ = conn.execute("ALTER TABLE agents ADD COLUMN compaction_model TEXT", []);
         conn.execute("PRAGMA user_version = 2", [])?;
     }
 
@@ -475,10 +472,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // Phase 5: persist theme name per agent so GUI `/theme` survives reload.
         // Stored as nullable TEXT holding the theme name (e.g. "dark", "tokyo-night",
         // or a user theme file stem). NULL = inherit the global setting.
-        let _ = conn.execute(
-            "ALTER TABLE agents ADD COLUMN theme TEXT",
-            [],
-        );
+        let _ = conn.execute("ALTER TABLE agents ADD COLUMN theme TEXT", []);
         conn.execute("PRAGMA user_version = 4", [])?;
     }
 
@@ -624,7 +618,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         if let Err(e) = r {
             // Tolerate re-run when artefacts already exist (idempotent migration).
             let msg = e.to_string();
-            if !(msg.contains("already exists") || msg.contains("trigger") && msg.contains("exists")) {
+            if !(msg.contains("already exists")
+                || msg.contains("trigger") && msg.contains("exists"))
+            {
                 tracing::warn!("Migration 10 (WI-SEMANTIC) memory_blocks_fts setup failed: {e}");
             }
         }
@@ -692,18 +688,28 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // ── Migration 14: A.1 Schema Migration (explicit provenance) ────────────────
     if current_version < 14 {
-        let r1 = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_turn_id TEXT", []);
+        let r1 = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN source_turn_id TEXT",
+            [],
+        );
         if let Err(e) = r1 {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {
-                tracing::warn!("Migration 14 (A.1-provenance) ADD COLUMN source_turn_id failed: {e}");
+                tracing::warn!(
+                    "Migration 14 (A.1-provenance) ADD COLUMN source_turn_id failed: {e}"
+                );
             }
         }
-        let r2 = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_tool_id TEXT", []);
+        let r2 = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN source_tool_id TEXT",
+            [],
+        );
         if let Err(e) = r2 {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {
-                tracing::warn!("Migration 14 (A.1-provenance) ADD COLUMN source_tool_id failed: {e}");
+                tracing::warn!(
+                    "Migration 14 (A.1-provenance) ADD COLUMN source_tool_id failed: {e}"
+                );
             }
         }
         conn.execute("PRAGMA user_version = 14", [])?;
@@ -745,6 +751,7 @@ pub struct AgentRow {
 pub mod agents;
 pub mod conversations;
 pub mod embedding;
+pub mod event_log;
 pub mod evidence;
 pub mod memory;
 pub mod messages;
@@ -753,7 +760,6 @@ pub mod providers;
 pub mod runs;
 pub mod skills;
 pub mod tools;
-pub mod event_log;
 
 pub use agents::*;
 pub use conversations::*;

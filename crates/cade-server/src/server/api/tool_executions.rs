@@ -60,8 +60,10 @@ mod p8_output_chars_tests {
             .unwrap()
             .filter_map(Result::ok)
             .collect();
-        assert!(cols.contains(&"output_chars".to_string()),
-            "output_chars column missing on fresh DB; got: {cols:?}");
+        assert!(
+            cols.contains(&"output_chars".to_string()),
+            "output_chars column missing on fresh DB; got: {cols:?}"
+        );
     }
 
     #[test]
@@ -101,6 +103,9 @@ mod p8_output_chars_tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert!(v >= 6, "expected user_version >= 6 after migration, got {v}");
+        assert!(
+            v >= 6,
+            "expected user_version >= 6 after migration, got {v}"
+        );
     }
 }

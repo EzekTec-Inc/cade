@@ -29,9 +29,8 @@ impl SshBackend {
         // are rejected.  `CADE_SSH_ACCEPT_NEW=1` (exact) opts in to the
         // weaker TOFU `accept-new` mode for environments that pre-seed
         // `known_hosts` dynamically (CI, test fleets).
-        let host_key_mode = strict_host_key_checking_policy(
-            std::env::var("CADE_SSH_ACCEPT_NEW").ok().as_deref(),
-        );
+        let host_key_mode =
+            strict_host_key_checking_policy(std::env::var("CADE_SSH_ACCEPT_NEW").ok().as_deref());
         let mut args = vec![
             "-o".to_string(),
             "BatchMode=yes".to_string(),

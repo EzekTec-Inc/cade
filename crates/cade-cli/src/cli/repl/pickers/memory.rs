@@ -1,6 +1,6 @@
-use crate::cli::repl::MemoryPickerResult;
-use crate::Result;
 use super::super::Repl;
+use crate::Result;
+use crate::cli::repl::MemoryPickerResult;
 
 impl Repl {
     /// `/memory` interactive picker
@@ -37,7 +37,10 @@ impl Repl {
             } else {
                 format!(" [Filter: {}] ", filter_query)
             };
-            let hint = format!("{}{}", f_disp, " ↑↓ j k  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel ");
+            let hint = format!(
+                "{}{}",
+                f_disp, " ↑↓ j k  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel "
+            );
 
             let rows: Vec<Row> = filtered_indices
                 .iter()

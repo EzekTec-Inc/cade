@@ -4,8 +4,8 @@
 //! key shortcuts — visible on ALL terminal widths (complements the sidebar
 //! which only appears on wide terminals ≥ 110 cols).
 
-use crate::colors::ThemeColorsExt;
 use crate::colors::ThemeColors;
+use crate::colors::ThemeColorsExt;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -39,7 +39,7 @@ pub(crate) fn render_breadcrumb(
     // Turn indicator
     let turn_icon = if nerd { " " } else { " T" };
     spans.push(Span::styled(
-        format!("{}{}",turn_icon, turn_count),
+        format!("{}{}", turn_icon, turn_count),
         colors.text_muted(),
     ));
 
@@ -52,10 +52,7 @@ pub(crate) fn render_breadcrumb(
     } else {
         model.to_string()
     };
-    spans.push(Span::styled(
-        model_display,
-        colors.text_dim(),
-    ));
+    spans.push(Span::styled(model_display, colors.text_dim()));
 
     spans.push(sep.clone());
 
@@ -74,10 +71,7 @@ pub(crate) fn render_breadcrumb(
             Style::default().fg(ctx_color),
         ));
     } else {
-        spans.push(Span::styled(
-            "— ctx",
-            colors.text_dim(),
-        ));
+        spans.push(Span::styled("— ctx", colors.text_dim()));
     }
 
     // Right-aligned hint (if space allows)
@@ -95,8 +89,7 @@ pub(crate) fn render_breadcrumb(
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(colors.c_bg_surface1())),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(colors.c_bg_surface1())),
         area,
     );
 }

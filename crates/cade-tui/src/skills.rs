@@ -68,14 +68,8 @@ pub fn show_skills_manager(
                     };
                     let scope_str = s.scope.to_string();
                     Row::new(vec![
-                        Cell::from(Span::styled(
-                            scope_str,
-                            colors.text_primary(),
-                        )),
-                        Cell::from(Span::styled(
-                            s.name.clone(),
-                            colors.text_primary(),
-                        )),
+                        Cell::from(Span::styled(scope_str, colors.text_primary())),
+                        Cell::from(Span::styled(s.name.clone(), colors.text_primary())),
                         Cell::from(Span::styled(
                             s.category.clone().unwrap_or_default(),
                             colors.text_muted(),
@@ -184,8 +178,7 @@ pub fn show_skills_manager(
                     break;
                 }
 
-                (KeyCode::Char('e'), KeyModifiers::NONE)
-                | (KeyCode::Enter, KeyModifiers::NONE) => {
+                (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE) => {
                     if let Some(skill) = skills.get(selected_idx) {
                         launch_editor(terminal, &skill.path)?;
                         result = Some(SkillsAction::Reload);

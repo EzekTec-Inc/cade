@@ -19,13 +19,13 @@ pub mod hooks;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod permissions;
 pub mod resources;
-pub mod structured_patch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod shell;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod skills;
+pub mod structured_patch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_ids;
 #[cfg(not(target_arch = "wasm32"))]

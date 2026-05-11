@@ -20,9 +20,9 @@ pub struct BlockInfo {
 #[derive(Debug, Clone)]
 pub struct LongTermExcerpt {
     pub label: String,
-    pub excerpt: String,      // 250 chars
+    pub excerpt: String,       // 250 chars
     pub keywords: Vec<String>, // top 5 distinctive terms
-    pub char_count: usize,    // total chars in original value
+    pub char_count: usize,     // total chars in original value
     pub turns_idle: i64,
 }
 
@@ -59,7 +59,9 @@ pub fn get_block_by_id(db: &Db, block_id: &str) -> Result<Option<BlockInfo>> {
                 label: r.get(1)?,
                 value: r.get(2)?,
                 description: r.get::<_, String>(3).unwrap_or_default(),
-                tier: r.get::<_, String>(4).unwrap_or_else(|_| "short".to_string()),
+                tier: r
+                    .get::<_, String>(4)
+                    .unwrap_or_else(|_| "short".to_string()),
                 max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
                 updated_at: r.get(6)?,
             })
@@ -123,7 +125,11 @@ pub fn list_agents_for_block(db: &Db, block_id: &str) -> Result<Vec<String>> {
 }
 
 /// Returns (label, value, description, memory_type, confidence) tuples ordered by label.
-pub fn get_memory_blocks_with_provenance(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String, f64)>> {
+#[allow(clippy::type_complexity)]
+pub fn get_memory_blocks_with_provenance(
+    db: &Db,
+    agent_id: &str,
+) -> Result<Vec<(String, String, String, String, f64)>> {
     let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.memory_type, b.confidence 
@@ -136,7 +142,8 @@ pub fn get_memory_blocks_with_provenance(db: &Db, agent_id: &str) -> Result<Vec<
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2).unwrap_or_default(),
-            row.get::<_, String>(3).unwrap_or_else(|_| "generic".to_string()),
+            row.get::<_, String>(3)
+                .unwrap_or_else(|_| "generic".to_string()),
             row.get::<_, f64>(4).unwrap_or(1.0),
         ))
     })?;
@@ -173,7 +180,9 @@ fn block_info_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BlockInfo> {
         label: r.get(1)?,
         value: r.get(2)?,
         description: r.get::<_, String>(3).unwrap_or_default(),
-        tier: r.get::<_, String>(4).unwrap_or_else(|_| "short".to_string()),
+        tier: r
+            .get::<_, String>(4)
+            .unwrap_or_else(|_| "short".to_string()),
         max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
         updated_at: r.get(6)?,
     })
@@ -190,11 +199,12 @@ fn extract_keywords(text: &str, max: usize) -> Vec<String> {
         "up", "out", "all", "use", "can", "will", "one", "when", "than", "each", "its", "been",
         "who", "into", "may", "would", "could", "should", "some", "such", "also", "then", "just",
         "like", "other", "more", "about", "these", "those", "only", "very", "how", "after", "new",
-        "any", "most", "what", "both", "did", "let", "get", "our", "his", "her"
+        "any", "most", "what", "both", "did", "let", "get", "our", "his", "her",
     ];
 
-    let mut word_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    
+    let mut word_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
     // Split on non-alphanumeric chars, lowercase, filter stop words
     for word in text
         .split(|c: char| !c.is_alphanumeric())
@@ -209,7 +219,7 @@ fn extract_keywords(text: &str, max: usize) -> Vec<String> {
         .into_iter()
         .map(|(word, freq)| (word.clone(), word.len() * freq))
         .collect();
-    
+
     scored.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by score desc
     scored.into_iter().take(max).map(|(word, _)| word).collect()
 }
@@ -243,8 +253,7 @@ pub fn upsert_memory_block(
     description: Option<&str>,
     max_chars: Option<usize>,
 ) -> Result<WriteResult> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
 
     // Fetch existing block linked to this agent with this label
     let existing: Option<(String, String, Option<usize>)> = conn
@@ -354,15 +363,16 @@ pub fn upsert_memory_block(
                      tier = {tier_sql}
                  WHERE id = ?4"
             );
-            conn.execute(
-                &sql,
-                params![final_value, ts, current_turn, block_id],
-            )?;
+            conn.execute(&sql, params![final_value, ts, current_turn, block_id])?;
         }
     } else {
         // Create a new shared block and link it to the agent.
         // INSERT tier: `pinned` for non-empty active_goal (M1), else `short`.
-        let insert_tier = if is_nonempty_active_goal { "pinned" } else { "short" };
+        let insert_tier = if is_nonempty_active_goal {
+            "pinned"
+        } else {
+            "short"
+        };
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
             "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at, tier, last_turn)
@@ -446,8 +456,7 @@ pub fn upsert_memory_block_with_embedder(
 
 /// Link an existing shared memory block to an agent.
 pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<()> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     conn.execute(
         "INSERT OR IGNORE INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
         params![agent_id, block_id],
@@ -466,7 +475,11 @@ pub fn stamp_provenance(
     source_tool_id: Option<&str>,
     source_tool_call_id: Option<&str>,
 ) {
-    if source_turn.is_none() && source_tool_call_id.is_none() && source_turn_id.is_none() && source_tool_id.is_none() {
+    if source_turn.is_none()
+        && source_tool_call_id.is_none()
+        && source_turn_id.is_none()
+        && source_tool_id.is_none()
+    {
         return;
     }
     let conn = db.lock();
@@ -481,7 +494,14 @@ pub fn stamp_provenance(
              JOIN agent_memory_blocks amb ON amb.block_id = b.id
              WHERE amb.agent_id = ?5 AND b.label = ?6
          )",
-        params![source_turn, source_tool_call_id, source_turn_id, source_tool_id, agent_id, label],
+        params![
+            source_turn,
+            source_tool_call_id,
+            source_turn_id,
+            source_tool_id,
+            agent_id,
+            label
+        ],
     );
 }
 
@@ -640,7 +660,14 @@ pub fn rechunk_block(
         let _ = conn.execute(
             "INSERT INTO memory_chunks (id, block_id, chunk_index, content, char_count, embedding)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, block_id, chunk.index as i64, chunk.content, char_count, emb_blob],
+            params![
+                id,
+                block_id,
+                chunk.index as i64,
+                chunk.content,
+                char_count,
+                emb_blob
+            ],
         );
     }
 }
@@ -662,12 +689,7 @@ pub struct RecalledChunk {
 /// Returns at most `limit` chunks, ordered by the number of keyword hits
 /// (most relevant first).  Chunks from the same block are deduplicated to
 /// the highest-scoring one.
-pub fn recall_chunks(
-    db: &Db,
-    agent_id: &str,
-    query: &str,
-    limit: usize,
-) -> Vec<RecalledChunk> {
+pub fn recall_chunks(db: &Db, agent_id: &str, query: &str, limit: usize) -> Vec<RecalledChunk> {
     // Extract keywords from the query (min 3 chars, skip stop words).
     let words: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -706,10 +728,7 @@ pub fn recall_chunks(
     };
 
     // Build params: agent_id, limit, then one pattern per word.
-    let patterns: Vec<String> = words
-        .iter()
-        .map(|w| format!("%{w}%"))
-        .collect();
+    let patterns: Vec<String> = words.iter().map(|w| format!("%{w}%")).collect();
 
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     param_values.push(Box::new(agent_id.to_string()));
@@ -717,7 +736,8 @@ pub fn recall_chunks(
     for p in &patterns {
         param_values.push(Box::new(p.clone()));
     }
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(|b| b.as_ref()).collect();
 
     let results: Vec<RecalledChunk> = stmt
         .query_map(param_refs.as_slice(), |row| {
@@ -741,8 +761,7 @@ pub fn recall_chunks(
 }
 
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     // We only remove the link, not the shared block itself (to avoid orphan issues if shared)
     // Actually, CADE docs imply it's removed from the agent's view.
     let n = conn.execute(
@@ -764,8 +783,7 @@ pub const CONFIDENCE_BOOST_PER_HIT: f64 = 0.15;
 
 /// Increment the confidence score for a memory block (called on search hit).
 pub fn boost_confidence(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let n = conn.execute(
         "UPDATE shared_memory_blocks
          SET confidence = confidence + ?1
@@ -778,8 +796,7 @@ pub fn boost_confidence(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
 
 /// Read the current confidence value for a memory block (used in tests).
 pub fn get_block_confidence(db: &Db, agent_id: &str, label: &str) -> Result<f64> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let confidence: f64 = conn.query_row(
         "SELECT b.confidence FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -830,15 +847,31 @@ fn auto_type_block_if_untyped(
     }
 
     let lower = value.to_lowercase();
-    let inferred = if contains_any(&lower, &["decided", "chosen", "rejected", "approved", "decision"]) {
+    let inferred = if contains_any(
+        &lower,
+        &["decided", "chosen", "rejected", "approved", "decision"],
+    ) {
         "decision"
-    } else if contains_any(&lower, &["must ", "always ", "never ", " rule", "mandatory", "forbidden"]) {
+    } else if contains_any(
+        &lower,
+        &[
+            "must ",
+            "always ",
+            "never ",
+            " rule",
+            "mandatory",
+            "forbidden",
+        ],
+    ) {
         "constraint"
     } else if contains_any(&lower, &["convention", "pattern", "naming", "style guide"])
         && (lower.contains('/') || lower.contains('.'))
     {
         "convention"
-    } else if contains_any(&lower, &["user prefers", "user wants", "user likes", "user asked"]) {
+    } else if contains_any(
+        &lower,
+        &["user prefers", "user wants", "user likes", "user asked"],
+    ) {
         "user_pref"
     } else {
         return; // No match — leave untyped
@@ -857,8 +890,7 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 
 /// Returns (label, value, description) tuples ordered by label.
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -880,8 +912,7 @@ pub fn get_memory_blocks_with_ts(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, i64)>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.updated_at FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -903,8 +934,7 @@ pub fn get_memory_blocks_with_ts(
 /// Increment the agent's user-message turn counter and return the new value.
 /// Call once per non-tool-return message (never for tool result turns).
 pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     conn.execute(
         "UPDATE agents SET memory_turn_counter = memory_turn_counter + 1 WHERE id = ?1",
         params![agent_id],
@@ -921,8 +951,7 @@ pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
 
 /// Read the current turn counter without incrementing.
 pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let n: i64 = conn
         .query_row(
             "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
@@ -987,9 +1016,13 @@ pub fn decay_stale_memories(
            )",
         params![current_turn, idle_threshold, agent_id],
     )?;
-    
+
     if n > 0 {
-        tracing::debug!("decay_stale_memories: decayed confidence for {} blocks of agent {}", n, agent_id);
+        tracing::debug!(
+            "decay_stale_memories: decayed confidence for {} blocks of agent {}",
+            n,
+            agent_id
+        );
     }
     Ok(n)
 }
@@ -1011,8 +1044,7 @@ pub fn promote_stale_blocks(
     current_turn: i64,
     threshold: i64,
 ) -> Result<u64> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     // Per-row threshold = base × (1 + min(access_count, 10) × 0.20)
     // Implemented in SQL as base * (5 + MIN(access_count, 10)) / 5 so we stay
     // in integer arithmetic and avoid round-off surprises across SQLite versions.
@@ -1042,8 +1074,7 @@ pub fn get_active_blocks(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String, i64)>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier, b.last_turn
          FROM shared_memory_blocks b
@@ -1071,8 +1102,7 @@ pub fn get_long_term_excerpts(
     agent_id: &str,
     current_turn: i64,
 ) -> Result<Vec<LongTermExcerpt>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.last_turn
          FROM shared_memory_blocks b
@@ -1084,7 +1114,7 @@ pub fn get_long_term_excerpts(
         let label: String = row.get(0)?;
         let value: String = row.get(1).unwrap_or_default();
         let last_turn: i64 = row.get(2).unwrap_or(0);
-        
+
         // A3: Take first 250 chars as excerpt (increased from 80)
         let char_count = value.chars().count();
         let excerpt: String = value.chars().take(250).collect();
@@ -1093,10 +1123,10 @@ pub fn get_long_term_excerpts(
         } else {
             excerpt
         };
-        
+
         // A3: Extract top 5 distinctive keywords
         let keywords = extract_keywords(&value, 5);
-        
+
         Ok(LongTermExcerpt {
             label,
             excerpt,
@@ -1116,8 +1146,7 @@ pub fn set_memory_tier(
     tier: &str,
     reset_turn: bool,
 ) -> Result<bool> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let current_turn: i64 = conn
         .query_row(
             "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
@@ -1170,10 +1199,7 @@ pub struct WritebackFact {
     pub confidence: f64,
 }
 
-pub fn extract_subagent_memory_for_writeback(
-    db: &Db,
-    subagent_id: &str,
-) -> Vec<WritebackFact> {
+pub fn extract_subagent_memory_for_writeback(db: &Db, subagent_id: &str) -> Vec<WritebackFact> {
     let blocks = get_memory_blocks_with_provenance(db, subagent_id).unwrap_or_default();
 
     blocks
@@ -1199,21 +1225,19 @@ pub fn extract_subagent_memory_for_writeback(
             }
             true
         })
-        .map(|(label, value, desc, memory_type, confidence)| WritebackFact {
-            label,
-            value,
-            description: desc,
-            memory_type,
-            confidence,
-        })
+        .map(
+            |(label, value, desc, memory_type, confidence)| WritebackFact {
+                label,
+                value,
+                description: desc,
+                memory_type,
+                confidence,
+            },
+        )
         .collect()
 }
 
-pub fn write_back_subagent_memory(
-    db: &Db,
-    subagent_id: &str,
-    parent_agent_id: &str,
-) -> usize {
+pub fn write_back_subagent_memory(db: &Db, subagent_id: &str, parent_agent_id: &str) -> usize {
     let facts = extract_subagent_memory_for_writeback(db, subagent_id);
 
     let mut written = 0;
@@ -1223,7 +1247,10 @@ pub fn write_back_subagent_memory(
         let desc = if fact.description.is_empty() {
             Some(format!("Written back from subagent {subagent_id}"))
         } else {
-            Some(format!("{} (from subagent {subagent_id})", fact.description))
+            Some(format!(
+                "{} (from subagent {subagent_id})",
+                fact.description
+            ))
         };
 
         if crate::sqlite::upsert_memory_block_typed(
@@ -1258,8 +1285,7 @@ pub fn get_memory_blocks_full(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String)>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier
          FROM shared_memory_blocks b
@@ -1286,8 +1312,7 @@ pub fn get_memory_history(
     label: &str,
     limit: usize,
 ) -> Result<Vec<(String, String, i64)>> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let block_id: Option<String> = conn
         .query_row(
             "SELECT b.id FROM shared_memory_blocks b
@@ -1321,8 +1346,7 @@ pub fn restore_memory_from_history(
     label: &str,
     hist_id: &str,
 ) -> Result<bool> {
-    let conn = db
-        .lock();
+    let conn = db.lock();
     let block_id: Option<String> = conn
         .query_row(
             "SELECT b.id FROM shared_memory_blocks b
@@ -1406,12 +1430,10 @@ fn atomic_write(path: &std::path::Path, contents: &str) -> Result<()> {
     let tmp = path.with_extension("md.tmp");
     {
         use std::io::Write;
-        let mut f = std::fs::File::create(&tmp).map_err(|e| {
-            crate::error::Error::custom(format!("create {}: {e}", tmp.display()))
-        })?;
-        f.write_all(contents.as_bytes()).map_err(|e| {
-            crate::error::Error::custom(format!("write {}: {e}", tmp.display()))
-        })?;
+        let mut f = std::fs::File::create(&tmp)
+            .map_err(|e| crate::error::Error::custom(format!("create {}: {e}", tmp.display())))?;
+        f.write_all(contents.as_bytes())
+            .map_err(|e| crate::error::Error::custom(format!("write {}: {e}", tmp.display())))?;
         f.sync_all().ok(); // best-effort durability
     }
     std::fs::rename(&tmp, path).map_err(|e| {
@@ -1454,9 +1476,8 @@ pub fn export_memory_to_rag_dir(
     if archival_dir.exists() {
         let _ = std::fs::remove_dir_all(&archival_dir);
     }
-    std::fs::create_dir_all(&blocks_dir).map_err(|e| {
-        crate::error::Error::custom(format!("mkdir {}: {e}", blocks_dir.display()))
-    })?;
+    std::fs::create_dir_all(&blocks_dir)
+        .map_err(|e| crate::error::Error::custom(format!("mkdir {}: {e}", blocks_dir.display())))?;
     std::fs::create_dir_all(&archival_dir).map_err(|e| {
         crate::error::Error::custom(format!("mkdir {}: {e}", archival_dir.display()))
     })?;
@@ -1497,11 +1518,9 @@ pub fn export_memory_to_rag_dir(
     // We read the archival_memory FTS5 virtual table directly — no existing
     // helper lists all rows for an agent, and we don't want one in the hot
     // path. Expected volume here is small-ish (hundreds to low thousands).
-    let conn = db
-        .lock();
-    let mut stmt = conn.prepare(
-        "SELECT id, content, tags, created_at FROM archival_memory WHERE agent_id = ?1",
-    )?;
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare("SELECT id, content, tags, created_at FROM archival_memory WHERE agent_id = ?1")?;
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
             row.get::<_, String>(0)?,

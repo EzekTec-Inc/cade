@@ -21,7 +21,7 @@ pub fn render_mcp_overlay(
     let screen = ctx.content_rect();
     let w = 640.0_f32.min(screen.width() - 40.0);
     let h = 520.0_f32.min(screen.height() - 60.0);
-    
+
     let rect = crate::responsive::overlay_rect(ctx, w, h, None);
     let w = rect.width();
     let h = rect.height();

@@ -196,15 +196,15 @@ async fn main() -> Result<()> {
     // in a blocking thread so it doesn't stall the async runtime.
     if let Some(emb) = state.embedder.clone() {
         let db_bf = state.db.clone();
-        tokio::task::spawn_blocking(move || {
-            match cade_store::sqlite::embedding::backfill_embeddings(&db_bf, &*emb) {
-                Ok(n) if n > 0 => tracing::info!(
-                    "Embedding backfill: filled {n} memory block(s) at startup"
-                ),
+        tokio::task::spawn_blocking(
+            move || match cade_store::sqlite::embedding::backfill_embeddings(&db_bf, &*emb) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Embedding backfill: filled {n} memory block(s) at startup")
+                }
                 Ok(_) => tracing::debug!("Embedding backfill: nothing to do"),
                 Err(e) => tracing::warn!("Embedding backfill failed: {e}"),
-            }
-        });
+            },
+        );
     }
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────

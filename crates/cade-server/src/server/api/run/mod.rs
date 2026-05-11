@@ -45,7 +45,6 @@ use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve
 use crate::server::state::AppState;
 
 /// Maximum agentic turns per request (prevents infinite loops).
-
 mod meta_tools;
 mod subagent;
 #[cfg(test)]
@@ -168,14 +167,15 @@ fn tool_turn_max_tokens() -> Option<u32> {
 /// Record that the agent is active and update its conversation pointer.
 async fn update_activity(state: &AppState, agent_id: &str, conv_id: Option<String>) {
     let mut activity = state.agent_activity.write().await;
-    let entry = activity
-        .entry(agent_id.to_owned())
-        .or_insert(crate::server::state::AgentActivity {
-            last_active_ts: 0,
-            needs_consolidation: false,
-            conversation_id: conv_id.clone(),
-            last_consolidation_turn: 0,
-        });
+    let entry =
+        activity
+            .entry(agent_id.to_owned())
+            .or_insert(crate::server::state::AgentActivity {
+                last_active_ts: 0,
+                needs_consolidation: false,
+                conversation_id: conv_id.clone(),
+                last_consolidation_turn: 0,
+            });
     entry.last_active_ts = chrono::Utc::now().timestamp();
     entry.conversation_id = conv_id;
 }
@@ -191,9 +191,7 @@ fn parse_input(body: &Value) -> Result<String, Response> {
 
 /// Return the theme name when the input is a `/theme <name>` command.
 fn detect_theme_cmd(input: &str) -> Option<String> {
-    input
-        .strip_prefix("/theme ")
-        .map(|s| s.trim().to_string())
+    input.strip_prefix("/theme ").map(|s| s.trim().to_string())
 }
 
 /// Create a run record in the DB, falling back to a timestamp-based local ID
@@ -252,7 +250,9 @@ pub async fn run_agent(
     // We use an mpsc channel to bridge the async loop into an SSE stream.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
 
-    tokio::spawn(run_agent_loop(state2, agent_id2, conv_id2, run_id2, theme_cmd, tx));
+    tokio::spawn(run_agent_loop(
+        state2, agent_id2, conv_id2, run_id2, theme_cmd, tx,
+    ));
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Sse::new(stream).into_response()
@@ -311,29 +311,25 @@ async fn run_agent_loop(
         };
 
         // Resolution order: built-in registry first, then on-disk themes.
-        let colors_opt =
-            cade_core::resources::get_theme(&effective_name)
-                .or_else(|| {
+        let colors_opt = cade_core::resources::get_theme(&effective_name)
+            .or_else(|| {
+                let all = cade_core::resources::discover_themes(&cwd, &agent_dir);
+                all.into_iter().find(|t| t.meta.name == effective_name)
+            })
+            .or_else(|| {
+                let name_lower = effective_name.to_lowercase();
+                let builtins = cade_core::resources::list_available_themes();
+                if let Some(bn) = builtins.iter().find(|n| {
+                    n.name.to_lowercase().contains(&name_lower)
+                        || n.display_name.to_lowercase().contains(&name_lower)
+                }) {
+                    cade_core::resources::get_theme(&bn.name)
+                } else {
                     let all = cade_core::resources::discover_themes(&cwd, &agent_dir);
                     all.into_iter()
-                        .find(|t| t.meta.name == effective_name)
-                })
-                .or_else(|| {
-                    let name_lower = effective_name.to_lowercase();
-                    let builtins = cade_core::resources::list_available_themes();
-                    if let Some(bn) = builtins
-                        .iter()
-                        .find(|n| {
-                            n.name.to_lowercase().contains(&name_lower)
-                                || n.display_name.to_lowercase().contains(&name_lower)
-                        })
-                    {
-                        cade_core::resources::get_theme(&bn.name)
-                    } else {
-                        let all = cade_core::resources::discover_themes(&cwd, &agent_dir);
-                        all.into_iter().find(|t| t.meta.name.to_lowercase().contains(&name_lower))
-                    }
-                });
+                        .find(|t| t.meta.name.to_lowercase().contains(&name_lower))
+                }
+            });
 
         if let Some(colors) = colors_opt {
             // Persist the chosen theme on the agent row so GUI reloads
@@ -665,11 +661,7 @@ async fn run_agent_loop(
             // boundary would otherwise panic.
             let output_for_sse = if result.output.len() > SSE_OUTPUT_TRUNCATE_BYTES {
                 let head = truncate_at_char_boundary(&result.output, SSE_OUTPUT_TRUNCATE_BYTES);
-                format!(
-                    "{}\n[... truncated: {} bytes]",
-                    head,
-                    result.output.len()
-                )
+                format!("{}\n[... truncated: {} bytes]", head, result.output.len())
             } else {
                 result.output.clone()
             };
@@ -705,7 +697,8 @@ async fn run_agent_loop(
             // even after the original messages have been dropped.
             {
                 let turn = sqlite::get_turn_counter(&state2.db, &agent_id2).unwrap_or(0);
-                let summary = build_observation_summary(&result.tool_name, &tc.arguments, &result.output);
+                let summary =
+                    build_observation_summary(&result.tool_name, &tc.arguments, &result.output);
                 let importance = rate_observation_importance(&result.tool_name, result.is_error);
                 let files = extract_file_paths(&tc.arguments);
                 let _ = sqlite::observations::insert_observation(
@@ -791,7 +784,9 @@ pub(super) fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str,
     }
 
     let new_value = lines.join("\n");
-    if let Err(e) = cade_store::sqlite::upsert_memory_block(db, agent_id, label, &new_value, None, Some(2000)) {
+    if let Err(e) =
+        cade_store::sqlite::upsert_memory_block(db, agent_id, label, &new_value, None, Some(2000))
+    {
         tracing::warn!("record_recent_edit_db failed for agent={agent_id} path={path}: {e}");
     }
 }
@@ -817,13 +812,26 @@ pub(super) fn build_observation_summary(
         .unwrap_or("");
 
     let key_excerpt = if key_arg.len() > 80 {
-        format!("{}…", &key_arg[..key_arg.char_indices().take(77).last().map(|(i, _)| i).unwrap_or(77)])
+        format!(
+            "{}…",
+            &key_arg[..key_arg
+                .char_indices()
+                .take(77)
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(77)]
+        )
     } else {
         key_arg.to_string()
     };
 
     let output_head = if output.len() > 60 {
-        let end = output.char_indices().take(57).last().map(|(i, _)| i).unwrap_or(57);
+        let end = output
+            .char_indices()
+            .take(57)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(57);
         format!("{}…", &output[..end])
     } else {
         output.to_string()

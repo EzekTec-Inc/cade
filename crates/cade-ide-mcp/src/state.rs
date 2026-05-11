@@ -75,9 +75,7 @@ pub struct Selection {
 }
 
 /// Severity of a diagnostic reported by the editor's language services.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticSeverity {
     Error,
@@ -292,8 +290,14 @@ mod tests {
         let sel = Selection {
             path: "/tmp/a.rs".into(),
             range: Range {
-                start: Position { line: 1, character: 0 },
-                end:   Position { line: 1, character: 5 },
+                start: Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 5,
+                },
             },
             text: "hello".into(),
         };
@@ -312,8 +316,14 @@ mod tests {
         let d = Diagnostic {
             path: "/tmp/a.rs".into(),
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end:   Position { line: 0, character: 4 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 4,
+                },
             },
             severity: DiagnosticSeverity::Error,
             message: "unused variable: `x`".into(),

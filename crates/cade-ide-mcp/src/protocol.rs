@@ -21,8 +21,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::state::{
-    ApplyEditRequest, DebugAction, Diagnostic, OpenFile, Range, Selection,
-    WorkspaceFolder,
+    ApplyEditRequest, DebugAction, Diagnostic, OpenFile, Range, Selection, WorkspaceFolder,
 };
 
 // ── Adapter → server ────────────────────────────────────────────────────────
@@ -189,16 +188,28 @@ mod tests {
             selection: Some(Selection {
                 path: "/tmp/a.rs".into(),
                 range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end: Position { line: 0, character: 4 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 4,
+                    },
                 },
                 text: "fn m".into(),
             }),
             diagnostics: vec![crate::state::Diagnostic {
                 path: "/tmp/a.rs".into(),
                 range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end: Position { line: 0, character: 2 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 2,
+                    },
                 },
                 severity: DiagnosticSeverity::Warning,
                 message: "unused import".into(),
@@ -241,7 +252,10 @@ mod tests {
             result: CallbackResult::Ok,
         };
         let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains(r#""type":"callback_response""#), "json={json}");
+        assert!(
+            json.contains(r#""type":"callback_response""#),
+            "json={json}"
+        );
         assert!(json.contains(r#""id":1"#), "json={json}");
     }
 
@@ -249,13 +263,17 @@ mod tests {
 
     #[test]
     fn server_hello_ack_round_trips() {
-        let msg = ServerMessage::HelloAck { protocol_version: 1 };
+        let msg = ServerMessage::HelloAck {
+            protocol_version: 1,
+        };
         assert_eq!(round_trip(&msg), msg);
     }
 
     #[test]
     fn server_hello_ack_serializes_type_tag() {
-        let msg = ServerMessage::HelloAck { protocol_version: 1 };
+        let msg = ServerMessage::HelloAck {
+            protocol_version: 1,
+        };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"hello_ack""#), "json={json}");
     }
@@ -270,8 +288,14 @@ mod tests {
                 path: "/tmp/a.rs".into(),
                 text_edits: vec![TextEdit {
                     range: Range {
-                        start: Position { line: 0, character: 0 },
-                        end: Position { line: 0, character: 0 },
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
                     },
                     new_text: "// header\n".into(),
                 }],
@@ -284,7 +308,9 @@ mod tests {
     fn callback_request_reveal_file_round_trips() {
         let msg = ServerMessage::CallbackRequest {
             id: 2,
-            op: CallbackOp::RevealFile { path: "/tmp/b.rs".into() },
+            op: CallbackOp::RevealFile {
+                path: "/tmp/b.rs".into(),
+            },
         };
         assert_eq!(round_trip(&msg), msg);
     }
@@ -296,8 +322,14 @@ mod tests {
             op: CallbackOp::SetSelection {
                 path: "/tmp/c.rs".into(),
                 range: Range {
-                    start: Position { line: 5, character: 2 },
-                    end: Position { line: 5, character: 10 },
+                    start: Position {
+                        line: 5,
+                        character: 2,
+                    },
+                    end: Position {
+                        line: 5,
+                        character: 10,
+                    },
                 },
             },
         };
@@ -308,7 +340,9 @@ mod tests {
     fn callback_request_save_single_round_trips() {
         let msg = ServerMessage::CallbackRequest {
             id: 4,
-            op: CallbackOp::Save { path: Some("/tmp/d.rs".into()) },
+            op: CallbackOp::Save {
+                path: Some("/tmp/d.rs".into()),
+            },
         };
         assert_eq!(round_trip(&msg), msg);
     }
@@ -326,7 +360,9 @@ mod tests {
     fn callback_request_run_task_round_trips() {
         let msg = ServerMessage::CallbackRequest {
             id: 6,
-            op: CallbackOp::RunTask { name: "cargo-build".into() },
+            op: CallbackOp::RunTask {
+                name: "cargo-build".into(),
+            },
         };
         assert_eq!(round_trip(&msg), msg);
     }
@@ -335,7 +371,9 @@ mod tests {
     fn callback_request_run_terminal_round_trips() {
         let msg = ServerMessage::CallbackRequest {
             id: 7,
-            op: CallbackOp::RunTerminal { command: "cargo test".into() },
+            op: CallbackOp::RunTerminal {
+                command: "cargo test".into(),
+            },
         };
         assert_eq!(round_trip(&msg), msg);
     }
@@ -364,7 +402,9 @@ mod tests {
     fn callback_request_serializes_type_tag_and_id() {
         let msg = ServerMessage::CallbackRequest {
             id: 99,
-            op: CallbackOp::RunTask { name: "build".into() },
+            op: CallbackOp::RunTask {
+                name: "build".into(),
+            },
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"callback_request""#), "json={json}");

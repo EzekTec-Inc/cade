@@ -1,6 +1,6 @@
-use crate::colors::ThemeColorsExt;
 use crate::app::*;
 use crate::colors::ThemeColors as TC;
+use crate::colors::ThemeColorsExt;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Row};
@@ -12,7 +12,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     if area.height == 0 {
         return;
     }
-    
+
     // Draw a proper shell overlay centered on screen
     let inner_area = crate::overlay::render_overlay_shell(frame, area, "Select File", colors);
 
@@ -45,7 +45,13 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     for (i, m) in pk.matches.iter().take(max_entries).enumerate() {
         let selected = i == pk.cursor;
         let (glyph, style) = if selected {
-            ("❯", Style::default().bg(colors.c_bg_surface1()).fg(colors.c_primary()).add_modifier(Modifier::BOLD))
+            (
+                "❯",
+                Style::default()
+                    .bg(colors.c_bg_surface1())
+                    .fg(colors.c_primary())
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             (" ", colors.text_muted())
         };
@@ -55,10 +61,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         lines.push(Line::from(Span::styled(padded_text, style)));
     }
 
-    frame.render_widget(
-        Paragraph::new(lines),
-        inner_area,
-    );
+    frame.render_widget(Paragraph::new(lines), inner_area);
 }
 
 // endregion: --- @ file picker
@@ -71,21 +74,27 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
 /// Build the 5-cell swatch spans for a `ThemeColors`.
 /// Returns a `Vec<Span>` of coloured `█` characters.
 fn theme_swatches(tc: &TC) -> Vec<Span<'static>> {
-    [tc.c_primary(), tc.c_success(), tc.c_error(), tc.c_warning(), tc.c_bg_surface2()]
-        .iter()
-        .map(|&fg| Span::styled("█", Style::default().fg(fg)))
-        .collect()
+    [
+        tc.c_primary(),
+        tc.c_success(),
+        tc.c_error(),
+        tc.c_warning(),
+        tc.c_bg_surface2(),
+    ]
+    .iter()
+    .map(|&fg| Span::styled("█", Style::default().fg(fg)))
+    .collect()
 }
 
 /// One theme row: `  ▶/  <swatches> <name>  <description>`.
-fn theme_row<'a>(
-    t: &opaline::Theme,
-    is_sel: bool,
-    colors: &ThemeColors,
-) -> Row<'a> {
+fn theme_row<'a>(t: &opaline::Theme, is_sel: bool, colors: &ThemeColors) -> Row<'a> {
     let cursor_span = Span::styled(
         if is_sel { " ❯ " } else { "   " },
-        Style::default().fg(if is_sel { colors.c_primary() } else { colors.c_text_dim() }),
+        Style::default().fg(if is_sel {
+            colors.c_primary()
+        } else {
+            colors.c_text_dim()
+        }),
     );
 
     // Swatch cell
@@ -111,7 +120,9 @@ fn theme_row<'a>(
     };
     let badge_cell = Cell::from(Span::styled(
         variant_badge.to_string(),
-        Style::default().fg(colors.c_text_dim()).add_modifier(Modifier::DIM),
+        Style::default()
+            .fg(colors.c_text_dim())
+            .add_modifier(Modifier::DIM),
     ));
 
     // Description cell
@@ -153,11 +164,19 @@ pub(crate) fn render_theme_picker(
         .collect();
 
     let w = (area.width / 2).max(40).min(area.width.saturating_sub(4));
-    let has_builtins = tp.filtered_indices.iter().any(|&i| builtin_names.contains(&tp.themes[i].meta.name));
-    let has_custom = tp.filtered_indices.iter().any(|&i| !builtin_names.contains(&tp.themes[i].meta.name));
+    let has_builtins = tp
+        .filtered_indices
+        .iter()
+        .any(|&i| builtin_names.contains(&tp.themes[i].meta.name));
+    let has_custom = tp
+        .filtered_indices
+        .iter()
+        .any(|&i| !builtin_names.contains(&tp.themes[i].meta.name));
     let header_rows = has_builtins as u16 + has_custom as u16;
     let max_visible = area.height.saturating_sub(8);
-    let n = (tp.filtered_indices.len() as u16 + header_rows).max(1).min(max_visible);
+    let n = (tp.filtered_indices.len() as u16 + header_rows)
+        .max(1)
+        .min(max_visible);
     let h = (n + 4).clamp(5, area.height.saturating_sub(4));
 
     let r = ratatui::layout::Rect {
@@ -290,15 +309,14 @@ pub(crate) fn render_theme_picker(
         [
             Constraint::Length(9),
             Constraint::Length(22),
-            Constraint::Length(8),   // U2: variant badge
+            Constraint::Length(8), // U2: variant badge
             Constraint::Min(10),
         ],
     )
     .column_spacing(1)
     .style(Style::default().bg(colors.c_bg_surface0()));
 
-    let mut ts = ratatui::widgets::TableState::default()
-        .with_selected(flat_cursor);
+    let mut ts = ratatui::widgets::TableState::default().with_selected(flat_cursor);
     frame.render_stateful_widget(table, inner_table_area, &mut ts);
 
     // -- Filter box
@@ -308,7 +326,9 @@ pub(crate) fn render_theme_picker(
         // U3: shortened title to fit narrow pickers
         .title(Span::styled(
             " ↑↓ nav · Enter ok · Esc cancel · type to filter ",
-            Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(colors.c_text_muted())
+                .add_modifier(Modifier::DIM),
         ))
         .border_style(colors.border_accent())
         .style(Style::default().bg(colors.c_bg_surface1()));
@@ -321,5 +341,3 @@ pub(crate) fn render_theme_picker(
 // endregion: --- Theme picker
 
 // region:    --- Tests
-
-

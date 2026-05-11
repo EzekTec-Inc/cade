@@ -109,9 +109,7 @@ impl BashTool {
             let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
             cade_core::askpass::apply_askpass_env(&mut cmd);
-            cmd.stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
         })
         .await
         .map_err(|_| crate::Error::custom(format!("Command timed out after {timeout_secs}s")))?

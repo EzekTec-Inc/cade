@@ -1,4 +1,4 @@
-use tui_textarea::{TextArea, Input, Key};
+use tui_textarea::{Input, Key, TextArea};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -85,13 +85,19 @@ impl Editor {
         for (row, line) in lines.iter().enumerate() {
             let next_pos = current_pos + line.len() + 1;
             if pos < next_pos {
-                self.textarea.move_cursor(tui_textarea::CursorMove::Jump(row as u16, (pos - current_pos) as u16));
+                self.textarea.move_cursor(tui_textarea::CursorMove::Jump(
+                    row as u16,
+                    (pos - current_pos) as u16,
+                ));
                 return;
             }
             current_pos = next_pos;
         }
         if let Some(last_row) = lines.len().checked_sub(1) {
-            self.textarea.move_cursor(tui_textarea::CursorMove::Jump(last_row as u16, lines[last_row].len() as u16));
+            self.textarea.move_cursor(tui_textarea::CursorMove::Jump(
+                last_row as u16,
+                lines[last_row].len() as u16,
+            ));
         }
     }
 
@@ -154,7 +160,12 @@ impl Editor {
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.textarea.input(Input { key: Key::Char(c), ctrl: false, alt: false, shift: false });
+        self.textarea.input(Input {
+            key: Key::Char(c),
+            ctrl: false,
+            alt: false,
+            shift: false,
+        });
     }
 
     pub fn insert_str(&mut self, s: &str) {
@@ -217,7 +228,7 @@ impl Editor {
         let mut extracted = Vec::new();
         let mut text = self.text();
         let current_images = std::mem::take(&mut self.paste_images);
-        
+
         for img in current_images {
             let marker_prefix = format!("[image #{}:", img.id);
             if text.contains(&marker_prefix) {
@@ -278,9 +289,7 @@ impl crate::editor_component::EditorComponent for Editor {
         match (key.code, key.modifiers) {
             // Plain Enter submits.  Shift+Enter / Alt+Enter still reach
             // the textarea below to insert a newline.
-            (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
-                EditorAction::Submit(self.text())
-            }
+            (KeyCode::Enter, m) if m == KeyModifiers::NONE => EditorAction::Submit(self.text()),
             (KeyCode::Esc, _) => EditorAction::Cancel,
             _ => {
                 let modified = self.handle_key_event(key, max_width);
@@ -309,8 +318,14 @@ impl crate::editor_component::EditorComponent for Editor {
         // Clamp to the rendered area to avoid emitting a MoveTo
         // outside the input region (which terminals interpret
         // unpredictably).
-        let x = area.x.saturating_add(col as u16).min(area.x + area.width.saturating_sub(1));
-        let y = area.y.saturating_add(row as u16).min(area.y + area.height.saturating_sub(1));
+        let x = area
+            .x
+            .saturating_add(col as u16)
+            .min(area.x + area.width.saturating_sub(1));
+        let y = area
+            .y
+            .saturating_add(row as u16)
+            .min(area.y + area.height.saturating_sub(1));
         Some((x, y))
     }
 
@@ -371,7 +386,11 @@ impl crate::editor_component::EditorComponent for Editor {
             InputMode::Regular => "regular".to_string(),
             InputMode::SlashCommand => "slash".to_string(),
             InputMode::BashCommand { silent } => {
-                if silent { "bash:silent".to_string() } else { "bash".to_string() }
+                if silent {
+                    "bash:silent".to_string()
+                } else {
+                    "bash".to_string()
+                }
             }
         })
     }

@@ -45,7 +45,9 @@ fn origin_policy_rejects_non_localhost() {
 // -- Middleware integration
 
 fn make_app() -> Router {
-    async fn ok() -> &'static str { "ok" }
+    async fn ok() -> &'static str {
+        "ok"
+    }
     Router::new()
         .route("/x", routing::get(ok).post(ok).put(ok).patch(ok).delete(ok))
         .layer(middleware::from_fn(csrf_middleware))

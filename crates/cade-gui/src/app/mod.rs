@@ -127,7 +127,12 @@ impl eframe::App for CadeApp {
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
         // ── Top toolbar (M1) ─────────────────────────────────────────────
-        if components::breadcrumb::render(ui, &session_snapshot_for_toolbar, &self.theme, self.viewport) {
+        if components::breadcrumb::render(
+            ui,
+            &session_snapshot_for_toolbar,
+            &self.theme,
+            self.viewport,
+        ) {
             self.sidebar_drawer_open = !self.sidebar_drawer_open;
         }
 
@@ -300,7 +305,8 @@ impl eframe::App for CadeApp {
                     let mut dismiss_gesture = false;
                     if let Some(g) = gesture {
                         match g {
-                            crate::gestures::Gesture::SwipeDown | crate::gestures::Gesture::SwipeRight => {
+                            crate::gestures::Gesture::SwipeDown
+                            | crate::gestures::Gesture::SwipeRight => {
                                 dismiss_gesture = true;
                             }
                             crate::gestures::Gesture::SwipeLeft => {

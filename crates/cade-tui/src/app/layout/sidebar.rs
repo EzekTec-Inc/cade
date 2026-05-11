@@ -1,8 +1,8 @@
-use crate::colors::{ThemeColorsExt,};
-use crate::app::*;
 use crate::app::layout::cursor::input_mode_badge;
 use crate::app::layout::helpers::mode_sep_color;
 use crate::app::layout::toast::context_severity_color;
+use crate::app::*;
+use crate::colors::ThemeColorsExt;
 
 /// All data the sidebar needs to render — constructed once per frame in
 /// `render_frame` and passed by reference to `render_sidebar`.
@@ -105,24 +105,15 @@ pub(crate) fn render_sidebar(
         )),
         Line::from(vec![
             Span::styled(" agent   ", colors.text_muted()),
-            Span::styled(
-                truncate_str(state.agent_name, val_w),
-                colors.text_primary(),
-            ),
+            Span::styled(truncate_str(state.agent_name, val_w), colors.text_primary()),
         ]),
         Line::from(vec![
             Span::styled(" model   ", colors.text_muted()),
-            Span::styled(
-                truncate_str(state.model, val_w),
-                colors.text_primary(),
-            ),
+            Span::styled(truncate_str(state.model, val_w), colors.text_primary()),
         ]),
         Line::from(vec![
             Span::styled(" cwd     ", colors.text_muted()),
-            Span::styled(
-                truncate_str(state.cwd, val_w),
-                colors.text_primary(),
-            ),
+            Span::styled(truncate_str(state.cwd, val_w), colors.text_primary()),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -154,22 +145,20 @@ pub(crate) fn render_sidebar(
         ]),
         Line::from(vec![
             Span::styled(" queue   ", colors.text_muted()),
-            Span::styled(
-                state.queued_count.to_string(),
-                colors.text_primary(),
-            ),
+            Span::styled(state.queued_count.to_string(), colors.text_primary()),
         ]),
         Line::from(vec![
             Span::styled(" turns   ", colors.text_muted()),
-            Span::styled(
-                state.turn_count.to_string(),
-                colors.text_primary(),
-            ),
+            Span::styled(state.turn_count.to_string(), colors.text_primary()),
         ]),
         Line::from(vec![
             Span::styled(" mouse   ", colors.text_muted()),
             Span::styled(
-                if state.mouse_capture_disabled { "FREE" } else { "CAPTURED" },
+                if state.mouse_capture_disabled {
+                    "FREE"
+                } else {
+                    "CAPTURED"
+                },
                 Style::default().fg(if state.mouse_capture_disabled {
                     colors.c_success()
                 } else {
@@ -217,38 +206,17 @@ pub(crate) fn render_sidebar(
                 .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(
-            " Ctrl+C abort / clear",
-            colors.text_muted(),
-        )),
+        Line::from(Span::styled(" Ctrl+C abort / clear", colors.text_muted())),
         Line::from(Span::styled(
             " Ctrl+O expand/collapse all",
             colors.text_muted(),
         )),
-        Line::from(Span::styled(
-            " Tab cycle permissions",
-            colors.text_muted(),
-        )),
-        Line::from(Span::styled(
-            " ↑/↓ command history",
-            colors.text_muted(),
-        )),
-        Line::from(Span::styled(
-            " @ file picker",
-            colors.text_muted(),
-        )),
-        Line::from(Span::styled(
-            " / commands menu",
-            colors.text_muted(),
-        )),
-        Line::from(Span::styled(
-            " Ctrl+P command palette",
-            colors.text_muted(),
-        )),
-        Line::from(Span::styled(
-            " Ctrl+T toggle plan",
-            colors.text_muted(),
-        )),
+        Line::from(Span::styled(" Tab cycle permissions", colors.text_muted())),
+        Line::from(Span::styled(" ↑/↓ command history", colors.text_muted())),
+        Line::from(Span::styled(" @ file picker", colors.text_muted())),
+        Line::from(Span::styled(" / commands menu", colors.text_muted())),
+        Line::from(Span::styled(" Ctrl+P command palette", colors.text_muted())),
+        Line::from(Span::styled(" Ctrl+T toggle plan", colors.text_muted())),
     ];
 
     // Split inner into text content area + sparkline area at bottom.

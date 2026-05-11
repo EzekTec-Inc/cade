@@ -124,17 +124,14 @@ pub fn search_memory_blocks_fts(
     )?;
 
     // FTS5 BM25 ranks lower (better) so we order by rank ASC.
-    let rows = stmt.query_map(
-        rusqlite::params![agent_id, query, limit as i64],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, f64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        },
-    )?;
+    let rows = stmt.query_map(rusqlite::params![agent_id, query, limit as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, f64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
@@ -146,20 +143,14 @@ pub fn search_memory_blocks_fts(
 /// upgraded incrementally. Failures on individual rows (e.g. an embedder
 /// hiccup on a single value) are logged and skipped — the function returns
 /// the count of rows successfully written.
-pub fn backfill_embeddings(
-    db: &super::Db,
-    embedder: &dyn Embedder,
-) -> Result<usize> {
+pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<usize> {
     // Snapshot the (id, value) pairs under a short-lived lock so we don't
     // hold the connection while running CPU-bound embedding work.
     let pending: Vec<(String, String)> = {
         let conn = db.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, value FROM shared_memory_blocks WHERE embedding IS NULL",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let mut stmt =
+            conn.prepare("SELECT id, value FROM shared_memory_blocks WHERE embedding IS NULL")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.filter_map(|r| r.ok()).collect()
     };
 
@@ -255,7 +246,9 @@ pub fn search_memory_semantic(
                 row.get::<_, String>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
             ))
-        })?.filter_map(|r| r.ok()).collect::<Vec<_>>()
+        })?
+        .filter_map(|r| r.ok())
+        .collect::<Vec<_>>()
     } else {
         let mut stmt = conn.prepare(
             "SELECT b.id, b.label, b.value, b.embedding
@@ -270,7 +263,9 @@ pub fn search_memory_semantic(
                 row.get::<_, String>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
             ))
-        })?.filter_map(|r| r.ok()).collect::<Vec<_>>()
+        })?
+        .filter_map(|r| r.ok())
+        .collect::<Vec<_>>()
     };
 
     let mut scored: Vec<(String, f64, String, String)> = Vec::new();

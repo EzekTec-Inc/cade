@@ -15,9 +15,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::server::state::AppState;
-use cade_store::sqlite::{self, MessageRow};
 use cade_ai::catalogue;
 use cade_ai::{CompletionRequest, LlmMessage, LlmToolCall, MessageImage, StreamChunk, TokenUsage};
+use cade_store::sqlite::{self, MessageRow};
 
 /// Maximum length for auto-generated conversation titles (chars from first user message).
 const CONV_TITLE_MAX: usize = 60;
@@ -87,10 +87,8 @@ impl MemoryBudgets {
     pub fn observation_budget(model: &str) -> (usize, usize) {
         let window_tokens = catalogue::context_window_for_model(model) as usize;
         // Scale linearly from the 32k baseline, clamped.
-        let obs_count = ((window_tokens as f64 / 32_000.0) * 30.0)
-            .round() as usize;
-        let obs_chars = ((window_tokens as f64 / 32_000.0) * 2_000.0)
-            .round() as usize;
+        let obs_count = ((window_tokens as f64 / 32_000.0) * 30.0).round() as usize;
+        let obs_chars = ((window_tokens as f64 / 32_000.0) * 2_000.0).round() as usize;
         (obs_count.clamp(30, 200), obs_chars.clamp(2_000, 16_000))
     }
 }
@@ -119,25 +117,35 @@ const TOOL_RESULT_MAX_CHARS: usize = 8_192;
 pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
     match tool_name {
         // Shell / command execution
-        "bash" | "developer__shell" | "RunShellCommand"
+        "bash"
+        | "developer__shell"
+        | "RunShellCommand"
         | "desktop-commander__start_process"
         | "desktop-commander__read_process_output" => 4_096,
 
         // File reading tools — need more room
-        "read_file" | "ReadFileGemini" | "developer__read_file"
+        "read_file"
+        | "ReadFileGemini"
+        | "developer__read_file"
         | "desktop-commander__read_file"
         | "desktop-commander__read_multiple_files" => 12_288,
 
         // Search / grep — compact results
-        "grep" | "SearchFileContent" | "developer__grep_search"
+        "grep"
+        | "SearchFileContent"
+        | "developer__grep_search"
         | "desktop-commander__start_search"
         | "desktop-commander__get_more_search_results" => 3_072,
 
         // Memory retrieval — excerpts only
-        "archival_memory_search" | "conversation_search" | "search_memory" | "query_event_log" => 2_048,
+        "archival_memory_search" | "conversation_search" | "search_memory" | "query_event_log" => {
+            2_048
+        }
 
         // Glob / list — compact
-        "glob" | "GlobGemini" | "developer__list_directory"
+        "glob"
+        | "GlobGemini"
+        | "developer__list_directory"
         | "desktop-commander__list_directory" => 3_072,
 
         // Everything else: default
@@ -182,8 +190,7 @@ pub(crate) const TOOL_SCHEMA_CHARS_ESTIMATE: usize = 600;
 pub(crate) const PER_MESSAGE_CHAR_CAP: usize = 30_000;
 /// Marker string appended when a message is truncated for context fit.
 /// Stable text — agents and tests both grep for it.
-pub(crate) const TRUNCATION_MARKER: &str =
-    "\n\n[…truncated for context fit. Re-run the original tool or use archival_memory_search to retrieve the full output…]";
+pub(crate) const TRUNCATION_MARKER: &str = "\n\n[…truncated for context fit. Re-run the original tool or use archival_memory_search to retrieve the full output…]";
 
 /// Total character budget for the "# Loaded Skills" section injected into the
 /// dynamic system prompt.  Skill bodies vary wildly (5 K–50 K each); without a
@@ -603,7 +610,11 @@ pub async fn stream_message(
         }
     };
 
-    let acc = std::sync::Arc::new(parking_lot::Mutex::new((String::new(), Vec::<Value>::new(), String::new())));
+    let acc = std::sync::Arc::new(parking_lot::Mutex::new((
+        String::new(),
+        Vec::<Value>::new(),
+        String::new(),
+    )));
     let acc_clone = acc.clone();
     // Accumulate token usage across chunks
     let usage_acc = std::sync::Arc::new(parking_lot::Mutex::new(TokenUsage::default()));
@@ -641,13 +652,15 @@ pub async fn stream_message(
 
             let event = match chunk {
                 Ok(StreamChunk::Reasoning(text)) => {
-                    { let mut g = acc_clone.lock();
+                    {
+                        let mut g = acc_clone.lock();
                         g.2.push_str(&text);
                     }
                     emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
                 }
                 Ok(StreamChunk::Text(text)) => {
-                    { let mut g = acc_clone.lock();
+                    {
+                        let mut g = acc_clone.lock();
                         g.0.push_str(&text);
                     }
                     emit(json!({ "message_type": "assistant_message", "content": text }))
@@ -662,7 +675,8 @@ pub async fn stream_message(
                     }))
                 }
                 Ok(StreamChunk::Usage(u)) => {
-                    { let mut acc = usage_acc2.lock();
+                    {
+                        let mut acc = usage_acc2.lock();
                         // P2: accumulate all 4 token fields (was input/output only —
                         // cache_read/cache_write were silently dropped).
                         acc.input_tokens += u.input_tokens;
@@ -685,14 +699,16 @@ pub async fn stream_message(
                     "reason": reason,
                 })),
                 Ok(StreamChunk::Done) => {
-                    { let g = acc_clone.lock();
+                    {
+                        let g = acc_clone.lock();
                         // Skip persisting empty assistant responses — they clutter
                         // the conversation and produce invalid turn ordering on
                         // next context load (e.g. Gemini consecutive-user-turn 400).
                         if !g.0.is_empty() || !g.1.is_empty() || !g.2.is_empty() {
                             let mut content = g.0.clone();
                             if !g.2.is_empty() {
-                                content = format!("<reasoning>\n{}\n</reasoning>\n\n{}", g.2, content);
+                                content =
+                                    format!("<reasoning>\n{}\n</reasoning>\n\n{}", g.2, content);
                             }
                             persist(
                                 &state_clone,
@@ -712,7 +728,8 @@ pub async fn stream_message(
                     // P2: flush accumulated token usage into AgentMetrics so
                     // server-side cost dashboards / future cost guardrails see
                     // cache_read + cache_write tokens (previously dropped).
-                    { let u = usage_acc3.lock();
+                    {
+                        let u = usage_acc3.lock();
                         let snap = u.clone();
                         let agent_metrics = state_clone.agent_metrics.clone();
                         let agent_id_for_metrics = agent_id_clone.clone();

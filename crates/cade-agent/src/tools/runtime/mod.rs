@@ -41,11 +41,11 @@ pub struct RuntimeToolResult {
 
 // region:    --- ToolRuntime
 
-pub mod memory;
-pub mod skills;
-pub mod native;
-pub mod checkpoints;
 pub mod agents;
+pub mod checkpoints;
+pub mod memory;
+pub mod native;
+pub mod skills;
 
 /// Shared context for dispatching tool calls.
 ///
@@ -87,7 +87,12 @@ impl ToolRuntime {
     }
 
     /// Convenience constructor that clones the client and wraps an MCP reference.
-    pub fn from_refs(client: &HttpTransport, mcp: &McpManager, agent_id: &str, cwd: PathBuf) -> Self {
+    pub fn from_refs(
+        client: &HttpTransport,
+        mcp: &McpManager,
+        agent_id: &str,
+        cwd: PathBuf,
+    ) -> Self {
         let _ = mcp;
         Self {
             client: Arc::new(client.clone()),
@@ -160,9 +165,11 @@ impl ToolRuntime {
                     .await
                     .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
             }
-            SEARCH_MEMORY => store_memory::SearchMemoryTool::run(&self.client, &self.agent_id, args)
-                .await
-                .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false)),
+            SEARCH_MEMORY => {
+                store_memory::SearchMemoryTool::run(&self.client, &self.agent_id, args)
+                    .await
+                    .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
+            }
 
             // -- Skill tools (intercepted; use local skill discovery)
             LOAD_SKILL => self.handle_load_skill(args),
@@ -183,7 +190,6 @@ impl ToolRuntime {
             UPDATE_MEMORY_FIELD => self.handle_update_memory_field(args).await,
             LINK_MEMORY_EVIDENCE => self.handle_link_memory_evidence(args).await,
             REFLECT => self.handle_reflect(args).await,
-
 
             // -- Interactive tools — not handled here
             RUN_SUBAGENT | ASK_USER_QUESTION | ENTER_PLAN_MODE | EXIT_PLAN_MODE => {
@@ -215,7 +221,14 @@ impl ToolRuntime {
 
             // -- Everything else: native Rust tools + MCP
             _ => {
-                let r = dispatch(tool_call_id.clone(), canonical, args, &self.mcp, self.allowed_paths.as_deref()).await;
+                let r = dispatch(
+                    tool_call_id.clone(),
+                    canonical,
+                    args,
+                    &self.mcp,
+                    self.allowed_paths.as_deref(),
+                )
+                .await;
                 (r.output, r.is_error)
             }
         };
@@ -264,10 +277,7 @@ impl ToolRuntime {
         }
     }
 
-
-
     // region:    --- Checkpoint handlers
-
 
     async fn handle_list_checkpoints(&self) -> (String, bool) {
         match self.client.list_checkpoints(&self.agent_id).await {
@@ -291,11 +301,9 @@ impl ToolRuntime {
         }
     }
 
-
     // endregion: --- Checkpoint handlers
 
     // region:    --- Artifact handlers
-
 
     // endregion: --- Artifact handlers
 
@@ -304,8 +312,6 @@ impl ToolRuntime {
     fn is_local_backend(&self) -> bool {
         self.backend.name() == "local"
     }
-
-
 
     async fn handle_write_via_backend(&self, args: &Value) -> (String, bool) {
         if !self.backend.is_writable() {
@@ -330,8 +336,6 @@ impl ToolRuntime {
 
     // region:    --- Typed memory / provenance / reflection handlers
 
-
-
     async fn handle_reflect(&self, args: &Value) -> (String, bool) {
         let focus = args["focus"].as_str().map(String::from);
 
@@ -346,7 +350,6 @@ impl ToolRuntime {
     }
 
     // endregion: --- Typed memory / provenance / reflection handlers
-
 
     // endregion: --- Skill handlers
 
@@ -370,7 +373,6 @@ impl ToolRuntime {
             Err(e) => (format!("Failed to list agents: {e}"), true),
         }
     }
-
 
     // endregion: --- Agent handlers
 }
@@ -472,7 +474,8 @@ mod tests {
             crate::agent::HttpTransport::new(
                 "http://localhost:0".to_string(),
                 "fake-key".to_string(),
-            ).unwrap(),
+            )
+            .unwrap(),
         );
         let mcp = Arc::new(crate::mcp::McpManager::empty());
         ToolRuntime::new(client, mcp, "test-agent".to_string(), PathBuf::from("/tmp"))
@@ -490,20 +493,22 @@ mod tests {
                 &serde_json::json!({"prompt": "hello"}),
             )
             .await;
-        assert!(result.is_none(), "run_subagent must not be handled by ToolRuntime");
+        assert!(
+            result.is_none(),
+            "run_subagent must not be handled by ToolRuntime"
+        );
     }
 
     #[tokio::test]
     async fn runtime_returns_none_for_ask_user_question() {
         let rt = build_test_runtime();
         let result = rt
-            .execute(
-                "tc_2".into(),
-                "ask_user_question",
-                &serde_json::json!({}),
-            )
+            .execute("tc_2".into(), "ask_user_question", &serde_json::json!({}))
             .await;
-        assert!(result.is_none(), "ask_user_question must not be handled by ToolRuntime");
+        assert!(
+            result.is_none(),
+            "ask_user_question must not be handled by ToolRuntime"
+        );
     }
 
     #[tokio::test]

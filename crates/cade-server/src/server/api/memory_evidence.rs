@@ -16,12 +16,14 @@ pub async fn list_evidence(
     State(state): State<AppState>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_memory_evidence(&state.db, &agent_id, &label).map_err(|e: cade_store::error::Error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "detail": e.to_string() })),
-        )
-    })?;
+    let rows = sqlite::list_memory_evidence(&state.db, &agent_id, &label).map_err(
+        |e: cade_store::error::Error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "detail": e.to_string() })),
+            )
+        },
+    )?;
 
     let items: Vec<Value> = rows
         .iter()
@@ -140,12 +142,14 @@ pub async fn list_reflection(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_reflection_log(&state.db, &agent_id).map_err(|e: cade_store::error::Error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "detail": e.to_string() })),
-        )
-    })?;
+    let rows = sqlite::list_reflection_log(&state.db, &agent_id).map_err(
+        |e: cade_store::error::Error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "detail": e.to_string() })),
+            )
+        },
+    )?;
     Ok(Json(json!(rows)))
 }
 

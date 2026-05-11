@@ -54,10 +54,7 @@ fn serve_embedded(path: &str) -> Response {
             };
             (
                 StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime),
-                    (header::CACHE_CONTROL, cache),
-                ],
+                [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, cache)],
                 file.data.to_vec(),
             )
                 .into_response()

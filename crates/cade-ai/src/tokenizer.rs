@@ -89,7 +89,10 @@ mod tests {
         let toks = count_tokens("openai/gpt-4o", text);
         let chars = text.chars().count();
         assert!(toks > 0, "must produce non-zero token count");
-        assert!(toks < chars, "tokens ({toks}) must be less than chars ({chars}) for ASCII");
+        assert!(
+            toks < chars,
+            "tokens ({toks}) must be less than chars ({chars}) for ASCII"
+        );
     }
 
     #[test]
@@ -105,21 +108,29 @@ mod tests {
         // We do not assert exact counts (tokenizer-version dependent) but
         // verify both paths produce numbers; o200k typically <= cl100k.
         let text = "The quick brown fox jumps over the lazy dog. ".repeat(20);
-        let cl = encoder_for("openai/gpt-3.5-turbo").unwrap()
+        let cl = encoder_for("openai/gpt-3.5-turbo")
+            .unwrap()
             .encode_with_special_tokens(&text)
             .len();
-        let o2 = encoder_for("openai/gpt-4o").unwrap()
+        let o2 = encoder_for("openai/gpt-4o")
+            .unwrap()
             .encode_with_special_tokens(&text)
             .len();
         assert!(cl > 0 && o2 > 0);
         // o200k should be ≤ cl100k for typical English (more efficient).
-        assert!(o2 <= cl + 5, "o200k ({o2}) should not exceed cl100k ({cl}) by much");
+        assert!(
+            o2 <= cl + 5,
+            "o200k ({o2}) should not exceed cl100k ({cl}) by much"
+        );
     }
 
     #[test]
     fn count_tokens_handles_unknown_provider() {
         let n = count_tokens("random/unknown-model", "hello world");
-        assert!(n > 0, "unknown providers must still return a useful estimate");
+        assert!(
+            n > 0,
+            "unknown providers must still return a useful estimate"
+        );
     }
 
     #[test]

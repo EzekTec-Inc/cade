@@ -33,10 +33,7 @@ async fn main() -> Result<(), BoxError> {
         .with_ansi(false)
         .init();
 
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "cade-ide-mcp starting"
-    );
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "cade-ide-mcp starting");
 
     let state = EditorState::new();
     let slot = ChannelSlot::null();
@@ -47,8 +44,7 @@ async fn main() -> Result<(), BoxError> {
         let s = state.clone();
         let sl = slot.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                cade_ide_mcp::transport::run_accept_loop(s, sl, shutdown_rx, None).await
+            if let Err(e) = cade_ide_mcp::transport::run_accept_loop(s, sl, shutdown_rx, None).await
             {
                 tracing::error!("adapter accept loop failed: {e}");
             }

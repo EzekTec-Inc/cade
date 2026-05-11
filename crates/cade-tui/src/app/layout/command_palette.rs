@@ -1,8 +1,8 @@
 //! Render the command palette overlay.
 
-use crate::colors::ThemeColorsExt;
 use crate::app::command_palette::CommandPaletteState;
 use crate::colors::ThemeColors;
+use crate::colors::ThemeColorsExt;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -19,7 +19,10 @@ pub(crate) fn render_command_palette(
     colors: &ThemeColors,
 ) {
     // Size the overlay: 60% width, up to 50 chars wide min, max 80
-    let w = (area.width * 3 / 5).max(40).min(area.width.saturating_sub(4)).min(80);
+    let w = (area.width * 3 / 5)
+        .max(40)
+        .min(area.width.saturating_sub(4))
+        .min(80);
     let max_visible = 12usize;
     let item_count = cp.filtered.len().min(max_visible);
     // Height = 3 (border top + search row + border/padding) + items + 2 (hint + border bottom)
@@ -27,7 +30,7 @@ pub(crate) fn render_command_palette(
 
     let r = Rect {
         x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 3,  // bias toward top 1/3
+        y: area.y + (area.height.saturating_sub(h)) / 3, // bias toward top 1/3
         width: w,
         height: h,
     };
@@ -140,11 +143,7 @@ pub(crate) fn render_command_palette(
                     .bg(colors.c_selected_bg()),
             )
         } else {
-            (
-                colors.primary(),
-                colors.text_muted(),
-                colors.text_dim(),
-            )
+            (colors.primary(), colors.text_muted(), colors.text_dim())
         };
 
         // Pad label to fixed width for alignment
@@ -174,11 +173,14 @@ pub(crate) fn render_command_palette(
         lines.push(Line::from(vec![
             Span::styled(format!(" {} ", glyph), glyph_style),
             Span::styled(label_padded, label_style),
-            Span::styled("  ", if is_selected {
-                Style::default().bg(colors.c_selected_bg())
-            } else {
-                Style::default()
-            }),
+            Span::styled(
+                "  ",
+                if is_selected {
+                    Style::default().bg(colors.c_selected_bg())
+                } else {
+                    Style::default()
+                },
+            ),
             Span::styled(desc, desc_style),
             Span::styled(section_tag, section_style),
         ]));
@@ -190,9 +192,15 @@ pub(crate) fn render_command_palette(
     let total = cade_core::resources::palette::CMD_DEFS.len();
     let shown = cp.filtered.len();
     let hint = if shown < total {
-        format!(" ↑↓ Navigate  Enter Select  Esc Cancel  ({}/{})", shown, total)
+        format!(
+            " ↑↓ Navigate  Enter Select  Esc Cancel  ({}/{})",
+            shown, total
+        )
     } else {
-        format!(" ↑↓ Navigate  Enter Select  Esc Cancel  ({} commands)", total)
+        format!(
+            " ↑↓ Navigate  Enter Select  Esc Cancel  ({} commands)",
+            total
+        )
     };
     frame.render_widget(
         Paragraph::new(Span::styled(

@@ -53,7 +53,7 @@ pub fn apply_style(ctx: &Context, vp: Viewport) {
             // Larger touch targets and padding for touch devices
             style.spacing.interact_size.y = 28.0;
             style.spacing.button_padding = egui::vec2(8.0, 6.0);
-            
+
             // Boost body text legibility on small screens
             if let Some(font_id) = style.text_styles.get_mut(&egui::TextStyle::Body) {
                 if font_id.size < 17.0 {
@@ -70,7 +70,7 @@ pub fn apply_style(ctx: &Context, vp: Viewport) {
             // Standard desktop sizes (egui defaults)
             style.spacing.interact_size.y = 22.0;
             style.spacing.button_padding = egui::vec2(4.0, 2.0);
-            
+
             if let Some(font_id) = style.text_styles.get_mut(&egui::TextStyle::Body) {
                 font_id.size = 14.0; // Typical egui default
             }
@@ -84,13 +84,16 @@ pub fn apply_style(ctx: &Context, vp: Viewport) {
 }
 
 /// Calculate the appropriate rectangle for an overlay modal based on viewport.
-pub fn overlay_rect(ctx: &Context, default_w: f32, default_h: f32, custom_desktop_y: Option<f32>) -> egui::Rect {
+pub fn overlay_rect(
+    ctx: &Context,
+    default_w: f32,
+    default_h: f32,
+    custom_desktop_y: Option<f32>,
+) -> egui::Rect {
     let screen = ctx.content_rect();
     let vp = detect(ctx);
     match vp {
-        Viewport::Mobile => {
-            screen
-        }
+        Viewport::Mobile => screen,
         Viewport::Tablet => {
             let w = screen.width() * 0.9;
             let h = screen.height() * 0.9;

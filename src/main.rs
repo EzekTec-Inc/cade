@@ -15,9 +15,9 @@ use clap::Parser;
 use serde_json::json;
 use std::path::PathBuf;
 
+use parking_lot::Mutex;
 use std::io::IsTerminal;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use agent::{HttpTransport, session::SessionStore};
 use cade::support::text::sanitize_for_terminal;
@@ -193,7 +193,8 @@ async fn main() -> Result<()> {
     );
     tracing::info!(
         "Connected to cade-server at {base_url} | provider={} | model={}",
-        server_info.0, server_info.1
+        server_info.0,
+        server_info.1
     );
 
     // Permissions
@@ -313,10 +314,7 @@ async fn main() -> Result<()> {
             StartupProgress::finish_warn(&sp_mcp, "No MCP servers started");
             tracing::warn!("No MCP servers started successfully");
         } else {
-            StartupProgress::finish_ok(
-                &sp_mcp,
-                format!("MCP: {count}/{total} server(s) ready"),
-            );
+            StartupProgress::finish_ok(&sp_mcp, format!("MCP: {count}/{total} server(s) ready"));
             tracing::info!("MCP: {count}/{total} server(s) ready");
         }
         std::sync::Arc::new(mgr)
@@ -749,7 +747,10 @@ async fn main() -> Result<()> {
     };
 
     // Extract settings values needed for Repl::new before moving `settings` into Arc.
-    let initial_reasoning = args.reasoning.clone().or_else(|| settings.reasoning_effort());
+    let initial_reasoning = args
+        .reasoning
+        .clone()
+        .or_else(|| settings.reasoning_effort());
 
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));

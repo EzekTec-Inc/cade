@@ -183,7 +183,9 @@ impl SettingsManager {
 
     /// Resolve reasoning effort: command line args (if provided) > local settings > global settings.
     pub fn reasoning_effort(&self) -> Option<String> {
-        self.local.reasoning_effort.clone()
+        self.local
+            .reasoning_effort
+            .clone()
             .or_else(|| self.global.reasoning_effort.clone())
     }
 

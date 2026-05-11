@@ -247,7 +247,11 @@ pub async fn patch_agent(
 
     let mut updated_compaction_model = existing.compaction_model.clone();
     if let Some(c_model) = &body.compaction_model {
-        let c_model_val = if c_model.trim().is_empty() { None } else { Some(c_model.trim()) };
+        let c_model_val = if c_model.trim().is_empty() {
+            None
+        } else {
+            Some(c_model.trim())
+        };
         sqlite::update_agent_compaction_model(&state.db, &agent_id, c_model_val)
             .map_err(|e| server_err(e.to_string()))?;
         tracing::info!("Agent {agent_id}: compaction_model → {:?}", c_model_val);
@@ -373,13 +377,9 @@ pub async fn export_memory_handler(
             .map(std::path::PathBuf::from)
             .map(|p| p.join(&agent_id).join("memory"))
             .or_else(|| {
-                dirs::home_dir().map(|h| {
-                    h.join(".cade").join("rag").join(&agent_id).join("memory")
-                })
+                dirs::home_dir().map(|h| h.join(".cade").join("rag").join(&agent_id).join("memory"))
             })
-            .ok_or_else(|| {
-                server_err("no $HOME and no CADE_RAG_EXPORT_DIR set".to_string())
-            })?,
+            .ok_or_else(|| server_err("no $HOME and no CADE_RAG_EXPORT_DIR set".to_string()))?,
     };
 
     let report = sqlite::export_memory_to_rag_dir(&state.db, &agent_id, &out_dir)
@@ -464,9 +464,8 @@ pub async fn search_messages_handler(
             .get("offset")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
-        let rows =
-            sqlite::list_messages_page(&state.db, &agent_id, conv_id, limit, offset)
-                .map_err(|e| server_err(e.to_string()))?;
+        let rows = sqlite::list_messages_page(&state.db, &agent_id, conv_id, limit, offset)
+            .map_err(|e| server_err(e.to_string()))?;
         let messages: Vec<Value> = rows
             .into_iter()
             .map(|r| {
@@ -482,7 +481,9 @@ pub async fn search_messages_handler(
             .collect();
         // If we got exactly `limit` messages, there may be more.
         let has_more = messages.len() == limit;
-        return Ok(Json(json!({ "messages": messages, "query": query, "has_more": has_more })));
+        return Ok(Json(
+            json!({ "messages": messages, "query": query, "has_more": has_more }),
+        ));
     }
 
     let db = state.db.clone();
@@ -491,16 +492,18 @@ pub async fn search_messages_handler(
     let cid = conv_id.map(String::from);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        tokio::task::spawn_blocking(move || {
-            sqlite::search_messages(&db, &aid, &q, cid.as_deref())
-        }),
+        tokio::task::spawn_blocking(move || sqlite::search_messages(&db, &aid, &q, cid.as_deref())),
     )
     .await;
     let rows = match result {
         Ok(Ok(Ok(r))) => r,
         Ok(Ok(Err(e))) => return Err(server_err(e.to_string())),
         Ok(Err(e)) => return Err(server_err(format!("search task panicked: {e}"))),
-        Err(_) => return Err(server_err("search_messages timed out after 10s".to_string())),
+        Err(_) => {
+            return Err(server_err(
+                "search_messages timed out after 10s".to_string(),
+            ));
+        }
     };
     let messages: Vec<Value> = rows
         .into_iter()
@@ -592,7 +595,7 @@ pub async fn query_events_handler(
             })
         })
         .collect();
-        
+
     Ok(Json(json!({ "events": events, "query": query })))
 }
 

@@ -27,7 +27,10 @@ async fn list_eval_tasks_returns_empty_on_fresh_db() {
         max_context_budget: None,
     });
 
-    let state = AppState { subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+    let state = AppState {
+        subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
         db,
         llm: Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
             anthropic_api_key: None,

@@ -1,5 +1,5 @@
-use crate::colors::{ThemeColorsExt,};
 use crate::app::*;
+use crate::colors::ThemeColorsExt;
 /// Calculate the number of rows needed for the inline question panel.
 /// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank
 ///       + per-option rows (label + optional description)
@@ -63,10 +63,7 @@ pub(crate) fn render_question_inline(
     let dash_w = sep_area.width as usize;
     let dash_str = "╌".repeat(dash_w);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            dash_str,
-            colors.border_muted(),
-        ))),
+        Paragraph::new(Line::from(Span::styled(dash_str, colors.border_muted()))),
         sep_area,
     );
 
@@ -207,7 +204,7 @@ pub(crate) fn render_question_inline(
                 Span::styled(l.to_string(), label_style),
             ]));
         }
-        
+
         if !opt.description.is_empty() {
             for l in opt.description.lines() {
                 lines.push(Line::from(Span::styled(
@@ -237,4 +234,3 @@ pub(crate) fn render_question_inline(
         body_area,
     );
 }
-

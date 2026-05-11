@@ -11,11 +11,7 @@
 //! Returns HTTP 429 with a Retry-After header when a bucket is exhausted.
 
 use serde_json::json;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use axum::{
     body::Body,

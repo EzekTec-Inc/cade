@@ -724,19 +724,18 @@ impl Repl {
             },
         };
 
-        if !result.is_error
-            && cade_agent::tools::manager::is_file_edit_tool(tool_name) {
-                let path = args["file_path"]
-                    .as_str()
-                    .or(args["path"].as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let c = runtime.client.clone();
-                let a = runtime.agent_id.clone();
-                tokio::spawn(async move {
-                    let _ = c.record_recent_edit(&a, &path).await;
-                });
-            }
+        if !result.is_error && cade_agent::tools::manager::is_file_edit_tool(tool_name) {
+            let path = args["file_path"]
+                .as_str()
+                .or(args["path"].as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let c = runtime.client.clone();
+            let a = runtime.agent_id.clone();
+            tokio::spawn(async move {
+                let _ = c.record_recent_edit(&a, &path).await;
+            });
+        }
 
         if result.is_error {
             hooks
@@ -847,7 +846,9 @@ impl Repl {
                 }))
             }
             "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
-            "run_parallel_subagents" => Some(self.handle_run_parallel_subagents(call_id, args).await),
+            "run_parallel_subagents" => {
+                Some(self.handle_run_parallel_subagents(call_id, args).await)
+            }
             "cancel_subagent" => Some(self.handle_cancel_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             "message_agent" => Some(self.handle_message_agent(call_id, args).await),

@@ -36,7 +36,7 @@ pub fn render_model_picker(
     let screen = ctx.content_rect();
     let w = 600.0_f32.min(screen.width() - 40.0);
     let h = 480.0_f32.min(screen.height() - 60.0);
-    
+
     let rect = crate::responsive::overlay_rect(ctx, w, h, None);
     let w = rect.width();
     let h = rect.height();

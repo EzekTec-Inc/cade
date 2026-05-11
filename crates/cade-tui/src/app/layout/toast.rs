@@ -1,4 +1,3 @@
-
 use crate::app::*;
 use crate::colors::ThemeColorsExt;
 pub(crate) fn render_toast(

@@ -164,19 +164,14 @@ mod tests {
         let store = SessionStore::load(tmp.path());
         assert_eq!(store.session.agent_id.as_deref(), Some("agent-old"));
         assert_eq!(store.session.agent_name.as_deref(), Some("OldAgent"));
-        assert_eq!(
-            store.session.conversation_id.as_deref(),
-            Some("conv-1")
-        );
+        assert_eq!(store.session.conversation_id.as_deref(), Some("conv-1"));
     }
 
     #[test]
     fn session_json_included_in_gitignore() {
         let tmp = TempDir::new().unwrap();
         let mut store = SessionStore::load(tmp.path());
-        store
-            .set_agent("agent-x".to_string(), None)
-            .unwrap();
+        store.set_agent("agent-x".to_string(), None).unwrap();
         let gitignore = tmp.path().join(".cade").join(".gitignore");
         let content = std::fs::read_to_string(&gitignore).unwrap();
         assert!(
@@ -203,7 +198,11 @@ mod tests {
 
         // 2. SessionStore writes session data
         let mut ss = SessionStore::load(tmp.path());
-        ss.set_agent("agent-session-1".to_string(), Some("SessionAgent".to_string())).unwrap();
+        ss.set_agent(
+            "agent-session-1".to_string(),
+            Some("SessionAgent".to_string()),
+        )
+        .unwrap();
         ss.set_conversation(Some("conv-1".to_string())).unwrap();
         ss.set_run(Some("run-1".to_string()), Some(99)).unwrap();
 
@@ -281,17 +280,12 @@ mod tests {
             .set_agent("agent-rt".to_string(), Some("RoundTrip".to_string()))
             .unwrap();
         store.set_conversation(Some("conv-rt".to_string())).unwrap();
-        store
-            .set_run(Some("run-rt".to_string()), Some(42))
-            .unwrap();
+        store.set_run(Some("run-rt".to_string()), Some(42)).unwrap();
 
         let store2 = SessionStore::load(tmp.path());
         assert_eq!(store2.session.agent_id.as_deref(), Some("agent-rt"));
         assert_eq!(store2.session.agent_name.as_deref(), Some("RoundTrip"));
-        assert_eq!(
-            store2.session.conversation_id.as_deref(),
-            Some("conv-rt")
-        );
+        assert_eq!(store2.session.conversation_id.as_deref(), Some("conv-rt"));
         assert_eq!(store2.session.run_id.as_deref(), Some("run-rt"));
         assert_eq!(store2.session.last_seq_id, Some(42));
     }

@@ -40,10 +40,7 @@ impl Repl {
     }
     /// Push a blank line to the TUI.
     pub(crate) fn tui_blank(&self) {
-        let _ = self
-            .app
-            .lock()
-            .push(crate::ui::RenderLine::Blank);
+        let _ = self.app.lock().push(crate::ui::RenderLine::Blank);
     }
 
     #[allow(dead_code)]

@@ -151,7 +151,8 @@ pub(crate) const COMPRESSED_DESCRIPTION_CHAR_CAP: usize = 80;
 pub(crate) fn compress_tool_schema(mut schema: Value) -> Value {
     // Truncate top-level description.
     if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
-        let trimmed: String = desc.split('\n')
+        let trimmed: String = desc
+            .split('\n')
             .next()
             .unwrap_or(desc)
             .chars()
@@ -469,9 +470,10 @@ pub(crate) async fn build_context(
     {
         let mut cache = state.context_cache.lock();
         if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key)
-            && *cached_hash == state_hash {
-                return Ok(cached_tuple.clone());
-            }
+            && *cached_hash == state_hash
+        {
+            return Ok(cached_tuple.clone());
+        }
     }
 
     // Message history from DB — oldest first, scoped to conversation
@@ -1173,7 +1175,12 @@ fn assemble_system_prompt_memory(
         };
 
         let chars = entry.chars().count();
-        candidates.push(CandidateBlock { label: label.clone(), entry, chars, priority });
+        candidates.push(CandidateBlock {
+            label: label.clone(),
+            entry,
+            chars,
+            priority,
+        });
     }
 
     // Sort by priority then by original order (stable sort preserves DB order within same priority).
@@ -1229,9 +1236,15 @@ fn assemble_system_prompt_memory(
             // Build actionable recovery instruction.
             let recovery = if c.label.starts_with("skill:") {
                 let skill_id = c.label.strip_prefix("skill:").unwrap_or(&c.label);
-                format!("- [{}] ({} chars) — use load_skill(\"{}\") to reload", c.label, c.chars, skill_id)
+                format!(
+                    "- [{}] ({} chars) — use load_skill(\"{}\") to reload",
+                    c.label, c.chars, skill_id
+                )
             } else {
-                format!("- [{}] ({} chars) — use search_memory(\"{}\") to retrieve", c.label, c.chars, c.label)
+                format!(
+                    "- [{}] ({} chars) — use search_memory(\"{}\") to retrieve",
+                    c.label, c.chars, c.label
+                )
             };
             overflow_manifest.push(recovery);
         }
@@ -1244,16 +1257,20 @@ fn assemble_system_prompt_memory(
 
     for excerpt_info in &long_excerpts {
         let entry = if excerpt_info.excerpt.trim().is_empty() {
-            format!("[{}]\n  keywords: {} | {} chars",
+            format!(
+                "[{}]\n  keywords: {} | {} chars",
                 excerpt_info.label,
                 excerpt_info.keywords.join(", "),
-                excerpt_info.char_count)
+                excerpt_info.char_count
+            )
         } else {
-            format!("[{}]: {}\n  keywords: {} | {} chars",
+            format!(
+                "[{}]: {}\n  keywords: {} | {} chars",
                 excerpt_info.label,
                 excerpt_info.excerpt,
                 excerpt_info.keywords.join(", "),
-                excerpt_info.char_count)
+                excerpt_info.char_count
+            )
         };
         let chars = entry.chars().count();
         if chars <= remaining {
@@ -1319,17 +1336,15 @@ fn assemble_system_prompt_memory(
                 sqlite::get_latest_user_message(&state.db, agent_id, conversation_id)
         {
             let recalled = sqlite::memory::recall_chunks(
-                &state.db,
-                agent_id,
-                &user_msg,
-                3, // top 3 chunks
+                &state.db, agent_id, &user_msg, 3, // top 3 chunks
             );
             if !recalled.is_empty() {
                 let mut recall_lines: Vec<String> = Vec::new();
                 for rc in &recalled {
                     let preview: String = rc.chunk_content.chars().take(300).collect();
                     recall_lines.push(format!(
-                        "- **[{}]** (chunk {}): {}", rc.label, rc.chunk_index, preview
+                        "- **[{}]** (chunk {}): {}",
+                        rc.label, rc.chunk_index, preview
                     ));
                 }
                 dynamic_core.push_str(&format!(
@@ -1346,17 +1361,11 @@ fn assemble_system_prompt_memory(
         // after older messages have been dropped from the message window.
         {
             let (obs_limit, obs_budget) = MemoryBudgets::observation_budget(&agent.model);
-            let observations = sqlite::observations::get_important_observations(
-                &state.db,
-                agent_id,
-                3,
-                obs_limit,
-            )
-            .unwrap_or_default();
-            let obs_section = sqlite::observations::render_observations_section(
-                &observations,
-                obs_budget,
-            );
+            let observations =
+                sqlite::observations::get_important_observations(&state.db, agent_id, 3, obs_limit)
+                    .unwrap_or_default();
+            let obs_section =
+                sqlite::observations::render_observations_section(&observations, obs_budget);
             if !obs_section.is_empty() {
                 dynamic_core.push_str(&obs_section);
                 dynamic_core.push_str("\n\n");
@@ -1851,7 +1860,13 @@ Load and follow these skills for all work:
         let skills = parse_required_skills_from_project(block);
         assert_eq!(
             skills,
-            vec!["tdd-guide", "strict-project-execution", "caveman", "grill-me", "rust"]
+            vec![
+                "tdd-guide",
+                "strict-project-execution",
+                "caveman",
+                "grill-me",
+                "rust"
+            ]
         );
     }
 

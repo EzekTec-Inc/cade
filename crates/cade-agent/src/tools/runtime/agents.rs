@@ -49,5 +49,4 @@ impl ToolRuntime {
             Err(e) => (format!("Failed to message agent: {e}"), true),
         }
     }
-
 }

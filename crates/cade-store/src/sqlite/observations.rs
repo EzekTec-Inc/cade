@@ -145,10 +145,7 @@ pub fn prune_old_observations(db: &Db, agent_id: &str, max_turn: i64) -> Result<
 /// [turn 55, 0 ago] write_file: Wrote src/main.rs (importance: 4)
 /// [turn 42, 13 ago] read_file: Read Cargo.toml (importance: 2)
 /// ```
-pub fn render_observations_section(
-    observations: &[ObservationRow],
-    budget_chars: usize,
-) -> String {
+pub fn render_observations_section(observations: &[ObservationRow], budget_chars: usize) -> String {
     if observations.is_empty() {
         return String::new();
     }
@@ -272,9 +269,39 @@ mod tests {
             },
         )?;
 
-        insert_observation(&db, agent_id, 1, "read_file", "tool_call", "Read foo", "[]", "[]", 2)?;
-        insert_observation(&db, agent_id, 2, "edit_file", "tool_call", "Edited bar", "[]", "[]", 4)?;
-        insert_observation(&db, agent_id, 3, "bash", "tool_call", "Ran tests", "[]", "[]", 5)?;
+        insert_observation(
+            &db,
+            agent_id,
+            1,
+            "read_file",
+            "tool_call",
+            "Read foo",
+            "[]",
+            "[]",
+            2,
+        )?;
+        insert_observation(
+            &db,
+            agent_id,
+            2,
+            "edit_file",
+            "tool_call",
+            "Edited bar",
+            "[]",
+            "[]",
+            4,
+        )?;
+        insert_observation(
+            &db,
+            agent_id,
+            3,
+            "bash",
+            "tool_call",
+            "Ran tests",
+            "[]",
+            "[]",
+            5,
+        )?;
 
         let important = get_important_observations(&db, agent_id, 4, 10)?;
         assert_eq!(important.len(), 2);

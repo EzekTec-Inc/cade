@@ -19,7 +19,7 @@
 use crate::Result;
 use serde_json::{Value, json};
 
-use cade_agent::agent::client::{HttpTransport, CreateAgentRequest, MemoryBlock};
+use cade_agent::agent::client::{CreateAgentRequest, HttpTransport, MemoryBlock};
 
 // -- Export
 

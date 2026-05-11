@@ -20,21 +20,27 @@ pub(super) async fn intercept_meta_tool(
         is_error,
     };
     match tc.name.as_str() {
-        "load_skill" => {
-            Some(handle_load_skill_tool(state, agent_id, &tc.id, &tc.arguments).await)
-        }
+        "load_skill" => Some(handle_load_skill_tool(state, agent_id, &tc.id, &tc.arguments).await),
         "unload_skill" => {
             Some(handle_unload_skill_tool(state, agent_id, &tc.id, &tc.arguments).await)
         }
         "run_subagent" => {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-            Some(super::subagent::handle_run_subagent_tool(state, agent_id, &tc.id, &args, sse_tx).await)
+            Some(
+                super::subagent::handle_run_subagent_tool(state, agent_id, &tc.id, &args, sse_tx)
+                    .await,
+            )
         }
         "run_parallel_subagents" => {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-            Some(super::subagent::handle_run_parallel_subagents_tool(state, agent_id, &tc.id, &args, sse_tx).await)
+            Some(
+                super::subagent::handle_run_parallel_subagents_tool(
+                    state, agent_id, &tc.id, &args, sse_tx,
+                )
+                .await,
+            )
         }
         "cancel_subagent" => {
             let args: serde_json::Value =
@@ -43,7 +49,8 @@ pub(super) async fn intercept_meta_tool(
         }
         // ── Phase A1: memory tools ────────────────────────────────────
         "update_memory" => {
-            let (output, is_error) = handle_update_memory(state, agent_id, &tc.arguments, Some(&tc.id)).await;
+            let (output, is_error) =
+                handle_update_memory(state, agent_id, &tc.arguments, Some(&tc.id)).await;
             Some(mk(output, is_error))
         }
         "update_memory_typed" => {
@@ -98,8 +105,7 @@ pub(super) async fn intercept_meta_tool(
         }
         // ── C7: unified recall tool ──────────────────────────────────────
         "recall" => {
-            let (output, is_error) =
-                handle_recall_meta(state, agent_id, &tc.arguments).await;
+            let (output, is_error) = handle_recall_meta(state, agent_id, &tc.arguments).await;
             Some(mk(output, is_error))
         }
         // ── Phase A2: skill meta-tools ────────────────────────────────────
@@ -324,11 +330,20 @@ async fn handle_update_memory_typed(
             // A3: Stamp provenance.
             let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
             cade_store::sqlite::memory::stamp_provenance(
-                &state.db, agent_id, &label, Some(turn), None, tool_call_id, tool_call_id,
+                &state.db,
+                agent_id,
+                &label,
+                Some(turn),
+                None,
+                tool_call_id,
+                tool_call_id,
             );
             // A5: Re-chunk.
             cade_store::sqlite::memory::rechunk_block(
-                &state.db, agent_id, &label, &value,
+                &state.db,
+                agent_id,
+                &label,
+                &value,
                 state.embedder.as_ref().map(|e| e.as_ref()),
             );
             (
@@ -382,15 +397,27 @@ async fn handle_memory_apply_patch(
                 // A3: Stamp provenance.
                 let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
                 cade_store::sqlite::memory::stamp_provenance(
-                    &state.db, agent_id, &label, Some(turn), None, tool_call_id, tool_call_id,
+                    &state.db,
+                    agent_id,
+                    &label,
+                    Some(turn),
+                    None,
+                    tool_call_id,
+                    tool_call_id,
                 );
                 // A5: Re-chunk.
                 cade_store::sqlite::memory::rechunk_block(
-                    &state.db, agent_id, &label, &new_value,
+                    &state.db,
+                    agent_id,
+                    &label,
+                    &new_value,
                     state.embedder.as_ref().map(|e| e.as_ref()),
                 );
                 (
-                    format!("Memory block '{label}' patched successfully ({} chars)", wr.stored_chars),
+                    format!(
+                        "Memory block '{label}' patched successfully ({} chars)",
+                        wr.stored_chars
+                    ),
                     false,
                 )
             }
@@ -414,10 +441,7 @@ async fn handle_update_memory_field(
     let value = args.get("value").cloned();
 
     if label.is_empty() || pointer.is_empty() {
-        return (
-            "Error: 'label' and 'path' are required".to_string(),
-            true,
-        );
+        return ("Error: 'label' and 'path' are required".to_string(), true);
     }
 
     let op = match cade_core::structured_patch::PatchOp::from_str_loose(op_str) {
@@ -454,34 +478,37 @@ async fn handle_update_memory_field(
             return (
                 format!("Error: {e}. Use update_memory(set,...) to seed JSON."),
                 true,
-            )
+            );
         }
     };
 
-    if let Err(e) =
-        cade_core::structured_patch::apply_pointer_patch(&mut root, &pointer, op, value)
+    if let Err(e) = cade_core::structured_patch::apply_pointer_patch(&mut root, &pointer, op, value)
     {
         return (format!("Patch error: {e}"), true);
     }
 
     let new_body = cade_core::structured_patch::serialize_back(&root);
     match cade_store::sqlite::upsert_memory_block(
-        &state.db,
-        agent_id,
-        &label,
-        &new_body,
-        None,
-        None,
+        &state.db, agent_id, &label, &new_body, None, None,
     ) {
         Ok(_) => {
             // A3: Stamp provenance.
             let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
             cade_store::sqlite::memory::stamp_provenance(
-                &state.db, agent_id, &label, Some(turn), None, tool_call_id, tool_call_id,
+                &state.db,
+                agent_id,
+                &label,
+                Some(turn),
+                None,
+                tool_call_id,
+                tool_call_id,
             );
             // A5: Re-chunk.
             cade_store::sqlite::memory::rechunk_block(
-                &state.db, agent_id, &label, &new_body,
+                &state.db,
+                agent_id,
+                &label,
+                &new_body,
                 state.embedder.as_ref().map(|e| e.as_ref()),
             );
             (
@@ -552,7 +579,10 @@ async fn handle_search_memory_meta(
     args: &serde_json::Value,
 ) -> (String, bool) {
     let query = args["query"].as_str().unwrap_or("").trim().to_string();
-    let memory_type = args["memory_type"].as_str().filter(|s| !s.trim().is_empty()).map(|s| s.to_string());
+    let memory_type = args["memory_type"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
     if query.is_empty() {
         return ("Error: 'query' is required".to_string(), true);
     }
@@ -654,8 +684,7 @@ pub(super) async fn handle_conversation_search_meta(
                 conversation_id.as_deref(),
             )
             .unwrap_or(false);
-            let mut out =
-                format!("No conversation messages matched '{query}'{scope_label}.");
+            let mut out = format!("No conversation messages matched '{query}'{scope_label}.");
             if has_marker {
                 out.push_str(
                     "\nNote: this agent has compacted history. The raw dropped turns are \
@@ -719,7 +748,10 @@ async fn handle_archival_memory_insert_meta(
         .unwrap_or_default();
     match cade_store::sqlite::insert_archival_memory(&state.db, agent_id, &content, &tags) {
         Ok(id) => (
-            format!("Stored in archival memory (id: {id}, {} chars)", content.len()),
+            format!(
+                "Stored in archival memory (id: {id}, {} chars)",
+                content.len()
+            ),
             false,
         ),
         Err(e) => (format!("archival_memory_insert error: {e}"), true),
@@ -750,10 +782,9 @@ async fn handle_archival_memory_search_meta(
     )
     .await;
     match result {
-        Ok(Ok(Ok(results))) if results.is_empty() => (
-            format!("No archival memory matched '{query}'."),
-            false,
-        ),
+        Ok(Ok(Ok(results))) if results.is_empty() => {
+            (format!("No archival memory matched '{query}'."), false)
+        }
         Ok(Ok(Ok(results))) => {
             let mut out = format!(
                 "Found {} archival record(s) for '{query}':\n\n",
@@ -803,15 +834,11 @@ async fn handle_query_event_log_meta(
     )
     .await;
     match result {
-        Ok(Ok(Ok(entries))) if entries.is_empty() => (
-            format!("No event log entries matched '{keyword}'."),
-            false,
-        ),
+        Ok(Ok(Ok(entries))) if entries.is_empty() => {
+            (format!("No event log entries matched '{keyword}'."), false)
+        }
         Ok(Ok(Ok(entries))) => {
-            let mut out = format!(
-                "Found {} event(s) for '{keyword}':\n\n",
-                entries.len()
-            );
+            let mut out = format!("Found {} event(s) for '{keyword}':\n\n", entries.len());
             for e in &entries {
                 let preview: String = e.content.chars().take(200).collect();
                 out.push_str(&format!("[{}] {}: {preview}\n", e.event_type, e.created_at));
@@ -820,10 +847,7 @@ async fn handle_query_event_log_meta(
         }
         Ok(Ok(Err(e))) => (format!("query_event_log error: {e}"), true),
         Ok(Err(e)) => (format!("query_event_log task panicked: {e}"), true),
-        Err(_) => (
-            "query_event_log timed out after 10s.".to_string(),
-            true,
-        ),
+        Err(_) => ("query_event_log timed out after 10s.".to_string(), true),
     }
 }
 
@@ -1394,9 +1418,12 @@ async fn handle_recall_meta(
     }
 
     match cade_store::sqlite::recall(&state.db, agent_id, &query, limit) {
-        Ok(results) if results.is_empty() => {
-            (format!("No results found for '{query}' across memory, conversations, archival memory, or event log."), false)
-        }
+        Ok(results) if results.is_empty() => (
+            format!(
+                "No results found for '{query}' across memory, conversations, archival memory, or event log."
+            ),
+            false,
+        ),
         Ok(results) => {
             let mut out = format!("Found {} results for '{query}':\n\n", results.len());
             for (i, r) in results.iter().enumerate() {

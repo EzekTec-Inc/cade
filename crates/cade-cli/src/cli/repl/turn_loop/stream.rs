@@ -61,7 +61,8 @@ impl Repl {
                     {
                         let cid: String = cid.to_string();
                         *conv_arc.lock() = Some(cid.clone());
-                        { let mut s = session_arc.lock();
+                        {
+                            let mut s = session_arc.lock();
                             let _ = s.set_conversation(Some(cid));
                         }
                     }
@@ -77,7 +78,8 @@ impl Repl {
                     if let Some(n) = msg.data["output_tokens"].as_u64() {
                         sess_out_tok.fetch_add(n, Ordering::SeqCst);
                     }
-                    { let mut stats = sess_stats.lock();
+                    {
+                        let mut stats = sess_stats.lock();
                         let model = msg.data["model"].as_str().unwrap_or("").to_string();
                         let input = msg.data["input_tokens"].as_u64().unwrap_or(0);
                         let cache_read = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
@@ -126,9 +128,7 @@ impl Repl {
                         if let Some(text) = msg.reasoning_text() {
                             in_reasoning = true;
                             reasoning_buf.lock().push_str(text);
-                            app_arc
-                                .lock()
-                                .push_reasoning_chunk(text);
+                            app_arc.lock().push_reasoning_chunk(text);
                         }
                     }
                     "assistant_message" => {
@@ -145,8 +145,7 @@ impl Repl {
                                 if let Some(bar) = &bar_text_arc {
                                     let cur = bar.lock().clone();
                                     if !cur.starts_with("●") {
-                                        *bar.lock() =
-                                            format!("generating… ({line_count} lines)");
+                                        *bar.lock() = format!("generating… ({line_count} lines)");
                                     }
                                 }
                             }
@@ -246,8 +245,7 @@ impl Repl {
                         // SSE.  Show as a toast and mirror to the timeline
                         // so it appears in session export/copy.
                         let level = msg.data["level"].as_str().unwrap_or("info");
-                        let text =
-                            msg.data["message"].as_str().unwrap_or("").to_string();
+                        let text = msg.data["message"].as_str().unwrap_or("").to_string();
                         if !text.is_empty() {
                             let toast_level = match level {
                                 "error" => crate::ui::ToastLevel::Error,
@@ -362,20 +360,14 @@ impl Repl {
                             if let Some(text) = msg.assistant_text()
                                 && !text.is_empty()
                             {
-                                let _ = self
-                                    .app
-                                    .lock()
-                                    .push_streaming_chunk(text);
+                                let _ = self.app.lock().push_streaming_chunk(text);
                             }
                         }
                         let _ = self.app.lock().commit_streaming();
                         msgs
                     }
                     Err(e) => {
-                        let _ = self
-                            .app
-                            .lock()
-                            .push(RenderLine::ErrorMsg(e.to_string()));
+                        let _ = self.app.lock().push(RenderLine::ErrorMsg(e.to_string()));
                         return Ok(vec![]);
                     }
                 }
@@ -400,10 +392,7 @@ impl Repl {
 
         // Post-stream diagnostics: finish reason, truncation heuristics, context usage.
         {
-            let text = self
-                .last_assistant_text
-                .lock()
-                .clone();
+            let text = self.last_assistant_text.lock().clone();
             let trimmed = text.trim_end();
             let looks_truncated = !trimmed.is_empty()
                 && (trimmed.ends_with(':')
@@ -449,13 +438,11 @@ impl Repl {
         // Save run_id + last seq_id for crash recovery / reconnect
         let saved_run_id = run_id_cell.lock().clone();
         let saved_seq_id = *seq_id_cell.lock();
-        if saved_run_id.is_some() || saved_seq_id.is_some()
-        {
+        if saved_run_id.is_some() || saved_seq_id.is_some() {
             let mut s = self.session.lock();
             let _ = s.set_run(saved_run_id, saved_seq_id);
         }
 
         Ok(messages)
     }
-
 }

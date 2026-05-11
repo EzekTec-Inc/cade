@@ -7,7 +7,7 @@ use std::any::Any;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use cade_core::resources::palette::{fuzzy_score, CMD_DEFS};
+use cade_core::resources::palette::{CMD_DEFS, fuzzy_score};
 
 use crate::colors::ThemeColors;
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
@@ -62,8 +62,7 @@ impl CommandPaletteState {
                         cade_core::resources::palette::CmdCategory::Session => "Session",
                         cade_core::resources::palette::CmdCategory::Display => "Display",
                     };
-                    fuzzy_score(&q, cmd.trigger, cmd.description, section)
-                        .map(|score| (i, score))
+                    fuzzy_score(&q, cmd.trigger, cmd.description, section).map(|score| (i, score))
                 })
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1));
@@ -177,7 +176,11 @@ mod tests {
     #[test]
     fn test_new_palette_has_all_commands() {
         let palette = CommandPaletteState::new();
-        assert!(CMD_DEFS.len() > 10, "should have 10+ commands, got {}", CMD_DEFS.len());
+        assert!(
+            CMD_DEFS.len() > 10,
+            "should have 10+ commands, got {}",
+            CMD_DEFS.len()
+        );
         assert_eq!(palette.filtered.len(), CMD_DEFS.len());
         assert_eq!(palette.cursor, 0);
         assert!(palette.query.is_empty());
@@ -186,7 +189,8 @@ mod tests {
     #[test]
     fn test_exact_prefix_scores_highest() {
         let score_agents = fuzzy_score("agents", "/agents", "List agents", "Session").unwrap();
-        let score_memory = fuzzy_score("agents", "/memory", "List agents in memory", "Session").unwrap();
+        let score_memory =
+            fuzzy_score("agents", "/memory", "List agents in memory", "Session").unwrap();
         assert!(score_agents > score_memory);
     }
 

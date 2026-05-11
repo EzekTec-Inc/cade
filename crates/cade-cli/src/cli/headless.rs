@@ -317,14 +317,25 @@ async fn run_one_tool(
     let canonical = cade_agent::tools::manager::canonical_name(&tool_name);
     if matches!(
         canonical,
-        "run_subagent" | "run_parallel_subagents" | "cancel_subagent" | "ask_user_question" | "EnterPlanMode" | "ExitPlanMode"
+        "run_subagent"
+            | "run_parallel_subagents"
+            | "cancel_subagent"
+            | "ask_user_question"
+            | "EnterPlanMode"
+            | "ExitPlanMode"
     ) {
         let msg = match canonical {
-            "run_subagent" => "Nested run_subagent calls are not supported from a headless subagent context. \
-                               Complete the work directly or return control to the parent agent.",
-            "ask_user_question" => "ask_user_question is unavailable in headless mode (no interactive user). \
-                                   Make a reasonable assumption and proceed, or return for parent guidance.",
-            "EnterPlanMode" | "ExitPlanMode" => "Permission mode changes are not allowed from a subagent.",
+            "run_subagent" => {
+                "Nested run_subagent calls are not supported from a headless subagent context. \
+                               Complete the work directly or return control to the parent agent."
+            }
+            "ask_user_question" => {
+                "ask_user_question is unavailable in headless mode (no interactive user). \
+                                   Make a reasonable assumption and proceed, or return for parent guidance."
+            }
+            "EnterPlanMode" | "ExitPlanMode" => {
+                "Permission mode changes are not allowed from a subagent."
+            }
             _ => "Tool unavailable in headless context.",
         };
         return finalize_tool_result(
@@ -367,19 +378,18 @@ async fn finalize_tool_result(
     mut output: String,
     is_error: bool,
 ) -> (String, String, String, bool) {
-    if !is_error
-        && cade_agent::tools::manager::is_file_edit_tool(tool_name.as_str()) {
-            let path = args["file_path"]
-                .as_str()
-                .or(args["path"].as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let c = client.clone();
-            let a = agent_id.to_string();
-            tokio::spawn(async move {
-                let _ = c.record_recent_edit(&a, &path).await;
-            });
-        }
+    if !is_error && cade_agent::tools::manager::is_file_edit_tool(tool_name.as_str()) {
+        let path = args["file_path"]
+            .as_str()
+            .or(args["path"].as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let c = client.clone();
+        let a = agent_id.to_string();
+        tokio::spawn(async move {
+            let _ = c.record_recent_edit(&a, &path).await;
+        });
+    }
 
     if hooks.is_empty() {
         return (call_id, tool_name, output, is_error);
@@ -445,7 +455,10 @@ async fn process_tool_calls(
         }
         *cumulative_tokens += (turn_chars / 3) as u64;
         if *cumulative_tokens > budget {
-            return Err(crate::Error::custom(format!("subagent token budget exceeded ({} > {})", cumulative_tokens, budget)));
+            return Err(crate::Error::custom(format!(
+                "subagent token budget exceeded ({} > {})",
+                cumulative_tokens, budget
+            )));
         }
     }
     let tool_calls: Vec<(String, String, serde_json::Value)> =
@@ -458,26 +471,28 @@ async fn process_tool_calls(
 
         tracing::info!("Headless loop stalled (no tool calls). Injecting re-prompt.");
         let reprompt = "[System: You did not invoke any tools. You are a headless background agent and MUST invoke a tool to make progress. If you believe the task is fully complete, you MUST call the `bash` tool with the command `echo 'TASK_COMPLETE'` to exit.]";
-        
+
         let on_out_clone = on_output.clone();
-        let follow = client.stream_message_cancellable(
-            agent_id,
-            reprompt,
-            None,
-            true, // ephemeral
-            None,
-            move |msg| {
-                if let Some(text) = msg.assistant_text() {
-                    if let Some(ref cb) = on_out_clone {
-                        cb(HeadlessEvent::Text(text));
-                    } else {
-                        print!("{text}");
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let follow = client
+            .stream_message_cancellable(
+                agent_id,
+                reprompt,
+                None,
+                true, // ephemeral
+                None,
+                move |msg| {
+                    if let Some(text) = msg.assistant_text() {
+                        if let Some(ref cb) = on_out_clone {
+                            cb(HeadlessEvent::Text(text));
+                        } else {
+                            print!("{text}");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
                     }
-                }
-            },
-            None,
-        ).await?;
+                },
+                None,
+            )
+            .await?;
 
         collect_assistant_text(&follow, output);
         stats.turn_count += 1;
@@ -494,12 +509,18 @@ async fn process_tool_calls(
             max_tokens_budget,
             cumulative_tokens,
             allowed_paths,
-        )).await;
+        ))
+        .await;
     }
 
     // Check for TASK_COMPLETE signal
     if tool_calls.iter().any(|(_, name, args)| {
-        name == "bash" && args.get("command").and_then(|v| v.as_str()).unwrap_or("").contains("TASK_COMPLETE")
+        name == "bash"
+            && args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains("TASK_COMPLETE")
     }) {
         tracing::info!("Subagent signalled completion via TASK_COMPLETE bash command.");
         return Ok(());
@@ -533,16 +554,23 @@ async fn process_tool_calls(
 
             let on_out_clone = on_output.clone();
             let follow = client
-                .stream_tool_return(agent_id, &cid, &tname, &out, is_err, move |msg: &CadeMessage| {
-                    if let Some(text) = msg.assistant_text() {
-                        if let Some(ref cb) = on_out_clone {
-                            cb(HeadlessEvent::Text(text));
-                        } else {
-                            print!("{text}");
-                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                .stream_tool_return(
+                    agent_id,
+                    &cid,
+                    &tname,
+                    &out,
+                    is_err,
+                    move |msg: &CadeMessage| {
+                        if let Some(text) = msg.assistant_text() {
+                            if let Some(ref cb) = on_out_clone {
+                                cb(HeadlessEvent::Text(text));
+                            } else {
+                                print!("{text}");
+                                let _ = std::io::Write::flush(&mut std::io::stdout());
+                            }
                         }
-                    }
-                })
+                    },
+                )
                 .await?;
 
             collect_assistant_text(&follow, output);
@@ -598,7 +626,7 @@ async fn process_tool_calls(
                 let perms = permissions.clone();
                 async move {
                     run_one_tool(
-                        &client, &agent_id, call_id, tool_name, args, &perms, mcp, hooks, None
+                        &client, &agent_id, call_id, tool_name, args, &perms, mcp, hooks, None,
                     )
                     .await
                 }
@@ -719,25 +747,27 @@ async fn process_tool_calls_stream_json(
 
         tracing::info!("Headless loop stalled (no tool calls). Injecting re-prompt.");
         let reprompt = "[System: You did not invoke any tools. You are a headless background agent and MUST invoke a tool to make progress. If you believe the task is fully complete, you MUST call the `bash` tool with the command `echo 'TASK_COMPLETE'` to exit.]";
-        
+
         let emit_clone = |v: serde_json::Value| emit(v);
-        let follow = client.stream_message_cancellable(
-            agent_id,
-            reprompt,
-            None,
-            true, // ephemeral
-            None,
-            move |msg| {
-                if let Some(text) = msg.assistant_text() {
-                    emit_clone(json!({
-                        "type": "message",
-                        "messageType": "assistant_message",
-                        "content": text
-                    }));
-                }
-            },
-            None,
-        ).await?;
+        let follow = client
+            .stream_message_cancellable(
+                agent_id,
+                reprompt,
+                None,
+                true, // ephemeral
+                None,
+                move |msg| {
+                    if let Some(text) = msg.assistant_text() {
+                        emit_clone(json!({
+                            "type": "message",
+                            "messageType": "assistant_message",
+                            "content": text
+                        }));
+                    }
+                },
+                None,
+            )
+            .await?;
 
         collect_assistant_text(&follow, output);
         stats.turn_count += 1;
@@ -751,12 +781,18 @@ async fn process_tool_calls_stream_json(
             stats,
             emit,
             hooks,
-        )).await;
+        ))
+        .await;
     }
 
     // Check for TASK_COMPLETE signal
     if tool_calls.iter().any(|(_, name, args)| {
-        name == "bash" && args.get("command").and_then(|v| v.as_str()).unwrap_or("").contains("TASK_COMPLETE")
+        name == "bash"
+            && args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains("TASK_COMPLETE")
     }) {
         tracing::info!("Subagent signalled completion via TASK_COMPLETE bash command.");
         return Ok(());
@@ -793,15 +829,22 @@ async fn process_tool_calls_stream_json(
 
             stats.tool_count += 1;
             let follow = client
-                .stream_tool_return(agent_id, &cid, &tname, &result_output, is_error, |msg: &CadeMessage| {
-                    if let Some(text) = msg.assistant_text() {
-                        emit(json!({
-                            "type": "message",
-                            "messageType": "assistant_message",
-                            "content": text
-                        }));
-                    }
-                })
+                .stream_tool_return(
+                    agent_id,
+                    &cid,
+                    &tname,
+                    &result_output,
+                    is_error,
+                    |msg: &CadeMessage| {
+                        if let Some(text) = msg.assistant_text() {
+                            emit(json!({
+                                "type": "message",
+                                "messageType": "assistant_message",
+                                "content": text
+                            }));
+                        }
+                    },
+                )
                 .await?;
 
             collect_assistant_text(&follow, output);

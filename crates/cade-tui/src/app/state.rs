@@ -213,7 +213,10 @@ impl TuiApp {
         self.mouse_capture_disabled = !self.mouse_capture_disabled;
         if self.mouse_capture_disabled {
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-            self.show_toast("Mouse selection enabled (scroll disabled)", ToastLevel::Info);
+            self.show_toast(
+                "Mouse selection enabled (scroll disabled)",
+                ToastLevel::Info,
+            );
         } else {
             let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
             self.show_toast("Mouse scroll enabled", ToastLevel::Info);
@@ -243,7 +246,8 @@ impl TuiApp {
             let text = std::mem::take(&mut self.streaming_text);
             let clean = crate::app::strip_orchestrator_prompts(&text);
             if !clean.trim().is_empty() {
-                self.lines.push(RenderLine::AssistantText(clean.into_owned()));
+                self.lines
+                    .push(RenderLine::AssistantText(clean.into_owned()));
             }
             self.streaming_active = false;
             self.streaming_reveal_len = 0;
@@ -363,8 +367,7 @@ impl TuiApp {
 
     /// Update the thinking text from the animation/assessing timer.
     pub fn update_thinking_text(&mut self, text: String) {
-        if let Some(ts) = &self.thinking
-        {
+        if let Some(ts) = &self.thinking {
             let mut guard = ts.text.lock();
             *guard = text;
         }
@@ -392,7 +395,8 @@ impl TuiApp {
             .enumerate()
             .position(|(_, t)| {
                 let tc = t;
-                tc.c_primary() == original_theme.c_primary() && tc.c_bg_base() == original_theme.c_bg_base()
+                tc.c_primary() == original_theme.c_primary()
+                    && tc.c_bg_base() == original_theme.c_bg_base()
             })
             .unwrap_or(0);
         let tp = ThemePickerState {
@@ -480,7 +484,11 @@ impl TuiApp {
     // mutations go through scroll_target for smooth animation.
 
     /// Handle a keyboard scroll event.  Returns `true` if the key was consumed.
-    pub fn handle_scroll_key(&mut self, code: crossterm::event::KeyCode, _modifiers: crossterm::event::KeyModifiers) -> bool {
+    pub fn handle_scroll_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        _modifiers: crossterm::event::KeyModifiers,
+    ) -> bool {
         use crossterm::event::KeyCode;
 
         match code {
