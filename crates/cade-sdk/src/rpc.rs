@@ -16,8 +16,6 @@ use crate::session::AgentSession;
 
 // region:    --- RPC server
 
-/// Run the RPC server, reading commands from stdin and writing responses to stdout.
-/// Blocks until stdin is closed.
 pub async fn run_rpc_server(session: AgentSession) {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -36,8 +34,19 @@ pub async fn run_rpc_server(session: AgentSession) {
             Ok(req) => handle_request(&session, &req).await,
         };
 
-        let mut out_line = serde_json::to_string(&response).unwrap_or_default();
-        out_line.push('\n');
+        let out_line = match serde_json::to_string(&response) {
+            Ok(mut s) => {
+                s.push('\n');
+                s
+            },
+            Err(e) => {
+                let err_resp = json!({ "error": format!("serialization error: {e}") });
+                let mut s = serde_json::to_string(&err_resp).unwrap_or_else(|_| r#"{"error": "critical serialization failure"}"#.to_string());
+                s.push('\n');
+                s
+            }
+        };
+        
         if out.write_all(out_line.as_bytes()).await.is_err() {
             break;
         }

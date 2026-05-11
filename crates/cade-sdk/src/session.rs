@@ -40,7 +40,7 @@ impl Default for SessionOptions {
             agent_id: None,
             model: None,
             cwd: std::env::current_dir().unwrap_or_default(),
-            permission_mode: PermissionMode::BypassPermissions,
+            permission_mode: PermissionMode::Default,
             allowed_paths: None,
         }
     }
@@ -127,6 +127,12 @@ impl AgentSession {
     // -- Prompting
 
     /// Send a prompt and return the final assistant text.
+    /// 
+    /// **Security Note:** The `text` parameter is passed directly to the LLM agent. If
+    /// your application accepts user input, be aware of Prompt Injection risks. The SDK
+    /// does not sanitize this input as it expects valid LLM instructions. Ensure your
+    /// `SessionOptions::permission_mode` and `allowed_paths` are strictly configured
+    /// to sandbox the agent's capabilities when handling untrusted user instructions.
     pub async fn prompt(&self, text: &str) -> Result<String> {
         let messages = self
             .client
@@ -183,6 +189,12 @@ impl AgentSession {
     }
 
     /// Set a memory block.
+    /// 
+    /// **Security Note:** The `value` parameter is stored as raw text in the agent's
+    /// memory and will be injected into future LLM contexts. The SDK does not sanitize
+    /// this input. If storing user-generated content, be aware that malicious content
+    /// could influence the agent's behavior (Prompt Injection via memory). Ensure the
+    /// agent is properly sandboxed.
     pub async fn set_memory(&self, label: &str, value: &str) -> Result<()> {
         self.client
             .upsert_memory(&self.agent_id, label, value, None)

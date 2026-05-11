@@ -1883,3 +1883,28 @@ Subagents were rendered with generic borders regardless of their mode, and the `
 \`\`\`sh
 git checkout HEAD^ -- crates/cade-tui
 \`\`\`
+
+---
+**UTC Timestamp:** 2026-05-10T22:00:00Z
+**Summary of change:** Resolve security findings in `cade-sdk` by improving error handling and updating defaults.
+**Files modified:**
+- `crates/cade-sdk/src/rpc.rs`
+- `crates/cade-sdk/src/session.rs`
+
+**Reason:**
+A subagent utilizing the `security-reviewer` skill highlighted several concerns in the `cade-sdk` crate. The RPC server swallowed JSON serialization errors via `unwrap_or_default`, and the default `PermissionMode` was set to `BypassPermissions`, creating a potential vulnerability out of the box. Additionally, the subagent raised input validation concerns for LLM prompts and memory values. 
+
+**Previous behavior:**
+- `run_rpc_server` failed silently with an empty string when `serde_json::to_string` errored.
+- `SessionOptions::default()` returned `PermissionMode::BypassPermissions`.
+- `prompt` and `set_memory` lacked security documentation regarding input sanitization.
+
+**New behavior:**
+- `run_rpc_server` now logs serialization errors and explicitly yields a formatted JSON error response.
+- `SessionOptions::default()` now uses `PermissionMode::Default`, adhering to secure-by-default principles. SDK users can still explicitly opt-in to `BypassPermissions`.
+- Added strict doc comments on `prompt` and `set_memory` noting that the SDK delegates sanitization to the LLM agent model, and that developers must enforce RBAC pathing securely.
+
+**Rollback steps:**
+\`\`\`sh
+git checkout HEAD^ -- crates/cade-sdk
+\`\`\`
