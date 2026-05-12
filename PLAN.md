@@ -2362,3 +2362,23 @@ No `/marketplace` or `/plugins` command existed. Users had to manually download 
 ```sh
 git checkout HEAD^ -- crates/cade-cli
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T21:30:00Z
+**Summary of change:** Added Plugin Development Guide to documentation.
+**Files modified:**
+- `docs/plugin-development.md` (created)
+
+**Reason:**
+The user requested that the instructions on how to build and host a marketplace plugin be saved to the documentation for future reference.
+
+**Previous behavior:**
+Instructions were only provided in the chat response.
+
+**New behavior:**
+Added `docs/plugin-development.md` containing the step-by-step guide for creating a plugin structure, writing the manifest, compressing, hosting, and registering the plugin on the marketplace.
+
+**Rollback steps:**
+```sh
+rm docs/plugin-development.md
+```
