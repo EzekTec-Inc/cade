@@ -2279,3 +2279,23 @@ The final two tasks on the Medium Term roadmap required setting up a benchmark s
 ```sh
 git checkout HEAD^ -- crates/
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T19:00:00Z
+**Summary of change:** Draft architectural proposal for the Long Term Plugin Marketplace feature.
+**Files modified:**
+- `docs/plugin-marketplace-proposal.md` (created)
+
+**Reason:**
+The user requested an exploration of the Long Term "Plugin Marketplace" feature outlined in the roadmap. This feature aims to unify the currently fragmented installation of skills, MCP servers, and subagents into a centralized, easy-to-use registry.
+
+**Previous behavior:**
+No design document or architectural plan existed for the Plugin Marketplace. Users install skills via raw URLs and manually configure MCP servers.
+
+**New behavior:**
+Authored `docs/plugin-marketplace-proposal.md`. The proposal outlines a static Git repository-backed registry containing an `index.json` and standardized plugin manifests. It proposes a phased implementation plan covering the registry, a unified downloader (`install_plugin`), a TUI Marketplace overlay, and autonomous LLM integration for discovering new capabilities.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- docs/
+```
