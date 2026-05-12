@@ -149,5 +149,5 @@ See `IMPLEMENTATION_PLAN.md` for detailed commit history.
 - [ ] **Voice mode** — speech-to-text input + audio output. Likely via
       WebRTC (browser) or local Whisper (CLI). Needs streaming TTS for
       natural response delivery.
-- [ ] **Plugin marketplace** — discover, install, and rate community skills
+- [x] **Plugin marketplace** — discover, install, and rate community skills
       and MCP server configs from a central registry
