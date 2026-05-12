@@ -78,6 +78,8 @@ pub(crate) enum SlashCmd {
     CompactionModel(String),
     /// Manually trigger session_summary consolidation.
     Compact,
+    /// Browse the plugin marketplace.
+    Marketplace,
 }
 
 pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -112,6 +114,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "feedback" => Some(SlashCmd::Feedback),
         "skills" => Some(SlashCmd::Skills(arg)),
         "subagents" | "agents-list" => Some(SlashCmd::Subagents),
+        "marketplace" | "plugins" => Some(SlashCmd::Marketplace),
         "theme" => Some(SlashCmd::Theme(arg)),
         "providers" | "provider-list" => Some(SlashCmd::Providers),
         "connect" => Some(SlashCmd::Connect(arg)),

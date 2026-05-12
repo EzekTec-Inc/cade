@@ -2333,3 +2333,32 @@ No unified mechanism existed to download a plugin artifact containing skills, su
 ```sh
 git checkout HEAD^ -- crates/
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T21:00:00Z
+**Summary of change:** Implement Phase 3 of the Plugin Marketplace Plan.
+**Files modified:**
+- `crates/cade-cli/src/cli/repl/pickers/marketplace.rs` (created)
+- `crates/cade-cli/src/cli/repl/pickers/mod.rs`
+- `crates/cade-cli/src/cli/repl/commands_marketplace.rs` (created)
+- `crates/cade-cli/src/cli/repl/slash.rs`
+- `crates/cade-cli/src/cli/repl/commands.rs`
+- `crates/cade-cli/src/cli/repl/mod.rs`
+- `crates/cade-cli/Cargo.toml`
+
+**Reason:**
+Phase 3 of the Plugin Marketplace architectural proposal required the creation of an interactive TUI overlay to allow users to seamlessly browse, search, and install capabilities from the remote registry without leaving the terminal.
+
+**Previous behavior:**
+No `/marketplace` or `/plugins` command existed. Users had to manually download SKILL.MD files or know exact plugin URLs to use `install_skill`.
+
+**New behavior:**
+- Added `/marketplace` (alias: `/plugins`) command to the CLI REPL.
+- Added `reqwest` dependency to `cade-cli` to fetch the remote `index.json`.
+- Implemented `marketplace_picker` overlay in `cade-tui` style, featuring a filterable table of plugins (ID, Author, Version) on the left, and a detailed preview pane (Tags, Description, URL) on the right.
+- Pressing `Enter` securely triggers the `install_plugin` logic built in Phase 2 to automatically download, unpack, and load the plugin into the local `~/.cade/plugins/` environment.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-cli
+```

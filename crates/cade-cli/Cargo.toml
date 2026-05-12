@@ -24,8 +24,7 @@ tracing.workspace      = true
 # -- Async
 tokio.workspace        = true
 futures.workspace      = true
-# -- HTTP
-reqwest.workspace      = true
+reqwest = { workspace = true, features = ["json"] }
 # -- Misc utilities
 uuid.workspace         = true
 chrono.workspace       = true
@@ -43,6 +42,7 @@ dirs.workspace         = true
 walkdir.workspace      = true
 ignore.workspace       = true
 notify.workspace       = true
+cade-plugin = { version = "0.2.0", path = "../cade-plugin" }
 
 [lints.rust]
 unsafe_code = "forbid"

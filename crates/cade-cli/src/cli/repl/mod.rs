@@ -11,6 +11,7 @@ pub mod commands_help;
 pub mod commands_hooks;
 pub mod commands_init;
 pub mod commands_mcp;
+pub mod commands_marketplace;
 pub mod commands_memory;
 pub mod commands_mode;
 pub mod commands_model;

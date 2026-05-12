@@ -401,6 +401,9 @@ impl Repl {
             }
 
             // -- New commands
+            SlashCmd::Marketplace => {
+                return self.cmd_marketplace().await;
+            }
             SlashCmd::Clear => {
                 return self.cmd_clear().await;
             }
