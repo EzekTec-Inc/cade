@@ -170,25 +170,29 @@ impl SubagentConfig {
     /// 2. `def.system_prompt` (named subagent definition from `.md` file)
     /// 3. Built-in default (worker prose)
     ///
-    /// For `mode == "plan"` a strict read-only directive is always appended
-    /// regardless of which source supplied the base.
+    /// For `mode == "plan"` a strict read-only directive is always appended.
     ///
-    /// The `prompt` is **not** appended here; callers add it as a separate
-    /// `user` message so the LLM context is cleanly separated.
+    /// REC-1/G3: HEADLESS_OVERRIDE replaced with a positive completion
+    /// contract.  The model is told to call `finish` when done, not punished
+    /// for emitting text.  This eliminates the primary doom-loop trigger where
+    /// a confused model keeps calling tools to avoid the "text = terminate"
+    /// penalty.
     pub fn resolve_system_prompt(&self, def: Option<&SubagentDef>) -> String {
         const DEFAULT_WORKER: &str = "\
 You are a CADE subagent — an autonomous coding assistant spawned to complete a \
 focused task. You have access to the full CADE tool suite (file operations, shell, \
-search, memory). Use tools aggressively to gather information before answering. \
-Return a concise final summary describing what you did, what you found, and any \
-follow-ups for the parent agent. Do NOT ask the parent clarifying questions — make \
-reasonable assumptions and proceed.";
+search, memory). Use tools to gather information and complete the task.\
+\n\nWhen you have completed the task, call the `finish` tool with your summary and \
+status. You may also call `finish` at any time if you determine the task cannot \
+be completed. Make reasonable assumptions and proceed — do NOT ask the parent \
+agent clarifying questions.";
 
-        const HEADLESS_OVERRIDE: &str = "\n\nCRITICAL SYSTEM OVERRIDE: You are \
-running in a headless autonomous loop. You MUST call tools to accomplish the task. \
-Do NOT ask for permission or emit conversational filler without calling a tool. If \
-you output plain text without a tool call, your execution terminates immediately. \
-When the task is complete, summarize your findings and stop.";
+        const COMPLETION_CONTRACT: &str = "\n\n\
+COMPLETION CONTRACT:\n\
+- Use tools to accomplish the task.\n\
+- When the task is complete or definitively blocked, call `finish(summary, status)`.\n\
+- `finish` is the ONLY valid way to end this session.\n\
+- Do not loop endlessly — if you are stuck, call `finish` with status=blocked.";
 
         const PLAN_DIRECTIVE: &str = "\n\nIMPORTANT: You are in PLAN mode. Analyze \
 and report only. Do NOT modify files, do NOT run mutating commands, do NOT use \
@@ -200,7 +204,7 @@ write_file / edit_file / apply_patch.";
             .or_else(|| def.map(|d| d.system_prompt.clone()))
             .unwrap_or_else(|| DEFAULT_WORKER.to_string());
 
-        let mut prompt = format!("{base}{HEADLESS_OVERRIDE}");
+        let mut prompt = format!("{base}{COMPLETION_CONTRACT}");
 
         if self.mode == "plan" {
             prompt.push_str(PLAN_DIRECTIVE);
@@ -457,11 +461,25 @@ mod tests {
         assert!(!result.contains("PLAN mode"));
     }
 
+    /// REC-1/G3: The HEADLESS_OVERRIDE was replaced with a positive completion
+    /// contract. Verify the new contract text is present and the old punishing
+    /// wording is gone.
     #[test]
-    fn resolve_system_prompt_contains_headless_override() {
+    fn resolve_system_prompt_contains_completion_contract() {
         let cfg = SubagentConfig::from_args(&json!({ "prompt": "x" }));
         let result = cfg.resolve_system_prompt(None);
-        assert!(result.contains("headless autonomous loop"));
+        // New contract text must be present
+        assert!(result.contains("COMPLETION CONTRACT"), "missing completion contract header");
+        assert!(result.contains("finish"), "finish tool must be mentioned");
+        // Old punishing text must be gone
+        assert!(
+            !result.contains("headless autonomous loop"),
+            "old HEADLESS_OVERRIDE must not be present"
+        );
+        assert!(
+            !result.contains("execution terminates immediately"),
+            "old punishment clause must not be present"
+        );
     }
 
     // -- build_seed_memory

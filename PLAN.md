@@ -2382,3 +2382,68 @@ Added `docs/plugin-development.md` containing the step-by-step guide for creatin
 ```sh
 rm docs/plugin-development.md
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T23:00:00Z
+**Summary of change:** Implement all 8 items from the Subagent Summary Priority Table.
+**Files modified:**
+- `crates/cade-agent/src/subagents/config.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+Subagent system was susceptible to doom-loops, hallucination spirals, and silent memory data loss.
+Full investigation identified 8 concrete gaps. All implemented in this change.
+
+**Changes made:**
+
+- **REC-1/G3 (Critical):** Replaced `HEADLESS_OVERRIDE` with a positive `COMPLETION CONTRACT`.
+  Old text punished the model for emitting text without a tool call, which caused confused models
+  to keep calling tools to avoid the "penalty". New contract invites the model to call `finish`
+  when done. Updated test to assert new wording and old punishment clause is absent.
+
+- **REC-4/G4 (High):** Injected a built-in `finish(summary, status, findings?)` tool into
+  every subagent's tool schema. The loop now terminates cleanly and immediately when `finish`
+  is dispatched, returning structured output to the parent instead of free-form prose.
+
+- **REC-3/G2 (High):** Replaced `try_acquire()` with `acquire()` wrapped in the wall-clock
+  timeout. The parent tool call now blocks until a semaphore slot is free instead of returning
+  an instant error that caused the parent LLM to retry-loop consuming tokens.
+
+- **REC-2/G1 (Critical):** Added a rolling 4-element fingerprint window in the agentic loop.
+  If the same (tool_name + args) fingerprint appears 3+ times in the last 4 iterations,
+  the loop aborts with a `StagnationDetected` error before all `max_iters` are exhausted.
+
+- **REC-5/G8 (Medium):** Emit a structured `subagent_iter` SSE event per iteration and on
+  `finish` dispatch: `{message_type, subagent_id, iter, tool, args_hash}`. Enables full
+  observability and post-mortem replay of failed subagent runs.
+
+- **REC-6/G6 (Medium):** `smart_memory_merge` is now awaited with a 15-second timeout before
+  teardown instead of being fire-and-forget via `tokio::spawn`. A timeout warning is emitted
+  via `tracing::warn` when the merge LLM call takes too long.
+
+- **G7 (Medium):** Semaphore permit is now explicitly `drop`ped before write-back so the
+  slot is freed as early as possible. Comment clarifies that `OwnedSemaphorePermit::drop()`
+  still handles the panic path.
+
+- **G5 (Medium):** Per-call dedup `HashMap<fingerprint, first_seen_iter>` tracks all tool
+  calls in the session. Duplicate calls emit a `tracing::debug` warning rather than failing,
+  serving as a lower-sensitivity companion to the stagnation detector.
+
+**Previous behavior:**
+- HEADLESS_OVERRIDE caused confused models to spiral into doom loops.
+- `try_acquire` caused parent LLM to retry-loop on full semaphore.
+- No stagnation detection; loops ran to max_iters consuming full token budget.
+- smart_memory_merge was fire-and-forget; merge failures silently lost data.
+- No per-iteration observability; debugging doom loops required log trawling.
+
+**New behavior:**
+- Model has a clear, positive completion contract with an explicit `finish` tool.
+- Parent blocks on a full semaphore rather than receiving an error it retries.
+- Stagnation aborts the loop early with a diagnostic message.
+- Memory merges are awaited synchronously with a 15s timeout and warning on timeout.
+- Every tool dispatch emits a structured SSE event for real-time observability.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-server/src/server/api/run/subagent.rs
+```

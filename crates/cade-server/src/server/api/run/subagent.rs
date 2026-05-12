@@ -63,26 +63,30 @@ impl EphemeralEnvironment {
             if let Some((_, old_value, _)) =
                 parent_blocks.iter().find(|(l, _, _)| l == &parent_label)
             {
-                let state_c = state.clone();
-                let parent_id_c = self.parent_agent_id.clone();
-                let parent_label_c = parent_label.clone();
-                let old_val_c = old_value.clone();
-                let new_val_c = fact.value.clone();
-                let memory_type_c = fact.memory_type.clone();
-                let confidence_c = fact.confidence;
-
-                tokio::spawn(async move {
+                // REC-6/G6: Await the merge with a bounded timeout so that
+                // memory conflicts are resolved synchronously before teardown.
+                // Fire-and-forget spawns previously risked silently losing data
+                // when the merge LLM call failed.
+                let merge_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
                     smart_memory_merge(
-                        state_c,
-                        parent_id_c,
-                        parent_label_c,
-                        old_val_c,
-                        new_val_c,
-                        memory_type_c,
-                        confidence_c,
-                    )
-                    .await;
-                });
+                        state.clone(),
+                        self.parent_agent_id.clone(),
+                        parent_label.clone(),
+                        old_value.clone(),
+                        fact.value.clone(),
+                        fact.memory_type.clone(),
+                        fact.confidence,
+                    ),
+                )
+                .await;
+                if merge_result.is_err() {
+                    tracing::warn!(
+                        label = %parent_label,
+                        subagent_id = %self.subagent_id,
+                        "smart_memory_merge timed out; retaining old value"
+                    );
+                }
                 written += 1;
             } else {
                 if cade_store::sqlite::upsert_memory_block_typed(
@@ -359,14 +363,37 @@ pub(super) async fn handle_run_subagent_tool_inner(
         };
     }
 
-    // Acquire semaphore permit
-    let permit = match state.subagent_semaphore.try_acquire() {
-        Ok(p) => p,
+    // REC-3/G2: Backpressure — block until a semaphore slot is free instead
+    // of returning an instant error that causes the parent LLM to retry-loop.
+    // Wrapped in the wall-clock timeout so a full semaphore never hangs forever.
+    let permit = match tokio::time::timeout(
+        std::time::Duration::from_secs(subagent_timeout_secs()),
+        state.subagent_semaphore.acquire(),
+    )
+    .await
+    {
+        Ok(Ok(p)) => p,
+        Ok(Err(_)) => {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_subagent".to_string(),
+                output: "error: subagent semaphore closed.".to_string(),
+                is_error: true,
+            };
+        }
         Err(_) => {
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: "run_subagent".to_string(),
-                output: "error: subagent concurrency limit reached. Try again later.".to_string(),
+                output: format!(
+                    "error: timed out waiting for a subagent slot after {}s. \
+                     All {} slots are occupied. Retry later or raise CADE_MAX_SUBAGENTS.",
+                    subagent_timeout_secs(),
+                    std::env::var("CADE_MAX_SUBAGENTS")
+                        .ok()
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(4)
+                ),
                 is_error: true,
             };
         }
@@ -490,7 +517,39 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 &cade_agent::subagents::SubagentTools::All
             }
         });
-        filter_subagent_tools(raw, tools_filter)
+        let mut filtered = filter_subagent_tools(raw, tools_filter);
+
+        // REC-4/G4: Inject the built-in `finish` tool so the model has an
+        // explicit, canonical way to signal completion.  This replaces the
+        // implicit "no tool_calls = done" heuristic which could not distinguish
+        // genuine completion from a confused model emitting prose mid-task.
+        filtered.push(serde_json::json!({
+            "name": "finish",
+            "description": "Signal task completion or a definitive block. \
+                Must be called to end the subagent session. \
+                Use status='done' when complete, 'blocked' when stuck, 'error' on failure.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "Concise summary of what was done or why the task is blocked."
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["done", "blocked", "error"],
+                        "description": "Final status."
+                    },
+                    "findings": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of key findings or artefacts."
+                    }
+                },
+                "required": ["summary", "status"]
+            }
+        }));
+        filtered
     };
 
     let mut messages = messages_init;
@@ -498,6 +557,15 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let mut llm_err: Option<String> = None;
     let next_depth = cfg.depth + 1;
     let allowed_paths = cfg.resolve_allowed_paths(def_opt);
+
+    // G1/REC-2: Rolling fingerprint window for stagnation detection.
+    // Stores hashes of (tool_name + args_json) for the last 4 dispatches.
+    let mut tool_fingerprints: std::collections::VecDeque<u64> =
+        std::collections::VecDeque::with_capacity(5);
+
+    // G5: Per-call dedup cache — maps fingerprint → first iter it was seen.
+    let mut tool_dedup: std::collections::HashMap<u64, usize> =
+        std::collections::HashMap::new();
 
     // Create a lightweight ephemeral DB row for the subagent so its
     // meta-tool calls (update_memory, load_skill, etc.) are scoped to
@@ -552,12 +620,11 @@ pub(super) async fn handle_run_subagent_tool_inner(
         id: subagent_id.clone(),
     };
 
-    // REC-1: Wrap the agentic loop in a wall-clock timeout to prevent
-    // a hung LLM or tool call from holding the semaphore permit forever.
+    // Wall-clock timeout guard (REC-1, pre-existing).
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
     let mut cumulative_tokens = 0u64;
     let loop_result = tokio::time::timeout(timeout_dur, async {
-        for _iter in 0..max_iters {
+        for iter in 0..max_iters {
             if let Some(budget) = cfg.max_tokens_budget {
                 let mut iter_input_tokens = 0;
                 for m in &messages {
@@ -639,8 +706,109 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 last_text.push_str(t);
             }
 
+            // REC-4/G4: `finish` tool = canonical clean exit.
+            // Natural text-only response = implicit done (honour the model's
+            // stopping instinct rather than punishing it).
             if resp.tool_calls.is_empty() {
                 break;
+            }
+
+            // Check for `finish` tool call first — handle before dispatch.
+            if let Some(finish_tc) = resp.tool_calls.iter().find(|tc| tc.name == "finish") {
+                let summary = finish_tc.arguments["summary"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                let status = finish_tc.arguments["status"]
+                    .as_str()
+                    .unwrap_or("done")
+                    .to_string();
+                let findings: Vec<String> = finish_tc.arguments["findings"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if !last_text.is_empty() {
+                    last_text.push_str("\n\n");
+                }
+                last_text.push_str(&summary);
+                if !findings.is_empty() {
+                    last_text.push_str("\n\nFindings:\n");
+                    for f in &findings {
+                        last_text.push_str(&format!("- {f}\n"));
+                    }
+                }
+
+                if status == "error" {
+                    llm_err = Some(format!("Subagent finished with status=error: {summary}"));
+                }
+
+                // G8/REC-5: Emit finish iter event.
+                let iter_ev = serde_json::json!({
+                    "message_type": "subagent_iter",
+                    "subagent_id": subagent_id,
+                    "iter": iter,
+                    "tool": "finish",
+                    "status": status,
+                });
+                let _ = emitter.raw_sse_tx()
+                    .send(Ok(axum::response::sse::Event::default().data(iter_ev.to_string())))
+                    .await;
+
+                break;
+            }
+
+            // G8/REC-5: Emit per-iteration observability event for each tool call.
+            for tc in &resp.tool_calls {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                tc.name.hash(&mut h);
+                tc.arguments.to_string().hash(&mut h);
+                let fp = h.finish();
+
+                let iter_ev = serde_json::json!({
+                    "message_type": "subagent_iter",
+                    "subagent_id": subagent_id,
+                    "iter": iter,
+                    "tool": tc.name,
+                    "args_hash": format!("{fp:x}"),
+                });
+                let _ = emitter.raw_sse_tx()
+                    .send(Ok(axum::response::sse::Event::default().data(iter_ev.to_string())))
+                    .await;
+
+                // G5: Per-call dedup — warn if same fingerprint seen before.
+                if let Some(first_seen) = tool_dedup.get(&fp) {
+                    tracing::debug!(
+                        subagent_id = %subagent_id,
+                        tool = %tc.name,
+                        iter,
+                        first_seen,
+                        "duplicate tool call fingerprint detected"
+                    );
+                } else {
+                    tool_dedup.insert(fp, iter);
+                }
+
+                // G1/REC-2: Stagnation detection — rolling window of last 4 fingerprints.
+                tool_fingerprints.push_back(fp);
+                if tool_fingerprints.len() > 4 {
+                    tool_fingerprints.pop_front();
+                }
+                let repeat_count = tool_fingerprints.iter().filter(|&&x| x == fp).count();
+                if repeat_count >= 3 {
+                    llm_err = Some(format!(
+                        "Stagnation detected: tool '{}' called with identical arguments {} times \
+                         in the last 4 iterations. Aborting to prevent doom-loop.",
+                        tc.name, repeat_count
+                    ));
+                    // Return early from async block
+                    return;
+                }
             }
 
             messages.push(LlmMessage {
@@ -725,11 +893,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
     }
 
     let elapsed = start_time.elapsed().as_secs() as u32;
+
+    // G7: Release semaphore permit explicitly before write-back so the slot
+    // is freed as early as possible.  The permit's Drop impl is a no-op after
+    // this — still safe on panic because OwnedSemaphorePermit::drop() handles it.
     drop(permit);
 
     // A15 + REC-2: Explicitly run write-back + delete via the guard.
-    // On the happy path this gives us the writeback_count; on panic the
-    // Drop impl handles it automatically (count is lost but cleanup happens).
     let writeback_count = ephemeral_guard.write_back_and_delete_async(state).await;
 
     let (output, is_error) = match llm_err {
