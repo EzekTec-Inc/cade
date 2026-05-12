@@ -176,6 +176,7 @@ impl ToolRuntime {
             RUN_SKILL_SCRIPT => self.handle_run_skill_script(args).await,
             LOAD_SKILL_REF => self.handle_load_skill_ref(args),
             INSTALL_SKILL => self.handle_install_skill(args).await,
+            INSTALL_PLUGIN => self.handle_install_plugin(args).await,
 
             // -- Checkpoints
             CREATE_CHECKPOINT => self.handle_create_checkpoint(args).await,

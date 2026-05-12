@@ -3,6 +3,23 @@ use cade_core::skills::discover_all_skills;
 use serde_json::Value;
 
 impl ToolRuntime {
+    pub(crate) async fn handle_install_plugin(&self, args: &Value) -> (String, bool) {
+        let url = args["url"].as_str().unwrap_or("").trim().to_string();
+        let plugin_id = args["plugin_id"].as_str().unwrap_or("").trim().to_string();
+
+        if url.is_empty() || plugin_id.is_empty() {
+            return (
+                "Error: 'url' and 'plugin_id' are required".to_string(),
+                true,
+            );
+        }
+
+        match self.storage.install_plugin(&self.agent_id, &url, &plugin_id).await {
+            Ok(msg) => (msg, false),
+            Err(e) => (format!("Failed to install plugin: {e}"), true),
+        }
+    }
+
     pub(crate) async fn handle_install_skill(&self, args: &Value) -> (String, bool) {
         let url = args["url"].as_str().unwrap_or("").trim().to_string();
         let scope = args["scope"].as_str().unwrap_or("project");

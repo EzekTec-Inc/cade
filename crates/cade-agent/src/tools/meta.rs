@@ -43,6 +43,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_load_skill(),
         schema_unload_skill(),
         schema_install_skill(),
+        schema_install_plugin(),
         schema_run_skill_script(),
         schema_load_skill_ref(),
         schema_run_subagent(),
@@ -283,6 +284,21 @@ fn schema_install_skill() -> Value {
                 }
             },
             "required": ["url"]
+        }
+    })
+}
+
+fn schema_install_plugin() -> Value {
+    json!({
+        "name": "install_plugin",
+        "description": "Download and install a plugin package (which can bundle skills, subagents, and MCP servers) from a central registry or direct URL.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "description": "URL to the plugin tarball or registry entry" },
+                "plugin_id": { "type": "string", "description": "Unique ID of the plugin (e.g. '@author/name')" }
+            },
+            "required": ["url", "plugin_id"]
         }
     })
 }

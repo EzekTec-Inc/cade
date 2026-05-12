@@ -2299,3 +2299,37 @@ Authored `docs/plugin-marketplace-proposal.md`. The proposal outlines a static G
 ```sh
 git checkout HEAD^ -- docs/
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T20:00:00Z
+**Summary of change:** Implement Phase 1 & 2 of the Plugin Marketplace Plan.
+**Files modified:**
+- `crates/cade-plugin/src/marketplace.rs` (created)
+- `crates/cade-plugin/src/manifest.rs`
+- `crates/cade-plugin/src/lib.rs`
+- `crates/cade-plugin/Cargo.toml`
+- `crates/cade-agent/src/backends/storage.rs`
+- `crates/cade-agent/src/agent/client/storage_impl.rs`
+- `crates/cade-server/src/server/api/run/storage_impl.rs`
+- `crates/cade-agent/src/tools/runtime/mod.rs`
+- `crates/cade-agent/src/tools/runtime/skills.rs`
+- `crates/cade-agent/src/tools/meta.rs`
+- `crates/cade-core/src/tool_ids.rs`
+- `crates/cade-server/Cargo.toml`
+
+**Reason:**
+Following up on the Plugin Marketplace architectural proposal, we implemented Phase 1 (registry schemas and manifest format) and Phase 2 (downloader via `install_plugin`), along with Phase 4 (agent integration via `schema_install_plugin`).
+
+**Previous behavior:**
+No unified mechanism existed to download a plugin artifact containing skills, subagents, and MCP configurations. `PluginManifest` lacked `mcp_servers`.
+
+**New behavior:**
+- Added `mcp_servers` to `PluginManifest`.
+- Created `RegistryIndex` and `RegistryPluginInfo` schemas in `marketplace.rs`.
+- Implemented `install_plugin` which downloads a tarball via `reqwest`, unpacks it via `flate2`/`tar`, and parses the manifest.
+- Exposed `install_plugin` as an LLM tool in `meta.rs` and wired its dispatch through `ToolRuntime` and `StorageBackend`.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/
+```

@@ -24,6 +24,9 @@ dirs.workspace       = true
 walkdir.workspace    = true
 # -- Misc utilities
 uuid.workspace       = true
+reqwest.workspace = true
+tar = "0.4.45"
+flate2 = "1.1.9"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -65,6 +65,8 @@ pub struct PluginManifest {
     pub themes: Vec<PathBuf>,
     #[serde(default)]
     pub subagents: Vec<PathBuf>,
+    #[serde(default)]
+    pub mcp_servers: std::collections::HashMap<String, cade_core::settings::models::McpServerConfig>,
 }
 
 // endregion: --- Types

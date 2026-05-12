@@ -120,6 +120,10 @@ impl StorageBackend for HttpTransport {
         self.store_artifact(agent_id, kind, content_type, text, None, None).await
     }
     
+    async fn install_plugin(&self, _agent_id: &str, _url: &str, _plugin_id: &str) -> Result<String> {
+        Err(crate::Error::custom("install_plugin not implemented on HttpTransport yet"))
+    }
+
     async fn install_skill(&self, agent_id: &str, url: &str, scope: &str, skill_name: Option<&str>) -> Result<String> {
         self.install_skill(agent_id, url, scope, skill_name).await
     }

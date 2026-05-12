@@ -26,6 +26,8 @@ pub trait StorageBackend: Send + Sync {
 
     async fn store_artifact(&self, agent_id: &str, kind: &str, content_type: &str, text: Option<&str>, blob: Option<&[u8]>, metadata: Option<&Value>) -> Result<String>;
     
+    async fn install_plugin(&self, agent_id: &str, url: &str, plugin_id: &str) -> Result<String>;
+
     async fn install_skill(&self, agent_id: &str, url: &str, scope: &str, skill_name: Option<&str>) -> Result<String>;
     async fn run_skill_script(&self, agent_id: &str, skill_id: &str, script_name: &str, args: Option<&[String]>, cwd: &Path) -> Result<String>;
     async fn load_skill_ref(&self, agent_id: &str, skill_id: &str, doc_name: &str) -> Result<String>;

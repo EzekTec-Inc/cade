@@ -53,6 +53,7 @@ pub const ARCHIVAL_MEMORY_SEARCH: &str = "archival_memory_search";
 
 pub const LOAD_SKILL: &str = "load_skill";
 pub const INSTALL_SKILL: &str = "install_skill";
+pub const INSTALL_PLUGIN: &str = "install_plugin";
 pub const RUN_SKILL_SCRIPT: &str = "run_skill_script";
 pub const LOAD_SKILL_REF: &str = "load_skill_ref";
 

@@ -2,6 +2,7 @@
 
 mod error;
 pub mod manifest;
+pub mod marketplace;
 pub mod registry;
 
 pub use error::{Error, Result};

@@ -215,6 +215,16 @@ impl StorageBackend for ServerStorageBackend {
         Ok(())
     }
 
+    async fn install_plugin(&self, _agent_id: &str, url: &str, plugin_id: &str) -> Result<String> {
+        let target_dir = dirs::home_dir()
+            .map(|h| h.join(".cade").join("plugins"))
+            .unwrap_or_default();
+        match cade_plugin::marketplace::install_plugin(url, plugin_id, &target_dir).await {
+            Ok(manifest) => Ok(format!("Plugin '{}' installed successfully.", manifest.name)),
+            Err(e) => Err(cade_agent::Error::custom(format!("Plugin installation failed: {e}"))),
+        }
+    }
+
     async fn install_skill(&self, _agent_id: &str, _url: &str, _scope: &str, _skill_name: Option<&str>) -> Result<String> {
         Err(cade_agent::Error::custom("install_skill not implemented on ServerStorageBackend"))
     }
