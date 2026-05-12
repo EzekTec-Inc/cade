@@ -1886,12 +1886,14 @@ mod tests {
 
         // ── assert ──────────────────────────────────────────────────────
 
-        // 1. The mock LLM's complete() was invoked exactly twice:
-        //    once for session_summary consolidation, once for P7 active_goal auto-update.
+        // 1. The mock LLM's complete() was invoked exactly three times:
+        //    (a) session_summary consolidation
+        //    (b) P7 auto_update_active_goal
+        //    (c) Phase B auto_extract_facts (added during memory architecture rework)
         assert_eq!(
             llm.calls.load(Ordering::SeqCst),
-            2,
-            "consolidate_agent must call LLM.complete twice (summary + P7 active_goal)"
+            3,
+            "consolidate_agent must call LLM.complete three times (summary + P7 active_goal + auto_extract_facts)"
         );
 
         // 2. `session_summary` block exists and contains the mock output verbatim.

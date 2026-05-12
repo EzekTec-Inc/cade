@@ -420,6 +420,37 @@ fn filter_subagent_tools_strips_run_subagent_schema() {
     assert!(names.iter().any(|n| n == "read_file"));
 }
 
+
+/// The built-in `finish` tool is injected by the subagent executor itself.
+/// If a parent agent somehow had a `finish` schema in its tool list, it must
+/// be stripped from what subagents see — otherwise a confused subagent could
+/// call `finish` on the *parent's* schema instead of the injected one, or
+/// cause unexpected tool routing.
+#[test]
+fn filter_subagent_tools_strips_finish_schema() {
+    let schemas = vec![
+        serde_json::json!({"name": "bash"}),
+        serde_json::json!({"name": "finish"}),
+        serde_json::json!({"name": "run_subagent"}),
+        serde_json::json!({"name": "read_file"}),
+    ];
+    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All);
+    let names: Vec<String> = filtered
+        .iter()
+        .filter_map(|s| s["name"].as_str().map(String::from))
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "finish"),
+        "finish must be stripped from parent schemas (injected fresh by executor), got: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "run_subagent"),
+        "run_subagent must also be stripped, got: {names:?}"
+    );
+    assert!(names.iter().any(|n| n == "bash"));
+    assert!(names.iter().any(|n| n == "read_file"));
+}
+
 // ── REC-1: Wall-clock timeout ─────────────────────────────────────────
 
 /// Mock LLM that sleeps for a very long time on each `complete()` call,

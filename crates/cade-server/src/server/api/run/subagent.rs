@@ -133,7 +133,11 @@ pub(super) fn filter_subagent_tools(
         .into_iter()
         .filter(|s| {
             let name = s["name"].as_str().unwrap_or("");
-            if name == "run_subagent" || name == "run_parallel_subagents" {
+            // Strip tools that must never appear in a subagent's inherited schema:
+            // - run_subagent / run_parallel_subagents: prevent runaway recursion
+            // - finish: injected fresh by the executor; stripping here prevents
+            //   the parent's stale schema from leaking in or causing double routing
+            if matches!(name, "run_subagent" | "run_parallel_subagents" | "finish") {
                 return false;
             }
             match allowed {
