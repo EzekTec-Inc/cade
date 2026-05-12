@@ -189,7 +189,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     let agent = match sqlite::get_agent(&state.db, agent_id) {
         Ok(Some(a)) => a,
         Ok(None) => {
-            tracing::warn!("consolidate [{}]: agent not found — skipping", agent_id);
+            tracing::warn!(agent_id = %agent_id, "consolidate:  agent not found — skipping");
             return;
         }
         Err(e) => {
@@ -331,10 +331,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     }
 
     if history_text.trim().is_empty() {
-        tracing::debug!(
-            "consolidate [{}]: dropped turns have no useful text — skipping",
-            agent_id
-        );
+        tracing::debug!(agent_id = %agent_id, "consolidate:  dropped turns have no useful text — skipping");
         return;
     }
 
@@ -471,7 +468,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     };
 
     if summary.is_empty() {
-        tracing::debug!("consolidate [{}]: LLM returned empty summary", agent_id);
+        tracing::debug!(agent_id = %agent_id, "consolidate:  LLM returned empty summary");
         return;
     }
 
@@ -808,7 +805,7 @@ async fn auto_update_active_goal(
     };
 
     if goal_text.is_empty() || goal_text == "UNCHANGED" {
-        tracing::debug!("consolidate [{}]: P7 active_goal unchanged", agent_id);
+        tracing::debug!(agent_id = %agent_id, "consolidate:  P7 active_goal unchanged");
         return;
     }
 
@@ -967,10 +964,7 @@ async fn auto_extract_facts(
             );
         }
     } else {
-        tracing::debug!(
-            "consolidate [{}]: Phase B auto-extraction failed to parse JSON",
-            agent_id
-        );
+        tracing::debug!(agent_id = %agent_id, "consolidate:  Phase B auto-extraction failed to parse JSON");
     }
 }
 

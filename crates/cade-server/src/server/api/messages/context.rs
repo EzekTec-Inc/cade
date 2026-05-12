@@ -789,10 +789,7 @@ pub(crate) async fn build_context(
         if let Some(conv_for_eager) = eager_snapshot {
             let state_eager = state.clone();
             let agent_eager = agent_id.to_string();
-            tracing::info!(
-                "build_context [{}]: eager consolidation triggered (turn-count path)",
-                agent_id
-            );
+            tracing::info!(agent_id = %agent_id, "build_context:  eager consolidation triggered (turn-count path)");
             tokio::spawn(async move {
                 crate::server::consolidation::consolidate_agent(
                     &state_eager,

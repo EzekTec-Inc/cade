@@ -51,4 +51,12 @@ dirs.workspace         = true
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 # unused = { level = "allow", priority = -1 } # For exploratory dev.
+
+
+[[bench]]
+name = "dispatch_bench"
+harness = false

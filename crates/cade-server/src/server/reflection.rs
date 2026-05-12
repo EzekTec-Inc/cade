@@ -131,7 +131,7 @@ pub async fn reflect_agent(
     let llm_output = match state.llm.complete(&req).await {
         Ok(r) => r.content.unwrap_or_default(),
         Err(e) => {
-            tracing::warn!("reflect_agent [{}]: LLM failed: {e}", agent_id);
+            tracing::warn!(agent_id = %agent_id, "reflect_agent:  LLM failed: {e}");
             result.summary = format!("Reflection LLM error: {e}");
             return result;
         }

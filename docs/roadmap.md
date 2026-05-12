@@ -138,9 +138,9 @@ See `IMPLEMENTATION_PLAN.md` for detailed commit history.
       (direct DB) meta-tool handlers behind a shared async trait. Eliminates
       ~1,500 lines of duplication across `cade-agent/src/tools/runtime/` and
       `cade-server/src/server/api/run/meta_tools.rs`.
-- [ ] **Benchmark suite** — latency and throughput benchmarks for LLM streaming,
+- [x] **Benchmark suite** — latency and throughput benchmarks for LLM streaming,
       tool dispatch, and memory operations (criterion.rs)
-- [ ] **Structured logging** — migrate from `tracing` ad-hoc spans to
+- [x] **Structured logging** — migrate from `tracing` ad-hoc spans to
       consistent structured fields across all crates
 
 ### Long term

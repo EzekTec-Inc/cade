@@ -2251,3 +2251,31 @@ As part of the Medium Term roadmap goals, extracting a `StorageBackend` trait un
 ```sh
 git checkout HEAD^ -- crates/cade-agent crates/cade-server crates/cade-cli src/main.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-11T18:00:00Z
+**Summary of change:** Complete the Medium Term roadmap (Benchmark suite and Structured logging).
+**Files modified:**
+- `docs/roadmap.md`
+- `crates/cade-store/Cargo.toml`
+- `crates/cade-store/benches/memory_bench.rs` (created)
+- `crates/cade-agent/Cargo.toml`
+- `crates/cade-agent/benches/dispatch_bench.rs` (created)
+- Various `crates/**/*.rs` files for tracing migration.
+
+**Reason:**
+The final two tasks on the Medium Term roadmap required setting up a benchmark suite using `criterion.rs` to track latency and throughput of memory operations and tool dispatching, as well as migrating ad-hoc string-interpolated `tracing` logs to consistent structured fields. 
+
+**Previous behavior:**
+- The repository lacked a benchmark suite, making it difficult to measure performance regressions in SQLite memory ranking or async tool dispatching.
+- Logs were formatted as raw text (e.g. `tracing::warn!("consolidate [{}]: agent not found", agent_id)`), making them impossible to parse or query easily with structured JSON log aggregators.
+
+**New behavior:**
+- Implemented `memory_bench` inside `cade-store` to test the Reciprocal Rank Fusion algorithm used during hybrid semantic search.
+- Implemented `dispatch_bench` inside `cade-agent` utilizing `tokio::runtime` to asynchronously benchmark the newly unified `StorageBackend` tool dispatcher.
+- Ran a workspace-wide Python AST refactoring script that successfully converted string-interpolated `tracing` macros into strongly-typed structural logging (e.g. `tracing::warn!(agent_id = %agent_id, "consolidate: agent not found")`).
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/
+```
