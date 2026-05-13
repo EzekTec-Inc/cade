@@ -17,7 +17,12 @@ pub async fn log_tool_execution(
     let now = unix_ts();
     let output_str = body["output"].as_str().unwrap_or("");
     let output_chars = output_str.chars().count() as i64;
-    let conn = state.db.lock();
+    let conn = state.db.get().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "detail": e.to_string() })),
+        )
+    })?;
     let _ = conn.execute(
         "INSERT OR IGNORE INTO tool_executions
          (id, agent_id, conversation_id, tool_name, arguments_json, output, output_chars, is_error, duration_ms, created_at)
@@ -52,7 +57,7 @@ mod p8_output_chars_tests {
     fn fresh_db_has_output_chars_column() {
         // apply_schema runs in `open` and must include output_chars on a brand-new DB.
         let db = st::open(":memory:").unwrap();
-        let conn = db.lock();
+        let conn = db.get().unwrap();
         let cols: Vec<String> = conn
             .prepare("PRAGMA table_info(tool_executions)")
             .unwrap()
@@ -69,7 +74,7 @@ mod p8_output_chars_tests {
     #[test]
     fn insert_persists_output_chars_matching_chars_count() {
         let db = st::open(":memory:").unwrap();
-        let conn = db.lock();
+        let conn = db.get().unwrap();
         // Seed the parent agent for the FK.
         conn.execute(
             "INSERT INTO agents (id, name, model, system_prompt, created_at) VALUES ('a1','A','test','',0)",
@@ -98,7 +103,7 @@ mod p8_output_chars_tests {
     #[test]
     fn migration_backfills_output_chars_for_legacy_rows() {
         let db = st::open(":memory:").unwrap();
-        let conn = db.lock();
+        let conn = db.get().unwrap();
         // After open() the user_version must be >= 6 (the P8 migration).
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))

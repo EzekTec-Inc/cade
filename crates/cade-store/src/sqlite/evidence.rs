@@ -26,7 +26,7 @@ pub fn upsert_memory_block_typed(
 
     // Update typed columns (safe — ALTER TABLE already ran in migration 14)
     if memory_type.is_some() || confidence.is_some() {
-        let conn = db.lock();
+        let conn = db.get()?;
         if let Some(mt) = memory_type {
             let _ = conn.execute(
                 "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
@@ -62,7 +62,7 @@ pub fn insert_memory_evidence(
     excerpt: Option<&str>,
     confidence: f64,
 ) -> Result<String> {
-    let conn = db.lock();
+    let conn = db.get()?;
 
     // Find the block_id
     let block_id: Option<String> = conn
@@ -97,7 +97,7 @@ pub fn list_memory_evidence(
     agent_id: &str,
     label: &str,
 ) -> Result<Vec<(String, String, String, Option<String>, f64, i64)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT e.id, e.kind, e.reference, e.excerpt, e.confidence, e.created_at
          FROM memory_evidence e
@@ -131,7 +131,7 @@ pub fn insert_reflection_log(
     summary: &str,
     duration_ms: u128,
 ) -> Result<()> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "INSERT OR IGNORE INTO reflection_log
          (id, agent_id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at)
@@ -152,7 +152,7 @@ pub fn insert_reflection_log(
 
 /// List reflection log entries for an agent.
 pub fn list_reflection_log(db: &Db, agent_id: &str) -> Result<Vec<serde_json::Value>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at
          FROM reflection_log WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 50",
@@ -184,11 +184,7 @@ mod tests {
     use serde_json::json;
 
     fn setup_mem_db() -> Result<Db> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        apply_schema(&conn)?;
-        run_migrations(&conn)?;
-        Ok(Arc::new(Mutex::new(conn)))
+        Ok(super::open(":memory:")?)
     }
 
     #[test]
@@ -230,7 +226,7 @@ mod tests {
 
         // Find the block ID
         let block_id: String = {
-            let conn = db.lock();
+            let conn = db.get()?;
             conn.query_row(
                 "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
                 params![agent1],

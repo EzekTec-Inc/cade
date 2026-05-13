@@ -83,6 +83,7 @@ impl IntoResponse for Error {
 
                 // 5xx — internal, generic body + log correlation id.
                 StoreError::Sqlite(err) => internal_error_response(&format!("sqlite: {err}")),
+                StoreError::R2d2(err) => internal_error_response(&format!("db pool: {err}")),
                 StoreError::Io(err) => internal_error_response(&format!("io: {err}")),
                 StoreError::Crypto(err) => internal_error_response(&format!("crypto: {err}")),
                 StoreError::Core(err) => internal_error_response(&format!("core: {err}")),

@@ -27,7 +27,7 @@ pub fn recency_frequency_score(
 }
 
 pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "INSERT INTO tools (id, name, description, source_code, json_schema, tags, created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7)
@@ -50,7 +50,7 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
 }
 
 pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
-    let conn = db.lock();
+    let conn = db.get().ok()?;
     let mut stmt = conn.prepare("SELECT id FROM tools WHERE name = ?1").ok()?;
     stmt.query_row(params![name], |r| r.get::<_, String>(0))
         .ok()
@@ -59,7 +59,7 @@ pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
 /// Delete all messages for an agent (or a specific conversation).
 /// If conversation_id is None, deletes all messages for the agent.
 pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let n = if let Some(conv_id) = conversation_id {
         conn.execute(
             "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id = ?2",
@@ -102,7 +102,7 @@ pub fn has_compaction_marker(
     agent_id: &str,
     conversation_id: Option<&str>,
 ) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let count: i64 = if let Some(cid) = conversation_id {
         conn.query_row(
             "SELECT COUNT(*) FROM messages
@@ -136,7 +136,7 @@ pub fn search_messages(
     query: &str,
     conversation_id: Option<&str>,
 ) -> Result<Vec<MessageSearchResult>> {
-    let conn = db.lock();
+    let conn = db.get()?;
 
     // Build safe FTS5 query: wrap the whole phrase in double-quotes to handle
     // spaces and special chars; escape internal quotes.
@@ -232,7 +232,7 @@ pub fn search_memory(
     let current_turn = super::get_turn_counter(db, agent_id).unwrap_or(0);
 
     let mut results: Vec<(String, String, String)> = {
-        let conn = db.lock();
+        let conn = db.get()?;
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
 
         let mut scored: Vec<(f64, String, String, String)> = if let Some(mtype) = memory_type {
@@ -357,7 +357,7 @@ pub fn search_memory(
             .map(|w| w.to_lowercase())
             .collect();
         if !words.is_empty() {
-            let conn = db.lock();
+            let conn = db.get()?;
             let mut stmt_sql = String::from(
                 "SELECT b.label, b.value FROM shared_memory_blocks b JOIN agent_memory_blocks amb ON amb.block_id = b.id WHERE amb.agent_id = ?1",
             );
@@ -414,7 +414,7 @@ pub fn search_memory(
     }
 
     {
-        let conn = db.lock();
+        let conn = db.get()?;
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
 
         let chunk_hits: Vec<(String, String, String)> = if let Some(mtype) = memory_type {
@@ -517,7 +517,7 @@ pub fn search_memory_hybrid(
         return Ok(kw_results);
     }
     let sem_hits = {
-        let conn = db.lock();
+        let conn = db.get()?;
         super::embedding::search_memory_semantic(&conn, agent_id, &q_vec, memory_type, 10)?
     };
 
@@ -563,7 +563,7 @@ pub fn insert_archival_memory(
     content: &str,
     tags: &[String],
 ) -> Result<String> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let id = uuid::Uuid::new_v4().to_string();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -582,7 +582,7 @@ pub fn search_archival_memory(
     query: &str,
     limit: usize,
 ) -> Result<Vec<ArchivalRecord>> {
-    let conn = db.lock();
+    let conn = db.get()?;
 
     // FTS5 requires queries to be properly quoted to avoid syntax errors
     let fts_query = format!("\"{}\"", query.replace('\"', "\"\""));
@@ -657,7 +657,7 @@ pub fn pending_tool_results(
 }
 
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name",
     )?;
@@ -699,11 +699,7 @@ mod tests {
     use serde_json::json;
 
     fn setup_mem_db() -> Result<Db> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        apply_schema(&conn)?;
-        run_migrations(&conn)?;
-        Ok(Arc::new(Mutex::new(conn)))
+        Ok(super::open(":memory:")?)
     }
 
     fn make_agent(db: &Db, id: &str) -> Result<()> {

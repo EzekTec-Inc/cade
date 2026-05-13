@@ -177,7 +177,7 @@ impl StorageBackend for ServerStorageBackend {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
         let size_bytes = content.len() as i64;
 
-        let conn = self.state.db.lock();
+        let conn = self.state.db.get().map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         let result = conn.execute(
             "INSERT INTO artifacts (id, agent_id, run_id, tool_call_id, kind, content_type, data_text, metadata_json, size_bytes, created_at)
              VALUES (?1, ?2, NULL, NULL, ?3, 'text/plain', ?4, '{}', ?5, ?6)",
@@ -240,7 +240,7 @@ impl StorageBackend for ServerStorageBackend {
     async fn create_checkpoint(&self, agent_id: &str, _conversation_id: Option<&str>, _branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, _stash_ref: Option<&str>, _git_commit_hash: Option<&str>) -> Result<String> {
         let id = format!("cp-{}", uuid::Uuid::new_v4());
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-        let conn = self.state.db.lock();
+        let conn = self.state.db.get().map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         let result = conn.execute(
             "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_stash_ref, git_commit_hash, parent_id)
              VALUES (?1, ?2, NULL, 'main', ?3, ?4, ?5, NULL, NULL, NULL)",
@@ -254,7 +254,7 @@ impl StorageBackend for ServerStorageBackend {
     }
 
     async fn list_checkpoints(&self, agent_id: &str) -> Result<Vec<Value>> {
-        let conn = self.state.db.lock();
+        let conn = self.state.db.get().map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         let mut stmt = match conn.prepare(
             "SELECT id, label, description, created_at FROM checkpoints
              WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 200",
@@ -281,7 +281,7 @@ impl StorageBackend for ServerStorageBackend {
     }
 
     async fn get_checkpoint(&self, agent_id: &str, checkpoint_id: &str) -> Result<Value> {
-        let conn = self.state.db.lock();
+        let conn = self.state.db.get().map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         let mut stmt = conn.prepare("SELECT id, label, description, created_at, git_commit_hash, parent_id FROM checkpoints WHERE id = ?1 AND agent_id = ?2").unwrap();
         let row = stmt.query_row(rusqlite::params![checkpoint_id, agent_id], |r| {
             Ok(serde_json::json!({

@@ -12,6 +12,8 @@ pub enum Error {
     #[from]
     Sqlite(rusqlite::Error),
     #[from]
+    R2d2(r2d2::Error),
+    #[from]
     Io(std::io::Error),
     #[from]
     SerdeJson(serde_json::Error),

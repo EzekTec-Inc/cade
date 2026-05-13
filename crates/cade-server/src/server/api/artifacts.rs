@@ -41,7 +41,7 @@ pub async fn create_artifact(
         .unwrap_or_else(|| "{}".to_string());
     let size_bytes = body.data_text.as_deref().map(|s| s.len()).unwrap_or(0) as i64;
 
-    let conn = state.db.lock();
+    let conn = state.db.get().map_err(db_err)?;
     conn.execute(
         "INSERT INTO artifacts (id, agent_id, run_id, tool_call_id, kind, content_type, data_text, metadata_json, size_bytes, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -59,7 +59,7 @@ pub async fn list_artifacts(
     State(state): State<crate::server::state::AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock();
+    let conn = state.db.get().map_err(db_err)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, kind, content_type, size_bytes, created_at, run_id
@@ -88,7 +88,7 @@ pub async fn get_artifact_handler(
     State(state): State<crate::server::state::AppState>,
     Path((agent_id, art_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock();
+    let conn = state.db.get().map_err(db_err)?;
     let row = conn.query_row(
         "SELECT id, kind, content_type, data_text, metadata_json, size_bytes, created_at
          FROM artifacts WHERE id = ?1 AND agent_id = ?2",
@@ -111,7 +111,7 @@ pub async fn delete_artifact_handler(
     State(state): State<crate::server::state::AppState>,
     Path((agent_id, art_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock();
+    let conn = state.db.get().map_err(db_err)?;
     let n = conn
         .execute(
             "DELETE FROM artifacts WHERE id = ?1 AND agent_id = ?2",
@@ -132,7 +132,7 @@ fn unix_ts() -> i64 {
         .as_secs() as i64
 }
 
-fn db_err(e: rusqlite::Error) -> (StatusCode, Json<Value>) {
+fn db_err(e: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "detail": e.to_string() })),

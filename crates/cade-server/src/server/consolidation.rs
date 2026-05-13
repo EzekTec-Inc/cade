@@ -597,7 +597,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 
     if let Some(ref bid) = boundary_msg_id {
         let marker_ts = {
-            let conn = state.db.lock();
+            let Ok(conn) = state.db.get() else {
+                tracing::warn!("consolidate_agent: pool get failed; skipping marker");
+                return;
+            };
             conn.query_row(
                 "SELECT created_at FROM messages WHERE id = ?1",
                 rusqlite::params![bid],
@@ -629,7 +632,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 
         // Insert with the boundary timestamp so ordering is correct.
         {
-            let conn = state.db.lock();
+            let Ok(conn) = state.db.get() else {
+                tracing::warn!("consolidate_agent: pool get failed; skipping marker insert");
+                return;
+            };
             let _ = conn.execute(
                 "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

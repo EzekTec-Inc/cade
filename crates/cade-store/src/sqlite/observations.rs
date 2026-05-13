@@ -47,7 +47,7 @@ pub fn insert_observation(
     importance: i64,
 ) -> Result<String> {
     let id = format!("obs-{}", uuid::Uuid::new_v4());
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "INSERT INTO observations (id, agent_id, turn, tool_name, observation_type, summary, files, concepts, importance, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -66,7 +66,7 @@ pub fn get_recent_observations(
     agent_id: &str,
     limit: usize,
 ) -> Result<Vec<ObservationRow>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, turn, tool_name, observation_type, summary, files, concepts, importance, created_at
          FROM observations
@@ -100,7 +100,7 @@ pub fn get_important_observations(
     min_importance: i64,
     limit: usize,
 ) -> Result<Vec<ObservationRow>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, turn, tool_name, observation_type, summary, files, concepts, importance, created_at
          FROM observations
@@ -127,7 +127,7 @@ pub fn get_important_observations(
 
 /// Delete observations older than `max_turn` to prevent unbounded growth.
 pub fn prune_old_observations(db: &Db, agent_id: &str, max_turn: i64) -> Result<usize> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let deleted = conn.execute(
         "DELETE FROM observations WHERE agent_id = ?1 AND turn < ?2",
         params![agent_id, max_turn],
@@ -205,11 +205,7 @@ mod tests {
     use super::*;
 
     fn setup_db() -> Result<Db> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        apply_schema(&conn)?;
-        run_migrations(&conn)?;
-        Ok(Arc::new(Mutex::new(conn)))
+        super::open(":memory:")
     }
 
     #[test]

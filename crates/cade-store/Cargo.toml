@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default         = ["bundled-sqlite"]
-bundled-sqlite  = ["rusqlite/bundled"]
+bundled-sqlite  = ["rusqlite/bundled", "r2d2_sqlite/bundled"]
 # WI-SEMANTIC: opt-in. Default build does NOT pull fastembed/sqlite-vec.
 semantic-search = ["dep:fastembed", "dep:sqlite-vec"]
 
@@ -20,7 +20,8 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 rusqlite = { workspace = true }
-parking_lot = { workspace = true }
+r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
 chrono = { workspace = true }
 aes-gcm = { workspace = true }
 hmac = { workspace = true }

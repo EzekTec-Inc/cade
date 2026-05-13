@@ -4,11 +4,8 @@ type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
 use super::*;
 
 fn setup_mem_db() -> Result<Db> {
-    let conn = Connection::open_in_memory()?;
-    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-    apply_schema(&conn)?;
-    run_migrations(&conn)?;
-    Ok(Arc::new(Mutex::new(conn)))
+    let db = super::super::open(":memory:")?;
+    Ok(db)
 }
 
 fn make_agent(db: &Db, id: &str) -> Result<()> {
@@ -401,11 +398,7 @@ fn survival_active_goal_persists_across_reopen() -> Result<()> {
 
     // -- Session 1: seed the block
     {
-        let conn = Connection::open(&path)?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        apply_schema(&conn)?;
-        run_migrations(&conn)?;
-        let db = Arc::new(Mutex::new(conn));
+        let db = super::super::open(path.to_str().unwrap())?;
         make_agent(&db, "survivor")?;
 
         let task = "Current task: implement Phase B.\n\
@@ -427,11 +420,7 @@ fn survival_active_goal_persists_across_reopen() -> Result<()> {
     } // Db dropped — mimics process exit
 
     // -- Session 2: reopen the same file
-    let conn = Connection::open(&path)?;
-    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-    apply_schema(&conn)?;
-    run_migrations(&conn)?;
-    let db = Arc::new(Mutex::new(conn));
+    let db = super::super::open(path.to_str().unwrap())?;
 
     let blocks = get_memory_blocks(&db, "survivor")?;
     let ws = blocks
@@ -1191,7 +1180,7 @@ fn f7_bump_block_access_increments_count_and_stamp() -> Result<()> {
     bump_block_access(&db, "a1", &["tracked"]);
 
     // Read back access_count + last_access_turn directly.
-    let conn = db.lock();
+    let conn = db.get()?;
     let (count, stamp): (i64, i64) = conn.query_row(
         "SELECT access_count, last_access_turn
          FROM shared_memory_blocks b
@@ -1286,7 +1275,7 @@ fn f7_access_bump_is_scoped_to_agent() -> Result<()> {
     bump_block_access(&db, "a1", &["shared_label"]);
     bump_block_access(&db, "a1", &["shared_label"]);
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let a1_count: i64 = conn.query_row(
         "SELECT access_count FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -1370,7 +1359,7 @@ fn extract_keywords_returns_distinctive_terms() -> Result<()> {
 #[test]
 fn memory_blocks_fts_exists_after_migration() -> Result<()> {
     let db = setup_mem_db()?;
-    let conn = db.lock();
+    let conn = db.get()?;
     // Virtual table is registered in sqlite_master with type='table'
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_blocks_fts'",
@@ -1397,7 +1386,7 @@ fn memory_blocks_fts_indexes_upserted_blocks() -> Result<()> {
         None,
     )?;
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let hits: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_blocks_fts WHERE memory_blocks_fts MATCH ?1",
         rusqlite::params!["mutex"],
@@ -1424,7 +1413,7 @@ fn search_memory_blocks_fts_returns_memory_hits_not_messages() -> Result<()> {
         None,
     )?;
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let hits = search_memory_blocks_fts(&conn, "a1", "parking_lot", 10)?;
     assert!(
         !hits.is_empty(),
@@ -1441,7 +1430,7 @@ fn search_memory_blocks_fts_returns_memory_hits_not_messages() -> Result<()> {
 #[test]
 fn shared_memory_blocks_has_embedding_column() -> Result<()> {
     let db = setup_mem_db()?;
-    let conn = db.lock();
+    let conn = db.get()?;
     // PRAGMA table_info returns one row per column with name in col 1.
     let mut stmt = conn.prepare("PRAGMA table_info(shared_memory_blocks)")?;
     let cols: Vec<String> = stmt
@@ -1483,7 +1472,7 @@ fn upsert_with_embedder_writes_blob() -> Result<()> {
         Some(&FakeEmbedder),
     )?;
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let blob: Option<Vec<u8>> = conn.query_row(
         "SELECT b.embedding FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -1525,7 +1514,7 @@ fn upsert_with_none_embedder_leaves_embedding_null() -> Result<()> {
         None::<&dyn Embedder>,
     )?;
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let blob: Option<Vec<u8>> = conn.query_row(
         "SELECT b.embedding FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -1561,7 +1550,7 @@ fn backfill_embeddings_populates_null_rows() -> Result<()> {
 
     // Sanity: both NULL before backfill.
     {
-        let conn = db.lock();
+        let conn = db.get()?;
         let null_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM shared_memory_blocks WHERE embedding IS NULL",
             [],
@@ -1573,7 +1562,7 @@ fn backfill_embeddings_populates_null_rows() -> Result<()> {
     let processed = backfill_embeddings(&db, &OneEmbedder)?;
     assert_eq!(processed, 2, "backfill must process both NULL rows");
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let null_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM shared_memory_blocks WHERE embedding IS NULL",
         [],
@@ -1652,7 +1641,7 @@ fn search_memory_semantic_ranks_by_cosine_similarity() -> Result<()> {
 
     // Query "a"-direction — should rank `alpha` first.
     let q = LetterEmbedder.embed("alpha query")?;
-    let conn = db.lock();
+    let conn = db.get()?;
     let hits = search_memory_semantic(&conn, "a1", &q, None, 10)?;
     assert!(!hits.is_empty(), "semantic search returned no rows");
 
@@ -1682,7 +1671,7 @@ fn search_memory_semantic_skips_null_embedding_rows() -> Result<()> {
     }
 
     let q = ZeroEmbedder.embed("anything")?;
-    let conn = db.lock();
+    let conn = db.get()?;
     let hits = search_memory_semantic(&conn, "a1", &q, None, 10)?;
     assert!(
         hits.is_empty(),
@@ -1861,7 +1850,7 @@ fn test_a3_stamp_provenance_sets_columns() -> Result<()> {
     );
 
     // Verify columns
-    let conn = db.lock();
+    let conn = db.get()?;
     let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
         "SELECT b.source_turn, b.source_te_id
          FROM shared_memory_blocks b
@@ -1895,7 +1884,7 @@ fn test_a3_stamp_provenance_coalesce_preserves_existing() -> Result<()> {
     // Second stamp with only turn — should not overwrite tc_id
     stamp_provenance(&db, "a1", "fact2", Some(20), None, None, None);
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
         "SELECT b.source_turn, b.source_te_id
          FROM shared_memory_blocks b
@@ -1923,7 +1912,7 @@ fn test_a3_stamp_provenance_noop_when_both_none() -> Result<()> {
     // Stamp with both None — should be a no-op
     stamp_provenance(&db, "a1", "fact3", None, None, None, None);
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let (turn, tc_id): (Option<i64>, Option<String>) = conn.query_row(
         "SELECT b.source_turn, b.source_te_id
          FROM shared_memory_blocks b
@@ -2029,7 +2018,7 @@ fn test_a5_rechunk_block_stores_chunks() -> Result<()> {
     rechunk_block(&db, "a1", "big_block", &big_value, None);
 
     // Verify chunks exist.
-    let conn = db.lock();
+    let conn = db.get()?;
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_chunks mc
          JOIN shared_memory_blocks b ON b.id = mc.block_id
@@ -2053,7 +2042,7 @@ fn test_a5_rechunk_block_skips_small_blocks() -> Result<()> {
     upsert_memory_block(&db, "a1", "tiny", "hello", None, None)?;
     rechunk_block(&db, "a1", "tiny", "hello", None);
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_chunks mc
          JOIN shared_memory_blocks b ON b.id = mc.block_id
@@ -2077,7 +2066,7 @@ fn test_a5_rechunk_replaces_old_chunks() -> Result<()> {
     upsert_memory_block(&db, "a1", "evolving", &big1, None, None)?;
     rechunk_block(&db, "a1", "evolving", &big1, None);
 
-    let conn = db.lock();
+    let conn = db.get()?;
     let count1: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_chunks mc
          JOIN shared_memory_blocks b ON b.id = mc.block_id
@@ -2095,7 +2084,7 @@ fn test_a5_rechunk_replaces_old_chunks() -> Result<()> {
     upsert_memory_block(&db, "a1", "evolving", &big2, None, None)?;
     rechunk_block(&db, "a1", "evolving", &big2, None);
 
-    let conn = db.lock();
+    let conn = db.get()?;
     // Verify no leftover Version1 chunks.
     let v1_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM memory_chunks mc

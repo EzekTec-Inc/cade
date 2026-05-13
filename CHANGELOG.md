@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+### Changed
+
+#### Connection pooling (P0-B)
+- Replaced `Db = Arc<parking_lot::Mutex<rusqlite::Connection>>` with `Db = r2d2::Pool<SqliteConnectionManager>` for real concurrent reads/writes through a managed pool
+- Added `r2d2` 0.8 and `r2d2_sqlite` 0.24 as workspace dependencies (rusqlite 0.31 compatible); `bundled-sqlite` feature now also drives `r2d2_sqlite/bundled`
+- Pool defaults: `max_size = 8` for file-backed databases, `max_size = 1` for `:memory:` (so all callers share the same DB), `connection_timeout = 30s`
+- Per-connection `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;` is now applied through `SqliteConnectionManager::with_init`, so every pooled connection gets the same setup — not only the first one
+- Added `cade_store::Error::R2d2(r2d2::Error)` variant; the cade-server `IntoResponse for Error` maps it to a 5xx response
+- All 180 `db.lock()` / `state.db.lock()` / `self.state.db.lock()` call sites across 21 files migrated to `db.get()` (fallible) — most propagate via `?`, four infallible memory helpers (`bump_block_access`, `recall_chunks`, `rechunk_block`, `stamp_provenance`) log + early-return on pool errors, and `get_tool_id_by_name` uses `db.get().ok()?`
+- Removed direct `parking_lot` dependency from cade-store (still transitively used elsewhere)
+
 ### Added
 
 #### Semantic Memory Search

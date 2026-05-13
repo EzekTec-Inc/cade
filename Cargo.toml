@@ -92,6 +92,8 @@ arboard        = "3"
 axum           = { version = "0.7", features = ["macros"] }
 tower-http     = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
 rusqlite       = { version = "0.31" }
+r2d2           = "0.8"
+r2d2_sqlite    = "0.24"
 
 # Embeddings (feature-gated in cade-store)
 fastembed      = "4"

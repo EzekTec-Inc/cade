@@ -267,28 +267,20 @@ async fn subagent_run_does_not_pollute_parent_db() {
     let state = build_state_with_llm(llm_dyn);
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
-    let agents_before: i64 = state
-        .db
-        .lock()
+    let agents_before: i64 = state.db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
-    let messages_before: i64 = state
-        .db
-        .lock()
+    let messages_before: i64 = state.db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
         .unwrap();
 
     let args = serde_json::json!({ "prompt": "do thing" });
     let _ = handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
 
-    let agents_after: i64 = state
-        .db
-        .lock()
+    let agents_after: i64 = state.db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
-    let messages_after: i64 = state
-        .db
-        .lock()
+    let messages_after: i64 = state.db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
         .unwrap();
 
@@ -494,9 +486,7 @@ async fn subagent_loop_respects_wall_clock_timeout() {
     let state = build_state_with_llm(llm);
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
-    let agents_before: i64 = state
-        .db
-        .lock()
+    let agents_before: i64 = state.db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
 
@@ -519,9 +509,7 @@ async fn subagent_loop_respects_wall_clock_timeout() {
     );
 
     // Ephemeral row must be cleaned up (REC-2 guard fires on timeout path).
-    let agents_after: i64 = state
-        .db
-        .lock()
+    let agents_after: i64 = state.db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
     assert_eq!(

@@ -3,7 +3,7 @@ use super::*;
 pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<ConversationRow> {
     let id = format!("conv-{}", uuid::Uuid::new_v4());
     let ts = now_ts();
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "INSERT INTO conversations (id, agent_id, title, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -20,7 +20,7 @@ pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<Conve
 }
 
 pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
@@ -45,7 +45,7 @@ pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow
 }
 
 pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
@@ -69,7 +69,7 @@ pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow
 }
 
 pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     // CASCADE deletes the messages too
     let n = conn.execute("DELETE FROM conversations WHERE id = ?1", params![conv_id])?;
     // Also clean up orphaned messages (fallback for rows without FK enforcement)
@@ -82,7 +82,7 @@ pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
 
 /// Update the conversation's title and bump updated_at.
 pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<()> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
         params![title, now_ts(), conv_id],
@@ -92,7 +92,7 @@ pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<
 
 /// Touch updated_at (called when a new message is added to a conversation).
 pub fn touch_conversation(db: &Db, conv_id: &str) -> Result<()> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
         params![now_ts(), conv_id],
@@ -122,11 +122,7 @@ mod tests {
     use super::*;
 
     fn setup_mem_db() -> Result<Db> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        apply_schema(&conn)?;
-        run_migrations(&conn)?;
-        Ok(Arc::new(Mutex::new(conn)))
+        Ok(super::open(":memory:")?)
     }
 
     fn make_agent(db: &Db, id: &str) -> Result<()> {

@@ -376,9 +376,7 @@ mod tests {
         .await;
 
         // Verify zero messages were persisted
-        let count: i64 = state
-            .db
-            .lock()
+        let count: i64 = state.db.get().unwrap()
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         assert_eq!(

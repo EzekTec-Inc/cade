@@ -131,7 +131,7 @@ pub async fn update_block(
     let ts = chrono::Utc::now().timestamp();
 
     {
-        let conn = state.db.lock();
+        let conn = state.db.get().map_err(|e| server_err(e.to_string()))?;
         conn.execute(
             "UPDATE shared_memory_blocks
              SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4

@@ -10,8 +10,7 @@ use tower::ServiceExt; // for `oneshot`
 /// Build a minimal AppState for middleware tests.
 /// `api_key` controls the auth token configured on the server.
 fn make_state(api_key: Option<String>) -> AppState {
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
-    let db = Arc::new(parking_lot::Mutex::new(conn));
+    let db = cade_store::sqlite::open(":memory:").unwrap();
 
     let config = Arc::new(crate::server::config::ServerConfig {
         addr: "127.0.0.1:0".parse().unwrap(),

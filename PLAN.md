@@ -1,3 +1,47 @@
+## 2026-05-13T18:05:00Z — refactor(store): replace Arc<Mutex<Connection>> with r2d2 connection pool (P0-B)
+
+**Task:** Implement code-review P0-B: replace the single-mutex `Db = Arc<parking_lot::Mutex<Connection>>` with an `r2d2`-managed connection pool so concurrent handlers no longer serialise on a single SQLite handle. User selected "Full migration" with "Propagate as Result" error handling.
+
+**Files modified (29):**
+- `Cargo.toml` — added `r2d2 = "0.8"` and `r2d2_sqlite = "0.24"` workspace deps
+- `crates/cade-store/Cargo.toml` — added `r2d2` + `r2d2_sqlite` deps; dropped direct `parking_lot` dep; extended `bundled-sqlite` feature to enable `r2d2_sqlite/bundled`
+- `crates/cade-store/src/error.rs` — added `Error::R2d2(r2d2::Error)` variant with `#[from]`
+- `crates/cade-store/src/sqlite/mod.rs` — replaced `Db` type alias with `Pool<SqliteConnectionManager>`, rewrote `open()` to build a pool (max 8 connections for file-backed, 1 for `:memory:`), 30s connection timeout, `with_init` to apply `journal_mode=WAL` + `foreign_keys=ON` on every connection
+- `crates/cade-store/src/sqlite/memory.rs` — 49 sites; `auto_type_block_if_untyped` now takes `&rusqlite::Connection` instead of `&MutexGuard<Connection>`; 4 infallible helpers (`bump_block_access`, `recall_chunks`, `rechunk_block`, `stamp_provenance`) log + early-return on pool failure
+- `crates/cade-store/src/sqlite/tools.rs` — 9 sites; `get_tool_id_by_name` uses `db.get().ok()?` (returns `Option`)
+- `crates/cade-store/src/sqlite/{agents,conversations,evidence,messages,providers,runs,observations,event_log,embedding,skills}.rs` — every `db.lock()` → `db.get()?`; test fixtures `setup_mem_db()` now delegate to `super::open(":memory:")`
+- `crates/cade-store/src/sqlite/memory/tests.rs` — `setup_mem_db` + 2 cross-process tests use `super::super::open(...)` instead of manually wrapping `Arc::new(Mutex::new(conn))`
+- `crates/cade-server/src/server/error.rs` — match arm for `StoreError::R2d2` → `internal_error_response`
+- `crates/cade-server/src/server/api/{artifacts,checkpoints,evals}.rs` — `db_err(e: rusqlite::Error)` generalised to `db_err(e: impl std::fmt::Display)`; sites use `.map_err(db_err)?`
+- `crates/cade-server/src/server/api/blocks.rs` — `.map_err(|e| server_err(e.to_string()))?`
+- `crates/cade-server/src/server/api/tool_executions.rs` — inline 500 mapping for pool errors
+- `crates/cade-server/src/server/api/run/storage_impl.rs` — `.map_err(|e| cade_agent::Error::custom(e.to_string()))?`
+- `crates/cade-server/src/server/consolidation.rs` — 2 sites use `let Ok(conn) = state.db.get() else { return; }` (the function is `async fn ... -> ()` and already silently logs)
+- `crates/cade-server/src/server/api/{dashboard,router,auth}_test.rs` — replaced manual `Arc::new(parking_lot::Mutex::new(Connection::open_in_memory()))` with `cade_store::sqlite::open(":memory:").unwrap()`
+- `crates/cade-server/src/server/api/{complete,messages/tests,run/tests}.rs` — multi-line `state.db\n    .lock()` patterns rewritten to `state.db.get().unwrap()` for test contexts
+
+**Previous behavior:**
+- One global `parking_lot::Mutex` around the single `Connection` — every read/write serialised through that mutex even for read-only paths
+- `apply_schema` + `run_migrations` + PRAGMAs were applied to only the one connection ever created
+- `db.lock()` was infallible (returned `MutexGuard`); call-site signatures were correspondingly simpler
+
+**New behavior:**
+- Up to 8 concurrent connections per file-backed DB (1 for `:memory:` to preserve single-DB semantics in tests); per-connection PRAGMAs ensure every checked-out connection has WAL + foreign keys on
+- `db.get()` is fallible (`r2d2::Error`); most call sites propagate via `?`; the four infallible memory helpers log a warning/trace and return a zero-value (`()`, `Vec::new()`, `None`) on pool failure
+- `Db = Pool<SqliteConnectionManager>` derefs are still ergonomic — `pool.get()?.execute(...)` reads identically to the old `db.lock().execute(...)`
+- Pool exhaustion / `connection_timeout` failures surface as `Error::R2d2`, which the server maps to a 500 with a generic body + correlation id
+
+**Dependency policy:** New deps `r2d2 = "0.8"` (MIT/Apache-2.0, sfackler) and `r2d2_sqlite = "0.24"` (MIT, ivanceras). Both are mature, widely-used SQLite pooling crates with `rusqlite 0.31` compatibility confirmed via probe build. User approved.
+
+**Test results:** 1486 passed, 0 failed across the workspace. `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+**Rollback steps:**
+```sh
+git checkout cp-65cce5d8  # checkpoint before-p0b-r2d2-pool
+```
+
+---
+
 ## 2026-05-07T14:30:00Z — fix(subagent): Implement REC-1, REC-2, REC-3 audit recommendations
 
 **Task:** Implement the three P1–P2 recommendations from the subagent system audit: wall-clock timeout (REC-1), ephemeral row cleanup guard (REC-2), and cascading write-back prefix filter (REC-3).

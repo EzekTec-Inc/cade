@@ -1,8 +1,9 @@
 use crate::error::Result;
-use parking_lot::Mutex;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
-use std::sync::Arc;
+use std::time::Duration;
 
 // -- Provider row
 
@@ -15,24 +16,69 @@ pub struct ProviderRow {
     pub enabled: bool,
 }
 
-/// Thread-safe SQLite handle
-pub type Db = Arc<Mutex<Connection>>;
+/// Thread-safe SQLite handle backed by an r2d2 connection pool.
+///
+/// Each call to [`Db::get`] checks out an idle [`Connection`] from the pool
+/// or, if all are in use, waits up to `connection_timeout` (default 30s).
+/// Connections are returned to the pool when their `PooledConnection` is dropped.
+///
+/// Migration note: previously this was `Arc<Mutex<Connection>>` with an
+/// infallible `lock()` helper. The new API is `db.get()?` and is fallible
+/// (pool exhaustion / connection timeout surface as an error).
+pub type Db = Pool<SqliteConnectionManager>;
 
+/// Maximum pool size for file-backed databases.
+const DEFAULT_MAX_POOL_SIZE: u32 = 8;
+
+/// Connection timeout when checking out from the pool.
+const POOL_CONNECTION_TIMEOUT_SECS: u64 = 30;
+
+/// Open a SQLite database and return a pooled handle.
+///
+/// `path` may be a filesystem path or the special string `":memory:"`. For
+/// in-memory databases the pool is restricted to a single connection so all
+/// callers share the same database (otherwise each fresh connection would
+/// produce an isolated, empty DB).
+///
+/// On the first connection the `apply_schema` + `run_migrations` routines
+/// run. Every subsequent connection produced by the pool is initialised with
+/// `PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`.
 pub fn open(path: &str) -> Result<Db> {
-    // Register sqlite-vec extension (no-op if feature disabled or already done).
-    // embedding::register_sqlite_vec();
-
     if let Some(parent) = std::path::Path::new(path).parent()
         && !parent.as_os_str().is_empty()
+        && path != ":memory:"
     {
         std::fs::create_dir_all(parent)?;
     }
-    let conn = Connection::open(path)
-        .map_err(|e| crate::error::Error::custom(format!("open SQLite at {path}: {e}")))?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-    apply_schema(&conn)?;
-    run_migrations(&conn)?;
-    Ok(Arc::new(Mutex::new(conn)))
+
+    let in_memory = path == ":memory:";
+    let manager = if in_memory {
+        SqliteConnectionManager::memory()
+    } else {
+        SqliteConnectionManager::file(path)
+    }
+    .with_init(|c| {
+        // Applied to every connection handed out by the pool.
+        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+    });
+
+    let max_size = if in_memory { 1 } else { DEFAULT_MAX_POOL_SIZE };
+    let pool = Pool::builder()
+        .max_size(max_size)
+        .connection_timeout(Duration::from_secs(POOL_CONNECTION_TIMEOUT_SECS))
+        .build(manager)
+        .map_err(|e| crate::error::Error::custom(format!("build SQLite pool at {path}: {e}")))?;
+
+    // Run schema + migrations once on a freshly checked-out connection.
+    {
+        let conn = pool
+            .get()
+            .map_err(|e| crate::error::Error::custom(format!("get conn at {path}: {e}")))?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+    }
+
+    Ok(pool)
 }
 
 /// Apply initial schema or update existing ones.

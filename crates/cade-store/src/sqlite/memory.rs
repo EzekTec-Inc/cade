@@ -35,7 +35,7 @@ pub fn create_standalone_block(
     description: Option<&str>,
     max_chars: Option<usize>,
 ) -> Result<String> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let id = uuid::Uuid::new_v4().to_string();
     let ts = now_ts();
     conn.execute(
@@ -48,7 +48,7 @@ pub fn create_standalone_block(
 
 /// Fetch a block by its primary-key ID, regardless of agent attachment.
 pub fn get_block_by_id(db: &Db, block_id: &str) -> Result<Option<BlockInfo>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.query_row(
         "SELECT id, label, value, description, tier, max_chars, updated_at
          FROM shared_memory_blocks WHERE id = ?1",
@@ -74,7 +74,7 @@ pub fn get_block_by_id(db: &Db, block_id: &str) -> Result<Option<BlockInfo>> {
 /// List all blocks in the system. Optional exact-match label filter.
 /// Ordered by updated_at DESC.
 pub fn list_all_blocks(db: &Db, label_filter: Option<&str>) -> Result<Vec<BlockInfo>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     if let Some(label) = label_filter {
         let mut stmt = conn.prepare(
             "SELECT id, label, value, description, tier, max_chars, updated_at
@@ -95,7 +95,7 @@ pub fn list_all_blocks(db: &Db, label_filter: Option<&str>) -> Result<Vec<BlockI
 /// Permanently delete a block from the system. FK CASCADE removes all
 /// agent_memory_blocks junction rows automatically.
 pub fn delete_block_permanently(db: &Db, block_id: &str) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let n = conn.execute(
         "DELETE FROM shared_memory_blocks WHERE id = ?1",
         params![block_id],
@@ -106,7 +106,7 @@ pub fn delete_block_permanently(db: &Db, block_id: &str) -> Result<bool> {
 /// Remove the link between an agent and a block (by block_id).
 /// Does NOT delete the block itself.
 pub fn unlink_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let n = conn.execute(
         "DELETE FROM agent_memory_blocks WHERE agent_id = ?1 AND block_id = ?2",
         params![agent_id, block_id],
@@ -116,7 +116,7 @@ pub fn unlink_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Re
 
 /// Return the list of agent IDs that have this block attached.
 pub fn list_agents_for_block(db: &Db, block_id: &str) -> Result<Vec<String>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT agent_id FROM agent_memory_blocks WHERE block_id = ?1 ORDER BY agent_id",
     )?;
@@ -130,7 +130,7 @@ pub fn get_memory_blocks_with_provenance(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String, f64)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.memory_type, b.confidence 
          FROM shared_memory_blocks b
@@ -156,7 +156,7 @@ pub fn get_memory_blocks_with_ids(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.id, b.label, b.value, b.description FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -253,7 +253,7 @@ pub fn upsert_memory_block(
     description: Option<&str>,
     max_chars: Option<usize>,
 ) -> Result<WriteResult> {
-    let conn = db.lock();
+    let conn = db.get()?;
 
     // Fetch existing block linked to this agent with this label
     let existing: Option<(String, String, Option<usize>)> = conn
@@ -438,7 +438,7 @@ pub fn upsert_memory_block_with_embedder(
             for f in &vec {
                 bytes.extend_from_slice(&f.to_le_bytes());
             }
-            let conn = db.lock();
+            let conn = db.get()?;
             // Resolve the block id via the agent ↔ block link, then update.
             conn.execute(
                 "UPDATE shared_memory_blocks
@@ -456,7 +456,7 @@ pub fn upsert_memory_block_with_embedder(
 
 /// Link an existing shared memory block to an agent.
 pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<()> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "INSERT OR IGNORE INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
         params![agent_id, block_id],
@@ -482,7 +482,13 @@ pub fn stamp_provenance(
     {
         return;
     }
-    let conn = db.lock();
+    let conn = match db.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::trace!("stamp_provenance [{agent_id}/{label}]: pool get failed: {e}");
+            return;
+        }
+    };
     let _ = conn.execute(
         "UPDATE shared_memory_blocks
          SET source_turn = COALESCE(?1, source_turn),
@@ -607,7 +613,13 @@ pub fn rechunk_block(
     value: &str,
     embedder: Option<&dyn crate::sqlite::embedding::Embedder>,
 ) {
-    let conn = db.lock();
+    let conn = match db.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("rechunk_block [{agent_id}/{label}]: pool get failed: {e}");
+            return;
+        }
+    };
 
     // Resolve block_id.
     let block_id: Option<String> = conn
@@ -701,9 +713,13 @@ pub fn recall_chunks(db: &Db, agent_id: &str, query: &str, limit: usize) -> Vec<
         return Vec::new();
     }
 
-    let conn = db.lock();
-
-    // Build OR clauses for keyword matching.
+    let conn = match db.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("recall_chunks [{agent_id}]: pool get failed: {e}");
+            return Vec::new();
+        }
+    };
     let conditions: Vec<String> = words
         .iter()
         .enumerate()
@@ -761,7 +777,7 @@ pub fn recall_chunks(db: &Db, agent_id: &str, query: &str, limit: usize) -> Vec<
 }
 
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     // We only remove the link, not the shared block itself (to avoid orphan issues if shared)
     // Actually, CADE docs imply it's removed from the agent's view.
     let n = conn.execute(
@@ -783,7 +799,7 @@ pub const CONFIDENCE_BOOST_PER_HIT: f64 = 0.15;
 
 /// Increment the confidence score for a memory block (called on search hit).
 pub fn boost_confidence(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let n = conn.execute(
         "UPDATE shared_memory_blocks
          SET confidence = confidence + ?1
@@ -796,7 +812,7 @@ pub fn boost_confidence(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
 
 /// Read the current confidence value for a memory block (used in tests).
 pub fn get_block_confidence(db: &Db, agent_id: &str, label: &str) -> Result<f64> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let confidence: f64 = conn.query_row(
         "SELECT b.confidence FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -824,10 +840,7 @@ const AUTO_TYPE_CONFIDENCE_BOOST: f64 = 1.35;
 ///   2. Contains "must"/"always"/"never"/"rule"/"mandatory" → `constraint`
 ///   3. Contains "convention"/"pattern"/"style"/"naming" + file path → `convention`
 ///   4. Contains "user prefers"/"user wants"/"user likes" → `user_pref`
-fn auto_type_block_if_untyped(
-    conn: &parking_lot::MutexGuard<'_, rusqlite::Connection>,
-    label: &str,
-) {
+fn auto_type_block_if_untyped(conn: &rusqlite::Connection, label: &str) {
     // Read current memory_type + value
     let row: Option<(Option<String>, String)> = conn
         .query_row(
@@ -890,7 +903,7 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 
 /// Returns (label, value, description) tuples ordered by label.
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -912,7 +925,7 @@ pub fn get_memory_blocks_with_ts(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, i64)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.updated_at FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -934,7 +947,7 @@ pub fn get_memory_blocks_with_ts(
 /// Increment the agent's user-message turn counter and return the new value.
 /// Call once per non-tool-return message (never for tool result turns).
 pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db.lock();
+    let conn = db.get()?;
     conn.execute(
         "UPDATE agents SET memory_turn_counter = memory_turn_counter + 1 WHERE id = ?1",
         params![agent_id],
@@ -951,7 +964,7 @@ pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
 
 /// Read the current turn counter without incrementing.
 pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let n: i64 = conn
         .query_row(
             "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
@@ -980,7 +993,13 @@ pub fn bump_block_access(db: &Db, agent_id: &str, labels: &[&str]) {
         return;
     }
     let current_turn = get_turn_counter(db, agent_id).unwrap_or(0);
-    let conn = db.lock();
+    let conn = match db.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::trace!("bump_block_access [{agent_id}]: pool get failed: {e}");
+            return;
+        }
+    };
     for label in labels {
         let res = conn.execute(
             "UPDATE shared_memory_blocks
@@ -1005,7 +1024,7 @@ pub fn decay_stale_memories(
     current_turn: i64,
     idle_threshold: i64,
 ) -> Result<usize> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let n = conn.execute(
         "UPDATE shared_memory_blocks 
          SET confidence = MAX(0.1, confidence * 0.95)
@@ -1044,7 +1063,7 @@ pub fn promote_stale_blocks(
     current_turn: i64,
     threshold: i64,
 ) -> Result<u64> {
-    let conn = db.lock();
+    let conn = db.get()?;
     // Per-row threshold = base × (1 + min(access_count, 10) × 0.20)
     // Implemented in SQL as base * (5 + MIN(access_count, 10)) / 5 so we stay
     // in integer arithmetic and avoid round-off surprises across SQLite versions.
@@ -1074,7 +1093,7 @@ pub fn get_active_blocks(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String, i64)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier, b.last_turn
          FROM shared_memory_blocks b
@@ -1102,7 +1121,7 @@ pub fn get_long_term_excerpts(
     agent_id: &str,
     current_turn: i64,
 ) -> Result<Vec<LongTermExcerpt>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.last_turn
          FROM shared_memory_blocks b
@@ -1146,7 +1165,7 @@ pub fn set_memory_tier(
     tier: &str,
     reset_turn: bool,
 ) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let current_turn: i64 = conn
         .query_row(
             "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
@@ -1285,7 +1304,7 @@ pub fn get_memory_blocks_full(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier
          FROM shared_memory_blocks b
@@ -1312,7 +1331,7 @@ pub fn get_memory_history(
     label: &str,
     limit: usize,
 ) -> Result<Vec<(String, String, i64)>> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let block_id: Option<String> = conn
         .query_row(
             "SELECT b.id FROM shared_memory_blocks b
@@ -1346,7 +1365,7 @@ pub fn restore_memory_from_history(
     label: &str,
     hist_id: &str,
 ) -> Result<bool> {
-    let conn = db.lock();
+    let conn = db.get()?;
     let block_id: Option<String> = conn
         .query_row(
             "SELECT b.id FROM shared_memory_blocks b
@@ -1518,7 +1537,7 @@ pub fn export_memory_to_rag_dir(
     // We read the archival_memory FTS5 virtual table directly — no existing
     // helper lists all rows for an agent, and we don't want one in the hot
     // path. Expected volume here is small-ish (hundreds to low thousands).
-    let conn = db.lock();
+    let conn = db.get()?;
     let mut stmt = conn
         .prepare("SELECT id, content, tags, created_at FROM archival_memory WHERE agent_id = ?1")?;
     let rows = stmt.query_map(params![agent_id], |row| {

@@ -147,7 +147,7 @@ pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<us
     // Snapshot the (id, value) pairs under a short-lived lock so we don't
     // hold the connection while running CPU-bound embedding work.
     let pending: Vec<(String, String)> = {
-        let conn = db.lock();
+        let conn = db.get()?;
         let mut stmt =
             conn.prepare("SELECT id, value FROM shared_memory_blocks WHERE embedding IS NULL")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -175,7 +175,7 @@ pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<us
         for f in &vec {
             bytes.extend_from_slice(&f.to_le_bytes());
         }
-        let conn = db.lock();
+        let conn = db.get()?;
         match conn.execute(
             "UPDATE shared_memory_blocks SET embedding = ?1 WHERE id = ?2",
             rusqlite::params![bytes, id],

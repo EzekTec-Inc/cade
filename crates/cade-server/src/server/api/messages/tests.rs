@@ -484,7 +484,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
 
     // Insert 50 messages to trigger P5-B (turns_len > 20)
     for i in 0..50 {
-        db.lock()
+        db.get().unwrap()
             .execute(
                 "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -574,8 +574,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
     .await;
 
     // Check what was saved in the db
-    let count: i64 = db
-        .lock()
+    let count: i64 = db.get().unwrap()
         .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
         .unwrap();
     println!("Total messages in DB: {}", count);
@@ -693,7 +692,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         ("u2", "user", serde_json::json!({"content": "and now this"})),
     ];
     for (id, role, content) in rows {
-        db.lock()
+        db.get().unwrap()
             .execute(
                 "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -1001,7 +1000,7 @@ fn seed_basic_agent(db: &cade_store::sqlite::Db, agent_id: &str) {
         },
     )
     .unwrap();
-    db.lock()
+    db.get().unwrap()
         .execute(
             "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
          VALUES ('u', ?1, 'user', ?2, 5, 0)",
@@ -1132,7 +1131,7 @@ async fn build_context_subtracts_full_system_prompt_and_memory() {
 
     // Add a pinned memory block via direct SQL
     {
-        let conn = db.lock();
+        let conn = db.get().unwrap();
         conn.execute(
             "INSERT INTO shared_memory_blocks (id, label, value, description, updated_at, last_turn, tier)
              VALUES ('mb1', 'pinned_block', ?1, '', 0, 0, 'pinned')",
@@ -1147,7 +1146,7 @@ async fn build_context_subtracts_full_system_prompt_and_memory() {
 
     // Insert two user/assistant turns
     for i in 0..4 {
-        db.lock()
+        db.get().unwrap()
             .execute(
                 "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -1319,7 +1318,7 @@ async fn build_context_message_budget_reflects_real_token_overhead() {
         )
         .unwrap();
         // One short user message so build_context returns
-        db.lock()
+        db.get().unwrap()
             .execute(
                 "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
              VALUES (?1, ?2, 'user', ?3, 5, 0)",
@@ -1398,7 +1397,7 @@ async fn build_context_token_overhead_frees_more_budget_than_chars() {
 
     // Insert many short messages so the budget actually packs them.
     for i in 0..40 {
-        db.lock()
+        db.get().unwrap()
             .execute(
                 "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -1451,7 +1450,7 @@ async fn build_context_records_telemetry_with_fits_budget_true() {
         },
     )
     .unwrap();
-    db.lock()
+    db.get().unwrap()
         .execute(
             "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
          VALUES ('u1', ?1, 'user', ?2, 5, 0)",
@@ -1499,7 +1498,7 @@ async fn build_context_records_native_token_counts() {
     let user_msg =
         serde_json::json!({"content": "The quick brown fox jumps over the lazy dog. ".repeat(20)})
             .to_string();
-    db.lock()
+    db.get().unwrap()
         .execute(
             "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
          VALUES ('u1', ?1, 'user', ?2, 1000, 0)",
