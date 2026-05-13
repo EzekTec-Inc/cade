@@ -276,7 +276,13 @@ pub(crate) async fn complete_with_overflow_recovery(
             );
 
             // 1. Synchronous consolidation — drops summarised into session_summary.
-            crate::server::consolidation::consolidate_agent(state, agent_id, conversation_id).await;
+            // Box::pin: consolidate_agent's Future holds ~500 lines of
+            // locals across 20 await points.  Without boxing, its state
+            // machine is embedded in complete_with_overflow_recovery's
+            // Future, which is in turn embedded in the caller's Future,
+            // compounding stack usage that caused the tokio worker thread
+            // overflow on archival/historic content access.
+            Box::pin(crate::server::consolidation::consolidate_agent(state, agent_id, conversation_id)).await;
 
             // 2. Drop the context cache entry so build_context recomputes.
             {
@@ -286,8 +292,10 @@ pub(crate) async fn complete_with_overflow_recovery(
             }
 
             // 3. Rebuild context fresh.
+            // Box::pin: same rationale as above — build_context holds
+            // Vec<Vec<LlmMessage>>, Vec<MessageRow>, and multiple HashMaps.
             let (model, mut new_messages, new_tools) =
-                match build_context(state, agent_id, conversation_id, is_tool_return).await {
+                match Box::pin(build_context(state, agent_id, conversation_id, is_tool_return)).await {
                     Ok(ctx) => ctx,
                     Err(build_err) => {
                         tracing::error!(

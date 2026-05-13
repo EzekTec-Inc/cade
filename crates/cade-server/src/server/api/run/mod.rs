@@ -423,8 +423,14 @@ async fn run_agent_loop(
         // (the actual user message). Subsequent iterations are tool-return
         // re-invocations — they should read, not advance, the staleness clock.
         let is_tool_return = turns > 1;
+        // Box::pin: build_context's compiled Future holds ~600 lines of
+        // locals (Vec<Vec<LlmMessage>>, HashMap, multiple Strings, etc.)
+        // across 23 await points.  Without boxing, this state machine is
+        // embedded in run_agent_loop's Future, which combined with the
+        // consolidation + LLM streaming futures overflows the tokio worker
+        // thread stack when processing large archival/historic queries.
         let (model, messages, tools) =
-            match build_context(&state2, &agent_id2, conv_id2.as_deref(), is_tool_return).await {
+            match Box::pin(build_context(&state2, &agent_id2, conv_id2.as_deref(), is_tool_return)).await {
                 Ok(ctx) => ctx,
                 Err(e) => {
                     send(json!({ "message_type": "error", "error": e })).await;
@@ -477,11 +483,16 @@ async fn run_agent_loop(
                     "message":      "Context window full — compacting older turns and retrying…"
                 }))
                 .await;
-                crate::server::consolidation::consolidate_agent(
+                // Box::pin the consolidation future to move its large
+                // state machine (~500 lines of locals) to the heap.
+                // Without this, consolidate_agent's Future is embedded
+                // in run_agent_loop's state machine, contributing to
+                // the stack overflow on archival/historic content access.
+                Box::pin(crate::server::consolidation::consolidate_agent(
                     &state2,
                     &agent_id2,
                     conv_id2.as_deref(),
-                )
+                ))
                 .await;
                 // Drop cached context entry so build_context recomputes.
                 {
@@ -489,12 +500,17 @@ async fn run_agent_loop(
                     let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
                     cache.pop(&key);
                 }
-                let (model2, mut messages2, tools2) = match build_context(
+                // Box::pin the rebuild future — build_context's state
+                // machine holds Vec<Vec<LlmMessage>>, Vec<MessageRow>,
+                // multiple HashMaps, etc. Boxing moves them to the heap
+                // and prevents the overflow recovery path from doubling
+                // the stack pressure of the main build_context call.
+                let (model2, mut messages2, tools2) = match Box::pin(build_context(
                     &state2,
                     &agent_id2,
                     conv_id2.as_deref(),
                     is_tool_return, // reuse — never double-increment on retry
-                )
+                ))
                 .await
                 {
                     Ok(ctx) => ctx,

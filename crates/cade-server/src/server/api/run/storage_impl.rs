@@ -97,14 +97,34 @@ impl StorageBackend for ServerStorageBackend {
     }
 
     async fn archival_memory_insert(&self, agent_id: &str, content: &str, tags: Option<&[String]>) -> Result<String> {
-        let id = cade_store::sqlite::insert_archival_memory(&self.state.db, agent_id, content, tags.unwrap_or_default())
-            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
-        Ok(id)
+        let db = self.state.db.clone();
+        let aid = agent_id.to_string();
+        let content = content.to_string();
+        let tags: Vec<String> = tags.unwrap_or_default().to_vec();
+        tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::insert_archival_memory(&db, &aid, &content, &tags)
+        })
+        .await
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))
     }
 
     async fn archival_memory_search(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
-        let results = cade_store::sqlite::search_archival_memory(&self.state.db, agent_id, keyword, limit.unwrap_or(10))
-            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        // spawn_blocking: FTS5 queries on large archival tables can be
+        // CPU-intensive and hold the r2d2 connection for tens of ms.
+        // Running on the tokio worker thread stack contributed to the
+        // 'tokio-rt-worker has overflowed its stack' crash because the
+        // result Vec + the calling async state machine exceeded capacity.
+        let db = self.state.db.clone();
+        let aid = agent_id.to_string();
+        let q = keyword.to_string();
+        let lim = limit.unwrap_or(10);
+        let results = tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::search_archival_memory(&db, &aid, &q, lim)
+        })
+        .await
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         Ok(results.into_iter().map(|r| {
             serde_json::json!({
                 "id": r.id,
@@ -116,8 +136,18 @@ impl StorageBackend for ServerStorageBackend {
     }
 
     async fn query_event_log(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
-        let results = cade_store::sqlite::event_log::query_event_log(&self.state.db, agent_id, keyword, limit.unwrap_or(10))
-            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        // spawn_blocking: event_log FTS5 queries should not run on the
+        // tokio worker thread to avoid stack pressure during archival access.
+        let db = self.state.db.clone();
+        let aid = agent_id.to_string();
+        let q = keyword.to_string();
+        let lim = limit.unwrap_or(10);
+        let results = tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::event_log::query_event_log(&db, &aid, &q, lim)
+        })
+        .await
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         Ok(results.into_iter().map(|r| {
             serde_json::json!({
                 "id": r.id,
@@ -129,8 +159,22 @@ impl StorageBackend for ServerStorageBackend {
     }
 
     async fn recall(&self, agent_id: &str, query: &str, limit: Option<usize>) -> Result<Vec<Value>> {
-        let results = cade_store::sqlite::recall(&self.state.db, agent_id, query, limit.unwrap_or(10))
-            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        // spawn_blocking: recall() is the most stack-intensive DB operation
+        // — it calls 4 separate search functions (search_memory,
+        // search_messages, search_archival_memory, query_event_log), each
+        // allocating large result vectors.  Running this on the tokio
+        // worker thread was a primary contributor to the stack overflow
+        // when accessing archival/historic content.
+        let db = self.state.db.clone();
+        let aid = agent_id.to_string();
+        let q = query.to_string();
+        let lim = limit.unwrap_or(10);
+        let results = tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::recall(&db, &aid, &q, lim)
+        })
+        .await
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?
+        .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         Ok(results.into_iter().map(|r| {
             serde_json::json!({
                 "source": r.source,

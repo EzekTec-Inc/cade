@@ -554,10 +554,15 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // The agent often forgets to call `update_memory(active_goal)`. Rather than
     // only nagging (C3 staleness), we extract a fresh snapshot from the summary
     // we just produced. This runs on the same cheap compaction model.
-    auto_update_active_goal(state, agent_id, &summary, &compaction_model).await;
+    // Box::pin: auto_update_active_goal and auto_extract_facts each hold
+    // an LLM CompletionRequest + response locals across their await point.
+    // Boxing their futures prevents them from inflating consolidate_agent's
+    // already-large state machine, which contributes to the tokio worker
+    // thread stack overflow on archival/historic content access paths.
+    Box::pin(auto_update_active_goal(state, agent_id, &summary, &compaction_model)).await;
 
     // Phase B: Automated Extraction of durable facts
-    auto_extract_facts(state, agent_id, &summary, &compaction_model).await;
+    Box::pin(auto_extract_facts(state, agent_id, &summary, &compaction_model)).await;
 
     // Phase B.2: export memory to a directory cade-rag-mcp can index.
     //
