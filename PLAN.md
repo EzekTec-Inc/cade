@@ -2491,3 +2491,39 @@ Full investigation identified 8 concrete gaps. All implemented in this change.
 ```sh
 git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-server/src/server/api/run/subagent.rs
 ```
+
+## 2026-05-13T19:30:00Z — fix(runtime): tokio-thread overflow/crash — 7 root-cause fixes
+
+**Task:** Investigate and fix tokio worker-thread stack overflow crashes caused by unbounded async recursion, missing runtime guards, and insufficient stack size configuration.
+
+**Files modified (6):**
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `src/main.rs` | Replace `#[tokio::main]` with explicit `Runtime::Builder` + 8 MB thread stack |
+| 2 | `src/bin/cade-server.rs` | Same as above; also add consolidation task semaphore (cap 4) |
+| 3 | `crates/cade-cli/src/cli/repl/turn_tools/runner.rs` | Convert `dispatch_tool_calls` from recursive `Box::pin` to iterative `for` loop (max 50 iterations) |
+| 4 | `crates/cade-cli/src/cli/headless.rs` | Convert `process_tool_calls` and `process_tool_calls_stream_json` from recursive `Box::pin` to iterative loops (max 50 iterations) |
+| 5 | `crates/cade-server/src/server/api/run/subagent.rs` | Guard `CancelGuard::drop` with `Handle::try_current()` to prevent double-panic abort; document `Box::pin` subagent recursion safety |
+| 6 | `crates/cade-cli/src/cli/repl/tool_intercepts.rs` | Guard `CancelGuard::drop` with `Handle::try_current()` |
+| 7 | `crates/cade-server/src/server/api/run/mod.rs` | Hoist `ToolRuntime` + `ServerStorageBackend` creation outside per-tool-call loop |
+
+**Reason:** Seven root causes were identified:
+- RC1 (CRITICAL): `dispatch_tool_calls` used unbounded `Box::pin` recursion with no depth limit — long tool chains overflowed the default 2 MB tokio thread stack.
+- RC2 (CRITICAL): `process_tool_calls` / `process_tool_calls_stream_json` had identical unbounded recursion, with an additional hazard of recursion inside a `for` loop in the sequential tool path.
+- RC3 (HIGH): `CancelGuard::drop` called `tokio::task::spawn` unconditionally — if dropped outside a runtime context (panic unwind, after shutdown), this caused a double-panic → process abort.
+- RC4 (HIGH): Both binaries used `#[tokio::main]` with the default 2 MB worker thread stack, insufficient for the deep async call chains.
+- RC5 (MEDIUM): `ToolRuntime` + `Arc<ServerStorageBackend>` were allocated per tool call inside the server's agentic loop, creating unnecessary memory pressure.
+- RC6 (MEDIUM): Nested subagent `Box::pin` recursion carries large futures (mitigated by depth cap 3 + 8 MB stack; `tokio::spawn` not applicable because the inner future is not `Send`).
+- RC7 (LOW): Consolidation background task spawned unbounded concurrent consolidation tasks with no concurrency limit.
+
+**Previous behavior:** Deep tool-call chains (>~15 turns) or subagent nesting could overflow the 2 MB default thread stack, crashing the process. `CancelGuard` panicked during cleanup if the runtime was gone. Consolidation had no backpressure.
+
+**New behavior:**
+- 8 MB thread stack prevents overflow even for the deepest recursion paths.
+- `dispatch_tool_calls` and both `process_tool_calls` variants are iterative loops capped at 50 iterations — zero stack growth per iteration.
+- `CancelGuard::drop` is safe to call from any context (no-op if runtime is absent).
+- One `ToolRuntime` per turn instead of per tool call.
+- Consolidation limited to 4 concurrent tasks.
+
+**Rollback steps:** Revert the 6 files to their prior commit. No schema or data changes.

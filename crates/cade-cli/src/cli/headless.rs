@@ -441,9 +441,13 @@ async fn process_tool_calls(
     cumulative_tokens: &mut u64,
     allowed_paths: Option<&[String]>,
 ) -> Result<()> {
+    // RC2-FIX: Iterative loop replaces unbounded Box::pin recursion that
+    // could overflow the tokio worker-thread stack on long tool-call chains.
+    const MAX_DISPATCH_DEPTH: usize = 50;
+    let mut messages = messages;
+
+    for _depth in 0..MAX_DISPATCH_DEPTH {
     if let Some(budget) = max_tokens_budget {
-        // Just rough token calculation for budget in CLI loop if model is unknown
-        // We'll approximate 4 chars per token, safe side
         let mut turn_chars = 0;
         for m in &messages {
             if let Some(text) = m.assistant_text() {
@@ -496,21 +500,8 @@ async fn process_tool_calls(
 
         collect_assistant_text(&follow, output);
         stats.turn_count += 1;
-        return Box::pin(process_tool_calls(
-            client,
-            agent_id,
-            follow,
-            permissions,
-            output,
-            mcp,
-            stats,
-            hooks,
-            on_output,
-            max_tokens_budget,
-            cumulative_tokens,
-            allowed_paths,
-        ))
-        .await;
+        messages = follow;
+        continue;
     }
 
     // Check for TASK_COMPLETE signal
@@ -526,15 +517,13 @@ async fn process_tool_calls(
         return Ok(());
     }
 
-    // Split into sequential (state-mutating) and parallel (independent) calls.
-    // Sequential tools are handled one at a time in original order.
-    // If all calls in the batch are sequential, fall through to sequential path.
     let all_sequential = tool_calls
         .iter()
         .all(|(_, name, _)| is_sequential_tool(name));
 
     if all_sequential || tool_calls.len() == 1 {
         // -- Sequential path
+        let mut last_follow: Vec<CadeMessage> = Vec::new();
         for (call_id, tool_name, args) in tool_calls {
             if let Some(cb) = on_output {
                 cb(HeadlessEvent::ToolCall(&tool_name));
@@ -576,26 +565,12 @@ async fn process_tool_calls(
             collect_assistant_text(&follow, output);
             stats.turn_count += 1;
             stats.tool_count += 1;
-            Box::pin(process_tool_calls(
-                client,
-                agent_id,
-                follow,
-                permissions,
-                output,
-                mcp,
-                stats,
-                hooks,
-                on_output,
-                max_tokens_budget,
-                cumulative_tokens,
-                allowed_paths,
-            ))
-            .await?;
+            last_follow = follow;
         }
+        messages = last_follow;
+        continue;
     } else {
         // -- Parallel path
-        // Execute all non-sequential tools concurrently, keep sequential ones
-        // in their original positions but run them after the parallel batch.
         let total = tool_calls.len();
         let mut parallel_batch: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut sequential_remainder: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -617,7 +592,6 @@ async fn process_tool_calls(
             sequential_remainder.len()
         );
 
-        // Spawn all parallel tools concurrently
         let futures: Vec<_> = parallel_batch
             .into_iter()
             .map(|(call_id, tool_name, args)| {
@@ -636,18 +610,12 @@ async fn process_tool_calls(
         let results: Vec<(String, String, String, bool)> = join_all(futures).await;
         stats.tool_count += results.len() as u32;
 
-        // Submit all parallel results back.
-        // The server counts received vs expected: it only calls the LLM once all
-        // expected results for this turn have arrived. So we send N-1 results
-        // silently (they return empty messages), then send the last one which
-        // triggers the LLM response.
         let result_count = results.len();
         let mut follow_msgs: Vec<CadeMessage> = Vec::new();
 
         for (i, (call_id, tname, out, is_err)) in results.into_iter().enumerate() {
             let is_last = i == result_count - 1 && sequential_remainder.is_empty();
             if is_last {
-                // Last result — triggers LLM response
                 let on_out_clone = on_output.clone();
                 let follow = client
                     .stream_tool_return(agent_id, &call_id, &tname, &out, is_err, move |msg| {
@@ -663,14 +631,12 @@ async fn process_tool_calls(
                     .await?;
                 follow_msgs = follow;
             } else {
-                // Non-last results — server buffers them, returns []
                 client
                     .send_tool_return(agent_id, &call_id, &tname, &out, is_err)
                     .await?;
             }
         }
 
-        // Now handle any sequential tools that were in this batch
         for (call_id, tool_name, args) in sequential_remainder {
             let (cid, tname, out, is_err) = run_one_tool(
                 client,
@@ -704,22 +670,10 @@ async fn process_tool_calls(
 
         collect_assistant_text(&follow_msgs, output);
         stats.turn_count += total as u32;
-        Box::pin(process_tool_calls(
-            client,
-            agent_id,
-            follow_msgs,
-            permissions,
-            output,
-            mcp,
-            stats,
-            hooks,
-            on_output,
-            max_tokens_budget,
-            cumulative_tokens,
-            allowed_paths,
-        ))
-        .await?;
+        messages = follow_msgs;
+        continue;
     }
+    } // end of iterative dispatch loop
 
     Ok(())
 }
@@ -737,6 +691,11 @@ async fn process_tool_calls_stream_json(
     emit: &impl Fn(serde_json::Value),
     hooks: &HookEngine,
 ) -> Result<()> {
+    // RC2-FIX: Iterative loop replaces unbounded Box::pin recursion.
+    const MAX_DISPATCH_DEPTH: usize = 50;
+    let mut messages = messages;
+
+    for _depth in 0..MAX_DISPATCH_DEPTH {
     let tool_calls: Vec<(String, String, serde_json::Value)> =
         messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
@@ -771,18 +730,8 @@ async fn process_tool_calls_stream_json(
 
         collect_assistant_text(&follow, output);
         stats.turn_count += 1;
-        return Box::pin(process_tool_calls_stream_json(
-            client,
-            agent_id,
-            follow,
-            permissions,
-            output,
-            mcp,
-            stats,
-            emit,
-            hooks,
-        ))
-        .await;
+        messages = follow;
+        continue;
     }
 
     // Check for TASK_COMPLETE signal
@@ -804,6 +753,7 @@ async fn process_tool_calls_stream_json(
 
     if all_sequential || tool_calls.len() == 1 {
         // -- Sequential path
+        let mut last_follow: Vec<CadeMessage> = Vec::new();
         for (call_id, tool_name, args) in tool_calls {
             emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
 
@@ -849,19 +799,10 @@ async fn process_tool_calls_stream_json(
 
             collect_assistant_text(&follow, output);
             stats.turn_count += 1;
-            Box::pin(process_tool_calls_stream_json(
-                client,
-                agent_id,
-                follow,
-                permissions,
-                output,
-                mcp,
-                stats,
-                emit,
-                hooks,
-            ))
-            .await?;
+            last_follow = follow;
         }
+        messages = last_follow;
+        continue;
     } else {
         // -- Parallel path
         let total = tool_calls.len();
@@ -910,7 +851,6 @@ async fn process_tool_calls_stream_json(
         let results: Vec<(String, (String, String, String, bool))> = join_all(futures).await;
         stats.tool_count += results.len() as u32;
 
-        // Emit tool results
         for (tool_name, (_, _, out, is_err)) in &results {
             emit(json!({
                 "type": "tool_result",
@@ -920,7 +860,6 @@ async fn process_tool_calls_stream_json(
             }));
         }
 
-        // Submit results back — server batches them until all expected arrive
         let result_count = results.len();
         let mut follow_msgs: Vec<CadeMessage> = Vec::new();
 
@@ -981,19 +920,10 @@ async fn process_tool_calls_stream_json(
 
         collect_assistant_text(&follow_msgs, output);
         stats.turn_count += total as u32;
-        Box::pin(process_tool_calls_stream_json(
-            client,
-            agent_id,
-            follow_msgs,
-            permissions,
-            output,
-            mcp,
-            stats,
-            emit,
-            hooks,
-        ))
-        .await?;
+        messages = follow_msgs;
+        continue;
     }
+    } // end of iterative dispatch loop
 
     Ok(())
 }

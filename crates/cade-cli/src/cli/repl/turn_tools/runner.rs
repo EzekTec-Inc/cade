@@ -76,6 +76,13 @@ impl Repl {
         reprompt_done: bool,
         turn_stats: &mut TurnStats,
     ) -> Result<()> {
+        // RC1-FIX: Iterative loop replaces unbounded Box::pin recursion that
+        // could overflow the tokio worker-thread stack on long tool-call chains.
+        const MAX_DISPATCH_DEPTH: usize = 50;
+        let mut messages = messages;
+        let mut reprompt_done = reprompt_done;
+
+        for _depth in 0..MAX_DISPATCH_DEPTH {
         // If the user cancelled (Esc/Ctrl+C) during Phase 2 tool-result sending,
         // stream_turn may return vec![] due to the cancellation rather than an
         // actual empty LLM response.  Bail out immediately so the re-prompt
@@ -220,13 +227,9 @@ impl Repl {
                         bar_text.clone(),
                     )
                     .await?;
-                Box::pin(
-                    self.dispatch_tool_calls(
-                        stdout, follow, user_input, bar_text, true, turn_stats,
-                    ),
-                )
-                .await?;
-                return Ok(());
+                messages = follow;
+                reprompt_done = true;
+                continue;
             }
 
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
@@ -265,17 +268,11 @@ impl Repl {
                         bar_text.clone(),
                     )
                     .await?;
-                Box::pin(self.dispatch_tool_calls(
-                    stdout,
-                    follow_msgs,
-                    user_input,
-                    bar_text,
-                    false,
-                    turn_stats,
-                ))
-                .await?;
+                messages = follow_msgs;
+                reprompt_done = false;
+                continue;
             }
-            return Ok(());
+            break;
         }
 
         // Check if this response contained any assistant text alongside the tool calls.
@@ -605,8 +602,10 @@ impl Repl {
                 .await?;
         }
 
-        Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, false, turn_stats))
-            .await?;
+        messages = follow;
+        reprompt_done = false;
+        // continue (implicit at end of for-loop body)
+        } // end of iterative dispatch loop
 
         Ok(())
     }

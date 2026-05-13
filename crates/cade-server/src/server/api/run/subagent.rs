@@ -613,10 +613,15 @@ pub(super) async fn handle_run_subagent_tool_inner(
         fn drop(&mut self) {
             let map = self.map.clone();
             let id = self.id.clone();
-            tokio::task::spawn(async move {
-                let mut cancellations = map.write().await;
-                cancellations.remove(&id);
-            });
+            // RC3-FIX: Guard against missing runtime context during panic
+            // unwind or after runtime shutdown — tokio::task::spawn panics
+            // if no runtime is available, causing a double-panic abort.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let mut cancellations = map.write().await;
+                    cancellations.remove(&id);
+                });
+            }
         }
     }
     let _cancel_guard = CancelGuard {
@@ -832,6 +837,11 @@ pub(super) async fn handle_run_subagent_tool_inner(
                             serde_json::Value::from(next_depth as u64),
                         );
                     }
+                    // RC6-NOTE: Box::pin is retained because the inner future
+                    // is not Send (non-Send state across await points).  The
+                    // recursion depth is hard-capped at CADE_SUBAGENT_MAX_DEPTH
+                    // (default 3), and the runtime thread stack is 8 MB (Fix 1),
+                    // so this cannot overflow.
                     Box::pin(handle_run_subagent_tool(
                         state,
                         parent_agent_id,

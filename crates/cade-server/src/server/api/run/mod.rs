@@ -633,18 +633,17 @@ async fn run_agent_loop(
         }
 
         // ── Execute tools and persist results ─────────────────────────
+        // RC5-FIX: Hoist ToolRuntime creation outside per-tool-call loop.
+        // One runtime instance is reused across all tool calls in this turn,
+        // avoiding redundant Arc::new + AppState clones per tool call.
+        let storage_backend = std::sync::Arc::new(storage_impl::ServerStorageBackend { state: state2.clone() });
+        let runtime = cade_agent::tools::runtime::ToolRuntime::new(
+            storage_backend,
+            std::sync::Arc::clone(&state2.mcp),
+            agent_id2.clone(),
+            std::env::current_dir().unwrap_or_default(),
+        );
         for tc in &tool_calls {
-            // Server-side meta-tool intercepts (Phase A: ToolRuntime
-            // parity).  `intercept_meta_tool` returns Some for tools
-            // that need access to AppState (DB, agent_id, sse_tx);
-            // returns None to fall through to native + MCP dispatch.
-            let storage_backend = std::sync::Arc::new(storage_impl::ServerStorageBackend { state: state2.clone() });
-            let runtime = cade_agent::tools::runtime::ToolRuntime::new(
-                storage_backend,
-                std::sync::Arc::clone(&state2.mcp),
-                agent_id2.clone(),
-                std::env::current_dir().unwrap_or_default(),
-            );
             
             // For interactive tools (run_subagent, etc) that ToolRuntime doesn't handle,
             // we intercept them server-side using the remaining meta_tools logic or subagent dispatcher.

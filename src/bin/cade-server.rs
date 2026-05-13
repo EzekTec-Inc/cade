@@ -34,8 +34,16 @@ struct ServerArgs {
     port: u16,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(8 * 1024 * 1024) // 8 MB — prevents stack overflow from deep async recursion
+        .build()
+        .map_err(|e| Error::custom(format!("tokio runtime: {e}")))?;
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -215,6 +223,9 @@ async fn main() -> Result<()> {
     // consolidation sooner; turn-count eager path (see build_context) covers
     // continuous sessions that never hit the idle timer.
     let state_bg = state.clone();
+    // RC7-FIX: Semaphore limits concurrent consolidation tasks to prevent
+    // unbounded task spawning when many agents need consolidation at once.
+    let consolidation_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
@@ -237,7 +248,9 @@ async fn main() -> Result<()> {
                     conv_id
                 );
                 let state_c = state_bg.clone();
+                let sem = consolidation_semaphore.clone();
                 tokio::spawn(async move {
+                    let _permit = sem.acquire().await;
                     cade::server::consolidation::consolidate_agent(
                         &state_c,
                         &agent_id,

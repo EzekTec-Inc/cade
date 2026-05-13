@@ -34,8 +34,16 @@ const SKILLS_DIR: &str = ".skills";
 mod bootstrap;
 use bootstrap::*;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(8 * 1024 * 1024) // 8 MB — prevents stack overflow from deep async recursion
+        .build()
+        .map_err(|e| Error::custom(format!("tokio runtime: {e}")))?;
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // Write tracing to a log file instead of stderr.  In alternate-screen TUI
     // mode crossterm only redirects stdout to the alt buffer — stderr writes go
     // directly to the terminal at the current cursor position (the input field),

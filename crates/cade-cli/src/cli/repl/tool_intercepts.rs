@@ -213,9 +213,12 @@ impl Repl {
                     fn drop(&mut self) {
                         let map = self.map.clone();
                         let id = self.id.clone();
-                        tokio::task::spawn(async move {
-                            map.lock().await.remove(&id);
-                        });
+                        // RC3-FIX: Guard against missing runtime context.
+                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                            handle.spawn(async move {
+                                map.lock().await.remove(&id);
+                            });
+                        }
                     }
                 }
                 let _cancel_guard = CancelGuard {
