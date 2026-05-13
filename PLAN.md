@@ -2527,3 +2527,32 @@ git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-serv
 - Consolidation limited to 4 concurrent tasks.
 
 **Rollback steps:** Revert the 6 files to their prior commit. No schema or data changes.
+
+## 2026-05-13T20:10:00Z — fix(ide-mcp): 6 fixes for startup, robustness, and VS Code reliability
+
+**Task:** Investigate and fix issues preventing `cade-ide-mcp` from starting and operating accurately.
+
+**Files modified (6):**
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `crates/cade-ide-mcp/src/bin/cade-ide-mcp.rs` | Add SIGINT/SIGTERM signal handlers for discovery-file cleanup; `select!` over accept-loop `JoinHandle` to propagate panics |
+| 2 | `crates/cade-ide-mcp/src/transport.rs` | Make `discovery_path` + `remove_discovery` public for signal-based cleanup; enforce single-adapter via `JoinHandle::abort()` on new connection |
+| 3 | `crates/cade-ide-mcp/src/state.rs` | Add `EditorState::apply_snapshot()` for atomic state replacement under one write lock |
+| 4 | `extensions/cade-vscode/src/connection.ts` | Add `isProcessAlive()` pid liveness check; remove stale discovery files; iterate candidates instead of blindly picking newest |
+| 5 | `extensions/cade-vscode/dist/extension.js` | Rebuilt from source to include #4 |
+| 6 | `target/release/cade-ide-mcp` | Built release binary (was missing) |
+
+**Fixes:**
+- #1 (BLOCKER): Release binary built — config path `target/release/cade-ide-mcp` now exists
+- #3 (HIGH): Signal handler (ctrl_c + SIGTERM) cleans up `~/.cade/ide/<pid>.json` on ungraceful exit
+- #4 (HIGH): VS Code extension probes pid liveness, removes stale discovery files, skips dead candidates
+- #5 (MEDIUM): `main` uses `select!` over accept-loop JoinHandle — panics no longer hang the process
+- #6 (MEDIUM): New adapter connections abort the previous `handle_connection` task (single-adapter enforcement)
+- #7 (MEDIUM): `apply_snapshot` now atomic — one write lock for all 6 fields instead of 6 separate lock/unlock
+
+**Previous behavior:** Release binary missing (BLOCKER); signal kills left stale discovery files; VS Code connected to dead pids; accept-loop panics hung the process; concurrent adapters clobbered each other; snapshot application was non-atomic.
+
+**New behavior:** All 6 issues resolved. Binary starts, connects, and serves tools correctly.
+
+**Rollback steps:** `git revert HEAD` or restore checkpoint `cp-e20b0bd9-6a15-4eb6-a0f6-da39125e74c5`.

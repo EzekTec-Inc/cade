@@ -186,6 +186,15 @@ var CadeConnection = class {
       this.reconnectTimer = void 0;
     }
   }
+  /** Check if a process with `pid` is alive. */
+  isProcessAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   readDiscoveryFile() {
     const dir = path.join(os.homedir(), ".cade", "ide");
     let entries;
@@ -198,18 +207,31 @@ var CadeConnection = class {
       const fullPath = path.join(dir, e.name);
       try {
         const stat = fs.statSync(fullPath);
-        return { fullPath, mtimeMs: stat.mtimeMs };
+        return { fullPath, name: e.name, mtimeMs: stat.mtimeMs };
       } catch {
         return null;
       }
     }).filter((x) => x !== null).sort((a, b) => b.mtimeMs - a.mtimeMs);
-    if (jsonFiles.length === 0) return void 0;
-    try {
-      const raw = fs.readFileSync(jsonFiles[0].fullPath, "utf8");
-      return JSON.parse(raw);
-    } catch {
-      return void 0;
+    for (const entry of jsonFiles) {
+      const pid = parseInt(path.basename(entry.name, ".json"), 10);
+      if (!Number.isNaN(pid) && !this.isProcessAlive(pid)) {
+        try {
+          fs.unlinkSync(entry.fullPath);
+          this.output.appendLine(
+            `CADE: removed stale discovery file for dead pid ${pid}`
+          );
+        } catch {
+        }
+        continue;
+      }
+      try {
+        const raw = fs.readFileSync(entry.fullPath, "utf8");
+        return JSON.parse(raw);
+      } catch {
+        continue;
+      }
     }
+    return void 0;
   }
 };
 

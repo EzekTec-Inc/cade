@@ -200,6 +200,16 @@ export class CadeConnection {
     }
   }
 
+  /** Check if a process with `pid` is alive. */
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0); // Signal 0 = probe only, no actual signal sent.
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private readDiscoveryFile(): DiscoveryInfo | undefined {
     const dir = path.join(os.homedir(), ".cade", "ide");
     let entries: fs.Dirent[];
@@ -209,28 +219,48 @@ export class CadeConnection {
       return undefined;
     }
 
-    // Pick the most-recently-modified discovery file — the running instance.
+    // Collect discovery files sorted newest-first by mtime.
     const jsonFiles = entries
       .filter((e) => e.isFile() && e.name.endsWith(".json"))
       .map((e) => {
         const fullPath = path.join(dir, e.name);
         try {
           const stat = fs.statSync(fullPath);
-          return { fullPath, mtimeMs: stat.mtimeMs };
+          return { fullPath, name: e.name, mtimeMs: stat.mtimeMs };
         } catch {
           return null;
         }
       })
-      .filter((x): x is { fullPath: string; mtimeMs: number } => x !== null)
+      .filter((x): x is { fullPath: string; name: string; mtimeMs: number } => x !== null)
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-    if (jsonFiles.length === 0) return undefined;
+    // Walk candidates: probe pid liveness, remove stale files, return
+    // the first live entry.
+    for (const entry of jsonFiles) {
+      // Extract pid from filename (format: "<pid>.json").
+      const pid = parseInt(path.basename(entry.name, ".json"), 10);
 
-    try {
-      const raw = fs.readFileSync(jsonFiles[0].fullPath, "utf8");
-      return JSON.parse(raw) as DiscoveryInfo;
-    } catch {
-      return undefined;
+      if (!Number.isNaN(pid) && !this.isProcessAlive(pid)) {
+        // Stale discovery file — owner process is dead. Clean it up.
+        try {
+          fs.unlinkSync(entry.fullPath);
+          this.output.appendLine(
+            `CADE: removed stale discovery file for dead pid ${pid}`,
+          );
+        } catch {
+          // Best-effort removal; ignore errors.
+        }
+        continue;
+      }
+
+      try {
+        const raw = fs.readFileSync(entry.fullPath, "utf8");
+        return JSON.parse(raw) as DiscoveryInfo;
+      } catch {
+        continue;
+      }
     }
+
+    return undefined;
   }
 }

@@ -84,7 +84,7 @@ struct DiscoveryInfo {
 }
 
 /// Returns `~/.cade/ide/<pid>.json`.
-fn discovery_path(pid: u32) -> Option<PathBuf> {
+pub fn discovery_path(pid: u32) -> Option<PathBuf> {
     let home = std::env::var("HOME")
         .ok()
         .or_else(|| std::env::var("USERPROFILE").ok())?;
@@ -108,7 +108,7 @@ fn write_discovery(addr: SocketAddr) -> Option<PathBuf> {
     Some(path)
 }
 
-fn remove_discovery(path: &PathBuf) {
+pub fn remove_discovery(path: &PathBuf) {
     let _ = std::fs::remove_file(path);
 }
 
@@ -139,14 +139,16 @@ impl ChannelSlot {
 // ── State-update application ─────────────────────────────────────────────────
 
 async fn apply_snapshot(state: &EditorState, snap: StateSnapshot) {
-    state.replace_open_files(snap.open_files).await;
-    state.set_active_file(snap.active_file).await;
-    state.set_selection(snap.selection).await;
-    state.replace_diagnostics(snap.diagnostics).await;
     state
-        .replace_workspace_folders(snap.workspace_folders)
+        .apply_snapshot(
+            snap.open_files,
+            snap.active_file,
+            snap.selection,
+            snap.diagnostics,
+            snap.workspace_folders,
+            snap.visible_range,
+        )
         .await;
-    state.set_visible_range(snap.visible_range).await;
 }
 
 // ── Per-connection read loop ──────────────────────────────────────────────────
@@ -272,6 +274,9 @@ pub async fn run_accept_loop(
         let _ = tx.send(addr);
     }
 
+    // Track the active adapter connection so new adapters displace stale ones.
+    let mut active_handle: Option<tokio::task::JoinHandle<()>> = None;
+
     loop {
         tokio::select! {
             biased;
@@ -281,10 +286,16 @@ pub async fn run_accept_loop(
             }
             result = listener.accept() => {
                 match result {
-                    Ok((stream, _)) => {
+                    Ok((stream, peer)) => {
+                        // Abort the previous adapter connection (if any) so
+                        // only one adapter is active at a time.
+                        if let Some(prev) = active_handle.take() {
+                            tracing::info!(?peer, "new adapter connecting — displacing previous");
+                            prev.abort();
+                        }
                         let s = state.clone();
                         let sl = slot.clone();
-                        tokio::spawn(handle_connection(stream, s, sl));
+                        active_handle = Some(tokio::spawn(handle_connection(stream, s, sl)));
                     }
                     Err(e) => tracing::warn!("accept error: {e}"),
                 }

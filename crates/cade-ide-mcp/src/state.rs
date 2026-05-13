@@ -212,6 +212,28 @@ impl EditorState {
     pub async fn set_visible_range(&self, range: Option<(u32, u32)>) {
         self.inner.write().await.visible_range = range;
     }
+
+    /// Replace **all** fields atomically under a single write lock.
+    ///
+    /// This prevents tools from observing a half-applied snapshot when
+    /// the adapter pushes a `StateUpdate`.
+    pub async fn apply_snapshot(
+        &self,
+        open_files: Vec<OpenFile>,
+        active_file: Option<String>,
+        selection: Option<Selection>,
+        diagnostics: Vec<Diagnostic>,
+        workspace_folders: Vec<WorkspaceFolder>,
+        visible_range: Option<(u32, u32)>,
+    ) {
+        let mut inner = self.inner.write().await;
+        inner.open_files = open_files;
+        inner.active_file = active_file;
+        inner.selection = selection;
+        inner.diagnostics = diagnostics;
+        inner.workspace_folders = workspace_folders;
+        inner.visible_range = visible_range;
+    }
 }
 
 // region:    --- Tests
