@@ -133,7 +133,7 @@ pub struct GlobalSettings {
     pub reasoning_effort: Option<String>,
 
     /// Plugin marketplace registry URL. Defaults to the official CADE registry.
-    #[serde(default = "default_marketplace_url", skip_serializing_if = "is_default_marketplace_url")]
+    #[serde(default = "default_marketplace_url")]
     pub marketplace_url: String,
 }
 
@@ -146,10 +146,6 @@ const DEFAULT_MARKETPLACE_URL: &str =
 
 fn default_marketplace_url() -> String {
     DEFAULT_MARKETPLACE_URL.to_string()
-}
-
-fn is_default_marketplace_url(url: &str) -> bool {
-    url == DEFAULT_MARKETPLACE_URL
 }
 
 // region:    --- Execution backend settings
