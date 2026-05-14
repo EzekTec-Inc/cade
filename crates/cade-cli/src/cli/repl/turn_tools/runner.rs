@@ -849,6 +849,40 @@ impl Repl {
             "cancel_subagent" => Some(self.handle_cancel_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             "message_agent" => Some(self.handle_message_agent(call_id, args).await),
+            "set_plan" => {
+                // Server-side persists the plan and emits SSE plan_update.
+                // Client-side: update local TUI state so the plan panel renders.
+                let steps: Vec<String> = args.get("steps")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                {
+                    let mut app = self.app.lock();
+                    app.set_plan(steps.clone());
+                }
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: format!("Plan set with {} steps.", steps.len()),
+                    is_error: false,
+                }))
+            }
+            "UpdatePlan" => {
+                // Server-side persists the step update and emits SSE plan_update.
+                // Client-side: update local TUI state.
+                let step_id = args.get("step_id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let done = args.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
+                {
+                    let mut app = self.app.lock();
+                    app.update_plan_step(step_id, done);
+                }
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: format!("Step {} marked {}.", step_id, if done { "done" } else { "not done" }),
+                    is_error: false,
+                }))
+            }
             "finish_task" => {
                 // finish_task is intercepted server-side during the streaming loop.
                 // If it reaches here (client-side dispatch), execute the audit logic directly.
