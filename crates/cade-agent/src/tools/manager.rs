@@ -9,7 +9,7 @@ use super::{
     ask::AskUserQuestionTool,
     bash::BashTool,
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
-    plan::{EnterPlanModeTool, ExitPlanModeTool, SetPlanTool, TodoWriteTool, UpdatePlanTool},
+    plan::{EnterPlanModeTool, ExitPlanModeTool, SetPlanTool, TodoWriteTool, UpdatePlanTool, FinishTaskTool},
     search::{GlobTool, GrepTool},
 };
 use crate::mcp::McpManager;
@@ -215,6 +215,7 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
+            FinishTaskTool::schema(),
         ],
         Toolset::Gemini => vec![
             rename_schema(BashTool::schema(), "RunShellCommand"),
@@ -226,6 +227,7 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
+            FinishTaskTool::schema(),
         ],
         _ => vec![
             BashTool::schema(),
@@ -237,6 +239,7 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
+            FinishTaskTool::schema(),
         ],
     };
     if allow_agent_mode_changes {

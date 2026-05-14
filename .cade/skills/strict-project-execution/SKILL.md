@@ -137,24 +137,14 @@ Do not expand scope to add extra robustness unless required. If proper handling 
 
 ## Change Log Requirement
 
-For project modifications, append an entry to `PLAN.md`. Create it if missing.
+For project modifications, you must call the `finish_task` tool when you are done.
 
-Each entry must include:
-
-- UTC timestamp
-- Summary of change
-- Files modified
-- Reason
-- Previous behavior
-- New behavior
-- Rollback steps
+Instead of manually editing a changelog file, invoke `finish_task(summary, reason)` and the server will automatically generate an audit log, record the files modified via git, and append the entry to `CADE_AUDIT.md`.
 
 Rules:
-
-- Append only
-- Never rewrite history
-- Never silently change behavior
-- If code is deleted, justify it in the entry
+- Call `finish_task` exactly once at the end of the modification.
+- Provide a clear `summary` and `reason` as arguments.
+- If code is deleted, justify it in the `reason`.
 
 ## Conflict Protocol
 
@@ -237,7 +227,7 @@ Before returning code, verify:
 - No unrelated code was modified
 - Backward compatibility was preserved unless approved otherwise
 - Scope did not expand
-- `PLAN.md` was updated
+- `finish_task` tool was called to log the changes
 - Code is complete and valid
 - Required tools were used when applicable
 

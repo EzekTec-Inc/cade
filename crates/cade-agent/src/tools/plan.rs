@@ -113,3 +113,27 @@ impl UpdatePlanTool {
         })
     }
 }
+/// Finishes the current task, generating an automated audit changelog and optionally committing.
+pub struct FinishTaskTool;
+impl FinishTaskTool {
+    pub fn schema() -> Value {
+        json!({
+            "name": "finish_task",
+            "description": "Call this tool when you have completed a task. The server will automatically generate an audit log, rollback steps, and optionally commit the changes. Replaces the manual PLAN.md process.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "A brief summary of what was accomplished."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "The reason for this change."
+                    }
+                },
+                "required": ["summary", "reason"]
+            }
+        })
+    }
+}
