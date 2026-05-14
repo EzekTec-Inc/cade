@@ -6,7 +6,7 @@ This document describes the internal architecture of CADE — a stateful, self-i
 
 ## Workspace Overview
 
-CADE is a Cargo workspace with **fifteen crates** and a root package that owns the two binaries (`cade` CLI and `cade-server`).
+CADE is a Cargo workspace with **sixteen crates** and a root package that owns the two binaries (`cade` CLI and `cade-server`).
 
 ```
 src/
@@ -41,6 +41,7 @@ crates/
 ├── cade-web/                   # Web search and scraping capabilities (→ cade-core)
 ├── cade-plugin/                # Plugin loading and manifests (→ cade-core, cade-agent)
 ├── cade-sdk/                   # Rust SDK for programmatic agent control (→ cade-core, cade-agent)
+├── cade-askpass/               # Askpass helper binary + IPC server for sudo/ssh password prompts
 └── cade-ide-mcp/               # IDE MCP bridge — serves editor state (open files,
                                 #   selection, diagnostics, workspace folders, visible
                                 #   range, file content) to CADE agents as MCP tools.
@@ -54,7 +55,7 @@ crates/
 ## Dependency Graph (acyclic)
 
 ```
-cade-core, cade-ai, cade-api-types, cade-ide-mcp   ← leaf crates (zero workspace deps)
+cade-core, cade-ai, cade-api-types, cade-ide-mcp, cade-askpass ← leaf crates (zero workspace deps)
 cade-desktop → cade-core
 cade-store   → cade-core, cade-ai
 cade-mcp     → cade-core
@@ -63,7 +64,7 @@ cade-tui     → cade-core
 cade-gui     → cade-core, cade-api-types
 cade-agent   → cade-core, cade-desktop(?), cade-mcp(?), cade-web(?)
 cade-server  → cade-core, cade-ai, cade-store, cade-agent, cade-mcp(?)
-cade-cli     → cade-core, cade-agent, cade-ai, cade-tui
+cade-cli     → cade-core, cade-agent, cade-ai, cade-tui, cade-askpass
 cade-plugin  → cade-core, cade-agent
 cade-sdk     → cade-core, cade-agent
 ```

@@ -41,7 +41,7 @@ A stateful, self-improving Rust CLI coding agent. CADE gives an AI agent full ac
 - **Intelligent Tool Selection (ITS)**: Reranks and filters tools using a local ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2`) or cloud APIs before passing them to the LLM.
 - **Dynamic Pricing Registry**: Real-time token cost estimation using an efficient, JSON-driven `ModelRegistry`.
 - **Heuristic Evaluator Layer**: A fast, dynamically configurable subagent layer that intercepts user input to evaluate intent, safety, and pathfinding *before* any tool executes, ensuring strict adherence to project constraints while conserving the main context window.
-- **Zero-Panic Safety**: Enforces the `rust10x` standard (no unhandled `unwrap()`/`expect()` in production code) and SQLite WAL mode for high integrity.
+- **Zero-Panic Safety**: Enforces the `rust10x` standard (no unhandled `unwrap()`/`expect()` in production code) and SQLite WAL mode for high integrity. The async runtime is tuned with a 16MB worker thread stack and leverages `Box::pin` combined with `spawn_blocking` for heavy DB operations to prevent state-machine stack overflows.
 - **Semantic Memory Search**: Hybrid search combining keyword matching, fuzzy word-match, and cosine similarity via local embeddings (`fastembed` + `sqlite-vec`), merged with Reciprocal Rank Fusion. Feature-gated behind `--features semantic-search`.
 
 ---
