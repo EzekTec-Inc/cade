@@ -1081,17 +1081,6 @@ pub(crate) async fn build_context(
         "build_context telemetry"
     );
 
-    // DEBUG: log tool names so we can verify finish_task is included
-    let tool_names: Vec<&str> = tool_schemas.iter()
-        .filter_map(|s| s["name"].as_str())
-        .collect();
-    let has_finish = tool_names.contains(&"finish_task");
-    tracing::info!(
-        tool_count = tool_names.len(),
-        has_finish_task = has_finish,
-        "build_context tool_schemas"
-    );
-
     let result_tuple = (agent.model, messages, tool_schemas);
     {
         let mut cache = state.context_cache.lock();

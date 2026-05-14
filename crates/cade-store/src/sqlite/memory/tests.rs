@@ -520,6 +520,7 @@ fn schema_snapshot_locks_known_tables() -> Result<()> {
             "memory_turn_counter",
             "compaction_model",
             "theme",
+            "active_plan_json",
         ],
         "agents table drift detected"
     );
