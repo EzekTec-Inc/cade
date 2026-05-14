@@ -2556,3 +2556,22 @@ git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-serv
 **New behavior:** All 6 issues resolved. Binary starts, connects, and serves tools correctly.
 
 **Rollback steps:** `git revert HEAD` or restore checkpoint `cp-e20b0bd9-6a15-4eb6-a0f6-da39125e74c5`.
+
+## 2026-05-14T05:35:00Z — cade-tui code review verdict fixes
+
+**Summary**: Applied 3 safety/quality fixes from cade-tui code review.
+
+**Files modified**:
+- `crates/cade-tui/src/app/input.rs` — replaced `overlays.pop().unwrap()` with `if let Some(...)`
+- `crates/cade-tui/src/app/questions.rs` — replaced 2× `overlays.pop().unwrap()` with `let Some(...) else { continue }`
+- `crates/cade-tui/src/app/password.rs` — replaced 2× `overlays.pop().unwrap()` with `let Some(...) else { continue }`
+- `crates/cade-tui/src/markdown_test.rs` — deleted (dead orphan file, never compiled, contained no tests)
+- `crates/cade-tui/src/lib.rs` — verified clippy allows are still needed (16 warnings across 12 files); restored after confirming they suppress real lint noise
+
+**Reason**: Resolve verdict items from cade-tui code review: eliminate 5 potential panic sites, remove dead code, audit clippy suppression.
+
+**Previous behavior**: `pop().unwrap()` would panic if overlay stack was empty at pop time (theoretically unreachable but fragile).
+
+**New behavior**: Gracefully handles empty overlay stack — `continue` in loops, guard in match arms. No functional change.
+
+**Rollback**: `git revert <commit>` or restore checkpoint `cp-f38a6636-bdf1-4687-86ae-ad5eae2b1d8c`.

@@ -136,7 +136,9 @@ impl TuiApp {
                 {
                     let res = top.handle_input(key);
                     if matches!(res, OverlayInputResult::Dismiss) {
-                        let mut pop = self.overlays.pop().unwrap();
+                        let Some(mut pop) = self.overlays.pop() else {
+                            continue;
+                        };
                         let result = pop
                             .take_result()
                             .and_then(|any| any.downcast::<Option<String>>().ok().map(|b| *b))
@@ -188,7 +190,9 @@ impl TuiApp {
             {
                 let res = top.handle_input(key);
                 if matches!(res, OverlayInputResult::Dismiss) {
-                    let mut pop = self.overlays.pop().unwrap();
+                    let Some(mut pop) = self.overlays.pop() else {
+                        continue;
+                    };
                     let result = pop
                         .take_result()
                         .and_then(|any| any.downcast::<Option<String>>().ok().map(|b| *b))

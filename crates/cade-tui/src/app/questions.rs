@@ -59,7 +59,9 @@ impl TuiApp {
                 {
                     let res = top.handle_input(key);
                     if matches!(res, crate::overlay_component::OverlayInputResult::Dismiss) {
-                        let mut pop = self.overlays.pop().unwrap();
+                        let Some(mut pop) = self.overlays.pop() else {
+                            continue;
+                        };
                         let result = pop
                             .take_result()
                             .and_then(|any| {
@@ -149,7 +151,9 @@ impl TuiApp {
             {
                 let res = top.handle_input(key_event);
                 if matches!(res, crate::overlay_component::OverlayInputResult::Dismiss) {
-                    let mut pop = self.overlays.pop().unwrap();
+                    let Some(mut pop) = self.overlays.pop() else {
+                        continue;
+                    };
                     let result = pop
                         .take_result()
                         .and_then(|any| {

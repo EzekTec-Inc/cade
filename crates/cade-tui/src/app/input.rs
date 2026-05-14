@@ -117,11 +117,12 @@ impl TuiApp {
             match result {
                 OverlayInputResult::Dismiss => {
                     // Pop the overlay, then process its final action.
-                    let mut popped = self.overlays.pop().unwrap();
-                    // Drain final result if handle_input didn't already produce one.
-                    let final_action = action.or_else(|| popped.take_result());
-                    if let Some(any_val) = final_action {
-                        return self.process_overlay_action(any_val);
+                    if let Some(mut popped) = self.overlays.pop() {
+                        // Drain final result if handle_input didn't already produce one.
+                        let final_action = action.or_else(|| popped.take_result());
+                        if let Some(any_val) = final_action {
+                            return self.process_overlay_action(any_val);
+                        }
                     }
                 }
                 OverlayInputResult::Consumed => {
