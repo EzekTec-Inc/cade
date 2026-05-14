@@ -13,3 +13,12 @@ Each entry is generated server-side when the agent completes a task.
 - M crates/cade-cli/src/cli/repl/turn_tools/runner.rs
 
 ---
+
+## 2026-05-14T22:15:56Z — Fix set_plan and UpdatePlan client-side dispatch for TUI plan panel
+
+**Reason:** Fix broken TUI plan panel — set_plan and UpdatePlan tool calls were falling through to 'Unknown tool' because the client-side dispatch had no handler for them
+
+**Files modified:**
+None
+
+---
