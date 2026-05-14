@@ -1341,7 +1341,8 @@ fn assemble_system_prompt_memory(
             ));
         }
 
-        let static_core = sections.join("\n\n");
+        let mut static_core = sections.join("\n\n");
+        static_core.push_str("\n\n");
         let mut dynamic_core = String::new();
 
         if !dynamic_parts.is_empty() {

@@ -101,6 +101,9 @@ impl AnthropicProvider {
             req.messages.iter().partition(|m| m.role == "system");
         let mut system_blocks: Vec<Value> = Vec::new();
         for m in system.iter() {
+            if m.content.is_empty() {
+                continue;
+            }
             system_blocks.push(json!({
                 "type": "text",
                 "text": m.content,
