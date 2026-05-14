@@ -31,3 +31,12 @@ None
 None
 
 ---
+
+## 2026-05-14T23:34:20Z — Fix github-mcp-server to use release binary and correct write_tools list
+
+**Reason:** github-mcp-server was using cargo run (debug mode) instead of the prebuilt release binary, wasting startup time and resources. Read-only tools were incorrectly listed as write_tools.
+
+**Files modified:**
+None
+
+---
