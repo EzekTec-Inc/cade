@@ -410,7 +410,7 @@ fn schema_run_subagent() -> Value {
 fn schema_run_parallel_subagents() -> Value {
     json!({
         "name": "run_parallel_subagents",
-        "description": "Spawn multiple subagents simultaneously to analyze different files or solve independent problems, then aggregate their results.",
+        "description": "Spawn multiple subagents simultaneously to analyze different files or solve independent problems, then aggregate their results. You can either provide a list of 'tasks' OR provide a 'team_id' and a 'prompt' to dispatch the same prompt to all members of a team.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -430,9 +430,17 @@ fn schema_run_parallel_subagents() -> Value {
                         },
                         "required": ["prompt"]
                     }
+                },
+                "team_id": {
+                    "type": "string",
+                    "description": "Optional: ID of the team to dispatch to (e.g. 'default'). If provided, 'prompt' must also be provided."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Optional: The prompt to send to all team members when using 'team_id'."
                 }
             },
-            "required": ["tasks"]
+            "required": []
         }
     })
 }

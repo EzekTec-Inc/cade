@@ -973,23 +973,69 @@ pub(super) async fn handle_run_parallel_subagents_tool(
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::tools::manager::ToolResult;
 
-    let tasks_val = match args.get("tasks").and_then(|v| v.as_array()) {
-        Some(t) => t,
-        None => {
-            return ToolResult {
-                tool_call_id: tool_call_id.to_string(),
-                tool_name: "run_parallel_subagents".to_string(),
-                output: "error: 'tasks' array is required".to_string(),
-                is_error: true,
-            };
+    let mut tasks_val: Vec<serde_json::Value> = Vec::new();
+
+    if let Some(team_id) = args.get("team_id").and_then(|v| v.as_str()) {
+        let prompt = match args.get("prompt").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => {
+                return ToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: "run_parallel_subagents".to_string(),
+                    output: "error: 'prompt' is required when 'team_id' is provided".to_string(),
+                    is_error: true,
+                };
+            }
+        };
+
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let all_teams = cade_agent::team::discovery::discover_all_teams(&cwd);
+        let team = match cade_agent::team::discovery::resolve_team_def(team_id, &all_teams) {
+            Some(t) => t,
+            None => {
+                return ToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: "run_parallel_subagents".to_string(),
+                    output: format!("error: team not found: {}", team_id),
+                    is_error: true,
+                };
+            }
+        };
+
+        for member in &team.members {
+            let mut member_args = serde_json::Map::new();
+            member_args.insert("prompt".to_string(), serde_json::Value::String(prompt.to_string()));
+            member_args.insert(
+                "description".to_string(),
+                serde_json::Value::String(format!("Team member: {} - {}", member.name, member.description)),
+            );
+            if !member.system_prompt.is_empty() {
+                member_args.insert(
+                    "system_prompt".to_string(),
+                    serde_json::Value::String(member.system_prompt.clone()),
+                );
+            }
+            if let Some(model) = &member.model {
+                member_args.insert("model".to_string(), serde_json::Value::String(model.clone()));
+            }
+            tasks_val.push(serde_json::Value::Object(member_args));
         }
-    };
+    } else if let Some(t) = args.get("tasks").and_then(|v| v.as_array()) {
+        tasks_val = t.clone();
+    } else {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_parallel_subagents".to_string(),
+            output: "error: either 'tasks' array OR 'team_id' and 'prompt' are required".to_string(),
+            is_error: true,
+        };
+    }
 
     if tasks_val.is_empty() {
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "run_parallel_subagents".to_string(),
-            output: "error: 'tasks' array cannot be empty".to_string(),
+            output: "error: task list cannot be empty (team may have no members)".to_string(),
             is_error: true,
         };
     }

@@ -2606,3 +2606,24 @@ git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-serv
 **Rollback:** Revert git history prior to this timestamp, as this involves significant trait/database column dependency removals.
 
 **Test results:** Cargo unit and integration tests successfully compiled and passed across multiple application interfaces and subcrates.
+
+---
+**UTC Timestamp:** 2026-05-14T02:00:00Z
+**Summary of change:** Implement dispatching a single prompt to a whole team simultaneously by expanding `run_parallel_subagents` to accept a `team_id`.
+**Files modified:**
+- `crates/cade-agent/src/tools/meta.rs`
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+To allow users to effectively utilize the teams feature from prompts by dispatching a single prompt to a whole team. This expands the existing `run_parallel_subagents` tool to optionally accept a `team_id` and a `prompt` instead of requiring an array of tasks.
+
+**Previous behavior:**
+`run_parallel_subagents` required a `tasks` array. Teams could only be listed via the `/teams` CLI command but not utilized.
+
+**New behavior:**
+`run_parallel_subagents` can accept a `team_id` (e.g. 'default') and a `prompt`. It discovers the team, extracts its members, creates a subagent task for each member, and dispatches them in parallel.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/api/run/subagent.rs
+```
