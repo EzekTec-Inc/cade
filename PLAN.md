@@ -2627,3 +2627,25 @@ To allow users to effectively utilize the teams feature from prompts by dispatch
 ```sh
 git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/api/run/subagent.rs
 ```
+
+---
+**UTC Timestamp:** 2026-05-14T03:00:00Z
+**Summary of change:** Refactored subagent system to handle model fallbacks/errors gracefully and intervene in doom-loops (stagnation).
+**Files modified:**
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+To ensure subagents can recover from 404/429 errors by falling back to a reliable model (`gpt-4o-mini`), and to break out of "doom-loops" where they repeatedly call the same tool with identical arguments. Instead of silently aborting on stagnation, the system now injects a systemic intervention message forcing the model to re-evaluate its approach.
+
+**Previous behavior:**
+- LLM completion errors (like 404 Not Found or 429 Too Many Requests) caused the subagent loop to break immediately and fail the task.
+- Stagnation detection (repeating the same tool call with identical arguments 3+ times in 4 iterations) caused an immediate abort of the loop.
+
+**New behavior:**
+- On a 404 or 429 error, the subagent falls back to `gpt-4o-mini` and retries the completion.
+- When stagnation is detected, instead of aborting, it injects a `SYSTEM INTERVENTION` message detailing the stagnation and instructs the model to try a completely different strategy or call the `finish` tool with status='blocked'.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
+```

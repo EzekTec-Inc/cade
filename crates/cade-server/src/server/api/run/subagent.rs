@@ -412,7 +412,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
     let def_opt = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
 
-    let model = cfg
+    let mut model = cfg
         .resolve_model(def_opt)
         .map(|s| s.to_string())
         .unwrap_or_else(|| {
@@ -669,20 +669,56 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 reasoning_effort: None,
             };
 
-            let resp = tokio::select! {
+            let mut fallback_triggered = false;
+            let mut fallback_model = String::new();
+            let mut resp_opt = None;
+
+            tokio::select! {
                 res = state.llm.complete(&llm_req) => {
                     match res {
-                        Ok(r) => r,
+                        Ok(r) => resp_opt = Some(r),
                         Err(e) => {
-                            llm_err = Some(e.to_string());
-                            break;
+                            let e_str = e.to_string();
+                            if e_str.contains("404") || e_str.contains("429") {
+                                fallback_triggered = true;
+                                // Fallback to a reliable, fast model
+                                fallback_model = "gpt-4o-mini".to_string();
+                                tracing::warn!("Model {} failed ({}), falling back to {}", model, e_str, fallback_model);
+                            } else {
+                                llm_err = Some(e_str);
+                            }
                         }
                     }
                 }
                 _ = cancel_rx.recv() => {
                     llm_err = Some("Task cancelled by parent".to_string());
-                    break;
                 }
+            };
+
+            if fallback_triggered {
+                let mut fallback_req = llm_req.clone();
+                fallback_req.model = fallback_model.clone();
+                tokio::select! {
+                    res = state.llm.complete(&fallback_req) => {
+                        match res {
+                            Ok(r) => {
+                                resp_opt = Some(r);
+                                model = fallback_model;
+                            },
+                            Err(e) => {
+                                llm_err = Some(format!("Fallback failed: {}", e));
+                            }
+                        }
+                    }
+                    _ = cancel_rx.recv() => {
+                        llm_err = Some("Task cancelled by parent".to_string());
+                    }
+                }
+            }
+
+            let resp = match resp_opt {
+                Some(r) => r,
+                None => break,
             };
 
             if let Some(budget) = cfg.max_tokens_budget {
@@ -771,6 +807,10 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 break;
             }
 
+            let mut stagnation_detected = false;
+            let mut stagnated_tool = String::new();
+            let mut stagnated_repeat_count = 0;
+
             // G8/REC-5: Emit per-iteration observability event for each tool call.
             for tc in &resp.tool_calls {
                 use std::hash::{Hash, Hasher};
@@ -810,13 +850,14 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 }
                 let repeat_count = tool_fingerprints.iter().filter(|&&x| x == fp).count();
                 if repeat_count >= 3 {
-                    llm_err = Some(format!(
-                        "Stagnation detected: tool '{}' called with identical arguments {} times \
-                         in the last 4 iterations. Aborting to prevent doom-loop.",
-                        tc.name, repeat_count
-                    ));
-                    // Return early from async block
-                    return;
+                    tracing::warn!(
+                        "Stagnation detected for subagent {}: tool '{}' called with identical arguments {} times. Injecting intervention.",
+                        subagent_id, tc.name, repeat_count
+                    );
+                    stagnation_detected = true;
+                    stagnated_tool = tc.name.clone();
+                    stagnated_repeat_count = repeat_count;
+                    break;
                 }
             }
 
@@ -827,6 +868,19 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 tool_call_id: None,
                 images: None,
             });
+
+            if stagnation_detected {
+                for tc in &resp.tool_calls {
+                    messages.push(LlmMessage {
+                        role: "tool".to_string(),
+                        content: format!("SYSTEM INTERVENTION: Stagnation detected. You have called '{}' with identical arguments {} times in the last 4 iterations. You are stuck in a doom-loop. Do NOT repeat this call. You MUST re-evaluate your approach, try a completely different strategy, or call the `finish` tool with status='blocked' if you cannot proceed.", stagnated_tool, stagnated_repeat_count),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        images: None,
+                    });
+                }
+                continue; // Skip actual tool execution, let the model process the intervention
+            }
 
             for tc in &resp.tool_calls {
                 let tool_result = if tc.name == "run_subagent" {
