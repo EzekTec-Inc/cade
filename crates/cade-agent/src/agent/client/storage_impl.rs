@@ -69,16 +69,24 @@ impl StorageBackend for HttpTransport {
         Ok(body["matches"].as_array().cloned().unwrap_or_default())
     }
 
-    async fn conversation_search(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
-        self.conversation_search(agent_id, keyword, limit).await
+    async fn conversation_search(&self, agent_id: &str, keyword: &str, _limit: Option<usize>) -> Result<Vec<Value>> {
+        // Delegate to the inherent HttpTransport::search_messages method.
+        // Previously this called self.conversation_search() which resolved
+        // to the same trait method — infinite recursion → stack overflow.
+        let results = self.search_messages(agent_id, keyword, None).await?;
+        Ok(results)
     }
 
     async fn archival_memory_insert(&self, agent_id: &str, content: &str, tags: Option<&[String]>) -> Result<String> {
-        self.archival_memory_insert(agent_id, content, tags).await
+        // Delegate to the inherent HttpTransport::insert_archival_memory.
+        let tag_vec: Vec<String> = tags.unwrap_or_default().to_vec();
+        self.insert_archival_memory(agent_id, content, &tag_vec).await
     }
 
     async fn archival_memory_search(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
-        self.archival_memory_search(agent_id, keyword, limit).await
+        // Delegate to the inherent HttpTransport::search_archival_memory.
+        let results = self.search_archival_memory(agent_id, keyword, limit.unwrap_or(10)).await?;
+        Ok(results)
     }
 
     async fn query_event_log(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
@@ -86,7 +94,53 @@ impl StorageBackend for HttpTransport {
     }
 
     async fn recall(&self, agent_id: &str, query: &str, limit: Option<usize>) -> Result<Vec<Value>> {
-        self.recall(agent_id, query, limit).await
+        // Federated recall: search memory + conversation + archival and merge.
+        // Previously this called self.recall() — infinite recursion → stack overflow.
+        let limit = limit.unwrap_or(10);
+        let mut all: Vec<Value> = Vec::new();
+
+        // Source 1: memory blocks
+        if let Ok(mem) = self.search_memory(agent_id, query).await {
+            for m in mem {
+                all.push(json!({
+                    "source": "memory",
+                    "label": m["label"],
+                    "snippet": m["snippet"].as_str().or(m["value"].as_str()).unwrap_or_default()
+                }));
+            }
+        }
+
+        // Source 2: conversation history
+        if let Ok(msgs) = self.search_messages(agent_id, query, None).await {
+            for msg in msgs.into_iter().take(5) {
+                let role = msg["role"].as_str().unwrap_or("?");
+                let text = msg["snippet"].as_str()
+                    .or(msg["content"].as_str())
+                    .unwrap_or_default();
+                all.push(json!({
+                    "source": "conversation",
+                    "label": role,
+                    "snippet": text
+                }));
+            }
+        }
+
+        // Source 3: archival memory
+        if let Ok(arch) = self.search_archival_memory(agent_id, query, 5).await {
+            for a in arch {
+                let snip = a["content"].as_str()
+                    .or(a["content_snippet"].as_str())
+                    .unwrap_or_default();
+                all.push(json!({
+                    "source": "archival",
+                    "label": a["tags"].as_array().and_then(|t| t.first()).and_then(|v| v.as_str()).unwrap_or_default(),
+                    "snippet": snip
+                }));
+            }
+        }
+
+        all.truncate(limit);
+        Ok(all)
     }
     
     async fn add_memory_evidence(&self, agent_id: &str, label: &str, kind: &str, reference: &str, excerpt: Option<&str>) -> Result<()> {
@@ -124,20 +178,28 @@ impl StorageBackend for HttpTransport {
         Err(crate::Error::custom("install_plugin not implemented on HttpTransport yet"))
     }
 
-    async fn install_skill(&self, agent_id: &str, url: &str, scope: &str, skill_name: Option<&str>) -> Result<String> {
-        self.install_skill(agent_id, url, scope, skill_name).await
+    async fn install_skill(&self, _agent_id: &str, _url: &str, _scope: &str, _skill_name: Option<&str>) -> Result<String> {
+        // No inherent method — return explicit not-implemented error.
+        // Previously this called self.install_skill() → infinite recursion → stack overflow.
+        Err(crate::Error::custom("install_skill not implemented on HttpTransport"))
     }
 
-    async fn run_skill_script(&self, agent_id: &str, skill_id: &str, script_name: &str, args: Option<&[String]>, cwd: &Path) -> Result<String> {
-        self.run_skill_script(agent_id, skill_id, script_name, args, cwd).await
+    async fn run_skill_script(&self, _agent_id: &str, _skill_id: &str, _script_name: &str, _args: Option<&[String]>, _cwd: &Path) -> Result<String> {
+        // No inherent method — return explicit not-implemented error.
+        // Previously this called self.run_skill_script() → infinite recursion → stack overflow.
+        Err(crate::Error::custom("run_skill_script not implemented on HttpTransport"))
     }
 
-    async fn load_skill_ref(&self, agent_id: &str, skill_id: &str, doc_name: &str) -> Result<String> {
-        self.load_skill_ref(agent_id, skill_id, doc_name).await
+    async fn load_skill_ref(&self, _agent_id: &str, _skill_id: &str, _doc_name: &str) -> Result<String> {
+        // No inherent method — return explicit not-implemented error.
+        // Previously this called self.load_skill_ref() → infinite recursion → stack overflow.
+        Err(crate::Error::custom("load_skill_ref not implemented on HttpTransport"))
     }
     
-    async fn create_checkpoint(&self, agent_id: &str, conversation_id: Option<&str>, branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, _stash_ref: Option<&str>, git_commit_hash: Option<&str>) -> Result<String> {
-        self.create_checkpoint(agent_id, conversation_id, branch_id, label, desc, git_commit_hash).await
+    async fn create_checkpoint(&self, agent_id: &str, conversation_id: Option<&str>, _branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, _stash_ref: Option<&str>, git_commit_hash: Option<&str>) -> Result<String> {
+        // Delegate to inherent HttpTransport::create_checkpoint with correct param order:
+        //   inherent: (agent_id, label, description, conversation_id, git_stash_ref, git_commit_hash)
+        self.create_checkpoint(agent_id, label, desc, conversation_id, _stash_ref, git_commit_hash).await
     }
 
     async fn get_checkpoint(&self, agent_id: &str, checkpoint_id: &str) -> Result<Value> {

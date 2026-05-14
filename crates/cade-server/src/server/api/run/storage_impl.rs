@@ -91,7 +91,8 @@ impl StorageBackend for ServerStorageBackend {
             serde_json::json!({
                 "id": r.id,
                 "role": r.role,
-                "text": r.snippet
+                "content": r.content,
+                "snippet": r.snippet
             })
         }).collect())
     }
@@ -128,7 +129,7 @@ impl StorageBackend for ServerStorageBackend {
         Ok(results.into_iter().map(|r| {
             serde_json::json!({
                 "id": r.id,
-                "content_snippet": r.content,
+                "content": r.content,
                 "tags": r.tags,
                 "created_at": r.created_at
             })
