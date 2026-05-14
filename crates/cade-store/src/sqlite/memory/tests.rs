@@ -20,6 +20,7 @@ fn make_agent(db: &Db, id: &str) -> Result<()> {
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         },
     )?;
     Ok(())

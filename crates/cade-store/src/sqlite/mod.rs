@@ -760,6 +760,20 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 14", [])?;
     }
 
+    if current_version < 15 {
+        let r = conn.execute(
+            "ALTER TABLE agents ADD COLUMN active_plan_json TEXT",
+            [],
+        );
+        if let Err(e) = r {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                tracing::warn!("Migration 15 ADD COLUMN active_plan_json failed: {e}");
+            }
+        }
+        conn.execute("PRAGMA user_version = 15", [])?;
+    }
+
     Ok(())
 }
 
@@ -791,6 +805,9 @@ pub struct AgentRow {
     /// `None` → inherit from global settings.
     #[serde(default)]
     pub theme: Option<String>,
+    /// Optional active plan serialized as JSON.
+    #[serde(default)]
+    pub active_plan_json: Option<String>,
 }
 
 pub mod agents;

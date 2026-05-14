@@ -223,6 +223,7 @@ mod tests {
                 created_at: None,
                 compaction_model: None,
                 theme: None,
+                active_plan_json: None,
             },
         )?;
 
@@ -262,6 +263,7 @@ mod tests {
                 created_at: None,
                 compaction_model: None,
                 theme: None,
+                active_plan_json: None,
             },
         )?;
 
@@ -321,6 +323,7 @@ mod tests {
                 created_at: None,
                 compaction_model: None,
                 theme: None,
+                active_plan_json: None,
             },
         )?;
 

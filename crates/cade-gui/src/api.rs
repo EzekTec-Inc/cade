@@ -81,6 +81,8 @@ pub enum StreamEvent {
     /// Boxed because `ThemeColors` is ~300 bytes and would otherwise
     /// dominate the size of every other variant in `StreamEvent`.
     ThemeUpdate(String),
+    /// A plan update from the server.
+    PlanUpdate(serde_json::Value),
     /// A subagent was spawned and started running.
     SubagentStarted {
         subagent_id: String,

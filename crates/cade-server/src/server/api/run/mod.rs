@@ -672,6 +672,77 @@ async fn run_agent_loop(
             } else if tc.name == "cancel_subagent" {
                 let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
                 subagent::handle_cancel_subagent_tool(&state2, &tc.id, &args).await
+            } else if tc.name == "set_plan" {
+                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                let steps = args.get("steps")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter().enumerate().filter_map(|(i, v)| {
+                            v.as_str().map(|s| {
+                                serde_json::json!({
+                                    "id": i + 1,
+                                    "description": s,
+                                    "is_done": false
+                                })
+                            })
+                        }).collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                
+                let n = steps.len();
+                let plan_json = serde_json::json!({ "steps": steps, "is_visible": true }).to_string();
+                let _ = sqlite::agents::update_agent_active_plan(&state2.db, &agent_id2, Some(&plan_json));
+                
+                send(serde_json::json!({
+                    "message_type": "plan_update",
+                    "plan": serde_json::json!({ "steps": steps, "is_visible": true })
+                })).await;
+
+                cade_agent::tools::manager::ToolResult {
+                    tool_call_id: tc.id.clone(),
+                    tool_name: tc.name.clone(),
+                    output: format!("Plan set with {n} step(s)."),
+                    is_error: false,
+                }
+            } else if tc.name == "UpdatePlan" {
+                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                let step_id = args.get("step_id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let done = args.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
+                
+                let mut found = false;
+                if let Ok(Some(agent)) = sqlite::agents::get_agent(&state2.db, &agent_id2) {
+                    if let Some(plan_str) = agent.active_plan_json {
+                        if let Ok(mut plan) = serde_json::from_str::<serde_json::Value>(&plan_str) {
+                            if let Some(steps) = plan.get_mut("steps").and_then(|v| v.as_array_mut()) {
+                                for step in steps.iter_mut() {
+                                    if step.get("id").and_then(|id| id.as_u64()) == Some(step_id as u64) {
+                                        step["is_done"] = serde_json::json!(done);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if found {
+                                let _ = sqlite::agents::update_agent_active_plan(&state2.db, &agent_id2, Some(&plan.to_string()));
+                                send(serde_json::json!({
+                                    "message_type": "plan_update",
+                                    "plan": plan
+                                })).await;
+                            }
+                        }
+                    }
+                }
+                
+                cade_agent::tools::manager::ToolResult {
+                    tool_call_id: tc.id.clone(),
+                    tool_name: tc.name.clone(),
+                    output: if found {
+                        format!("Step {step_id} marked {}.", if done { "done" } else { "not done" })
+                    } else {
+                        format!("error: Step {step_id} not found in the active plan.")
+                    },
+                    is_error: !found,
+                }
             } else if let Some(executed) = runtime.execute(tc.id.clone(), &tc.name, &tc.arguments).await {
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: executed.tool_call_id,

@@ -1141,6 +1141,24 @@ fn assemble_system_prompt_memory(
     }
 
     let mut dynamic_parts: Vec<String> = Vec::new();
+
+    if let Some(plan_json) = &agent.active_plan_json {
+        if let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json) {
+            if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
+                let mut xml = String::from("<active_plan>\n");
+                for step in steps {
+                    let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let desc = step.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    let is_done = step.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let status = if is_done { "done" } else { "pending" };
+                    xml.push_str(&format!("  <step id=\"{}\" status=\"{}\">{}</step>\n", id, status, desc));
+                }
+                xml.push_str("</active_plan>");
+                dynamic_parts.push(xml);
+            }
+        }
+    }
+
     let mut candidates: Vec<CandidateBlock> = Vec::new();
 
     for (label, val, _desc, tier, _lt) in &active_blocks {

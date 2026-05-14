@@ -849,43 +849,6 @@ impl Repl {
             "cancel_subagent" => Some(self.handle_cancel_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             "message_agent" => Some(self.handle_message_agent(call_id, args).await),
-            // Plan panel — require TuiApp access, intercepted before generic dispatch.
-            "set_plan" => {
-                let steps: Vec<String> = args["steps"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let n = steps.len();
-                self.app.lock().set_plan(steps);
-                Some(Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: format!("Plan set with {n} step(s)."),
-                    is_error: false,
-                }))
-            }
-            "UpdatePlan" => {
-                let step_id = args["step_id"].as_u64().unwrap_or(0) as usize;
-                let done = args["done"].as_bool().unwrap_or(true);
-                let found = self.app.lock().update_plan_step(step_id, done);
-                Some(Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: if found {
-                        format!(
-                            "Step {step_id} marked {}.",
-                            if done { "done" } else { "not done" }
-                        )
-                    } else {
-                        format!("Step {step_id} not found in active plan.")
-                    },
-                    is_error: !found,
-                }))
-            }
             _ => None,
         }
     }

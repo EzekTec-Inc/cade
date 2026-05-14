@@ -3,15 +3,16 @@ use super::*;
 pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
     let conn = db.get()?;
     conn.execute(
-        "INSERT INTO agents (id, name, model, description, system_prompt, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO agents (id, name, model, description, system_prompt, created_at, active_plan_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             row.id,
             row.name,
             row.model,
             row.description,
             row.system_prompt,
-            now_ts()
+            now_ts(),
+            row.active_plan_json
         ],
     )?;
     Ok(())
@@ -20,7 +21,7 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
 pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
     let conn = db.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme FROM agents WHERE id = ?1",
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme, active_plan_json FROM agents WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
@@ -33,6 +34,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
             created_at: row.get(5)?,
             compaction_model: row.get(6)?,
             theme: row.get(7)?,
+            active_plan_json: row.get(8)?,
         }))
     } else {
         Ok(None)
@@ -42,7 +44,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
 pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
     let conn = db.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme FROM agents ORDER BY created_at DESC"
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme, active_plan_json FROM agents ORDER BY created_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AgentRow {
@@ -54,6 +56,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
             created_at: row.get(5)?,
             compaction_model: row.get(6)?,
             theme: row.get(7)?,
+            active_plan_json: row.get(8)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -111,6 +114,17 @@ pub fn update_agent_theme(db: &Db, id: &str, theme: Option<&str>) -> Result<bool
     let n = conn.execute(
         "UPDATE agents SET theme = ?1 WHERE id = ?2",
         params![theme, id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Persist the active plan for an agent (serialized as JSON).
+/// Pass `None` to clear the plan.
+pub fn update_agent_active_plan(db: &Db, id: &str, plan_json: Option<&str>) -> Result<bool> {
+    let conn = db.get()?;
+    let n = conn.execute(
+        "UPDATE agents SET active_plan_json = ?1 WHERE id = ?2",
+        params![plan_json, id],
     )?;
     Ok(n > 0)
 }
@@ -195,6 +209,7 @@ mod tests {
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         }
     }
 
