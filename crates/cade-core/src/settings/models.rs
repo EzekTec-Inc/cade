@@ -131,10 +131,25 @@ pub struct GlobalSettings {
     /// Default reasoning effort for models that support it (e.g. o1, o3-mini).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+
+    /// Plugin marketplace registry URL. Defaults to the official CADE registry.
+    #[serde(default = "default_marketplace_url", skip_serializing_if = "is_default_marketplace_url")]
+    pub marketplace_url: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+const DEFAULT_MARKETPLACE_URL: &str =
+    "https://raw.githubusercontent.com/EzekTec-Inc/cade-registry/main/index.json";
+
+fn default_marketplace_url() -> String {
+    DEFAULT_MARKETPLACE_URL.to_string()
+}
+
+fn is_default_marketplace_url(url: &str) -> bool {
+    url == DEFAULT_MARKETPLACE_URL
 }
 
 // region:    --- Execution backend settings

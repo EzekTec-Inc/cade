@@ -5,7 +5,7 @@ use dirs;
 impl Repl {
     pub(crate) async fn cmd_marketplace(&self) -> Result<bool> {
         self.tui_sys("Fetching marketplace index...");
-        let index_url = "https://raw.githubusercontent.com/EzekTec-Inc/cade-registry/main/index.json";
+        let index_url = self.settings.lock().marketplace_url().to_string();
         
         let client = reqwest::Client::new();
         let resp = match client.get(index_url).send().await {

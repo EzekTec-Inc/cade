@@ -255,6 +255,11 @@ impl SettingsManager {
         &self.global.permissions
     }
 
+    /// Marketplace registry URL (from global settings, with default fallback).
+    pub fn marketplace_url(&self) -> &str {
+        &self.global.marketplace_url
+    }
+
     /// Append a rule to the global allow list and persist.
     pub fn save_allow_rule(&mut self, rule: &str) -> Result<()> {
         if !self.global.permissions.allow.contains(&rule.to_string()) {
