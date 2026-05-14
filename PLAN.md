@@ -1,3 +1,26 @@
+## 2026-05-14T15:00:00Z — docs: comprehensive rewrite of docs/ and README.md
+
+**Task:** Audit and rewrite documentation for production readiness. Include Zero-Panic Safety features, 16MB tokio worker thread stack, `Box::pin`, and semantic memory search. Add `cade-askpass` and `cade-gui` to crates list.
+
+**Files modified:**
+- `README.md` — Value proposition, semantic memory search, license badges, Zero-Panic Safety details.
+- `docs/index.md`, `docs/getting-started.md`, `docs/architecture.md`, `docs/memory-system.md`, `docs/development.md`, `docs/roadmap.md` — Updated content, removed obsolete plans, archived others to `docs/history/`.
+- `CHANGELOG.md` — Rewritten `[Unreleased]` section.
+- `CONTRIBUTING.md` — Updated minimum Rust version to 1.85+ and crate count to 16.
+
+**Reason for change:** Ensure docs accurately reflect current shipped realities (semantic search, new UI components, panic safety) and lower the barrier to entry for users and contributors.
+
+**Previous behavior:** Docs contained stale, in-flight refactor plans; `README.md` was feature-heavy instead of value-focused; missed new crates like `cade-askpass`.
+
+**New behavior:** Docs are streamlined, up-to-date, and production-ready.
+
+**Rollback steps:**
+```sh
+git revert 1c322c5b 7dfc6d78 4c1916ac 38d1ca81 3c671491
+```
+
+---
+
 ## 2026-05-13T18:05:00Z — refactor(store): replace Arc<Mutex<Connection>> with r2d2 connection pool (P0-B)
 
 **Task:** Implement code-review P0-B: replace the single-mutex `Db = Arc<parking_lot::Mutex<Connection>>` with an `r2d2`-managed connection pool so concurrent handlers no longer serialise on a single SQLite handle. User selected "Full migration" with "Propagate as Result" error handling.
