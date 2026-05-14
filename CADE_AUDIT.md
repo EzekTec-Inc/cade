@@ -40,3 +40,12 @@ None
 None
 
 ---
+
+## 2026-05-14T23:39:02Z — Add 11 new GitHub CRUD tools to github-mcp-server (14→25 tools), rebuild release binary, update write_tools
+
+**Reason:** The github-mcp-server only had 14 tools covering basic issues, search, and commits. Added 11 new tools for full GitHub CRUD: PR management, file CRUD, branch management, forks, and releases.
+
+**Files modified:**
+None
+
+---
