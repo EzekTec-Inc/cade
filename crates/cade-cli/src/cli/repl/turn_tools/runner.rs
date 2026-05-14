@@ -849,6 +849,42 @@ impl Repl {
             "cancel_subagent" => Some(self.handle_cancel_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             "message_agent" => Some(self.handle_message_agent(call_id, args).await),
+            "finish_task" => {
+                // finish_task is intercepted server-side during the streaming loop.
+                // If it reaches here (client-side dispatch), execute the audit logic directly.
+                let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let reason = args.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                
+                let git_output = std::process::Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+                
+                let files_modified = if git_output.trim().is_empty() {
+                    "None".to_string()
+                } else {
+                    git_output.lines().map(|l| format!("- {}", l.trim())).collect::<Vec<_>>().join("\n")
+                };
+                
+                let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                
+                let log_entry = format!(
+                    "\n## {} — {}\n\n**Reason:** {}\n\n**Files modified:**\n{}\n\n---\n",
+                    timestamp, summary, reason, files_modified
+                );
+                
+                let path = std::path::Path::new("CADE_AUDIT.md");
+                let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "# CADE Audit Log\n\n".to_string());
+                let _ = std::fs::write(path, format!("{}{}", existing, log_entry));
+                
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: format!("Task finished. Audit log appended to CADE_AUDIT.md."),
+                    is_error: false,
+                }))
+            }
             _ => None,
         }
     }
