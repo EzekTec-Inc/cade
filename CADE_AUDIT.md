@@ -22,3 +22,12 @@ Each entry is generated server-side when the agent completes a task.
 None
 
 ---
+
+## 2026-05-14T23:01:40Z — Make marketplace_url configurable via settings.json with default fallback
+
+**Reason:** The marketplace registry URL was hardcoded, preventing users from pointing to private or self-hosted registries
+
+**Files modified:**
+None
+
+---
