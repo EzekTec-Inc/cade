@@ -2617,6 +2617,36 @@ git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-serv
 **Reason:**
 To allow users to effectively utilize the teams feature from prompts by dispatching a single prompt to a whole team. This expands the existing `run_parallel_subagents` tool to optionally accept a `team_id` and a `prompt` instead of requiring an array of tasks.
 
+**New behavior:**
+`run_parallel_subagents` can accept a `team_id` (e.g. 'default') and a `prompt`. It discovers the team, extracts its members, creates a subagent task for each member, and dispatches them in parallel.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-agent/src/tools/meta.rs crates/cade-server/src/server/api/run/subagent.rs
+```
+
+---
+**UTC Timestamp:** 2026-05-14T03:00:00Z
+**Summary of change:** Refactored subagent system to handle model fallbacks/errors gracefully and intervene in doom-loops (stagnation).
+**Files modified:**
+- `crates/cade-server/src/server/api/run/subagent.rs`
+
+**Reason:**
+To ensure subagents can recover from 404/429 errors by falling back to the parent agent's model (or a fast reliable model), and to break out of "doom-loops" where they repeatedly call the same tool with identical arguments. Instead of silently aborting on stagnation, the system now injects a systemic intervention message forcing the model to re-evaluate its approach.
+
+**Previous behavior:**
+- LLM completion errors (like 404 Not Found or 429 Too Many Requests) caused the subagent loop to break immediately and fail the task.
+- Stagnation detection (repeating the same tool call with identical arguments 3+ times in 4 iterations) caused an immediate abort of the loop.
+
+**New behavior:**
+- On a 404 or 429 error, the subagent falls back to the parent agent's model and retries the completion.
+- When stagnation is detected, instead of aborting, it injects a `SYSTEM INTERVENTION` message detailing the stagnation and instructs the model to try a completely different strategy or call the `finish` tool with status='blocked'.
+
+**Rollback steps:**
+```sh
+git checkout HEAD^ -- crates/cade-server/src/server/api/run/subagent.rs
+```
+
 **Previous behavior:**
 `run_parallel_subagents` required a `tasks` array. Teams could only be listed via the `/teams` CLI command but not utilized.
 

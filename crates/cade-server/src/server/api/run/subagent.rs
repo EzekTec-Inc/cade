@@ -412,16 +412,16 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
     let def_opt = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
 
+    let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
+        .ok()
+        .flatten()
+        .map(|a| a.model)
+        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+
     let mut model = cfg
         .resolve_model(def_opt)
         .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            cade_store::sqlite::get_agent(&state.db, parent_agent_id)
-                .ok()
-                .flatten()
-                .map(|a| a.model)
-                .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
-        });
+        .unwrap_or_else(|| parent_model.clone());
 
     emitter
         .emit_started(&subagent_id, &task_preview, &cfg.mode, &model)
@@ -681,8 +681,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
                             let e_str = e.to_string();
                             if e_str.contains("404") || e_str.contains("429") {
                                 fallback_triggered = true;
-                                // Fallback to a reliable, fast model
-                                fallback_model = "gpt-4o-mini".to_string();
+                                // Fallback to the parent agent's model
+                                fallback_model = parent_model.clone();
                                 tracing::warn!("Model {} failed ({}), falling back to {}", model, e_str, fallback_model);
                             } else {
                                 llm_err = Some(e_str);
