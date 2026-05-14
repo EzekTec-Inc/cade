@@ -255,8 +255,8 @@ const SECTIONS: &[Section] = &[
                 desc: "Reload skills from disk",
             },
             CmdEntry {
-                cmd: "/subagents",
-                desc: "List available subagent definitions",
+                cmd: "/teams",
+                desc: "List available teams and their members",
             },
         ],
     },
@@ -344,7 +344,7 @@ enum MenuItem {
 fn cmd_required_capability(cmd: &str) -> Option<cade_core::capabilities::Capability> {
     use cade_core::capabilities::Capability;
     match cmd {
-        "/agents" | "/subagents" | "/reflect" | "/artifacts" => Some(Capability::Agentic),
+        "/agents" | "/teams" | "/reflect" | "/artifacts" => Some(Capability::Agentic),
         "/mcp" => Some(Capability::Mcp),
         "web_search" | "fetch_doc" => Some(Capability::Web),
         _ => None,

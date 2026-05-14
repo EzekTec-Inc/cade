@@ -589,6 +589,32 @@ impl Repl {
                 }
             }
 
+            SlashCmd::Teams => {
+                if self
+                    .require_capability(cade_core::capabilities::Capability::Agentic, "/teams")
+                {
+                    return Ok(false);
+                }
+                let all_teams = cade_agent::team::discovery::discover_all_teams(&self.cwd);
+                if all_teams.is_empty() {
+                    self.tui_dim("  No teams discovered.".to_string());
+                } else {
+                    self.tui_blank();
+                    self.tui_hdr("  Available teams:");
+                    for team in &all_teams {
+                        self.tui_sys(team.summary());
+                        for member in &team.members {
+                            self.tui_dim(format!(
+                                "    └─ {} ({}) — {}",
+                                member.id, member.tools, member.description
+                            ));
+                        }
+                    }
+                    self.tui_blank();
+                    self.tui_dim("  Tip: Use run_team(task=\"...\", team=\"<id>\") to delegate work.".to_string());
+                }
+            }
+
             SlashCmd::Providers => {
                 return self.cmd_providers().await;
             }

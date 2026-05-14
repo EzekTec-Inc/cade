@@ -11,6 +11,7 @@ pub mod agent;
 pub mod backends;
 pub mod mcp;
 pub mod subagents;
+pub mod team;
 pub mod tools;
 
 // endregion: --- Modules
