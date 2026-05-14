@@ -1,44 +1,56 @@
 # CADE Documentation
 
-Welcome to the CADE documentation. CADE is a local-first Rust coding-AI
-assistant with desktop extensions, persistent memory, and a Cargo workspace
-of 14 crates.
+Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent shell — a local-first, batteries-included AI development environment that runs entirely in your terminal. These docs will help you get the most out of it.
 
-## Read these first
+> **New here?** Start with [Getting Started](getting-started.md) — you'll be up and running in under five minutes.
 
-| Doc | Use when |
+---
+
+## 🚀 Start Here
+
+| Doc | When to read it |
 |---|---|
-| [getting-started.md](getting-started.md) | Installing CADE and running your first session |
-| [slash-commands.md](slash-commands.md) | Looking up `/`-prefixed commands |
-| [keybindings.md](keybindings.md) | TUI keyboard shortcuts |
-| [configuration.md](configuration.md) | Editing `settings.json` or environment variables |
+| [Getting Started](getting-started.md) | You just installed CADE and want to run your first session |
+| [Usage Guide](usage-guide.md) | You want a tour of what CADE can do day-to-day |
+| [Slash Commands](slash-commands.md) | You need to look up a `/command` |
+| [Keybindings](keybindings.md) | You want to learn the keyboard shortcuts |
+| [Configuration](configuration.md) | You want to tweak settings, env vars, or file locations |
 
-## Architecture & development
+## 🧠 Core Systems
 
-| Doc | Use when |
+| Doc | When to read it |
 |---|---|
-| [architecture.md](architecture.md) | Understanding the workspace and data flow |
-| [development.md](development.md) | Setting up a dev environment, building, testing |
-| [roadmap.md](roadmap.md) | Reviewing shipped features and what's next |
+| [Memory System](memory-system.md) | You want to understand how CADE remembers things across sessions |
+| [Skills](skills.md) | You want to load, create, or share domain-specific knowledge packs |
+| [Subagents & Teams](subagents.md) | You want to delegate tasks to parallel background workers |
+| [Agents & Conversations](agents-and-conversations.md) | You want to manage agents, switch conversations, or use checkpoints |
 
-## Subsystems
+## 🔌 Extensibility
 
-| Doc | Use when |
+| Doc | When to read it |
 |---|---|
-| [memory-system.md](memory-system.md) | Reading or writing memory blocks, debugging consolidation |
-| [agents-and-conversations.md](agents-and-conversations.md) | Managing agents, conversations, checkpoints |
-| [permissions.md](permissions.md) | Controlling tool approval and protected paths |
-| [hooks.md](hooks.md) | Wiring shell scripts into lifecycle events |
-| [skills.md](skills.md) | Loading, installing, or authoring skills |
-| [subagents.md](subagents.md) | Delegating work to sub-agents |
-| [mcp-servers.md](mcp-servers.md) | Adding external MCP tool servers |
-| [intelligent-tool-selection.md](intelligent-tool-selection.md) | Tuning tool reranking |
-| [cost-and-pricing.md](cost-and-pricing.md) | Capping spend and inspecting token costs |
-| [execution-backends.md](execution-backends.md) | Running tools locally, in Docker, or over SSH |
-| [themes.md](themes.md) | Customising TUI colour schemes |
-| [gui-dashboard.md](gui-dashboard.md) | Using the WASM dashboard |
+| [MCP Servers](mcp-servers.md) | You want to connect external tools (GitHub, Jira, databases, etc.) |
+| [Hooks](hooks.md) | You want to run shell scripts when specific events happen |
+| [Permissions](permissions.md) | You want to control what CADE can and can't do |
+| [Execution Backends](execution-backends.md) | You want to run tools inside Docker, over SSH, or in read-only mode |
 
-## Historical material
+## 🎨 Customisation
 
-`docs/history/` contains shipped or partially-shipped plan documents
-preserved for archaeology. They do not describe current behaviour.
+| Doc | When to read it |
+|---|---|
+| [Themes](themes.md) | You want to skin the TUI with your favourite colour scheme |
+| [Intelligent Tool Selection](intelligent-tool-selection.md) | You want to understand or tune how CADE picks tools for each request |
+| [GUI Dashboard](gui-dashboard.md) | You want to use the browser-based WASM dashboard |
+| [Cost & Pricing](cost-and-pricing.md) | You want to track spend or set cost guardrails |
+
+## 🏗️ Architecture & Development
+
+| Doc | When to read it |
+|---|---|
+| [Architecture](architecture.md) | You want to understand the crate structure and data flow |
+| [Development](development.md) | You want to build CADE from source and run the test suite |
+| [Developer Guide](developer-guide.md) | You want to contribute code and follow project conventions |
+
+## 📜 Historical Material
+
+`docs/history/` contains shipped or partially-shipped plan documents preserved for reference. They describe design intent at the time of writing, not necessarily current behaviour.
