@@ -586,6 +586,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         },
     );
 

@@ -101,6 +101,7 @@ pub async fn create_agent(
         created_at: None, // populated by DB via now_ts()
         compaction_model: None,
         theme: None,
+            active_plan_json: None,
     };
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;

@@ -540,6 +540,7 @@ fn ephemeral_environment_cleans_up_on_drop() {
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         },
     )
     .unwrap();
@@ -555,6 +556,7 @@ fn ephemeral_environment_cleans_up_on_drop() {
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         },
     )
     .unwrap();
@@ -755,6 +757,7 @@ async fn subagent_write_file_records_recent_edit() {
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         },
     )
     .unwrap();
@@ -853,6 +856,7 @@ async fn subagent_mcp_prefixed_write_records_recent_edit() {
             created_at: None,
             compaction_model: None,
             theme: None,
+            active_plan_json: None,
         },
     )
     .unwrap();
