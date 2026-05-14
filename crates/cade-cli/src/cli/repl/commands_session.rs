@@ -15,12 +15,12 @@ impl Repl {
             Ok(checkpoints) => {
                 if let Some(last_cp) = checkpoints.last() {
                     let checkpoint_id = last_cp["id"].as_str().unwrap_or("").to_string();
-                    let stash_ref = last_cp["git_stash_ref"].as_str().map(String::from);
+                    let commit_hash = last_cp["git_commit_hash"].as_str().map(String::from);
                     self.tui_dim(format!("  Restoring checkpoint {checkpoint_id}…"));
-                    if let Some(s) = stash_ref {
+                    if let Some(c) = commit_hash {
                         use cade_agent::tools::git_checkpoint;
-                        match git_checkpoint::restore_git_checkpoint(&s, &self.cwd).await {
-                            Ok(()) => self.tui_ok(format!("  ✓ Git stash applied: {s}")),
+                        match git_checkpoint::restore_git_checkpoint(&c, &self.cwd).await {
+                            Ok(()) => self.tui_ok(format!("  ✓ Git reset applied: {c}")),
                             Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
                         }
                     }

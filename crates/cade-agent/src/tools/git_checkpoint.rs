@@ -1,11 +1,11 @@
-/// Git-based checkpointing: stash working-tree state before destructive turns.
+/// Git-based checkpointing: commit working-tree state before destructive turns.
 ///
 /// When `create_git_checkpoint` is called:
-/// 1. If the working tree is dirty, creates a stash labelled "cade-cp-<label>" and returns the stash ref.
+/// 1. If the working tree is dirty, commits with label "cade-cp-<label>".
 /// 2. Records the current HEAD commit hash.
-/// 3. Returns (stash_ref, commit_hash) — either or both may be None.
+/// 3. Returns the `GitCheckpoint` with the `commit_hash`.
 ///
-/// When `restore_git_checkpoint` is called with a stash ref, it pops that stash.
+/// When `restore_git_checkpoint` is called with a commit hash, it resets to that commit.
 use std::path::Path;
 
 use crate::Result;
@@ -15,8 +15,6 @@ use crate::Result;
 /// Result of creating a git checkpoint.
 #[derive(Debug, Clone)]
 pub struct GitCheckpoint {
-    /// The git stash ref (e.g. "stash@{0}") if dirty state was stashed.
-    pub stash_ref: Option<String>,
     /// HEAD commit hash at checkpoint time.
     pub commit_hash: Option<String>,
 }
@@ -25,7 +23,7 @@ pub struct GitCheckpoint {
 
 // region:    --- Public API
 
-/// Create a git checkpoint for the working directory.
+/// Create a git checkpoint for the working directory by committing dirty state.
 ///
 /// Returns `None` if the directory is not in a git repo.
 pub async fn create_git_checkpoint(label: &str, cwd: &Path) -> Option<GitCheckpoint> {
@@ -33,55 +31,43 @@ pub async fn create_git_checkpoint(label: &str, cwd: &Path) -> Option<GitCheckpo
         return None;
     }
 
-    let commit_hash = current_git_hash(cwd).await;
     let is_dirty = working_tree_dirty(cwd).await;
 
-    let stash_ref = if is_dirty {
-        create_stash(label, cwd).await
-    } else {
-        None
-    };
+    if is_dirty {
+        let msg = format!("cade-cp-{label}");
+        let _ = run_git(cwd, &["add", "-A"]).await;
+        let _ = run_git(cwd, &["commit", "-m", &msg]).await;
+    }
+
+    let commit_hash = current_git_hash(cwd).await;
 
     Some(GitCheckpoint {
-        stash_ref,
         commit_hash,
     })
 }
 
-/// Restore a git checkpoint by popping the stash ref.
+/// Restore a git checkpoint by hard resetting to the commit hash.
 ///
-/// Returns an error message on failure; Ok(()) if the stash applied cleanly or
-/// if `stash_ref` is None (no-op).
-pub async fn restore_git_checkpoint(stash_ref: &str, cwd: &Path) -> Result<()> {
-    if stash_ref.is_empty() {
+/// Returns an error message on failure; Ok(()) if the reset was successful.
+pub async fn restore_git_checkpoint(commit_hash: &str, cwd: &Path) -> Result<()> {
+    if commit_hash.is_empty() {
         return Ok(());
     }
-    let out = run_git(cwd, &["stash", "apply", stash_ref]).await;
+    let out = run_git(cwd, &["reset", "--hard", commit_hash]).await;
     match out {
         Some((exit, _, stderr)) if exit != 0 => Err(crate::Error::custom(format!(
-            "git stash apply failed: {stderr}"
+            "git reset failed: {stderr}"
         ))),
         None => Err(crate::Error::custom("git not found or failed to run")),
         _ => Ok(()),
     }
 }
 
-/// Delete a git checkpoint by dropping the stash ref.
+/// Delete a git checkpoint. Since checkpoints are now commits, we do not delete them to preserve history.
 ///
-/// Returns an error message on failure; Ok(()) if dropped cleanly or
-/// if `stash_ref` is None (no-op).
-pub async fn delete_git_checkpoint(stash_ref: &str, cwd: &Path) -> Result<()> {
-    if stash_ref.is_empty() {
-        return Ok(());
-    }
-    let out = run_git(cwd, &["stash", "drop", stash_ref]).await;
-    match out {
-        Some((exit, _, stderr)) if exit != 0 => Err(crate::Error::custom(format!(
-            "git stash drop failed: {stderr}"
-        ))),
-        None => Err(crate::Error::custom("git not found or failed to run")),
-        _ => Ok(()),
-    }
+/// Returns Ok(()).
+pub async fn delete_git_checkpoint(_commit_hash: &str, _cwd: &Path) -> Result<()> {
+    Ok(())
 }
 
 /// Get the current HEAD commit hash, if inside a git repo.
@@ -110,21 +96,7 @@ async fn working_tree_dirty(cwd: &Path) -> bool {
     matches!(run_git(cwd, &["status", "--porcelain"]).await, Some((0, ref out, _)) if !out.trim().is_empty())
 }
 
-async fn create_stash(label: &str, cwd: &Path) -> Option<String> {
-    let msg = format!("cade-cp-{label}");
-    let (exit, _, _) = run_git(cwd, &["stash", "push", "-u", "-m", &msg]).await?;
-    if exit != 0 {
-        return None;
-    }
-    // Get the stash ref — it's always stash@{0} immediately after push
-    let (exit2, stdout, _) = run_git(cwd, &["stash", "list", "--format=%gd", "-1"]).await?;
-    if exit2 == 0 {
-        let r = stdout.trim().to_string();
-        if r.is_empty() { None } else { Some(r) }
-    } else {
-        Some("stash@{0}".to_string())
-    }
-}
+
 
 /// Run a git subcommand in `cwd`, returning (exit_code, stdout, stderr).
 async fn run_git(cwd: &Path, args: &[&str]) -> Option<(i32, String, String)> {

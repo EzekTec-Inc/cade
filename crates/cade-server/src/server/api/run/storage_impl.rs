@@ -282,13 +282,13 @@ impl StorageBackend for ServerStorageBackend {
         Err(cade_agent::Error::custom("load_skill_ref not implemented on ServerStorageBackend"))
     }
     
-    async fn create_checkpoint(&self, agent_id: &str, _conversation_id: Option<&str>, _branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, _stash_ref: Option<&str>, _git_commit_hash: Option<&str>) -> Result<String> {
+    async fn create_checkpoint(&self, agent_id: &str, _conversation_id: Option<&str>, _branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, _git_commit_hash: Option<&str>) -> Result<String> {
         let id = format!("cp-{}", uuid::Uuid::new_v4());
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
         let conn = self.state.db.get().map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         let result = conn.execute(
-            "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_stash_ref, git_commit_hash, parent_id)
-             VALUES (?1, ?2, NULL, 'main', ?3, ?4, ?5, NULL, NULL, NULL)",
+            "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_commit_hash, parent_id)
+             VALUES (?1, ?2, NULL, 'main', ?3, ?4, ?5, NULL, NULL)",
             rusqlite::params![id, agent_id, label, desc, now],
         );
         drop(conn);

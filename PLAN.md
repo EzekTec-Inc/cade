@@ -2575,3 +2575,34 @@ git checkout HEAD^ -- crates/cade-agent/src/subagents/config.rs crates/cade-serv
 **New behavior**: Gracefully handles empty overlay stack — `continue` in loops, guard in match arms. No functional change.
 
 **Rollback**: `git revert <commit>` or restore checkpoint `cp-f38a6636-bdf1-4687-86ae-ad5eae2b1d8c`.
+
+## 2026-05-13T23:30:00Z — refactor(checkpoints): Track each committed state as a snapshot
+
+**Task:** Refactor the `/checkpoint` system to track each committed state as a snapshot that the user can restore to, rather than creating git stashes.
+
+**Files modified (10):**
+- `crates/cade-agent/src/tools/git_checkpoint.rs` — Updated `create_git_checkpoint` to commit dirty states instead of stashing. Updated `restore_git_checkpoint` to perform a hard reset to the provided commit hash. Simplified `delete_git_checkpoint` to just return success as history isn't modified.
+- `crates/cade-agent/src/tools/runtime/checkpoints.rs` — Updated `handle_create_checkpoint` and `handle_restore_checkpoint` to handle `git_commit_hash` instead of `git_stash_ref`.
+- `crates/cade-agent/src/backends/storage.rs` — Updated `StorageBackend` trait's `create_checkpoint` to remove `stash_ref`.
+- `crates/cade-agent/src/agent/client/extensions.rs` — Updated `HttpTransport::create_checkpoint` signature to omit `git_stash_ref`.
+- `crates/cade-agent/src/agent/client/storage_impl.rs` — Updated `ServerStorageBackend::create_checkpoint` signature and `HttpTransport` invocation to omit `git_stash_ref`.
+- `crates/cade-server/src/server/api/checkpoints.rs` — Updated `CheckpointRow` and `CreateCheckpointBody` to remove `git_stash_ref`. Updated SQL schema interactions accordingly.
+- `crates/cade-server/src/server/api/run/storage_impl.rs` — Updated SQLite inserts and schemas to drop `git_stash_ref` dependency.
+- `crates/cade-store/src/sqlite/mod.rs` — Updated SQLite `checkpoints` table creation schema to remove `git_stash_ref`.
+- `crates/cade-cli/src/cli/repl/commands_checkpoints.rs` — Refactored `cmd_fork` and `cmd_checkpoint` to process `commit_hash` natively without stashing operations.
+- `crates/cade-cli/src/cli/repl/commands_session.rs` — Removed stash logic from `cmd_undo`, replacing it with `git reset` on `commit_hash`.
+- `crates/cade-cli/src/cli/repl/commands_tree.rs` — Removed stash drop logic and refactored stash restore into a hard reset on `commit_hash`.
+- `crates/cade-cli/src/cli/repl/turn_tools/runner.rs` — Removed references to stashes in automatic checkpointing workflow.
+- `crates/cade-gui/src/api.rs` — Removed `git_stash_ref` references in `CheckpointRow` definition and mocked data for tests.
+- `crates/cade-gui/src/session/tests.rs` — Updated snapshot definitions to replace `git_stash_ref` instances with `git_commit_hash`.
+- `crates/cade-tui/src/session_tree.rs` — Removed `git_stash_ref` indicators (`🔀` and `"stashed"`) favoring a clean commit snapshot indicator.
+- `crates/cade-agent/src/tools/meta.rs` — Updated tool metadata descriptions for `create_checkpoint` and `restore_checkpoint` to explicitly mention that dirty git changes are "committed as a snapshot" and restoration is via "hard reset".
+- `docs/architecture.md`, `docs/slash-commands.md`, `docs/agents-and-conversations.md` — Removed markdown documentation claiming checkpoints were built on top of "stashes", replacing definitions with "snapshots" or "commit hashes".
+
+**Previous behavior:** Checkpoints stashed the current working directory's state implicitly, storing a string index `stash_ref` with the `commit_hash`. Restoring the state ran a `git stash pop` mechanism which applied stashed files locally. Deleting dropped the stash reference explicitly from git using `git stash drop`.
+
+**New behavior:** A checkpoint acts natively as a snapshot by staging all modified files and running `git commit -m "cade-cp-<label>"` locally. Consequently, restoration checks out a previous state definitively without applying a stash overhead using `git reset --hard <commit_hash>`.
+
+**Rollback:** Revert git history prior to this timestamp, as this involves significant trait/database column dependency removals.
+
+**Test results:** Cargo unit and integration tests successfully compiled and passed across multiple application interfaces and subcrates.

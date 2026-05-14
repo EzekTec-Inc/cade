@@ -87,7 +87,6 @@ impl HttpTransport {
         label: Option<&str>,
         description: Option<&str>,
         conversation_id: Option<&str>,
-        git_stash_ref: Option<&str>,
         git_commit_hash: Option<&str>,
     ) -> Result<String> {
         let mut body = serde_json::json!({});
@@ -99,9 +98,6 @@ impl HttpTransport {
         }
         if let Some(c) = conversation_id {
             body["conversation_id"] = c.into();
-        }
-        if let Some(s) = git_stash_ref {
-            body["git_stash_ref"] = s.into();
         }
         if let Some(h) = git_commit_hash {
             body["git_commit_hash"] = h.into();

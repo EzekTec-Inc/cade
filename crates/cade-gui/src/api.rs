@@ -462,8 +462,6 @@ pub struct CheckpointRow {
     pub description: Option<String>,
     pub created_at: i64,
     #[serde(default)]
-    pub git_stash_ref: Option<String>,
-    #[serde(default)]
     pub git_commit_hash: Option<String>,
     #[serde(default)]
     pub parent_id: Option<String>,
@@ -1329,16 +1327,16 @@ mod tests {
         let body = r#"[
             {"id":"cp-1","agent_id":"agent-1","branch_id":"main","created_at":1700000000,
              "label":"before-refactor","description":"safe",
-             "conversation_id":null,"git_stash_ref":"stash@{0}","git_commit_hash":null,"parent_id":null},
+             "conversation_id":null,"git_commit_hash":"hash123","parent_id":null},
             {"id":"cp-2","agent_id":"agent-1","branch_id":"main","created_at":1700001000,
              "label":null,"description":null,
-             "conversation_id":null,"git_stash_ref":null,"git_commit_hash":null,"parent_id":null}
+             "conversation_id":null,"git_commit_hash":null,"parent_id":null}
         ]"#;
         let rows = parse_checkpoints(200, body).expect("decode");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "cp-1");
         assert_eq!(rows[0].label.as_deref(), Some("before-refactor"));
-        assert_eq!(rows[0].git_stash_ref.as_deref(), Some("stash@{0}"));
+        assert_eq!(rows[0].git_commit_hash.as_deref(), Some("hash123"));
         assert_eq!(rows[1].label, None);
     }
 

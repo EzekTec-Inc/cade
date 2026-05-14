@@ -196,10 +196,10 @@ impl StorageBackend for HttpTransport {
         Err(crate::Error::custom("load_skill_ref not implemented on HttpTransport"))
     }
     
-    async fn create_checkpoint(&self, agent_id: &str, conversation_id: Option<&str>, _branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, _stash_ref: Option<&str>, git_commit_hash: Option<&str>) -> Result<String> {
+    async fn create_checkpoint(&self, agent_id: &str, conversation_id: Option<&str>, _branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, git_commit_hash: Option<&str>) -> Result<String> {
         // Delegate to inherent HttpTransport::create_checkpoint with correct param order:
-        //   inherent: (agent_id, label, description, conversation_id, git_stash_ref, git_commit_hash)
-        self.create_checkpoint(agent_id, label, desc, conversation_id, _stash_ref, git_commit_hash).await
+        //   inherent: (agent_id, label, description, conversation_id, git_commit_hash)
+        self.create_checkpoint(agent_id, label, desc, conversation_id, git_commit_hash).await
     }
 
     async fn get_checkpoint(&self, agent_id: &str, checkpoint_id: &str) -> Result<Value> {

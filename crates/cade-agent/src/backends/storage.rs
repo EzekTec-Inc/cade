@@ -32,7 +32,7 @@ pub trait StorageBackend: Send + Sync {
     async fn run_skill_script(&self, agent_id: &str, skill_id: &str, script_name: &str, args: Option<&[String]>, cwd: &Path) -> Result<String>;
     async fn load_skill_ref(&self, agent_id: &str, skill_id: &str, doc_name: &str) -> Result<String>;
     
-    async fn create_checkpoint(&self, agent_id: &str, conversation_id: Option<&str>, branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, stash_ref: Option<&str>, git_commit_hash: Option<&str>) -> Result<String>;
+    async fn create_checkpoint(&self, agent_id: &str, conversation_id: Option<&str>, branch_id: Option<&str>, label: Option<&str>, desc: Option<&str>, git_commit_hash: Option<&str>) -> Result<String>;
     async fn get_checkpoint(&self, agent_id: &str, checkpoint_id: &str) -> Result<Value>;
 
     async fn list_checkpoints(&self, agent_id: &str) -> Result<Vec<Value>>;

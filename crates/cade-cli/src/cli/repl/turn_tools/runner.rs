@@ -417,7 +417,6 @@ impl Repl {
 
                 use cade_agent::tools::git_checkpoint;
                 let git_cp = git_checkpoint::create_git_checkpoint("auto", &self.cwd).await;
-                let stash = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref());
                 let commit = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref());
 
                 match self
@@ -427,15 +426,14 @@ impl Repl {
                         Some("auto"),
                         Some("Created automatically prior to destructive tool execution"),
                         conv_id.as_deref(),
-                        stash,
                         commit,
                     )
                     .await
                 {
                     Ok(id) => {
-                        let msg = if stash.is_some() {
+                        let msg = if commit.is_some() {
                             format!(
-                                "  ✓ Auto-checkpoint & stash saved (ID: {})",
+                                "  ✓ Auto-checkpoint & commit saved (ID: {})",
                                 &id[..8.min(id.len())]
                             )
                         } else {

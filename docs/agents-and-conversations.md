@@ -64,8 +64,7 @@ pages as you scroll up.
 
 A checkpoint captures:
 
-- A `git stash` ref of any uncommitted working-tree changes
-- The current `git HEAD` commit hash
+- The `git HEAD` commit hash
 - An optional label and description
 - A pointer to the conversation message after which it was created
 
@@ -78,7 +77,7 @@ A checkpoint captures:
 /fork [label]                 # branch a new conversation from a checkpoint
 ```
 
-Restore re-applies the stash. No-op restore (clean tree, same commit) is
+Restore checks out the recorded commit hash, returning the working tree to the exact committed state at that point. No-op restore (clean tree, same commit) is
 free.
 
 ### When to checkpoint

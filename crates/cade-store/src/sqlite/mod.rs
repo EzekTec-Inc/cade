@@ -238,7 +238,6 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             label           TEXT,
             description     TEXT,
             created_at      INTEGER NOT NULL,
-            git_stash_ref   TEXT,
             git_commit_hash TEXT,
             parent_id       TEXT,
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE

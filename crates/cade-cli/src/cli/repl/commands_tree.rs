@@ -70,16 +70,15 @@ impl Repl {
                             if let Ok(Some(a)) = ans
                                 && a.as_str().starts_with("Yes")
                             {
-                                // Drop git stash if exists
-                                let stash_ref = checkpoints
+                                let commit_hash = checkpoints
                                     .iter()
                                     .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
-                                    .and_then(|cp| cp["git_stash_ref"].as_str())
+                                    .and_then(|cp| cp["git_commit_hash"].as_str())
                                     .map(String::from);
-                                if let Some(s) = stash_ref {
+                                if let Some(c) = commit_hash {
                                     use cade_agent::tools::git_checkpoint;
                                     let _ =
-                                        git_checkpoint::delete_git_checkpoint(&s, &self.cwd).await;
+                                        git_checkpoint::delete_git_checkpoint(&c, &self.cwd).await;
                                 }
                                 // Delete from server
                                 match self
@@ -102,16 +101,16 @@ impl Repl {
                         }
                         Ok(cade_tui::TreeAction::Restore { checkpoint_id }) => {
                             self.tui_dim(format!("  Restoring checkpoint {checkpoint_id}…"));
-                            // Find git stash ref in the checkpoint list
-                            let stash_ref = checkpoints
+                            // Find git commit hash in the checkpoint list
+                            let commit_hash = checkpoints
                                 .iter()
                                 .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
-                                .and_then(|cp| cp["git_stash_ref"].as_str())
+                                .and_then(|cp| cp["git_commit_hash"].as_str())
                                 .map(String::from);
-                            if let Some(s) = stash_ref {
+                            if let Some(c) = commit_hash {
                                 use cade_agent::tools::git_checkpoint;
-                                match git_checkpoint::restore_git_checkpoint(&s, &self.cwd).await {
-                                    Ok(()) => self.tui_ok(format!("  ✓ Git stash applied: {s}")),
+                                match git_checkpoint::restore_git_checkpoint(&c, &self.cwd).await {
+                                    Ok(()) => self.tui_ok(format!("  ✓ Git reset applied: {c}")),
                                     Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
                                 }
                             }

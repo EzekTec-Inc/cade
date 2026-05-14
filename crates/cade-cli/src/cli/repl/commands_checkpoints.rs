@@ -11,10 +11,6 @@ impl Repl {
         self.tui_dim(format!("  Creating fork point '{label}'…"));
         use cade_agent::tools::git_checkpoint;
         let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
-        let stash = git_cp
-            .as_ref()
-            .and_then(|g| g.stash_ref.as_deref())
-            .map(String::from);
         let commit = git_cp
             .as_ref()
             .and_then(|g| g.commit_hash.as_deref())
@@ -27,7 +23,6 @@ impl Repl {
                 Some(label),
                 Some("fork anchor"),
                 self.conversation_id().as_deref(),
-                stash.as_deref(),
                 commit.as_deref(),
             )
             .await
@@ -61,13 +56,9 @@ impl Repl {
         let agent_id = self.agent_id();
         let label = label_arg.as_deref().unwrap_or("manual");
         self.tui_dim(format!("  Creating checkpoint '{label}'…"));
-        // Git stash if dirty
+        // Git commit if dirty
         use cade_agent::tools::git_checkpoint;
         let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
-        let stash = git_cp
-            .as_ref()
-            .and_then(|g| g.stash_ref.as_deref())
-            .map(String::from);
         let commit = git_cp
             .as_ref()
             .and_then(|g| g.commit_hash.as_deref())
@@ -80,15 +71,14 @@ impl Repl {
                 Some(label),
                 None,
                 conv_id.as_deref(),
-                stash.as_deref(),
                 commit.as_deref(),
             )
             .await
         {
             Ok(cp_id) => {
                 let mut msg = format!("  ✓ Checkpoint '{label}' — ID: {cp_id}");
-                if stash.is_some() {
-                    msg.push_str("  (git stashed)");
+                if commit.is_some() {
+                    msg.push_str("  (git committed)");
                 }
                 self.app
                     .lock()

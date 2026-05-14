@@ -138,18 +138,15 @@ fn draw_tree(
             let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
                 .map(|d| d.format("%m-%d %H:%M").to_string())
                 .unwrap_or_default();
-            let stash = cp["git_stash_ref"].as_str().filter(|s| !s.is_empty());
             let commit = cp["git_commit_hash"]
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .map(|h| &h[..8.min(h.len())]);
 
-            // Indicator: 🔀 if has git stash, 📍 otherwise
-            let icon = if stash.is_some() { "🔀" } else { "📍" };
-            let git_str = match (stash, commit) {
-                (Some(s), Some(h)) => format!("  {s} @ {h}"),
-                (None, Some(h)) => format!("  @ {h}"),
-                (Some(s), None) => format!("  {s}"),
+            // Indicator: 📍
+            let icon = "📍";
+            let git_str = match commit {
+                Some(h) => format!("  @ {h}"),
                 _ => String::new(),
             };
 

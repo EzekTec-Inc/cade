@@ -91,7 +91,7 @@ same REST API.
 - `agents`, `conversations`, `messages`
 - `memory_blocks` (pinned/short/long-term tier)
 - `tool_executions` (with `output_chars` for cost telemetry)
-- `checkpoints` (git stash refs + commit hashes)
+- `checkpoints` (git commit hashes)
 - `artifacts` (logs, diffs, fetched docs)
 - `providers` (encrypted API keys via AES-GCM)
 - `runs` (background mode)

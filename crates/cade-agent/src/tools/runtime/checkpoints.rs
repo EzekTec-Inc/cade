@@ -11,12 +11,8 @@ impl ToolRuntime {
             .to_string();
         let description = args["description"].as_str().map(String::from);
 
-        // 1. Attempt a git stash
+        // 1. Attempt a git commit if dirty
         let git_cp = git_checkpoint::create_git_checkpoint(&label, &self.cwd).await;
-        let stash_ref = git_cp
-            .as_ref()
-            .and_then(|g| g.stash_ref.as_deref())
-            .map(String::from);
         let commit_hash = git_cp
             .as_ref()
             .and_then(|g| g.commit_hash.as_deref())
@@ -31,16 +27,12 @@ impl ToolRuntime {
                 Some("main"),
                 Some(&label),
                 description.as_deref(),
-                stash_ref.as_deref(),
                 commit_hash.as_deref(),
             )
             .await
         {
             Ok(cp_id) => {
                 let mut msg = format!("Checkpoint '{label}' created. ID: {cp_id}");
-                if let Some(s) = &stash_ref {
-                    msg.push_str(&format!("\nGit stash: {s}"));
-                }
                 if let Some(h) = &commit_hash {
                     msg.push_str(&format!("\nHEAD: {}", &h[..8.min(h.len())]));
                 }
@@ -66,12 +58,12 @@ impl ToolRuntime {
             Err(e) => return (format!("Checkpoint not found: {e}"), true),
         };
 
-        // Apply git stash if there is one
-        let stash_ref = cp["git_stash_ref"].as_str().unwrap_or("").to_string();
-        if !stash_ref.is_empty()
-            && let Err(e) = git_checkpoint::restore_git_checkpoint(&stash_ref, &self.cwd).await
+        // Reset to git commit if there is one
+        let commit_hash = cp["git_commit_hash"].as_str().unwrap_or("").to_string();
+        if !commit_hash.is_empty()
+            && let Err(e) = git_checkpoint::restore_git_checkpoint(&commit_hash, &self.cwd).await
         {
-            return (format!("Git restore failed: {e}"), true);
+            return (format!("Git reset failed: {e}"), true);
         }
 
         // Mark checkpoint as restored on server

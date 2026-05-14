@@ -21,7 +21,6 @@ pub struct CheckpointRow {
     pub label: Option<String>,
     pub description: Option<String>,
     pub created_at: i64,
-    pub git_stash_ref: Option<String>,
     pub git_commit_hash: Option<String>,
     pub parent_id: Option<String>,
 }
@@ -32,7 +31,6 @@ pub struct CreateCheckpointBody {
     pub description: Option<String>,
     pub conversation_id: Option<String>,
     pub branch_id: Option<String>,
-    pub git_stash_ref: Option<String>,
     pub git_commit_hash: Option<String>,
     pub parent_id: Option<String>,
 }
@@ -51,13 +49,13 @@ pub async fn create_checkpoint(
     let conn = state.db.get().map_err(db_err)?;
     let now = unix_ts();
     conn.execute(
-        "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_stash_ref, git_commit_hash, parent_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_commit_hash, parent_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             id, agent_id,
             body.conversation_id, body.branch_id.as_deref().unwrap_or("main"),
             body.label, body.description, now,
-            body.git_stash_ref, body.git_commit_hash, body.parent_id
+            body.git_commit_hash, body.parent_id
         ],
     ).map_err(db_err)?;
     Ok(Json(json!({ "id": id, "created_at": now })))
@@ -72,7 +70,7 @@ pub async fn list_checkpoints(
     let mut stmt = conn
         .prepare(
             "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
-                git_stash_ref, git_commit_hash, parent_id
+                git_commit_hash, parent_id
          FROM checkpoints WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 200",
         )
         .map_err(db_err)?;
@@ -86,9 +84,8 @@ pub async fn list_checkpoints(
                 "label":           r.get::<_, Option<String>>(4)?,
                 "description":     r.get::<_, Option<String>>(5)?,
                 "created_at":      r.get::<_, i64>(6)?,
-                "git_stash_ref":   r.get::<_, Option<String>>(7)?,
-                "git_commit_hash": r.get::<_, Option<String>>(8)?,
-                "parent_id":       r.get::<_, Option<String>>(9)?,
+                "git_commit_hash": r.get::<_, Option<String>>(7)?,
+                "parent_id":       r.get::<_, Option<String>>(8)?,
             }))
         })
         .map_err(db_err)?
@@ -106,7 +103,7 @@ pub async fn get_checkpoint_handler(
     let row = conn
         .query_row(
             "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
-                git_stash_ref, git_commit_hash, parent_id
+                git_commit_hash, parent_id
          FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
             rusqlite::params![cp_id, agent_id],
             |r| {

@@ -32,7 +32,7 @@ the GUI palette uses the same triggers via `cade-core::resources::palette`.
 | `/pin` | | Pin current agent as the global default |
 | `/resume` | | Browse past conversations and switch |
 | `/init` | | Generate a starter `project` memory block |
-| `/checkpoint [label]` | `/cp` | Save a working-tree checkpoint (git stash) |
+| `/checkpoint [label]` | `/cp` | Save a working-tree checkpoint (git commit) |
 | `/tree` | `/checkpoints`, `/session-tree` | Browse + restore checkpoints |
 | `/fork [label]` | | Branch a new conversation from a checkpoint |
 | `/undo` | | Restore the most recent checkpoint |

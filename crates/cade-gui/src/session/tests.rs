@@ -1567,8 +1567,7 @@ fn test_checkpoint_rows() -> Vec<crate::api::CheckpointRow> {
             label: Some("before-refactor".into()),
             description: None,
             created_at: 1_700_000_000,
-            git_stash_ref: Some("stash@{0}".into()),
-            git_commit_hash: None,
+            git_commit_hash: Some("hash123".into()),
             parent_id: None,
         },
         crate::api::CheckpointRow {
@@ -1579,7 +1578,6 @@ fn test_checkpoint_rows() -> Vec<crate::api::CheckpointRow> {
             label: None,
             description: Some("auto-save".into()),
             created_at: 1_700_001_000,
-            git_stash_ref: None,
             git_commit_hash: None,
             parent_id: Some("cp-1".into()),
         },

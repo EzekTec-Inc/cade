@@ -494,7 +494,7 @@ fn schema_message_agent() -> Value {
 fn schema_create_checkpoint() -> Value {
     json!({
         "name": "create_checkpoint",
-        "description": "Create a checkpoint of the current working-tree state. Optionally stashes dirty git changes so you can restore to this exact state later. Use before risky operations, refactors, or long task sequences.",
+        "description": "Create a checkpoint of the current working-tree state. Commits dirty git changes as a snapshot so you can restore to this exact state later. Use before risky operations, refactors, or long task sequences.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -527,7 +527,7 @@ fn schema_list_checkpoints() -> Value {
 fn schema_restore_checkpoint() -> Value {
     json!({
         "name": "restore_checkpoint",
-        "description": "Restore the working tree to a previously created checkpoint. Applies the git stash captured at that point (if any) and marks the checkpoint as current.",
+        "description": "Restore the working tree to a previously created checkpoint. Hard resets the git tree to the commit captured at that point and marks the checkpoint as current.",
         "parameters": {
             "type": "object",
             "properties": {
