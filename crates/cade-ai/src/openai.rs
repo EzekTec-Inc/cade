@@ -25,6 +25,11 @@ fn needs_max_completion_tokens(model: &str) -> bool {
         || bare.starts_with("o4")
 }
 
+fn is_o_series(model: &str) -> bool {
+    let bare = bare_model(model).to_lowercase();
+    bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
+}
+
 fn needs_responses_api(model: &str) -> bool {
     let bare = model.to_lowercase();
     bare.starts_with("gpt-5")
@@ -164,10 +169,7 @@ impl OpenAiProvider {
     }
 
     fn to_openai_messages(req: &CompletionRequest) -> Value {
-        let is_o_series = {
-            let bare = bare_model(&req.model).to_lowercase();
-            bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
-        };
+        let is_o_series = is_o_series(&req.model);
 
         let mut combined_system = String::new();
         let mut processed_messages = Vec::new();
@@ -329,10 +331,7 @@ impl OpenAiProvider {
     }
 
     fn to_responses_input(req: &CompletionRequest) -> Value {
-        let is_o_series = {
-            let bare = bare_model(&req.model).to_lowercase();
-            bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
-        };
+        let is_o_series = is_o_series(&req.model);
         let mut items: Vec<Value> = Vec::new();
         for m in &req.messages {
             match m.role.as_str() {
@@ -442,7 +441,7 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
-            if let Some(effort) = &req.reasoning_effort {
+            if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
                 let mapped = match effort.as_str() {
                     "xhigh" => "high",
                     e @ ("low" | "medium" | "high") => e,
@@ -494,7 +493,7 @@ impl LlmProvider for OpenAiProvider {
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
-        if let Some(effort) = &req.reasoning_effort {
+        if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
             let mapped = match effort.as_str() {
                 "xhigh" => "high",
                 e @ ("low" | "medium" | "high") => e,
@@ -557,7 +556,7 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
-            if let Some(effort) = &req.reasoning_effort {
+            if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
                 let mapped = match effort.as_str() {
                     "xhigh" => "high",
                     e @ ("low" | "medium" | "high") => e,
@@ -733,7 +732,7 @@ impl LlmProvider for OpenAiProvider {
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
-        if let Some(effort) = &req.reasoning_effort {
+        if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
             let mapped = match effort.as_str() {
                 "xhigh" => "high",
                 e @ ("low" | "medium" | "high") => e,
