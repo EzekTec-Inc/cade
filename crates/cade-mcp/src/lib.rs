@@ -45,8 +45,24 @@ use cade_core::settings::McpServerConfig;
 
 const MAX_RECONNECT_ATTEMPTS: u32 = 3;
 const RECONNECT_DELAY_SECS: u64 = 2;
+/// Maximum time (in seconds) to wait for a single MCP server to spawn,
+/// complete the JSON-RPC handshake, and report its tool list.
+/// Servers exceeding this deadline are skipped with a warning.
+const MCP_SERVER_TIMEOUT_SECS: u64 = 15;
 
 // -- Types
+
+/// Result of a single MCP server startup attempt — used by the progress
+/// reporter in `main.rs` to show per-server status.
+#[derive(Debug)]
+pub enum McpStartResult {
+    /// Server connected and reported its tools.
+    Ok { key: String, tool_count: usize },
+    /// Server failed to start (spawn error, handshake failure, etc.).
+    Failed { key: String, error: String },
+    /// Server exceeded the per-server startup timeout.
+    Timeout { key: String, timeout_secs: u64 },
+}
 
 /// Public summary of a running MCP server (for `/mcp` command display).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -125,44 +141,68 @@ fn existing_identity<'a>(server: &Option<&'a McpServer>) -> Option<&'a str> {
 
 impl McpManager {
     /// Spawn all enabled MCP servers, handshake, and fetch their tool lists.
-    /// Servers that fail to start are skipped with a warning.
-    pub async fn start(configs: &HashMap<String, McpServerConfig>) -> Self {
+    /// Servers that fail to start or exceed the per-server timeout are skipped
+    /// with a warning.
+    ///
+    /// Returns `(manager, results)` where `results` contains per-server
+    /// outcomes so the caller can report individual status to the user.
+    pub async fn start(configs: &HashMap<String, McpServerConfig>) -> (Self, Vec<McpStartResult>) {
         let mut servers = Vec::new();
+        let mut results = Vec::new();
 
         // Sort for deterministic startup order
         let mut entries: Vec<(&String, &McpServerConfig)> = configs.iter().collect();
         entries.sort_by_key(|(k, _)| k.as_str());
+
+        let timeout_dur = std::time::Duration::from_secs(MCP_SERVER_TIMEOUT_SECS);
 
         let mut join_set = tokio::task::JoinSet::new();
         for (key, config) in entries {
             let k = key.clone();
             let c = config.clone();
             join_set.spawn(async move {
-                let res = Self::connect_server(&k, &c).await;
+                let res = tokio::time::timeout(timeout_dur, Self::connect_server(&k, &c)).await;
                 (k, res)
             });
         }
 
         while let Some(Ok((key, result))) = join_set.join_next().await {
             match result {
-                Ok(server) => {
-                    info!(
-                        "MCP server '{}' ready — {} tool(s)",
-                        key,
-                        server.tools.len()
-                    );
+                Ok(Ok(server)) => {
+                    let count = server.tools.len();
+                    info!("MCP server '{}' ready — {} tool(s)", key, count);
+                    results.push(McpStartResult::Ok {
+                        key: key.clone(),
+                        tool_count: count,
+                    });
                     servers.push(server);
                 }
-                Err(e) => {
-                    warn!("MCP server '{}' failed to start: {e}", key);
+                Ok(Err(e)) => {
+                    let msg = e.to_string();
+                    warn!("MCP server '{}' failed to start: {msg}", key);
+                    results.push(McpStartResult::Failed {
+                        key: key.clone(),
+                        error: msg,
+                    });
+                }
+                Err(_elapsed) => {
+                    warn!(
+                        "MCP server '{}' timed out after {}s — skipping",
+                        key, MCP_SERVER_TIMEOUT_SECS
+                    );
+                    results.push(McpStartResult::Timeout {
+                        key: key.clone(),
+                        timeout_secs: MCP_SERVER_TIMEOUT_SECS,
+                    });
                 }
             }
         }
 
-        McpManager {
+        let mgr = McpManager {
             servers: RwLock::new(servers),
             schemas_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
+        };
+        (mgr, results)
     }
 
     /// No-op (empty) manager — used when no servers are configured.
@@ -173,11 +213,23 @@ impl McpManager {
         }
     }
 
+    /// Merge servers from a completed background boot into this (initially empty)
+    /// manager.  Used by the deferred-startup path: the REPL starts with an
+    /// empty manager, and the background task calls this once all servers are
+    /// ready.
+    pub async fn merge_from(&self, other: McpManager) {
+        let new_servers = other.servers.into_inner();
+        let mut current = self.servers.write().await;
+        current.extend(new_servers);
+        self.schemas_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Reload MCP servers from a new config map.
     ///
     /// - Servers whose key **and** command are unchanged are kept as-is.
     /// - Servers no longer in `new_configs` are dropped (killing the child process).
-    /// - New or changed servers are (re-)started.
+    /// - New or changed servers are (re-)started with a per-server timeout.
     ///
     /// Returns a `ReloadSummary` suitable for display in the REPL.
     pub async fn reload(&self, new_configs: &HashMap<String, McpServerConfig>) -> ReloadSummary {
@@ -186,6 +238,8 @@ impl McpManager {
         // Sort new configs for deterministic startup order
         let mut entries: Vec<(&String, &McpServerConfig)> = new_configs.iter().collect();
         entries.sort_by_key(|(k, _)| k.as_str());
+
+        let timeout_dur = std::time::Duration::from_secs(MCP_SERVER_TIMEOUT_SECS);
 
         // Drain the current server list — we'll rebuild it
         let mut old_servers: Vec<McpServer> = {
@@ -233,18 +287,18 @@ impl McpManager {
             }
             // Identity changed or server was disabled — drop and reconnect.
 
-            // Start a new connection
+            // Start a new connection with per-server timeout
             let k = (*key).clone();
             let c = (*config).clone();
             join_set.spawn(async move {
-                let res = Self::connect_server(&k, &c).await;
+                let res = tokio::time::timeout(timeout_dur, Self::connect_server(&k, &c)).await;
                 (k, res)
             });
         }
 
         while let Some(Ok((key, result))) = join_set.join_next().await {
             match result {
-                Ok(server) => {
+                Ok(Ok(server)) => {
                     info!(
                         "MCP reload: started server '{key}' — {} tool(s)",
                         server.tools.len()
@@ -252,8 +306,15 @@ impl McpManager {
                     summary.started.push(key.to_string());
                     new_servers.push(server);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     warn!("MCP reload: server '{key}' failed to start: {e}");
+                    summary.failed.push(key.to_string());
+                }
+                Err(_elapsed) => {
+                    warn!(
+                        "MCP reload: server '{key}' timed out after {}s — skipping",
+                        MCP_SERVER_TIMEOUT_SECS
+                    );
                     summary.failed.push(key.to_string());
                 }
             }

@@ -130,7 +130,8 @@ async fn async_main() -> Result<()> {
                 Arc::new(McpManager::empty())
             } else {
                 tracing::info!("Starting {} MCP server(s)…", mcp_configs.len());
-                Arc::new(McpManager::start(&mcp_configs).await)
+                let (mgr, _results) = McpManager::start(&mcp_configs).await;
+                Arc::new(mgr)
             }
         }
         Err(e) => {

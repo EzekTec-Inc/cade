@@ -43,7 +43,7 @@ impl StartupProgress {
         if !self.enabled {
             return ProgressBar::hidden();
         }
-        let style = ProgressStyle::with_template("{spinner:.cyan} {msg}")
+        let style = ProgressStyle::with_template("{spinner:.cyan} {elapsed_precise:.dim} {msg}")
             .unwrap()
             .tick_strings(SPINNER_TICKS);
         let pb = self.mp.add(ProgressBar::new_spinner());
@@ -72,6 +72,11 @@ impl StartupProgress {
         self.add_spinner(format!("Starting {count} MCP server(s)…"))
     }
 
+    /// Individual MCP server spinner — shows per-server status during boot.
+    pub fn start_mcp_server(&self, name: &str) -> ProgressBar {
+        self.add_spinner(format!("  ├─ {name}…"))
+    }
+
     /// "Syncing tools…"
     pub fn start_tool_sync(&self) -> ProgressBar {
         self.add_spinner("Syncing tools…")
@@ -98,12 +103,19 @@ impl StartupProgress {
     }
 
     /// Mark a spinner as failed (red).
-    #[allow(dead_code)]
     pub fn finish_err(pb: &ProgressBar, msg: impl Into<String>) {
         let err_style = ProgressStyle::with_template("  {msg:.red}")
             .unwrap_or_else(|_| ProgressStyle::default_spinner());
         pb.set_style(err_style);
         pb.finish_with_message(format!("✗ {}", msg.into()));
+    }
+
+    /// Mark a spinner as skipped/timed out (dim).
+    pub fn finish_skip(pb: &ProgressBar, msg: impl Into<String>) {
+        let skip_style = ProgressStyle::with_template("  {msg:.dim}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner());
+        pb.set_style(skip_style);
+        pb.finish_with_message(format!("⊘ {}", msg.into()));
     }
 
     /// Clear the entire multi-progress display so the terminal is clean
