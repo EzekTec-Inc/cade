@@ -76,7 +76,6 @@ impl Repl {
             progress: None,
         };
 
-        #[allow(deprecated)]
         let rx = {
             let mut app = self.app.lock();
             app.ask_question_async(q)?
@@ -182,9 +181,6 @@ impl Repl {
                 },
             };
 
-            // Use ask_question_async to avoid blocking the main event loop
-            // while awaiting user input. The app mutex is released during await.
-            #[allow(deprecated)]
             let rx = {
                 let mut app = self.app.lock();
                 app.ask_question_async(q)?

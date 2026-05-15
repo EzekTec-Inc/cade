@@ -10,8 +10,8 @@ pub mod commands_delete;
 pub mod commands_help;
 pub mod commands_hooks;
 pub mod commands_init;
-pub mod commands_mcp;
 pub mod commands_marketplace;
+pub mod commands_mcp;
 pub mod commands_memory;
 pub mod commands_mode;
 pub mod commands_model;
@@ -495,15 +495,17 @@ impl Repl {
             match cade_askpass::server::AskpassServer::start(move |prompt| {
                 let app_handle = app_for_pw.clone();
                 async move {
-                    // Use spawn_blocking so the blocking TUI modal doesn't
-                    // stall the tokio runtime.
-                    let result = tokio::task::spawn_blocking(move || {
+                    // Push the password overlay and await the oneshot receiver.
+                    // The TUI event loop handles key events — no lock is held
+                    // while waiting, eliminating the spawn_blocking deadlock.
+                    let rx = {
                         let mut app = app_handle.lock();
-                        app.ask_password(&prompt).ok().flatten()
-                    })
-                    .await
-                    .ok()
-                    .flatten();
+                        app.ask_password_async(&prompt).ok()
+                    };
+                    let result = match rx {
+                        Some(rx) => rx.await.ok().flatten(),
+                        None => None,
+                    };
                     match result {
                         Some(pw) => cade_askpass::server::PasswordResponse::Password(pw),
                         None => cade_askpass::server::PasswordResponse::Cancel,
@@ -789,9 +791,10 @@ impl Repl {
             // Send to agent and handle tool loop
             let mut final_input = input.clone();
             if let Some(ctx) = session_hook_ctx.take()
-                && !ctx.trim().is_empty() {
-                    final_input = format!("{final_input}\n\n[System Note: {}]", ctx.trim());
-                }
+                && !ctx.trim().is_empty()
+            {
+                final_input = format!("{final_input}\n\n[System Note: {}]", ctx.trim());
+            }
 
             self.agent_turn_with_images(&mut stdout, &final_input, submit_images)
                 .await?;

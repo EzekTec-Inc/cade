@@ -23,7 +23,10 @@ impl Repl {
     ) -> Result<Option<MarketplaceActionResult>> {
         if plugins.is_empty() {
             let mut app = app_arc.lock();
-            app.show_toast("Marketplace is currently empty or unreachable.", crate::ui::ToastLevel::Warning);
+            app.show_toast(
+                "Marketplace is currently empty or unreachable.",
+                crate::ui::ToastLevel::Warning,
+            );
             return Ok(None);
         }
 
@@ -44,10 +47,7 @@ impl Repl {
             } else {
                 format!(" [Filter: {}] ", filter_query)
             };
-            let hint = format!(
-                "{}{}",
-                f_disp, " ↑↓ Navigate  Enter Install  Esc/q Cancel "
-            );
+            let hint = format!("{}{}", f_disp, " ↑↓ Navigate  Enter Install  Esc/q Cancel ");
 
             let rows: Vec<Row> = filtered_indices
                 .iter()
@@ -67,11 +67,19 @@ impl Repl {
                     Row::new(vec![
                         Cell::from(Span::styled(
                             p.id.clone(),
-                            Style::default().fg(if is_sel { colors.c_text_primary() } else { colors.c_primary() }),
+                            Style::default().fg(if is_sel {
+                                colors.c_text_primary()
+                            } else {
+                                colors.c_primary()
+                            }),
                         )),
                         Cell::from(Span::styled(
                             p.author.clone(),
-                            Style::default().fg(if is_sel { colors.c_text_primary() } else { colors.c_text_muted() }),
+                            Style::default().fg(if is_sel {
+                                colors.c_text_primary()
+                            } else {
+                                colors.c_text_muted()
+                            }),
                         )),
                         Cell::from(Span::styled(
                             p.version.clone(),
@@ -91,8 +99,11 @@ impl Repl {
                 ],
             )
             .header(
-                Row::new(vec!["ID", "Author", "Version"])
-                    .style(Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD)),
+                Row::new(vec!["ID", "Author", "Version"]).style(
+                    Style::default()
+                        .fg(colors.c_primary())
+                        .add_modifier(Modifier::BOLD),
+                ),
             )
             .block(
                 Block::default()
@@ -181,20 +192,29 @@ impl Repl {
                 match key.code {
                     KeyCode::Esc => break None,
                     KeyCode::Char('q') if key.modifiers.is_empty() && filter_query.is_empty() => {
-                        break None
+                        break None;
                     }
-                    KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() && filter_query.is_empty() => {
+                    KeyCode::Up | KeyCode::Char('k')
+                        if key.modifiers.is_empty() && filter_query.is_empty() =>
+                    {
                         selected_filtered = selected_filtered.saturating_sub(1);
                     }
-                    KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() && filter_query.is_empty() => {
+                    KeyCode::Down | KeyCode::Char('j')
+                        if key.modifiers.is_empty() && filter_query.is_empty() =>
+                    {
                         if selected_filtered + 1 < filtered_indices.len() {
                             selected_filtered += 1;
                         }
                     }
                     KeyCode::Enter => {
-                        if !filtered_indices.is_empty() && selected_filtered < filtered_indices.len() {
+                        if !filtered_indices.is_empty()
+                            && selected_filtered < filtered_indices.len()
+                        {
                             let p = &plugins[filtered_indices[selected_filtered]];
-                            break Some(MarketplaceActionResult::Install(p.url.clone(), p.id.clone()));
+                            break Some(MarketplaceActionResult::Install(
+                                p.url.clone(),
+                                p.id.clone(),
+                            ));
                         }
                     }
                     KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {

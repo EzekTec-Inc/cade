@@ -18,14 +18,16 @@ use ratatui::layout::Rect;
 use std::any::Any;
 
 /// State for the active password prompt overlay.
-#[derive(Debug, Clone)]
 pub struct PasswordPromptState {
     /// The prompt text shown to the user (e.g. "[sudo] password for alice:").
     pub prompt: String,
     /// The password being typed (never displayed in cleartext).
     pub input: String,
-    /// Result when finished.
+    /// Result when finished (used by blocking variant).
     pub result: Option<Option<String>>,
+    /// Oneshot sender for the async variant — sends the password (or None)
+    /// back to the caller without blocking or holding a lock.
+    pub async_tx: Option<tokio::sync::oneshot::Sender<Option<String>>>,
 }
 
 impl OverlayComponent for PasswordPromptState {
@@ -110,7 +112,12 @@ impl OverlayComponent for PasswordPromptState {
     }
 
     fn take_result(&mut self) -> Option<Box<dyn Any>> {
-        self.result.take().map(|r| Box::new(r) as Box<dyn Any>)
+        let result = self.result.take();
+        // If the async channel is active, send the result through it.
+        if let Some(tx) = self.async_tx.take() {
+            let _ = tx.send(result.clone().flatten());
+        }
+        result.map(|r| Box::new(r) as Box<dyn Any>)
     }
 }
 
@@ -124,6 +131,7 @@ impl TuiApp {
             prompt: prompt.to_string(),
             input: String::new(),
             result: None,
+            async_tx: None,
         };
 
         self.overlays.push(Box::new(state));
@@ -176,6 +184,7 @@ impl TuiApp {
             prompt: prompt.to_string(),
             input: String::new(),
             result: None,
+            async_tx: None,
         };
 
         self.overlays.push(Box::new(state));
@@ -216,5 +225,27 @@ impl TuiApp {
         }
 
         Ok(answer)
+    }
+
+    /// Non-blocking password modal.  Pushes the overlay and returns a
+    /// `oneshot::Receiver` that resolves when the user submits or cancels.
+    ///
+    /// The TUI event loop handles key events for the overlay — no lock is
+    /// held by the caller while waiting.  This eliminates the deadlock risk
+    /// of the `spawn_blocking` + `parking_lot::Mutex` pattern.
+    pub fn ask_password_async(
+        &mut self,
+        prompt: &str,
+    ) -> Result<tokio::sync::oneshot::Receiver<Option<String>>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let state = PasswordPromptState {
+            prompt: prompt.to_string(),
+            input: String::new(),
+            result: None,
+            async_tx: Some(tx),
+        };
+        self.overlays.push(Box::new(state));
+        self.draw()?;
+        Ok(rx)
     }
 }

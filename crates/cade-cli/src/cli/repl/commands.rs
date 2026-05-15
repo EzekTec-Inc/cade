@@ -590,9 +590,7 @@ impl Repl {
             }
 
             SlashCmd::Teams => {
-                if self
-                    .require_capability(cade_core::capabilities::Capability::Agentic, "/teams")
-                {
+                if self.require_capability(cade_core::capabilities::Capability::Agentic, "/teams") {
                     return Ok(false);
                 }
                 let all_teams = cade_agent::team::discovery::discover_all_teams(&self.cwd);
@@ -611,7 +609,10 @@ impl Repl {
                         }
                     }
                     self.tui_blank();
-                    self.tui_dim("  Tip: Use run_team(task=\"...\", team=\"<id>\") to delegate work.".to_string());
+                    self.tui_dim(
+                        "  Tip: Use run_team(task=\"...\", team=\"<id>\") to delegate work."
+                            .to_string(),
+                    );
                 }
             }
 

@@ -261,22 +261,31 @@ impl Repl {
                     "plan_update" => {
                         let mut app = app_arc.lock();
                         if let Some(plan) = msg.data.get("plan") {
-                            let steps: Vec<String> = plan.get("steps")
+                            let steps: Vec<String> = plan
+                                .get("steps")
                                 .and_then(|v| v.as_array())
                                 .map(|arr| {
                                     arr.iter()
-                                        .filter_map(|step| step.get("description").and_then(|d| d.as_str()).map(String::from))
+                                        .filter_map(|step| {
+                                            step.get("description")
+                                                .and_then(|d| d.as_str())
+                                                .map(String::from)
+                                        })
                                         .collect()
                                 })
                                 .unwrap_or_default();
-                            
+
                             app.set_plan(steps);
-                            
+
                             // Apply completed steps
                             if let Some(steps_arr) = plan.get("steps").and_then(|v| v.as_array()) {
                                 for step in steps_arr {
-                                    let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                                    let done = step.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as usize;
+                                    let done = step
+                                        .get("is_done")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
                                     if done {
                                         app.update_plan_step(id, done);
                                     }

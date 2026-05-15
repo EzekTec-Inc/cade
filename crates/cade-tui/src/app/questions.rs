@@ -191,13 +191,11 @@ impl TuiApp {
     /// Async question via oneshot channel.
     ///
     /// ONLY valid when an external event driver (the tick task's spin-wait
-    /// loop) is concurrently calling `handle_question_key`.  For tool-call
-    /// approval use `ask_question_blocking` via `spawn_blocking` instead.
-    #[deprecated(
-        note = "Use ask_question_blocking (via spawn_blocking) for prompt_approval. \
-                ask_question_async is only safe when the tick-task spin-wait is \
-                the sole event driver and no async lock contention can occur."
-    )]
+    /// loop) is concurrently calling `handle_question_key`.
+    ///
+    /// This is the preferred async-safe pattern: push the overlay, release
+    /// the lock, await the oneshot.  No lock is held during the wait, so
+    /// there is no deadlock risk with the TUI event loop.
     pub fn ask_question_async(
         &mut self,
         question: crate::question::Question,

@@ -52,6 +52,14 @@ async fn async_main() -> Result<()> {
         )
         .init();
 
+    // Install a panic hook that logs the panic before the process unwinds.
+    // Without this, panics on background tokio tasks may be invisible.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("PANIC: {info}");
+        original_hook(info);
+    }));
+
     let _ = dotenvy::dotenv();
 
     // Parse CLI args first so --port / CADE_SERVER_PORT is available

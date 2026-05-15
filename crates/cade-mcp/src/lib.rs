@@ -275,12 +275,15 @@ impl McpManager {
                 && identity_unchanged
                 && !existing.disabled
             {
-                // SAFETY: the `if let Some(...)` immediately above
-                // proved `*key` is in the map.  No mutation occurs in
-                // the gate, so `.remove()` cannot return `None` here.
-                let existing = old_by_key
-                    .remove(*key)
-                    .expect("key proven present by preceding if-let-Some gate");
+                // The `if let Some(...)` immediately above proved `*key`
+                // is in the map.  Use unwrap_or_else for belt-and-suspenders
+                // safety under panic=unwind — log rather than crash.
+                let Some(existing) = old_by_key.remove(*key) else {
+                    tracing::error!(
+                        "BUG: key '{key}' vanished from old_by_key between get and remove"
+                    );
+                    continue;
+                };
                 summary.kept.push(key.to_string());
                 new_servers.push(existing);
                 continue;
