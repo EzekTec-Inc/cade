@@ -121,12 +121,12 @@ async fn poll_server_health(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn cold_start_detects_missing_db() {
         // Verify the cold-start heuristic: a non-existent path means cold start.
-        let fake_path = std::path::PathBuf::from("/tmp/cade-test-nonexistent-dir/cade.db");
+        let fake_path = PathBuf::from("/tmp/cade-test-nonexistent-dir/cade.db");
         assert!(
             !fake_path.exists(),
             "test precondition: path must not exist"
