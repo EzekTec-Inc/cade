@@ -38,7 +38,7 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(16 * 1024 * 1024) // 16 MB — prevents stack overflow from deeply-nested async state machines
-                                               // (run_agent_loop → build_context → consolidate_agent chain)
+        // (run_agent_loop → build_context → consolidate_agent chain)
         .build()
         .map_err(|e| Error::custom(format!("tokio runtime: {e}")))?;
     runtime.block_on(async_main())
@@ -361,7 +361,9 @@ async fn async_main() -> Result<()> {
                 .collect();
             let _ = client_bg.detach_agent_tools(&agent_id_bg).await;
             if !non_mcp_ids.is_empty() {
-                let _ = client_bg.attach_agent_tools(&agent_id_bg, &non_mcp_ids).await;
+                let _ = client_bg
+                    .attach_agent_tools(&agent_id_bg, &non_mcp_ids)
+                    .await;
             }
 
             if !mcp_bg.is_empty().await {

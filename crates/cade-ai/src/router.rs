@@ -401,7 +401,10 @@ impl LlmRouter {
 
                 // -- Preset providers (Groq, OpenRouter, etc.)
                 _ => {
-                    if let Some(preset) = crate::provider_registry::ProviderRegistry::new().get_all_providers().iter().find(|p| p.name == name.as_str())
+                    if let Some(preset) = crate::provider_registry::ProviderRegistry::new()
+                        .get_all_providers()
+                        .iter()
+                        .find(|p| p.name == name.as_str())
                         && let Some(models_url) = &preset.models_url
                     {
                         let n = name.clone();

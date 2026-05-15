@@ -32,7 +32,9 @@ pub async fn push_env_providers_to_server(client: &HttpTransport) {
     }
     // Preset OpenAI-compatible providers (Groq, OpenRouter, Together, etc.)
     // We load this from the registry so it dynamically picks up default_providers.json
-    let presets = cade_ai::provider_registry::ProviderRegistry::new().get_all_providers().to_vec();
+    let presets = cade_ai::provider_registry::ProviderRegistry::new()
+        .get_all_providers()
+        .to_vec();
     for preset in presets {
         let key = preset
             .env_vars
@@ -40,7 +42,12 @@ pub async fn push_env_providers_to_server(client: &HttpTransport) {
             .find_map(|v| std::env::var(v).ok().filter(|k| !k.is_empty()));
         if let Some(key) = key {
             let _ = client
-                .add_provider(&preset.name, "openai-compatible", Some(&key), Some(&preset.chat_url))
+                .add_provider(
+                    &preset.name,
+                    "openai-compatible",
+                    Some(&key),
+                    Some(&preset.chat_url),
+                )
                 .await;
         }
     }

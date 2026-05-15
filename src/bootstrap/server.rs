@@ -97,9 +97,7 @@ async fn poll_server_health(
         // Check if the child process exited before responding to health checks.
         match child.try_wait() {
             Ok(Some(status)) => {
-                tracing::error!(
-                    "cade-server exited prematurely with status: {status}"
-                );
+                tracing::error!("cade-server exited prematurely with status: {status}");
                 return false;
             }
             Ok(None) => { /* still running — good */ }
@@ -129,6 +127,9 @@ mod tests {
     fn cold_start_detects_missing_db() {
         // Verify the cold-start heuristic: a non-existent path means cold start.
         let fake_path = std::path::PathBuf::from("/tmp/cade-test-nonexistent-dir/cade.db");
-        assert!(!fake_path.exists(), "test precondition: path must not exist");
+        assert!(
+            !fake_path.exists(),
+            "test precondition: path must not exist"
+        );
     }
 }
