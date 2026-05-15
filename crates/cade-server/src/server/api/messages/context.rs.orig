@@ -1154,7 +1154,6 @@ fn assemble_system_prompt_memory(
 
     let mut dynamic_parts: Vec<String> = Vec::new();
 
-    #[allow(clippy::collapsible_if)]
     if let Some(plan_json) = &agent.active_plan_json {
         if let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json) {
             if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {

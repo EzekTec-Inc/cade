@@ -781,7 +781,6 @@ async fn run_agent_loop(
                 let done = args.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
 
                 let mut found = false;
-                #[allow(clippy::collapsible_if)]
                 if let Ok(Some(agent)) = sqlite::agents::get_agent(&state2.db, &agent_id2) {
                     if let Some(plan_str) = agent.active_plan_json {
                         if let Ok(mut plan) = serde_json::from_str::<serde_json::Value>(&plan_str) {
@@ -842,7 +841,7 @@ async fn run_agent_loop(
                     .to_string();
 
                 let output = std::process::Command::new("git")
-                    .args(["status", "--porcelain"])
+                    .args(&["status", "--porcelain"])
                     .output()
                     .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                     .unwrap_or_default();
@@ -873,7 +872,7 @@ async fn run_agent_loop(
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.name.clone(),
-                    output: "Task finished. Audit log appended to CADE_AUDIT.md.".to_string(),
+                    output: format!("Task finished. Audit log appended to CADE_AUDIT.md."),
                     is_error: false,
                 }
             } else if let Some(executed) = runtime

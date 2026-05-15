@@ -1,0 +1,20 @@
+--- crates/cade-server/src/server/api/messages/context.rs
++++ crates/cade-server/src/server/api/messages/context.rs
+@@ -1154,6 +1154,7 @@
+     }
+ 
+     // 7) Active Plan
++    #[allow(clippy::collapsible_if)]
+     if let Some(plan_json) = &agent.active_plan_json {
+         if let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json) {
+             if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
+--- crates/cade-server/src/server/api/run/mod.rs
++++ crates/cade-server/src/server/api/run/mod.rs
+@@ -781,6 +781,7 @@
+                 return "Updated plan step successfully.".to_string();
+             } else {
+                 // Try to fallback to reading from agent row
++                #[allow(clippy::collapsible_if)]
+                 if let Ok(Some(agent)) = sqlite::agents::get_agent(&state2.db, &agent_id2) {
+                     if let Some(plan_str) = agent.active_plan_json {
+                         if let Ok(mut plan) = serde_json::from_str::<serde_json::Value>(&plan_str) {
