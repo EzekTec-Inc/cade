@@ -251,8 +251,8 @@ impl AnthropicProvider {
                 };
                 body["thinking"] = json!({ "type": "adaptive" });
                 body["output_config"] = json!({ "effort": mapped_effort });
-            } else {
-                // Legacy Claude 3.5 / 3.7 extended-thinking models:
+            } else if bare_model(&req.model).contains("claude-3-7-sonnet") {
+                // Legacy Claude 3.7 extended-thinking models:
                 // `thinking.type=enabled` with an explicit `budget_tokens`.
                 // Anthropic requires budget_tokens ≤ max_tokens. The max_tokens
                 // field is shared between reasoning and output, so we scale the

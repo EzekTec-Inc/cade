@@ -185,7 +185,7 @@ pub fn max_tokens_for_model(model_id: &str) -> u32 {
         m.4
     } else if model_id.starts_with("anthropic/claude-") {
         128_000
-        } else if model_id.starts_with("openai/o")
+    } else if model_id.starts_with("openai/o")
         || model_id.starts_with("openai/gpt-5")
         || model_id.starts_with("gpt-5")
     {
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(max_tokens_for_model("gpt-5"), 100_000);
         assert_eq!(max_tokens_for_model("gpt-5.1-preview"), 100_000);
     }
-// -- context_window_for_model
+    // -- context_window_for_model
 
     #[test]
     fn context_window_known_models() {
