@@ -62,11 +62,14 @@ pub(super) const SSE_OUTPUT_TRUNCATE_BYTES: usize = 8_192;
 /// column so audit / observability can distinguish a clean termination
 /// (`"done"`) from an aborted one (`"error"` — `MAX_TURNS` exceeded, cost
 /// cap hit, build_context error, LLM stream error, context-overflow
-/// retry exhausted, etc.).  Pure value type; no I/O.
+/// retry exhausted, etc.) or a client-initiated cancel (`"cancelled"` —
+/// the SSE channel closed because the user pressed Ctrl+C or the client
+/// process exited).  Pure value type; no I/O.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RunExitStatus {
     Done,
     Error,
+    Cancelled,
 }
 
 impl RunExitStatus {
@@ -74,6 +77,7 @@ impl RunExitStatus {
         match self {
             RunExitStatus::Done => "done",
             RunExitStatus::Error => "error",
+            RunExitStatus::Cancelled => "cancelled",
         }
     }
 }
@@ -392,6 +396,19 @@ async fn run_agent_loop(
             break;
         }
 
+        // ── Client disconnect check ───────────────────────────────────
+        // If the SSE receiver has been dropped (user pressed Ctrl+C in the
+        // TUI, the cade CLI exited, or the network connection died), bail
+        // out before doing more work. This prevents the server from
+        // continuing to call the LLM and execute tools after the client
+        // has gone away — saving tokens and avoiding unwanted side
+        // effects from in-flight tool calls.
+        if tx.is_closed() {
+            tracing::info!("agentic loop: client disconnected at turn {turns} — cancelling");
+            exit_status = RunExitStatus::Cancelled;
+            break;
+        }
+
         // ── P4: cost guardrail ────────────────────────────────────────
         // Abort when cumulative session cost (across the server's lifetime
         // for this agent) exceeds the configured cap.  Disabled by default
@@ -575,57 +592,82 @@ async fn run_agent_loop(
 
         let mut text_acc = String::new();
         let mut tool_calls: Vec<LlmToolCall> = Vec::new();
-
-        while let Some(chunk) = llm_stream.next().await {
-            match chunk {
-                Ok(StreamChunk::Text(t)) => {
-                    text_acc.push_str(&t);
-                    send(json!({ "message_type": "assistant_message", "content": t })).await;
+        // Race the LLM stream against tx.closed() so a mid-stream
+        // disconnect (Ctrl+C in the TUI, client process exit, network
+        // drop) aborts the LLM call instead of letting it run to
+        // completion and silently bill tokens.
+        let mut stream_cancelled = false;
+        loop {
+            tokio::select! {
+                biased;
+                _ = tx.closed() => {
+                    tracing::info!(
+                        "agentic loop: client disconnected mid-stream at turn {turns} — aborting LLM"
+                    );
+                    stream_cancelled = true;
+                    break;
                 }
-                Ok(StreamChunk::Reasoning(r)) => {
-                    send(json!({ "message_type": "reasoning_message", "reasoning": r })).await;
-                }
-                Ok(StreamChunk::ToolCall(tc)) => {
-                    send(json!({
-                        "message_type": "tool_call_message",
-                        "tool_call": {
-                            "id": tc.id,
-                            "name": tc.name,
-                            "arguments": tc.arguments,
+                chunk_opt = llm_stream.next() => {
+                    let Some(chunk) = chunk_opt else { break };
+                    match chunk {
+                        Ok(StreamChunk::Text(t)) => {
+                            text_acc.push_str(&t);
+                            send(json!({ "message_type": "assistant_message", "content": t })).await;
                         }
-                    }))
-                    .await;
-                    tool_calls.push(tc);
-                }
-                Ok(StreamChunk::Usage(u)) => {
-                    // P2: accumulate into AgentMetrics so cache tokens
-                    // are not silently dropped server-side.
-                    {
-                        let mut map = state2.agent_metrics.write().await;
-                        map.entry(agent_id2.clone())
-                            .or_default()
-                            .accumulate_usage(&u);
+                        Ok(StreamChunk::Reasoning(r)) => {
+                            send(json!({ "message_type": "reasoning_message", "reasoning": r })).await;
+                        }
+                        Ok(StreamChunk::ToolCall(tc)) => {
+                            send(json!({
+                                "message_type": "tool_call_message",
+                                "tool_call": {
+                                    "id": tc.id,
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                }
+                            }))
+                            .await;
+                            tool_calls.push(tc);
+                        }
+                        Ok(StreamChunk::Usage(u)) => {
+                            // P2: accumulate into AgentMetrics so cache tokens
+                            // are not silently dropped server-side.
+                            {
+                                let mut map = state2.agent_metrics.write().await;
+                                map.entry(agent_id2.clone())
+                                    .or_default()
+                                    .accumulate_usage(&u);
+                            }
+                            send(json!({
+                                "message_type": "usage_statistics",
+                                "input_tokens":  u.input_tokens,
+                                "output_tokens": u.output_tokens,
+                                "cache_read_tokens":  u.cache_read_tokens,
+                                "cache_write_tokens": u.cache_write_tokens,
+                                "model": u.model,
+                            }))
+                            .await;
+                        }
+                        Ok(StreamChunk::FinishReason(r)) => {
+                            send(json!({ "message_type": "finish_reason", "reason": r })).await;
+                        }
+                        Err(e) => {
+                            send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                        }
+                        Ok(StreamChunk::Done) => {
+                            // Stream ended cleanly (some providers emit Done before FinishReason)
+                        }
                     }
-                    send(json!({
-                        "message_type": "usage_statistics",
-                        "input_tokens":  u.input_tokens,
-                        "output_tokens": u.output_tokens,
-                        "cache_read_tokens":  u.cache_read_tokens,
-                        "cache_write_tokens": u.cache_write_tokens,
-                        "model": u.model,
-                    }))
-                    .await;
-                }
-                Ok(StreamChunk::FinishReason(r)) => {
-                    send(json!({ "message_type": "finish_reason", "reason": r })).await;
-                }
-                Err(e) => {
-                    send(json!({ "message_type": "error", "error": e.to_string() })).await;
-                }
-                Ok(StreamChunk::Done) => {
-                    // Stream ended cleanly (some providers emit Done before FinishReason)
                 }
             }
+        }
+        if stream_cancelled {
+            // Drop the stream explicitly so the underlying HTTP connection
+            // to the LLM provider closes — this aborts upstream generation
+            // and stops token billing.
+            drop(llm_stream);
+            exit_status = RunExitStatus::Cancelled;
+            break;
         }
 
         // ── Persist assistant message ─────────────────────────────────
