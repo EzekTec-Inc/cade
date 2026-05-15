@@ -309,8 +309,8 @@ const SECTIONS: &[Section] = &[
         name: "Misc",
         items: &[
             CmdEntry {
-                cmd: "/copy",
-                desc: "Toggle copy mode (disables mouse scroll for text selection)",
+                cmd: "/mouse",
+                desc: "Toggle scroll-wheel capture on/off (text selection always works)",
             },
             CmdEntry {
                 cmd: "/export",

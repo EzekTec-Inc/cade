@@ -206,20 +206,20 @@ impl TuiApp {
         self.streaming_active
     }
 
-    /// Toggle OS text-selection mouse mode on/off.
-    /// When disabled: mouse capture is disabled so the terminal lets the user select text.
-    /// When enabled: mouse capture is restored so scroll wheel works normally.
+    /// Toggle scroll-wheel capture on/off.
+    /// When disabled: scroll capture is off, terminal handles all mouse events natively.
+    /// When enabled: CADE captures scroll-wheel events (text selection always works).
     pub fn toggle_mouse_capture(&mut self) {
         self.mouse_capture_disabled = !self.mouse_capture_disabled;
         if self.mouse_capture_disabled {
-            let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+            let _ = crossterm::execute!(std::io::stdout(), crate::mouse::DisableScrollCapture);
             self.show_toast(
-                "Mouse selection enabled (scroll disabled)",
+                "Scroll capture disabled — use keyboard to scroll",
                 ToastLevel::Info,
             );
         } else {
-            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-            self.show_toast("Mouse scroll enabled", ToastLevel::Info);
+            let _ = crossterm::execute!(std::io::stdout(), crate::mouse::EnableScrollCapture);
+            self.show_toast("Scroll capture enabled", ToastLevel::Info);
         }
     }
 

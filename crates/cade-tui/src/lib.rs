@@ -23,6 +23,7 @@ pub mod icons;
 pub mod markdown;
 pub mod mcp_picker;
 pub mod menu;
+pub mod mouse;
 pub mod overlay;
 pub mod overlay_component;
 pub mod question;

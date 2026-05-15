@@ -27,9 +27,8 @@ use std::time::Instant;
 use crate::Result;
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::{
     DefaultTerminal, Frame,
@@ -981,7 +980,7 @@ impl TuiApp {
         let terminal = ratatui::init();
         let _ = crossterm::execute!(
             std::io::stdout(),
-            EnableMouseCapture,
+            crate::mouse::EnableScrollCapture,
             EnableBracketedPaste,
             EnableFocusChange
         );
@@ -1391,7 +1390,7 @@ impl Drop for TuiApp {
         let _ = crossterm::execute!(
             std::io::stdout(),
             DisableBracketedPaste,
-            DisableMouseCapture,
+            crate::mouse::DisableScrollCapture,
             DisableFocusChange
         );
         ratatui::restore();
