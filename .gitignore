@@ -32,3 +32,8 @@ test_partition.rs
 test_anthropic.rs
 test_anthropic_system.sh
 test_empty_system.sh
+
+# Log files (never commit — may contain secrets, PII, env vars)
+*.log
+tmux-*.log
+nohup.out
