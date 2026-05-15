@@ -34,6 +34,7 @@ fn encoder_for(model_id: &str) -> Option<&'static CoreBPE> {
 
     // OpenAI o-series + GPT-4o → o200k_base
     let is_o200k = lower.contains("gpt-4o")
+        || lower.contains("gpt-4.5")
         || lower.contains("gpt-5")
         || lower.contains("/o1")
         || lower.contains("/o3")

@@ -42,6 +42,7 @@ fn needs_max_completion_tokens_reasoning_models() {
     assert!(needs_max_completion_tokens("o1-preview"));
     assert!(needs_max_completion_tokens("o3-mini"));
     assert!(needs_max_completion_tokens("o4-mini"));
+    assert!(needs_max_completion_tokens("gpt-4.5"));
     assert!(needs_max_completion_tokens("gpt-5"));
     assert!(!needs_max_completion_tokens("gpt-4o"));
     assert!(!needs_max_completion_tokens("gpt-4o-mini"));
