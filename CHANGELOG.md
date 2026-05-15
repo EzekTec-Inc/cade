@@ -7,6 +7,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+### Fixed
+
+#### Mouse text selection works without any command
+- Removed `EnableMouseCapture` from TUI startup so the terminal handles mouse events natively
+- Users can now click-and-drag to select text and right-click (or Ctrl+Shift+C) to copy without typing `/mouse`
+- Scroll-wheel capture is now opt-in via `/mouse`; viewport scrolling via keyboard (PgUp/PgDn, arrows, Ctrl+U/D) is unaffected
+- Root cause: xterm's `?1000h` mode (the minimum needed for scroll-wheel reporting) also captures click events, blocking native text selection
+
+#### Stability — eliminate silent crashes and deadlocks
+- Changed `panic = "abort"` → `panic = "unwind"` in release profile so panics produce stack traces instead of silent process death
+- Added panic hook to `cade-server` to log panics via `tracing::error` before unwinding
+- Replaced `join_all(...).flatten()` in parallel tool runner with explicit `JoinError` handling so panicked tasks are logged instead of silently dropped
+- Eliminated `spawn_blocking` + `parking_lot::Mutex` deadlock in the password handler by adding `ask_password_async()` to `TuiApp` (push overlay, return `oneshot::Receiver` — no lock held during await)
+- Un-deprecated `ask_question_async` — its deprecation note incorrectly recommended `spawn_blocking` which is itself the deadlock source
+- Hardened MCP `reload()` `.expect()` → `let-else` with `tracing::error` so a logic bug logs and continues instead of panicking
+
+#### Startup hangs, timeouts, and first-try reliability (4-phase remediation)
+- **Phase 1** — `auto_start_server()` now uses exponential backoff (100ms → 1.6s capped) with a 15s total timeout (30s on first run when `~/.cade/cade.db` is missing); retains the `Child` handle and checks `try_wait()` each iteration so a crashed server fails immediately instead of waiting the full timeout
+- **Phase 2** — `McpManager::start()` and `::reload()` wrap each `connect_server` call in `tokio::time::timeout(15s)`; timed-out servers are logged and skipped; `start()` returns a `Vec<McpStartResult>` (`Ok`/`Failed`/`Timeout`) so callers can report per-server status
+- **Phase 3** — `StartupProgress` now shows elapsed time in spinners (`{elapsed_precise}`); added `start_mcp_server(name)` for per-server progress lines and `finish_skip()` for timed-out servers; failed/timed-out servers print to stderr with reasons
+- **Phase 4** — Synchronous MCP boot with per-server spinners (deferred-background variant explored and reverted — synchronous boot with timeouts gives better UX than instant-but-blank TUI)
+- Added `McpManager::merge_from()` and `McpStartResult` enum for future deferred-startup work
+
+### Added
+
+#### Model catalogue — modern Anthropic and OpenAI token limits
+- Added `Claude Opus 4.7` to the static catalogue with 128k output / 1M context
+- Updated `Claude Opus 4.5`, `Sonnet 4.6/4.5/3.7` to 128k output and 1M context (was 8k / 200k)
+- Updated `Claude Haiku 4.5` to 128k output
+- Updated OpenAI reasoning models (`o3`, `o3-mini`, `o4-mini`) to 100k output for chain-of-thought headroom (was 16k)
+- Fixed GPT-4.1 context window typo `1_047_576` → `1_048_576`
+- `max_tokens_for_model` fallback: uncatalogued `anthropic/claude-*` now returns 128k; uncatalogued `openai/o*` returns 100k
+- `context_window_for_model` fallback: uncatalogued `anthropic/` models containing `opus` or `sonnet` now return 1M instead of 200k
+- Resolves `claude-opus-4-7` being interrupted mid-response — the uncatalogued model was hitting the legacy 4096 output token default, which starved adaptive thinking of headroom
+
 ### Changed
 
 #### Connection pooling (P0-B)
