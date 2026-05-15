@@ -5,37 +5,44 @@
 ///   context_window_tokens: model's input context length in tokens
 pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     // -- Anthropic
-    // All Claude 3+ models: 200 K token context window
+    (
+        "anthropic",
+        "Claude Opus 4.7",
+        "anthropic/claude-opus-4-7",
+        "default",
+        128_000,
+        1_048_576,
+    ),
     (
         "anthropic",
         "Claude Opus 4.5",
         "anthropic/claude-opus-4-5",
         "default",
-        8192,
-        200_000,
+        128_000,
+        1_048_576,
     ),
     (
         "anthropic",
         "Claude Sonnet 4.6",
         "anthropic/claude-sonnet-4-6",
         "default",
-        8192,
-        200_000,
+        128_000,
+        1_048_576,
     ),
     (
         "anthropic",
         "Claude Sonnet 4.5",
         "anthropic/claude-sonnet-4-5-20250929",
         "default",
-        8192,
-        200_000,
+        128_000,
+        1_048_576,
     ),
     (
         "anthropic",
         "Claude Haiku 4.5",
         "anthropic/claude-haiku-4-5",
         "default",
-        8192,
+        128_000,
         200_000,
     ),
     (
@@ -43,8 +50,8 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         "Claude Sonnet 3.7",
         "anthropic/claude-3-7-sonnet-20250219",
         "default",
-        8192,
-        200_000,
+        128_000,
+        1_048_576,
     ),
     (
         "anthropic",
@@ -85,16 +92,16 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         "o4 Mini",
         "openai/o4-mini",
         "codex",
-        16384,
+        100_000,
         200_000,
     ),
-    ("openai", "o3", "openai/o3", "codex", 16384, 200_000),
+    ("openai", "o3", "openai/o3", "codex", 100_000, 200_000),
     (
         "openai",
         "o3 Mini",
         "openai/o3-mini",
         "codex",
-        16384,
+        100_000,
         200_000,
     ),
     // -- Google Gemini
@@ -176,6 +183,10 @@ pub fn toolset_for_model(model_id: &str) -> String {
 pub fn max_tokens_for_model(model_id: &str) -> u32 {
     if let Some(m) = CATALOGUE.iter().find(|(_, _, id, _, _, _)| *id == model_id) {
         m.4
+    } else if model_id.starts_with("anthropic/claude-") {
+        128_000
+    } else if model_id.starts_with("openai/o") {
+        100_000
     } else if model_id.starts_with("gemini/")
         || model_id.starts_with("google/gemini")
         || model_id.starts_with("openai/")
@@ -205,6 +216,9 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     }
     // Provider-prefix heuristics for dynamic / uncatalogued models
     if model_id.starts_with("anthropic/") {
+        if model_id.contains("opus") || model_id.contains("sonnet") {
+            return 1_048_576;
+        }
         return 200_000;
     }
     if model_id.starts_with("gemini/") || model_id.starts_with("google/gemini") {
@@ -326,7 +340,7 @@ mod tests {
     fn max_tokens_known_models() {
         assert_eq!(
             max_tokens_for_model("anthropic/claude-sonnet-4-5-20250929"),
-            8192
+            128_000
         );
         assert_eq!(max_tokens_for_model("openai/gpt-4o"), 16384);
     }
@@ -352,7 +366,7 @@ mod tests {
     fn context_window_known_models() {
         assert_eq!(
             context_window_for_model("anthropic/claude-sonnet-4-5-20250929"),
-            200_000
+            1_048_576
         );
         assert_eq!(context_window_for_model("openai/gpt-4o"), 128_000);
         assert_eq!(context_window_for_model("gemini/gemini-2.5-pro"), 1_048_576);
