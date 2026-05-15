@@ -23,3 +23,12 @@ crates/cade-gui/dist/
 crates/cade-gui/pkg/
 
 .serena/
+
+# Development debris
+CADE_AUDIT.md
+fix_models.py
+test_partition
+test_partition.rs
+test_anthropic.rs
+test_anthropic_system.sh
+test_empty_system.sh
