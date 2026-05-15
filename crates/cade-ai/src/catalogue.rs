@@ -199,7 +199,6 @@ pub fn max_tokens_for_model(model_id: &str) -> u32 {
         4096 // Safe default for older models / unknown providers
     }
 }
-}
 
 /// Determine the context window (input tokens) for a specific model ID.
 ///

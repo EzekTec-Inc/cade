@@ -662,3 +662,15 @@ fn pricing_o1_mini_not_matched_by_o1_rule() {
     // Should NOT get o1 pricing ($15/$60) — the not_contains_any guard excludes "mini"
     assert!(p.input < 15.0, "o1-mini should not get o1 pricing");
 }
+
+#[test]
+fn pricing_gpt_5_series() {
+    let registry = crate::ModelRegistry::new();
+    let p_base = registry.pricing_for_model("openai/gpt-5");
+    assert_eq!(p_base.input, 5.0);
+    assert_eq!(p_base.output, 30.0);
+    
+    let p_mini = registry.pricing_for_model("openai/gpt-5-mini");
+    assert_eq!(p_mini.input, 1.1);
+    assert_eq!(p_mini.output, 4.4);
+}
