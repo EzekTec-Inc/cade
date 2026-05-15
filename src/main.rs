@@ -302,106 +302,115 @@ async fn async_main() -> Result<()> {
         .await?;
     StartupProgress::finish_ok(&sp_agent, format!("Agent: {}", agent.name));
 
-    // -- MCP server boot + tool sync (deferred to background task)
+    // -- MCP server boot + tool sync (synchronous with per-server spinners)
     //
-    // The REPL starts immediately with an empty McpManager so the TUI is
-    // interactive within seconds.  MCP servers, tool sync, and tool
-    // registration happen in a background tokio::spawn.  Once complete the
-    // background task merges servers into the shared Arc<McpManager> and
-    // sets schemas_dirty so the REPL re-registers tools on the next tick.
+    // Per-server timeouts (Phase 2) cap worst-case at 15s per server, so
+    // synchronous boot is bounded and the user sees live progress for every
+    // server.  The TUI starts immediately after this block.
     let mcp_configs = settings.merged_mcp_servers();
     let mcp_enabled = capabilities.is_enabled(cade_core::capabilities::Capability::Mcp);
-    let mcp: std::sync::Arc<McpManager> = std::sync::Arc::new(McpManager::empty());
+    let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() || !mcp_enabled {
+        if !mcp_configs.is_empty() && !mcp_enabled {
+            tracing::info!(
+                "Skipping {} MCP server(s) — Mcp capability not enabled",
+                mcp_configs.len()
+            );
+        }
+        std::sync::Arc::new(McpManager::empty())
+    } else {
+        let total = mcp_configs.len();
+        let sp_mcp = progress.start_mcp_boot(total);
 
-    if !mcp_configs.is_empty() && mcp_enabled {
-        let mcp_bg = std::sync::Arc::clone(&mcp);
-        let client_bg = client.clone();
-        let agent_id_bg = agent.id.clone();
-        tokio::spawn(async move {
-            tracing::info!("Background: starting {} MCP server(s)…", mcp_configs.len());
-            let (mgr, mcp_results) = McpManager::start(&mcp_configs).await;
+        // Create per-server spinners (sorted for deterministic display order)
+        let mut server_names: Vec<&String> = mcp_configs.keys().collect();
+        server_names.sort();
+        let server_spinners: std::collections::HashMap<String, indicatif::ProgressBar> =
+            server_names
+                .iter()
+                .map(|name| (name.to_string(), progress.start_mcp_server(name)))
+                .collect();
 
-            // Log per-server results
-            let mut failed_count = 0usize;
-            for r in &mcp_results {
-                match r {
-                    cade::mcp::McpStartResult::Ok { key, tool_count } => {
-                        tracing::info!("MCP server '{key}' ready — {tool_count} tool(s)");
-                    }
-                    cade::mcp::McpStartResult::Failed { key, error } => {
-                        tracing::warn!("MCP server '{key}' failed: {error}");
-                        failed_count += 1;
-                    }
-                    cade::mcp::McpStartResult::Timeout { key, timeout_secs } => {
-                        tracing::warn!("MCP server '{key}' timed out after {timeout_secs}s");
-                        failed_count += 1;
+        tracing::info!("Starting {total} MCP server(s)…");
+        let (mgr, mcp_results) = McpManager::start(&mcp_configs).await;
+
+        // Update per-server spinners based on results
+        let mut failed_count = 0usize;
+        for r in &mcp_results {
+            match r {
+                cade::mcp::McpStartResult::Ok { key, tool_count } => {
+                    if let Some(sp) = server_spinners.get(key) {
+                        StartupProgress::finish_ok(sp, format!("{key} — {tool_count} tool(s)"));
                     }
                 }
-            }
-
-            let ok_count = mcp_results.len() - failed_count;
-            let total = mcp_configs.len();
-            if ok_count > 0 {
-                tracing::info!("Background: MCP {ok_count}/{total} server(s) ready");
-            } else {
-                tracing::warn!("Background: no MCP servers started successfully");
-            }
-
-            // Merge servers into the shared manager so the REPL picks them up.
-            mcp_bg.merge_from(mgr).await;
-
-            // Sync MCP tools: detach stale, re-attach non-MCP, register new MCP tools.
-            let non_mcp_ids: Vec<String> = client_bg
-                .get_agent_tools(&agent_id_bg)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|(_, name)| !name.contains("__"))
-                .map(|(id, _)| id)
-                .collect();
-            let _ = client_bg.detach_agent_tools(&agent_id_bg).await;
-            if !non_mcp_ids.is_empty() {
-                let _ = client_bg
-                    .attach_agent_tools(&agent_id_bg, &non_mcp_ids)
-                    .await;
-            }
-
-            if !mcp_bg.is_empty().await {
-                use agent::tools::register_mcp_tools;
-                let mcp_tool_ids: Vec<String> =
-                    register_mcp_tools(&client_bg, mcp_bg.all_tool_schemas().await)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|t| t.id)
-                        .collect();
-                if !mcp_tool_ids.is_empty() {
-                    if let Err(e) = client_bg
-                        .attach_agent_tools(&agent_id_bg, &mcp_tool_ids)
-                        .await
-                    {
-                        tracing::warn!("Background: failed to attach MCP tools: {e}");
-                    } else {
-                        tracing::info!(
-                            "Background: attached {} MCP tool(s) to agent",
-                            mcp_tool_ids.len()
+                cade::mcp::McpStartResult::Failed { key, error } => {
+                    if let Some(sp) = server_spinners.get(key) {
+                        StartupProgress::finish_err(sp, format!("{key}: {error}"));
+                    }
+                    failed_count += 1;
+                }
+                cade::mcp::McpStartResult::Timeout { key, timeout_secs } => {
+                    if let Some(sp) = server_spinners.get(key) {
+                        StartupProgress::finish_skip(
+                            sp,
+                            format!("{key} (timed out after {timeout_secs}s)"),
                         );
                     }
+                    failed_count += 1;
                 }
             }
+        }
 
-            if failed_count > 0 {
-                eprintln!(
-                    "⚠ MCP: {ok_count}/{total} server(s) ready ({failed_count} failed). Check /tmp/cade.log for details."
-                );
-            }
-        });
-    } else if !mcp_configs.is_empty() && !mcp_enabled {
-        tracing::info!(
-            "Skipping {} MCP server(s) — Mcp capability not enabled",
-            mcp_configs.len()
-        );
+        let ok_count = total - failed_count;
+        if ok_count == 0 {
+            StartupProgress::finish_warn(&sp_mcp, "No MCP servers started");
+        } else if failed_count > 0 {
+            StartupProgress::finish_warn(
+                &sp_mcp,
+                format!("MCP: {ok_count}/{total} server(s) ready ({failed_count} failed)"),
+            );
+        } else {
+            StartupProgress::finish_ok(&sp_mcp, format!("MCP: {ok_count}/{total} server(s) ready"));
+        }
+        std::sync::Arc::new(mgr)
+    };
+
+    // Sync MCP tools: remove stale MCP tool entries (from removed or
+    // disconnected servers) while preserving native/meta tool attachments.
+    let sp_tools = progress.start_tool_sync();
+    {
+        let non_mcp_ids: Vec<String> = client
+            .get_agent_tools(&agent.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, name)| !name.contains("__"))
+            .map(|(id, _)| id)
+            .collect();
+        let _ = client.detach_agent_tools(&agent.id).await;
+        if !non_mcp_ids.is_empty() {
+            let _ = client.attach_agent_tools(&agent.id, &non_mcp_ids).await;
+        }
     }
+
+    // Register MCP tool schemas with cade-server + attach to agent.
+    if !mcp.is_empty().await {
+        sp_tools.set_message("Registering MCP tools…");
+        use agent::tools::register_mcp_tools;
+        let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        if !mcp_tool_ids.is_empty() {
+            if let Err(e) = client.attach_agent_tools(&agent.id, &mcp_tool_ids).await {
+                tracing::warn!("Failed to attach MCP tools to agent: {e}");
+            } else {
+                tracing::info!("Attached {} MCP tool(s) to agent", mcp_tool_ids.len());
+            }
+        }
+    }
+    StartupProgress::finish_ok(&sp_tools, "Tools synced");
 
     // Build hook engine from merged settings (local > project > global)
     let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
