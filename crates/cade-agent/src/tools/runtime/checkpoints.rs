@@ -20,7 +20,8 @@ impl ToolRuntime {
 
         // 2. Create server-side checkpoint record
         let conv_id = self.conversation_id.as_deref();
-        match self.storage
+        match self
+            .storage
             .create_checkpoint(
                 &self.agent_id,
                 conv_id,
@@ -67,7 +68,11 @@ impl ToolRuntime {
         }
 
         // Mark checkpoint as restored on server
-        if let Err(e) = self.storage.restore_checkpoint(&self.agent_id, &cp_id).await {
+        if let Err(e) = self
+            .storage
+            .restore_checkpoint(&self.agent_id, &cp_id)
+            .await
+        {
             tracing::warn!("restore_checkpoint server update failed: {e}");
         }
 

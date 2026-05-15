@@ -568,8 +568,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         std::collections::VecDeque::with_capacity(5);
 
     // G5: Per-call dedup cache — maps fingerprint → first iter it was seen.
-    let mut tool_dedup: std::collections::HashMap<u64, usize> =
-        std::collections::HashMap::new();
+    let mut tool_dedup: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
 
     // Create a lightweight ephemeral DB row for the subagent so its
     // meta-tool calls (update_memory, load_skill, etc.) are scoped to
@@ -1059,10 +1058,16 @@ pub(super) async fn handle_run_parallel_subagents_tool(
 
         for member in &team.members {
             let mut member_args = serde_json::Map::new();
-            member_args.insert("prompt".to_string(), serde_json::Value::String(prompt.to_string()));
+            member_args.insert(
+                "prompt".to_string(),
+                serde_json::Value::String(prompt.to_string()),
+            );
             member_args.insert(
                 "description".to_string(),
-                serde_json::Value::String(format!("Team member: {} - {}", member.name, member.description)),
+                serde_json::Value::String(format!(
+                    "Team member: {} - {}",
+                    member.name, member.description
+                )),
             );
             if !member.system_prompt.is_empty() {
                 member_args.insert(
@@ -1071,7 +1076,10 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                 );
             }
             if let Some(model) = &member.model {
-                member_args.insert("model".to_string(), serde_json::Value::String(model.clone()));
+                member_args.insert(
+                    "model".to_string(),
+                    serde_json::Value::String(model.clone()),
+                );
             }
             tasks_val.push(serde_json::Value::Object(member_args));
         }
@@ -1081,7 +1089,8 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "run_parallel_subagents".to_string(),
-            output: "error: either 'tasks' array OR 'team_id' and 'prompt' are required".to_string(),
+            output: "error: either 'tasks' array OR 'team_id' and 'prompt' are required"
+                .to_string(),
             is_error: true,
         };
     }
@@ -1223,17 +1232,18 @@ pub(super) async fn smart_memory_merge(
     };
 
     if let Ok(resp) = state.llm.complete(&req).await
-        && let Some(merged) = resp.content {
-            let desc = "Smart merged after subagent run".to_string();
-            let _ = cade_store::sqlite::upsert_memory_block_typed(
-                &state.db,
-                &agent_id,
-                &label,
-                merged.trim(),
-                Some(&desc),
-                None,
-                Some(&memory_type),
-                Some(confidence),
-            );
-        }
+        && let Some(merged) = resp.content
+    {
+        let desc = "Smart merged after subagent run".to_string();
+        let _ = cade_store::sqlite::upsert_memory_block_typed(
+            &state.db,
+            &agent_id,
+            &label,
+            merged.trim(),
+            Some(&desc),
+            None,
+            Some(&memory_type),
+            Some(confidence),
+        );
+    }
 }

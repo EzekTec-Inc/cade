@@ -282,7 +282,12 @@ pub(crate) async fn complete_with_overflow_recovery(
             // Future, which is in turn embedded in the caller's Future,
             // compounding stack usage that caused the tokio worker thread
             // overflow on archival/historic content access.
-            Box::pin(crate::server::consolidation::consolidate_agent(state, agent_id, conversation_id)).await;
+            Box::pin(crate::server::consolidation::consolidate_agent(
+                state,
+                agent_id,
+                conversation_id,
+            ))
+            .await;
 
             // 2. Drop the context cache entry so build_context recomputes.
             {
@@ -294,18 +299,24 @@ pub(crate) async fn complete_with_overflow_recovery(
             // 3. Rebuild context fresh.
             // Box::pin: same rationale as above — build_context holds
             // Vec<Vec<LlmMessage>>, Vec<MessageRow>, and multiple HashMaps.
-            let (model, mut new_messages, new_tools) =
-                match Box::pin(build_context(state, agent_id, conversation_id, is_tool_return)).await {
-                    Ok(ctx) => ctx,
-                    Err(build_err) => {
-                        tracing::error!(
-                            "complete [{}]: rebuild after overflow failed: {}",
-                            agent_id,
-                            build_err
-                        );
-                        return Err(e);
-                    }
-                };
+            let (model, mut new_messages, new_tools) = match Box::pin(build_context(
+                state,
+                agent_id,
+                conversation_id,
+                is_tool_return,
+            ))
+            .await
+            {
+                Ok(ctx) => ctx,
+                Err(build_err) => {
+                    tracing::error!(
+                        "complete [{}]: rebuild after overflow failed: {}",
+                        agent_id,
+                        build_err
+                    );
+                    return Err(e);
+                }
+            };
 
             // 4. Aggressive safety trim: keep the system prompts (always at
             //    the front) and only the most-recent half of the remaining
@@ -1148,10 +1159,19 @@ fn assemble_system_prompt_memory(
                 let mut xml = String::from("<active_plan>\n");
                 for step in steps {
                     let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let desc = step.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    let is_done = step.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let desc = step
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let is_done = step
+                        .get("is_done")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     let status = if is_done { "done" } else { "pending" };
-                    xml.push_str(&format!("  <step id=\"{}\" status=\"{}\">{}</step>\n", id, status, desc));
+                    xml.push_str(&format!(
+                        "  <step id=\"{}\" status=\"{}\">{}</step>\n",
+                        id, status, desc
+                    ));
                 }
                 xml.push_str("</active_plan>");
                 dynamic_parts.push(xml);

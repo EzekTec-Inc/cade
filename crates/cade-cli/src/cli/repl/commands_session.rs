@@ -106,11 +106,12 @@ impl Repl {
         app.toggle_mouse_capture();
         if app.mouse_capture_disabled {
             let _ = app.push(RenderLine::SystemMsg(
-                    "Mouse capture disabled — scroll disabled. Click and drag to select text. /mouse to restore.".into()
-                ));
+                "Scroll-wheel capture off — use keyboard to scroll (PgUp/PgDn, arrows). /mouse to re-enable."
+                    .into(),
+            ));
         } else {
             let _ = app.push(RenderLine::SuccessMsg(
-                "Mouse capture restored — scroll enabled.".into(),
+                "Scroll-wheel capture on — mouse wheel scrolls viewport. /mouse to disable.".into(),
             ));
         }
         Ok(false)

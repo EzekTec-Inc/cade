@@ -370,38 +370,40 @@ pub fn search_memory(
                 if let Ok(mut stmt) = conn.prepare(&stmt_sql)
                     && let Ok(rows) = stmt.query_map(params![agent_id, mtype], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    }) {
-                        for row in rows.filter_map(|r| r.ok()) {
-                            let (label, value) = row;
-                            let combined = format!("{} {}", label, value).to_lowercase();
-                            let hits = words
-                                .iter()
-                                .filter(|w| combined.contains(w.as_str()))
-                                .count();
-                            if hits > 0 {
-                                let snippet = value.chars().take(200).collect::<String>();
-                                scored.push((hits, label, value, snippet));
-                            }
+                    })
+                {
+                    for row in rows.filter_map(|r| r.ok()) {
+                        let (label, value) = row;
+                        let combined = format!("{} {}", label, value).to_lowercase();
+                        let hits = words
+                            .iter()
+                            .filter(|w| combined.contains(w.as_str()))
+                            .count();
+                        if hits > 0 {
+                            let snippet = value.chars().take(200).collect::<String>();
+                            scored.push((hits, label, value, snippet));
                         }
                     }
+                }
             } else {
                 if let Ok(mut stmt) = conn.prepare(&stmt_sql)
                     && let Ok(rows) = stmt.query_map(params![agent_id], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    }) {
-                        for row in rows.filter_map(|r| r.ok()) {
-                            let (label, value) = row;
-                            let combined = format!("{} {}", label, value).to_lowercase();
-                            let hits = words
-                                .iter()
-                                .filter(|w| combined.contains(w.as_str()))
-                                .count();
-                            if hits > 0 {
-                                let snippet = value.chars().take(200).collect::<String>();
-                                scored.push((hits, label, value, snippet));
-                            }
+                    })
+                {
+                    for row in rows.filter_map(|r| r.ok()) {
+                        let (label, value) = row;
+                        let combined = format!("{} {}", label, value).to_lowercase();
+                        let hits = words
+                            .iter()
+                            .filter(|w| combined.contains(w.as_str()))
+                            .count();
+                        if hits > 0 {
+                            let snippet = value.chars().take(200).collect::<String>();
+                            scored.push((hits, label, value, snippet));
                         }
                     }
+                }
             }
 
             scored.sort_by(|a, b| b.0.cmp(&a.0));
@@ -714,7 +716,7 @@ mod tests {
                 created_at: None,
                 compaction_model: None,
                 theme: None,
-            active_plan_json: None,
+                active_plan_json: None,
             },
         )?;
         Ok(())

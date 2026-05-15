@@ -25,7 +25,11 @@ impl ToolRuntime {
             Err(e) => return (format!("Failed to query agents: {e}"), true),
         };
 
-        match self.storage.message_agent(&self.agent_id, &target_id, &message).await {
+        match self
+            .storage
+            .message_agent(&self.agent_id, &target_id, &message)
+            .await
+        {
             Ok(response) => {
                 if response.trim().is_empty() {
                     ("Target agent returned an empty response".to_string(), false)

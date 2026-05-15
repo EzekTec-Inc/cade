@@ -469,7 +469,10 @@ mod tests {
         let cfg = SubagentConfig::from_args(&json!({ "prompt": "x" }));
         let result = cfg.resolve_system_prompt(None);
         // New contract text must be present
-        assert!(result.contains("COMPLETION CONTRACT"), "missing completion contract header");
+        assert!(
+            result.contains("COMPLETION CONTRACT"),
+            "missing completion contract header"
+        );
         assert!(result.contains("finish"), "finish tool must be mentioned");
         // Old punishing text must be gone
         assert!(

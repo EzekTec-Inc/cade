@@ -271,7 +271,7 @@ mod tests {
             thinking_text: None,
             thinking_elapsed: None,
             active_plan: None,
-            mouse_capture_disabled: false,
+            mouse_capture_disabled: true,
         }
     }
 

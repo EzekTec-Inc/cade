@@ -559,10 +559,22 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // Boxing their futures prevents them from inflating consolidate_agent's
     // already-large state machine, which contributes to the tokio worker
     // thread stack overflow on archival/historic content access paths.
-    Box::pin(auto_update_active_goal(state, agent_id, &summary, &compaction_model)).await;
+    Box::pin(auto_update_active_goal(
+        state,
+        agent_id,
+        &summary,
+        &compaction_model,
+    ))
+    .await;
 
     // Phase B: Automated Extraction of durable facts
-    Box::pin(auto_extract_facts(state, agent_id, &summary, &compaction_model)).await;
+    Box::pin(auto_extract_facts(
+        state,
+        agent_id,
+        &summary,
+        &compaction_model,
+    ))
+    .await;
 
     // Phase B.2: export memory to a directory cade-rag-mcp can index.
     //
@@ -691,13 +703,14 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // Phase C: Memories that haven't been accessed recently decay in confidence.
     if let Ok(decayed) =
         cade_store::sqlite::memory::decay_stale_memories(&state.db, agent_id, current_turn, 20)
-        && decayed > 0 {
-            tracing::debug!(
-                "consolidate [{}]: Phase C decayed confidence for {} stale memory blocks",
-                agent_id,
-                decayed
-            );
-        }
+        && decayed > 0
+    {
+        tracing::debug!(
+            "consolidate [{}]: Phase C decayed confidence for {} stale memory blocks",
+            agent_id,
+            decayed
+        );
+    }
 }
 
 // ── P7: active_goal auto-update ───────────────────────────────────────────────
@@ -1594,7 +1607,7 @@ mod tests {
                 created_at: None,
                 compaction_model: None,
                 theme: None,
-            active_plan_json: None,
+                active_plan_json: None,
             },
         )
         .unwrap();

@@ -55,21 +55,22 @@ impl SubagentTools {
             other => {
                 if other.starts_with('{')
                     && let Ok(v) = serde_json::from_str::<serde_json::Value>(other)
-                        && let (Some(tools), Some(paths)) = (
-                            v.get("allowed_tools").and_then(|v| v.as_array()),
-                            v.get("allowed_paths").and_then(|v| v.as_array()),
-                        ) {
-                            return Self::Restricted {
-                                allowed_tools: tools
-                                    .iter()
-                                    .filter_map(|t| t.as_str().map(String::from))
-                                    .collect(),
-                                allowed_paths: paths
-                                    .iter()
-                                    .filter_map(|p| p.as_str().map(String::from))
-                                    .collect(),
-                            };
-                        }
+                    && let (Some(tools), Some(paths)) = (
+                        v.get("allowed_tools").and_then(|v| v.as_array()),
+                        v.get("allowed_paths").and_then(|v| v.as_array()),
+                    )
+                {
+                    return Self::Restricted {
+                        allowed_tools: tools
+                            .iter()
+                            .filter_map(|t| t.as_str().map(String::from))
+                            .collect(),
+                        allowed_paths: paths
+                            .iter()
+                            .filter_map(|p| p.as_str().map(String::from))
+                            .collect(),
+                    };
+                }
                 Self::List(
                     other
                         .split(',')

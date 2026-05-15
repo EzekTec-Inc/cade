@@ -761,10 +761,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if current_version < 15 {
-        let r = conn.execute(
-            "ALTER TABLE agents ADD COLUMN active_plan_json TEXT",
-            [],
-        );
+        let r = conn.execute("ALTER TABLE agents ADD COLUMN active_plan_json TEXT", []);
         if let Err(e) = r {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {

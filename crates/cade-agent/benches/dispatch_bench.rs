@@ -1,7 +1,7 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use std::hint::black_box;
-use cade_agent::tools::manager::dispatch;
 use cade_agent::mcp::McpManager;
+use cade_agent::tools::manager::dispatch;
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 fn bench_tool_dispatch(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -16,7 +16,8 @@ fn bench_tool_dispatch(c: &mut Criterion) {
                 black_box(&args),
                 black_box(&mcp),
                 black_box(None),
-            ).await;
+            )
+            .await;
             black_box(res);
         })
     });

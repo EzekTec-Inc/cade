@@ -14,9 +14,9 @@
 pub mod docker;
 pub mod local;
 pub mod readonly;
-pub mod storage;
 #[cfg(feature = "backend-ssh")]
 pub mod ssh;
+pub mod storage;
 
 #[cfg(feature = "backend-docker")]
 pub use docker::DockerBackend;

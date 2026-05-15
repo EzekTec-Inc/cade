@@ -20,7 +20,6 @@ use cade_core::skills::discover_all_skills;
 
 use cade_core::tool_ids::*;
 
-
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
 use crate::tools::dispatch;
@@ -237,21 +236,23 @@ impl ToolRuntime {
         // Fire-and-forget tool execution logging
         if self.log_executions {
             let duration_ms = t0.elapsed().as_millis() as u64;
-            self.storage.log_tool_execution_spawn(
-                self.agent_id.clone(),
-                self.conversation_id.clone(),
-                None, // checkpoint ID not easily available here
-                tool_call_id.clone(),
-                tool_name.to_string(),
-                args.clone(),
-                if output.len() > 1024 {
-                    format!("{}…", &output[..1024])
-                } else {
-                    output.clone()
-                },
-                is_error,
-                duration_ms,
-            ).await;
+            self.storage
+                .log_tool_execution_spawn(
+                    self.agent_id.clone(),
+                    self.conversation_id.clone(),
+                    None, // checkpoint ID not easily available here
+                    tool_call_id.clone(),
+                    tool_name.to_string(),
+                    args.clone(),
+                    if output.len() > 1024 {
+                        format!("{}…", &output[..1024])
+                    } else {
+                        output.clone()
+                    },
+                    is_error,
+                    duration_ms,
+                )
+                .await;
         }
 
         Some(RuntimeToolResult {
@@ -343,7 +344,8 @@ impl ToolRuntime {
     async fn handle_reflect(&self, args: &Value) -> (String, bool) {
         let focus = args["focus"].as_str().map(String::from);
 
-        match self.storage
+        match self
+            .storage
             .trigger_reflect(&self.agent_id, focus.as_deref())
             .await
         {

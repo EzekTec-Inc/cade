@@ -978,12 +978,11 @@ impl TuiApp {
         colors: ThemeColors,
     ) -> Self {
         let terminal = ratatui::init();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crate::mouse::EnableScrollCapture,
-            EnableBracketedPaste,
-            EnableFocusChange
-        );
+        // No mouse capture on startup — terminal handles all mouse events
+        // natively (click-and-drag selects text, right-click copies).
+        // Scroll via keyboard: PgUp/PgDn, arrows, Ctrl+U/D.
+        // Use /mouse to opt-in to scroll-wheel capture if preferred.
+        let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange);
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
         // swallows the query. Unrecognized escape codes are safely ignored by VT100
@@ -1022,7 +1021,7 @@ impl TuiApp {
             session_tokens: (0, 0),
             turn_count: 0,
             token_history: Vec::new(),
-            mouse_capture_disabled: false,
+            mouse_capture_disabled: true,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
@@ -1387,12 +1386,11 @@ impl TuiApp {}
 impl Drop for TuiApp {
     fn drop(&mut self) {
         let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            DisableBracketedPaste,
-            crate::mouse::DisableScrollCapture,
-            DisableFocusChange
-        );
+        // Only disable scroll capture if it was enabled via /mouse.
+        if !self.mouse_capture_disabled {
+            let _ = crossterm::execute!(std::io::stdout(), crate::mouse::DisableScrollCapture);
+        }
+        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
         ratatui::restore();
     }
 }

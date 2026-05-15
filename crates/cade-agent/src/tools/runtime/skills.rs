@@ -14,7 +14,11 @@ impl ToolRuntime {
             );
         }
 
-        match self.storage.install_plugin(&self.agent_id, &url, &plugin_id).await {
+        match self
+            .storage
+            .install_plugin(&self.agent_id, &url, &plugin_id)
+            .await
+        {
             Ok(msg) => (msg, false),
             Err(e) => (format!("Failed to install plugin: {e}"), true),
         }

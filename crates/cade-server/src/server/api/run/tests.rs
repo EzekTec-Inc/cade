@@ -3,8 +3,6 @@
 use super::subagent::{filter_subagent_tools, handle_run_subagent_tool};
 use super::*;
 
-
-
 // ── truncate_at_char_boundary (C2) ────────────────────────────────
 
 #[test]
@@ -71,16 +69,6 @@ fn run_exit_status_done_renders_as_done() {
 fn run_exit_status_error_renders_as_error() {
     assert_eq!(RunExitStatus::Error.as_str(), "error");
 }
-
-
-
-
-
-
-
-
-
-
 
 /// A mock LlmProvider that panics if called.  Used to assert that an early
 /// return path (e.g. depth-limit guard) never reaches the LLM at all.
@@ -267,20 +255,32 @@ async fn subagent_run_does_not_pollute_parent_db() {
     let state = build_state_with_llm(llm_dyn);
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
-    let agents_before: i64 = state.db.get().unwrap()
+    let agents_before: i64 = state
+        .db
+        .get()
+        .unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
-    let messages_before: i64 = state.db.get().unwrap()
+    let messages_before: i64 = state
+        .db
+        .get()
+        .unwrap()
         .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
         .unwrap();
 
     let args = serde_json::json!({ "prompt": "do thing" });
     let _ = handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
 
-    let agents_after: i64 = state.db.get().unwrap()
+    let agents_after: i64 = state
+        .db
+        .get()
+        .unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
-    let messages_after: i64 = state.db.get().unwrap()
+    let messages_after: i64 = state
+        .db
+        .get()
+        .unwrap()
         .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
         .unwrap();
 
@@ -412,7 +412,6 @@ fn filter_subagent_tools_strips_run_subagent_schema() {
     assert!(names.iter().any(|n| n == "read_file"));
 }
 
-
 /// The built-in `finish` tool is injected by the subagent executor itself.
 /// If a parent agent somehow had a `finish` schema in its tool list, it must
 /// be stripped from what subagents see — otherwise a confused subagent could
@@ -486,7 +485,10 @@ async fn subagent_loop_respects_wall_clock_timeout() {
     let state = build_state_with_llm(llm);
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
-    let agents_before: i64 = state.db.get().unwrap()
+    let agents_before: i64 = state
+        .db
+        .get()
+        .unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
 
@@ -509,7 +511,10 @@ async fn subagent_loop_respects_wall_clock_timeout() {
     );
 
     // Ephemeral row must be cleaned up (REC-2 guard fires on timeout path).
-    let agents_after: i64 = state.db.get().unwrap()
+    let agents_after: i64 = state
+        .db
+        .get()
+        .unwrap()
         .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
         .unwrap();
     assert_eq!(
@@ -604,45 +609,13 @@ fn ephemeral_environment_cleans_up_on_drop() {
 
 // ── Phase A2: skills meta-tools ──────────────────────────────────────
 
-
-
-
-
-
-
 // ── Phase A3: checkpoint meta-tools ──────────────────────────────────
-
-
-
-
-
-
 
 // ── Phase A4: artifact / agents meta-tools ────────────────────────────
 
-
-
-
-
-
-
-
-
-
-
 // ── F6: cross-conversation search ────────────────────────────────────────
 
-
-
-
-
 // ── F8: compaction transparency in conversation_search ────────────────────
-
-
-
-
-
-
 
 /// RED: at depth >= CADE_SUBAGENT_MAX_DEPTH (default 3), the tool must
 /// short-circuit with an error and never call the LLM.  Currently fails
@@ -670,12 +643,6 @@ async fn depth_limit_blocks_recursion_before_llm_call() {
 }
 
 // ── subagent meta-tool dispatch ───────────────────────────────────────
-
-
-
-
-
-
 
 // ── subagent file-edit tracking ───────────────────────────────────────
 

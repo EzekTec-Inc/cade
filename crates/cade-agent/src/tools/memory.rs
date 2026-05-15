@@ -170,9 +170,7 @@ impl ConversationSearchTool {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let results = client
-            .conversation_search(agent_id, query, None)
-            .await?;
+        let results = client.conversation_search(agent_id, query, None).await?;
         if results.is_empty() {
             let scope = match conversation_id {
                 Some(cid) => format!(" in conversation {cid}"),

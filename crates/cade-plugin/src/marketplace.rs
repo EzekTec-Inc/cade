@@ -27,8 +27,13 @@ pub async fn install_plugin(
     target_dir: &std::path::Path,
 ) -> crate::Result<crate::manifest::PluginManifest> {
     // 1. Download tarball
-    let resp = reqwest::get(url).await.map_err(|e| crate::Error::custom(e.to_string()))?;
-    let bytes = resp.bytes().await.map_err(|e| crate::Error::custom(e.to_string()))?;
+    let resp = reqwest::get(url)
+        .await
+        .map_err(|e| crate::Error::custom(e.to_string()))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| crate::Error::custom(e.to_string()))?;
 
     // 2. Unpack tarball to target_dir/plugin_id
     let plugin_dir = target_dir.join(plugin_id.replace('/', "_"));
@@ -43,7 +48,9 @@ pub async fn install_plugin(
 
     let tar = GzDecoder::new(Cursor::new(bytes.as_ref()));
     let mut archive = Archive::new(tar);
-    archive.unpack(&plugin_dir).map_err(|e| crate::Error::custom(format!("Unpack failed: {e}")))?;
+    archive
+        .unpack(&plugin_dir)
+        .map_err(|e| crate::Error::custom(format!("Unpack failed: {e}")))?;
 
     // 3. Load manifest
     crate::manifest::PluginManifest::load(&plugin_dir)

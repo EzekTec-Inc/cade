@@ -1,6 +1,6 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use std::hint::black_box;
 use cade_store::sqlite;
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 fn bench_reciprocal_rank_fusion(c: &mut Criterion) {
     let kw_labels: Vec<String> = (0..100).map(|i| format!("label_{}", i)).collect();

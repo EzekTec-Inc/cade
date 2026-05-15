@@ -41,9 +41,7 @@ pub async fn create_git_checkpoint(label: &str, cwd: &Path) -> Option<GitCheckpo
 
     let commit_hash = current_git_hash(cwd).await;
 
-    Some(GitCheckpoint {
-        commit_hash,
-    })
+    Some(GitCheckpoint { commit_hash })
 }
 
 /// Restore a git checkpoint by hard resetting to the commit hash.
@@ -55,9 +53,9 @@ pub async fn restore_git_checkpoint(commit_hash: &str, cwd: &Path) -> Result<()>
     }
     let out = run_git(cwd, &["reset", "--hard", commit_hash]).await;
     match out {
-        Some((exit, _, stderr)) if exit != 0 => Err(crate::Error::custom(format!(
-            "git reset failed: {stderr}"
-        ))),
+        Some((exit, _, stderr)) if exit != 0 => {
+            Err(crate::Error::custom(format!("git reset failed: {stderr}")))
+        }
         None => Err(crate::Error::custom("git not found or failed to run")),
         _ => Ok(()),
     }
@@ -95,8 +93,6 @@ async fn working_tree_dirty(cwd: &Path) -> bool {
     // `git status --porcelain` outputs nothing when tree is clean
     matches!(run_git(cwd, &["status", "--porcelain"]).await, Some((0, ref out, _)) if !out.trim().is_empty())
 }
-
-
 
 /// Run a git subcommand in `cwd`, returning (exit_code, stdout, stderr).
 async fn run_git(cwd: &Path, args: &[&str]) -> Option<(i32, String, String)> {

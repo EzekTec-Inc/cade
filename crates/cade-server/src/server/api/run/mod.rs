@@ -44,10 +44,9 @@ use serde_json::{Value, json};
 use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve_conversation};
 use crate::server::state::AppState;
 
-/// Maximum agentic turns per request (prevents infinite loops).
-
-mod subagent;
 pub mod storage_impl;
+/// Maximum agentic turns per request (prevents infinite loops).
+mod subagent;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -429,15 +428,21 @@ async fn run_agent_loop(
         // embedded in run_agent_loop's Future, which combined with the
         // consolidation + LLM streaming futures overflows the tokio worker
         // thread stack when processing large archival/historic queries.
-        let (model, messages, tools) =
-            match Box::pin(build_context(&state2, &agent_id2, conv_id2.as_deref(), is_tool_return)).await {
-                Ok(ctx) => ctx,
-                Err(e) => {
-                    send(json!({ "message_type": "error", "error": e })).await;
-                    exit_status = RunExitStatus::Error;
-                    break;
-                }
-            };
+        let (model, messages, tools) = match Box::pin(build_context(
+            &state2,
+            &agent_id2,
+            conv_id2.as_deref(),
+            is_tool_return,
+        ))
+        .await
+        {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                send(json!({ "message_type": "error", "error": e })).await;
+                exit_status = RunExitStatus::Error;
+                break;
+            }
+        };
 
         let max_tokens_cap = catalogue::max_tokens_for_model(&model);
         // P6: on iterations after the first (= tool-dispatch turns
@@ -652,7 +657,9 @@ async fn run_agent_loop(
         // RC5-FIX: Hoist ToolRuntime creation outside per-tool-call loop.
         // One runtime instance is reused across all tool calls in this turn,
         // avoiding redundant Arc::new + AppState clones per tool call.
-        let storage_backend = std::sync::Arc::new(storage_impl::ServerStorageBackend { state: state2.clone() });
+        let storage_backend = std::sync::Arc::new(storage_impl::ServerStorageBackend {
+            state: state2.clone(),
+        });
         let runtime = cade_agent::tools::runtime::ToolRuntime::new(
             storage_backend,
             std::sync::Arc::clone(&state2.mcp),
@@ -660,43 +667,64 @@ async fn run_agent_loop(
             std::env::current_dir().unwrap_or_default(),
         );
         for tc in &tool_calls {
-            
             // For interactive tools (run_subagent, etc) that ToolRuntime doesn't handle,
             // we intercept them server-side using the remaining meta_tools logic or subagent dispatcher.
             let result = if tc.name == "run_subagent" {
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                subagent::handle_run_subagent_tool(&state2, &agent_id2, &tc.id, &args, tx.clone()).await
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                subagent::handle_run_subagent_tool(&state2, &agent_id2, &tc.id, &args, tx.clone())
+                    .await
             } else if tc.name == "run_parallel_subagents" {
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                subagent::handle_run_parallel_subagents_tool(&state2, &agent_id2, &tc.id, &args, tx.clone()).await
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                subagent::handle_run_parallel_subagents_tool(
+                    &state2,
+                    &agent_id2,
+                    &tc.id,
+                    &args,
+                    tx.clone(),
+                )
+                .await
             } else if tc.name == "cancel_subagent" {
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
                 subagent::handle_cancel_subagent_tool(&state2, &tc.id, &args).await
             } else if tc.name == "set_plan" {
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                let steps = args.get("steps")
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                let steps = args
+                    .get("steps")
                     .and_then(|v| v.as_array())
                     .map(|arr| {
-                        arr.iter().enumerate().filter_map(|(i, v)| {
-                            v.as_str().map(|s| {
-                                serde_json::json!({
-                                    "id": i + 1,
-                                    "description": s,
-                                    "is_done": false
+                        arr.iter()
+                            .enumerate()
+                            .filter_map(|(i, v)| {
+                                v.as_str().map(|s| {
+                                    serde_json::json!({
+                                        "id": i + 1,
+                                        "description": s,
+                                        "is_done": false
+                                    })
                                 })
                             })
-                        }).collect::<Vec<_>>()
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                
+
                 let n = steps.len();
-                let plan_json = serde_json::json!({ "steps": steps, "is_visible": true }).to_string();
-                let _ = sqlite::agents::update_agent_active_plan(&state2.db, &agent_id2, Some(&plan_json));
-                
+                let plan_json =
+                    serde_json::json!({ "steps": steps, "is_visible": true }).to_string();
+                let _ = sqlite::agents::update_agent_active_plan(
+                    &state2.db,
+                    &agent_id2,
+                    Some(&plan_json),
+                );
+
                 send(serde_json::json!({
                     "message_type": "plan_update",
                     "plan": serde_json::json!({ "steps": steps, "is_visible": true })
-                })).await;
+                }))
+                .await;
 
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: tc.id.clone(),
@@ -705,17 +733,22 @@ async fn run_agent_loop(
                     is_error: false,
                 }
             } else if tc.name == "UpdatePlan" {
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
                 let step_id = args.get("step_id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 let done = args.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
-                
+
                 let mut found = false;
                 if let Ok(Some(agent)) = sqlite::agents::get_agent(&state2.db, &agent_id2) {
                     if let Some(plan_str) = agent.active_plan_json {
                         if let Ok(mut plan) = serde_json::from_str::<serde_json::Value>(&plan_str) {
-                            if let Some(steps) = plan.get_mut("steps").and_then(|v| v.as_array_mut()) {
+                            if let Some(steps) =
+                                plan.get_mut("steps").and_then(|v| v.as_array_mut())
+                            {
                                 for step in steps.iter_mut() {
-                                    if step.get("id").and_then(|id| id.as_u64()) == Some(step_id as u64) {
+                                    if step.get("id").and_then(|id| id.as_u64())
+                                        == Some(step_id as u64)
+                                    {
                                         step["is_done"] = serde_json::json!(done);
                                         found = true;
                                         break;
@@ -723,61 +756,87 @@ async fn run_agent_loop(
                                 }
                             }
                             if found {
-                                let _ = sqlite::agents::update_agent_active_plan(&state2.db, &agent_id2, Some(&plan.to_string()));
+                                let _ = sqlite::agents::update_agent_active_plan(
+                                    &state2.db,
+                                    &agent_id2,
+                                    Some(&plan.to_string()),
+                                );
                                 send(serde_json::json!({
                                     "message_type": "plan_update",
                                     "plan": plan
-                                })).await;
+                                }))
+                                .await;
                             }
                         }
                     }
                 }
-                
+
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.name.clone(),
                     output: if found {
-                        format!("Step {step_id} marked {}.", if done { "done" } else { "not done" })
+                        format!(
+                            "Step {step_id} marked {}.",
+                            if done { "done" } else { "not done" }
+                        )
                     } else {
                         format!("error: Step {step_id} not found in the active plan.")
                     },
                     is_error: !found,
                 }
             } else if tc.name == "finish_task" {
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let reason = args.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+                let summary = args
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let reason = args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
                 let output = std::process::Command::new("git")
                     .args(&["status", "--porcelain"])
                     .output()
                     .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                     .unwrap_or_default();
-                
+
                 let files_modified = if output.trim().is_empty() {
                     "None".to_string()
                 } else {
-                    output.lines().map(|l| format!("- {}", l.trim())).collect::<Vec<_>>().join("\n")
+                    output
+                        .lines()
+                        .map(|l| format!("- {}", l.trim()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 };
-                
-                let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                
+
+                let timestamp =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
                 let log_entry = format!(
                     "\n## {} — {}\n\n**Reason:** {}\n\n**Files modified:**\n{}\n\n---\n",
                     timestamp, summary, reason, files_modified
                 );
-                
+
                 let path = std::path::Path::new("CADE_AUDIT.md");
-                let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "# CADE Audit Log\n\n".to_string());
+                let existing = std::fs::read_to_string(path)
+                    .unwrap_or_else(|_| "# CADE Audit Log\n\n".to_string());
                 let _ = std::fs::write(path, format!("{}{}", existing, log_entry));
-                
+
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.name.clone(),
                     output: format!("Task finished. Audit log appended to CADE_AUDIT.md."),
                     is_error: false,
                 }
-            } else if let Some(executed) = runtime.execute(tc.id.clone(), &tc.name, &tc.arguments).await {
+            } else if let Some(executed) = runtime
+                .execute(tc.id.clone(), &tc.name, &tc.arguments)
+                .await
+            {
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: executed.tool_call_id,
                     tool_name: executed.tool_name,
@@ -785,11 +844,14 @@ async fn run_agent_loop(
                     is_error: executed.is_error,
                 }
             } else {
-                // Any other interactive tools that reach here but shouldn't 
+                // Any other interactive tools that reach here but shouldn't
                 cade_agent::tools::manager::ToolResult {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.name.clone(),
-                    output: format!("Tool '{}' requires interactive TUI context and is not supported in background server loop.", tc.name),
+                    output: format!(
+                        "Tool '{}' requires interactive TUI context and is not supported in background server loop.",
+                        tc.name
+                    ),
                     is_error: true,
                 }
             };
