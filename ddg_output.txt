@@ -1,0 +1,15 @@
+Pricing | OpenAI API
+For gpt-4o-mini and gpt-4.1-mini with the non-preview web search tool, search content tokens are billed as a fixed block of 8,000 input tokens per call. File search tool call pricing applies to the Responses API only.
+---
+ChatGPT Token Limit: Free, Plus, Pro, and OpenAI API Limits (2026)
+GPT-4.1 models have a 1,047,576-token context window and a 32,768-token max output limit. ChatGPT plan limits are different from API limits. In ChatGPT, GPT-5.5 Instant uses smaller context windows by plan, while GPT-5.5 Thinking can use larger context windows on paid tiers.
+---
+OpenAI API Pricing 2026: GPT-5.5, GPT-5.4, o3 & All Models | AI Pricing ...
+Complete OpenAI API pricing for May 2026. Compare GPT-5.5, GPT-5.5 Pro, GPT-5.4, GPT-4.1, o3, and GPT-4o token costs with input, output, and cached rates per million tokens.
+---
+GPT 4.5 API Pricing Explained: Is It really worth it?
+GPT‑4.5 is built on a colossal architecture with 12.8 trillion parameters and a 128k token context window. This enormous scale and compute-intensive design come with premium pricing. For instance, a workload with 750k input tokens and 250k output tokens can cost around $147—roughly 30–34× more expensive than earlier models like GPT‑4o.
+---
+Current OpenAI API Pricing 2026: GPT-5.5, GPT-5.4, GPT-4o & Codex Costs
+OpenAI API pricing in 2026 is easiest to reason about per 1 million tokens. If you need the current OpenAI API price quickly: GPT-5.5 is $5/M input and $30/M output, GPT-5.4 is $2.50/M input and $15/M output, and GPT-5.2-Codex is $1.75/M input and $14/M output before caching, Batch, Flex, or long-context modifiers. For developer workloads, the practical shortlist is now GPT-5.5 for the hardest ...
+---
