@@ -1,0 +1,15 @@
+What is going on with the GPT-5 API? - Page 2 - API - OpenAI
+If the generated tokens reach the context window limit or the max_output_tokens value you’ve set, you’ll receive a response with a status of ...
+---
+Help Needed: Tackling Context Length Limits in OpenAI Models -
+No, as @jr.2509 mentioned, there is no direct method to limit the input prompt in the same way that you use max_tokens to limit the output.
+---
+Test new 128k window on gpt-4-1106-preview - API - OpenAI
+The recent unveiling of OpenAI’s GPT-4 Turbo model, with its mind-blowing 128K context length, has sent ripples through the AI community.
+---
+Request: Query for a models max tokens - API - OpenAI Developer
+I haven’t seen OpenAI randomly changing the context window length / number of max tokens on the API side, yet. ... API to report the maximum output ...
+---
+Test new 128k window on gpt-4-1106-preview - Page 2 - API -
+The only thing I changed in my code was the API model name, gpt-4-1106-preview, and the existing code continues to work.
+---
