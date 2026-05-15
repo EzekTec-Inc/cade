@@ -185,7 +185,10 @@ pub fn max_tokens_for_model(model_id: &str) -> u32 {
         m.4
     } else if model_id.starts_with("anthropic/claude-") {
         128_000
-    } else if model_id.starts_with("openai/o") || model_id.starts_with("openai/gpt-5") {
+        } else if model_id.starts_with("openai/o")
+        || model_id.starts_with("openai/gpt-5")
+        || model_id.starts_with("gpt-5")
+    {
         100_000
     } else if model_id.starts_with("gemini/")
         || model_id.starts_with("google/gemini")
@@ -195,6 +198,7 @@ pub fn max_tokens_for_model(model_id: &str) -> u32 {
     } else {
         4096 // Safe default for older models / unknown providers
     }
+}
 }
 
 /// Determine the context window (input tokens) for a specific model ID.
@@ -365,7 +369,13 @@ mod tests {
         assert_eq!(max_tokens_for_model("random/model"), 4096);
     }
 
-    // -- context_window_for_model
+    #[test]
+    fn max_tokens_bare_gpt5_defaults_to_high_budget() {
+        // Bare OpenAI model IDs should still align with gpt-5 defaults to avoid truncation.
+        assert_eq!(max_tokens_for_model("gpt-5"), 100_000);
+        assert_eq!(max_tokens_for_model("gpt-5.1-preview"), 100_000);
+    }
+// -- context_window_for_model
 
     #[test]
     fn context_window_known_models() {
