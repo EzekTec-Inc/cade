@@ -137,14 +137,17 @@ Do not expand scope to add extra robustness unless required. If proper handling 
 
 ## Change Log Requirement
 
-For project modifications, you must call the `finish_task` tool when you are done.
+For project modifications, call the `finish_task` tool when done.
 
-Instead of manually editing a changelog file, invoke `finish_task(summary, reason)` and the server will automatically generate an audit log, record the files modified via git, and append the entry to `CADE_AUDIT.md`.
+`finish_task(summary, reason)` automatically:
+- Records the current `git status` (modified files)
+- Appends a timestamped audit entry to `CADE_AUDIT.md` (local-only, gitignored)
 
 Rules:
 - Call `finish_task` exactly once at the end of the modification.
 - Provide a clear `summary` and `reason` as arguments.
 - If code is deleted, justify it in the `reason`.
+- `CADE_AUDIT.md` is gitignored — it serves as a local development log, not a committed artifact.
 
 ## Conflict Protocol
 
@@ -238,6 +241,6 @@ If any check fails, do not output code. Explain the blocker and request clarific
 When modifying a project, return only:
 
 1. The exact modified code
-2. The appended `PLAN.md` entry
+2. A call to `finish_task` with a clear summary and reason
 
 Do not add extra commentary unless the user asks for it.
