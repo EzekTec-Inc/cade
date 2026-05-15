@@ -18,7 +18,8 @@ const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
 fn needs_max_completion_tokens(model: &str) -> bool {
     let bare = model.to_lowercase();
-    bare.starts_with("gpt-5")
+    bare.starts_with("gpt-4.5")
+        || bare.starts_with("gpt-5")
         || bare.starts_with("o1")
         || bare.starts_with("o3")
         || bare.starts_with("o4")
