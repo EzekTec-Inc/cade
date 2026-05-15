@@ -380,6 +380,8 @@ impl GeminiProvider {
                         part.insert("functionCall".to_string(), Value::Object(fc));
                         if let Some(sig) = &tc.thought_signature {
                             part.insert("thoughtSignature".to_string(), json!(sig));
+                        } else {
+                            part.insert("thoughtSignature".to_string(), json!(""));
                         }
                         all_parts.push(Value::Object(part));
                     }

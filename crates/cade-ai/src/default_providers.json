@@ -28,5 +28,23 @@
     "env_vars": ["DEEPINFRA_API_KEY"],
     "chat_url": "https://api.deepinfra.com/v1/openai/chat/completions",
     "models_url": "https://api.deepinfra.com/v1/openai/models"
+  },
+  {
+    "name": "deepseek",
+    "env_vars": ["DEEPSEEK_API_KEY"],
+    "chat_url": "https://api.deepseek.com/chat/completions",
+    "models_url": "https://api.deepseek.com/models"
+  },
+  {
+    "name": "xai",
+    "env_vars": ["XAI_API_KEY"],
+    "chat_url": "https://api.x.ai/v1/chat/completions",
+    "models_url": "https://api.x.ai/v1/models"
+  },
+  {
+    "name": "github",
+    "env_vars": ["GITHUB_TOKEN"],
+    "chat_url": "https://models.inference.ai.azure.com/chat/completions",
+    "models_url": "https://models.inference.ai.azure.com/models"
   }
 ]

@@ -7,59 +7,11 @@ use std::sync::Arc;
 // based on the `provider/model` prefix in `CompletionRequest.model`.
 // This lets /model switching work transparently without a server restart.
 
-/// A known OpenAI-compatible provider preset.
-///
-/// - `env_vars`: env var names to scan for an API key (first non-empty wins)
-/// - `chat_url`: chat completions endpoint
-/// - `models_url`: live model listing endpoint (`None` → not supported by this provider)
-#[derive(Debug, Clone)]
-pub struct PresetDef {
-    pub name: &'static str,
-    pub env_vars: &'static [&'static str],
-    pub chat_url: &'static str,
-    pub models_url: Option<&'static str>,
-}
-
-/// All known OpenAI-compatible preset providers with their auto-detection env vars.
-pub const PRESET_PROVIDERS: &[PresetDef] = &[
-    PresetDef {
-        name: "openrouter",
-        env_vars: &["OPENROUTER_API_KEY"],
-        chat_url: "https://openrouter.ai/api/v1/chat/completions",
-        models_url: Some("https://openrouter.ai/api/v1/models"),
-    },
-    PresetDef {
-        name: "groq",
-        env_vars: &["GROQ_API_KEY"],
-        chat_url: "https://api.groq.com/openai/v1/chat/completions",
-        models_url: Some("https://api.groq.com/openai/v1/models"),
-    },
-    PresetDef {
-        name: "together",
-        env_vars: &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
-        chat_url: "https://api.together.xyz/v1/chat/completions",
-        models_url: Some("https://api.together.xyz/v1/models"),
-    },
-    PresetDef {
-        name: "fireworks",
-        env_vars: &["FIREWORKS_API_KEY"],
-        chat_url: "https://api.fireworks.ai/inference/v1/chat/completions",
-        models_url: Some("https://api.fireworks.ai/inference/v1/models"),
-    },
-    PresetDef {
-        name: "deepinfra",
-        env_vars: &["DEEPINFRA_API_KEY"],
-        chat_url: "https://api.deepinfra.com/v1/openai/chat/completions",
-        models_url: Some("https://api.deepinfra.com/v1/openai/models"),
-    },
-];
-
-/// Backward-compat alias for providers.rs and repl.rs /connect preset lookup.
-/// Derived from PRESET_PROVIDERS so there is a single source of truth.
-pub fn openai_compat_presets() -> Vec<(&'static str, &'static str)> {
-    PRESET_PROVIDERS
+pub fn openai_compat_presets() -> Vec<(String, String)> {
+    crate::provider_registry::ProviderRegistry::new()
+        .get_all_providers()
         .iter()
-        .map(|p| (p.name, p.chat_url))
+        .map(|p| (p.name.clone(), p.chat_url.clone()))
         .collect()
 }
 
@@ -114,9 +66,9 @@ impl LlmRouter {
         );
 
         // -- Preset providers auto-detected from env vars
-        for preset in PRESET_PROVIDERS {
+        for preset in crate::provider_registry::ProviderRegistry::new().get_all_providers() {
             // Skip if already registered (avoid overwriting a core provider)
-            if providers.contains_key(preset.name) {
+            if providers.contains_key(&preset.name) {
                 continue;
             }
             let key = preset
@@ -131,7 +83,7 @@ impl LlmRouter {
                         .env_vars
                         .iter()
                         .find(|v| std::env::var(v).is_ok())
-                        .unwrap_or(&"?")
+                        .unwrap_or(&"?".to_string())
                 );
                 providers.insert(
                     preset.name.to_string(),
@@ -259,9 +211,9 @@ impl LlmRouter {
         }
 
         // -- Preset providers (Groq, OpenRouter, Together, etc.)
-        for preset in PRESET_PROVIDERS {
-            let missing = !self.providers.contains_key(preset.name)
-                || needs_key(&self.provider_keys, preset.name);
+        for preset in crate::provider_registry::ProviderRegistry::new().get_all_providers() {
+            let missing = !self.providers.contains_key(&preset.name)
+                || needs_key(&self.provider_keys, &preset.name);
             if !missing {
                 continue;
             }
@@ -272,13 +224,13 @@ impl LlmRouter {
             if let Some(key) = key {
                 tracing::info!("hot_sync: registering/updating {} from env", preset.name);
                 self.providers.insert(
-                    preset.name.into(),
+                    preset.name.clone(),
                     Arc::new(openai::OpenAiProvider::new(
                         key.clone(),
                         Some(preset.chat_url.to_string()),
                     )),
                 );
-                self.provider_keys.insert(preset.name.into(), key);
+                self.provider_keys.insert(preset.name.clone(), key);
             }
         }
     }
@@ -449,8 +401,8 @@ impl LlmRouter {
 
                 // -- Preset providers (Groq, OpenRouter, etc.)
                 _ => {
-                    if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str())
-                        && let Some(models_url) = preset.models_url
+                    if let Some(preset) = crate::provider_registry::ProviderRegistry::new().get_all_providers().iter().find(|p| p.name == name.as_str())
+                        && let Some(models_url) = &preset.models_url
                     {
                         let n = name.clone();
                         let url = models_url.to_string();

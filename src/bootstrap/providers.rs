@@ -31,40 +31,16 @@ pub async fn push_env_providers_to_server(client: &HttpTransport) {
         }
     }
     // Preset OpenAI-compatible providers (Groq, OpenRouter, Together, etc.)
-    let presets: &[(&str, &[&str], &str)] = &[
-        (
-            "openrouter",
-            &["OPENROUTER_API_KEY"],
-            "https://openrouter.ai/api/v1/chat/completions",
-        ),
-        (
-            "groq",
-            &["GROQ_API_KEY"],
-            "https://api.groq.com/openai/v1/chat/completions",
-        ),
-        (
-            "together",
-            &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
-            "https://api.together.xyz/v1/chat/completions",
-        ),
-        (
-            "fireworks",
-            &["FIREWORKS_API_KEY"],
-            "https://api.fireworks.ai/inference/v1/chat/completions",
-        ),
-        (
-            "deepinfra",
-            &["DEEPINFRA_API_KEY"],
-            "https://api.deepinfra.com/v1/openai/chat/completions",
-        ),
-    ];
-    for (name, vars, base_url) in presets {
-        let key = vars
+    // We load this from the registry so it dynamically picks up default_providers.json
+    let presets = cade_ai::provider_registry::ProviderRegistry::new().get_all_providers().to_vec();
+    for preset in presets {
+        let key = preset
+            .env_vars
             .iter()
             .find_map(|v| std::env::var(v).ok().filter(|k| !k.is_empty()));
         if let Some(key) = key {
             let _ = client
-                .add_provider(name, "openai-compatible", Some(&key), Some(base_url))
+                .add_provider(&preset.name, "openai-compatible", Some(&key), Some(&preset.chat_url))
                 .await;
         }
     }

@@ -69,7 +69,7 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         "openai/gpt-4.1",
         "codex",
         16384,
-        1_047_576,
+        1_048_576,
     ),
     ("openai", "GPT-4o", "openai/gpt-4o", "codex", 16384, 128_000),
     (

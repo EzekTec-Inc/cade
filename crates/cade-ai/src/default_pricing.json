@@ -69,5 +69,13 @@
   {
     "starts_with_any": ["gemini/", "gemini-"],
     "pricing": { "input": 1.25, "output": 10.0, "cache_read": 0.31, "cache_write": 0.0 }
+  },
+  {
+    "starts_with_any": ["deepseek/"],
+    "pricing": { "input": 0.55, "output": 2.19, "cache_read": 0.14, "cache_write": 0.0 }
+  },
+  {
+    "starts_with_any": ["xai/"],
+    "pricing": { "input": 2.0, "output": 10.0, "cache_read": 0.0, "cache_write": 0.0 }
   }
 ]
