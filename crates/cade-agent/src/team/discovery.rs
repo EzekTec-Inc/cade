@@ -176,7 +176,7 @@ fn parse_team_toml(fid: &str, content: &str, scope: MemberScope, path: PathBuf) 
         description: t["description"].as_str().unwrap_or("").into(),
         mode: t["mode"]
             .as_str()
-            .and_then(|s| TeamMode::from_str(s))
+            .and_then(TeamMode::from_str)
             .unwrap_or(TeamMode::Coordinate),
         max_iterations: t["max_iterations"]
             .as_u64()
@@ -232,6 +232,7 @@ fn parse_toml_member(v: &serde_json::Value, scope: MemberScope) -> Option<Member
         path: None,
     })
 }
+#[allow(clippy::collapsible_if)]
 fn toml_to_json(content: &str) -> Result<serde_json::Value> {
     use serde_json::{Map, Value};
     let mut root = Map::new();
@@ -243,11 +244,12 @@ fn toml_to_json(content: &str) -> Result<serde_json::Value> {
             continue;
         }
         if t.starts_with("[[") && t.ends_with("]]") {
-            if cak.is_some() && !cm.is_empty() {
-                let k = cak.as_ref().unwrap().clone();
-                let a = root.entry(&k).or_insert_with(|| Value::Array(vec![]));
-                if let Value::Array(a) = a {
-                    a.push(Value::Object(std::mem::take(&mut cm)));
+            if let Some(k) = &cak {
+                if !cm.is_empty() {
+                    let a = root.entry(k).or_insert_with(|| Value::Array(vec![]));
+                    if let Value::Array(a) = a {
+                        a.push(Value::Object(std::mem::take(&mut cm)));
+                    }
                 }
             }
             cak = Some(
@@ -304,6 +306,7 @@ fn ptv(v: &str) -> serde_json::Value {
     }
     Value::String(v.into())
 }
+#[allow(clippy::collapsible_if)]
 pub fn discover_all_teams(cwd: &Path) -> Vec<TeamDef> {
     let mut all: Vec<TeamDef> = vec![builtin_default_team()];
     if let Some(h) = dirs::home_dir() {

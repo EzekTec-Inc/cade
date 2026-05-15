@@ -317,3 +317,40 @@ fn build_tools_seals_top_level_only() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn build_tools_truncates_to_128() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..200 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should truncate to 128");
+
+    let resp_tools_val = OpenAiProvider::build_responses_tools(&req);
+    let arr2 = resp_tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(
+        arr2.len(),
+        128,
+        "build_responses_tools should truncate to 128"
+    );
+
+    Ok(())
+}

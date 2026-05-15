@@ -25,6 +25,7 @@ impl TaskStatus {
             Self::Blocked => "blocked",
         }
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "pending" => Some(Self::Pending),
@@ -128,6 +129,7 @@ impl TaskList {
         let l = title.to_lowercase();
         self.tasks.iter().find(|t| t.title.to_lowercase() == l)
     }
+    #[allow(clippy::collapsible_if)]
     pub fn get_summary_string(&self) -> String {
         if self.tasks.is_empty() {
             return "No tasks created yet.".into();

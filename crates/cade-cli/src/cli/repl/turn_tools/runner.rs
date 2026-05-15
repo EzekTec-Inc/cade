@@ -951,7 +951,7 @@ impl Repl {
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
-                    output: format!("Task finished. Audit log appended to CADE_AUDIT.md."),
+                    output: "Task finished. Audit log appended to CADE_AUDIT.md.".to_string(),
                     is_error: false,
                 }))
             }

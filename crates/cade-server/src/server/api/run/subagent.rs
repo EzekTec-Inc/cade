@@ -913,7 +913,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         std::env::current_dir().unwrap_or_default(),
                     );
                     runtime.allowed_paths = allowed_paths.clone();
-                    
+
                     if let Some(executed) = runtime.execute(tc.id.clone(), &tc.name, &tc.arguments).await {
                         cade_agent::tools::manager::ToolResult {
                             tool_call_id: executed.tool_call_id,

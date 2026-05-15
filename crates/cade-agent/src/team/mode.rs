@@ -1,5 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TeamMode {
+    #[default]
     Coordinate,
     Route,
     Broadcast,
@@ -14,6 +15,7 @@ impl TeamMode {
             Self::Tasks => "tasks",
         }
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "coordinate" => Some(Self::Coordinate),
@@ -27,10 +29,5 @@ impl TeamMode {
 impl std::fmt::Display for TeamMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-impl Default for TeamMode {
-    fn default() -> Self {
-        Self::Coordinate
     }
 }

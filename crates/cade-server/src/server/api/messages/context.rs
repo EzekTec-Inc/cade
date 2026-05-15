@@ -383,6 +383,7 @@ pub(crate) fn group_into_turns(messages: &[LlmMessage]) -> Vec<Vec<LlmMessage>> 
     turns
 }
 
+#[allow(clippy::collapsible_if)]
 pub(crate) async fn build_context(
     state: &AppState,
     agent_id: &str,

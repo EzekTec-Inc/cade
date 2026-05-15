@@ -284,6 +284,7 @@ impl OpenAiProvider {
         let tools: Vec<Value> = req
             .tools
             .iter()
+            .take(128)
             .map(|s| {
                 let mut params = s
                     .get("parameters")
@@ -310,6 +311,7 @@ impl OpenAiProvider {
         let tools: Vec<Value> = req
             .tools
             .iter()
+            .take(128)
             .map(|s| {
                 let mut params = s
                     .get("parameters")
@@ -441,7 +443,9 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
-            if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
+            if is_o_series(&req.model)
+                && let Some(effort) = &req.reasoning_effort
+            {
                 let mapped = match effort.as_str() {
                     "xhigh" => "high",
                     e @ ("low" | "medium" | "high") => e,
@@ -493,7 +497,9 @@ impl LlmProvider for OpenAiProvider {
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
-        if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
+        if is_o_series(&req.model)
+            && let Some(effort) = &req.reasoning_effort
+        {
             let mapped = match effort.as_str() {
                 "xhigh" => "high",
                 e @ ("low" | "medium" | "high") => e,
@@ -556,7 +562,9 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
-            if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
+            if is_o_series(&req.model)
+                && let Some(effort) = &req.reasoning_effort
+            {
                 let mapped = match effort.as_str() {
                     "xhigh" => "high",
                     e @ ("low" | "medium" | "high") => e,
@@ -732,7 +740,9 @@ impl LlmProvider for OpenAiProvider {
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
-        if is_o_series(&req.model) && let Some(effort) = &req.reasoning_effort {
+        if is_o_series(&req.model)
+            && let Some(effort) = &req.reasoning_effort
+        {
             let mapped = match effort.as_str() {
                 "xhigh" => "high",
                 e @ ("low" | "medium" | "high") => e,

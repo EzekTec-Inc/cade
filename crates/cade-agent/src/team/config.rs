@@ -35,7 +35,7 @@ impl TeamConfig {
                 .unwrap_or("default")
                 .trim()
                 .to_string(),
-            mode_override: args["mode"].as_str().and_then(|s| TeamMode::from_str(s)),
+            mode_override: args["mode"].as_str().and_then(TeamMode::from_str),
             background: args["background"].as_bool().unwrap_or(false),
             model_override: args["model"]
                 .as_str()
