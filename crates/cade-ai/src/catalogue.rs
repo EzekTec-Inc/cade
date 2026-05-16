@@ -72,11 +72,19 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     // -- OpenAI
     (
         "openai",
-        "GPT-4.1",
-        "openai/gpt-4.1",
+        "GPT-4.5",
+        "openai/gpt-4.5",
         "codex",
         16384,
-        1_048_576,
+        128_000,
+    ),
+    (
+        "openai",
+        "GPT-4.5 Preview",
+        "openai/gpt-4.5-preview",
+        "codex",
+        16384,
+        128_000,
     ),
     ("openai", "GPT-4o", "openai/gpt-4o", "codex", 16384, 128_000),
     (
@@ -228,6 +236,9 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
         return 1_048_576;
     }
     if model_id.starts_with("openai/") {
+        if model_id.starts_with("openai/o") || model_id.starts_with("openai/gpt-5") {
+            return 200_000; // o-series and gpt-5 models have a 200k context window
+        }
         return 128_000;
     }
     // Groq models (fast inference, smaller windows)
