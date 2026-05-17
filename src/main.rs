@@ -302,221 +302,120 @@ async fn async_main() -> Result<()> {
         .await?;
     StartupProgress::finish_ok(&sp_agent, format!("Agent: {}", agent.name));
 
-    // -- MCP server boot + tool sync (synchronous with per-server spinners)
-    //
-    // Per-server timeouts (Phase 2) cap worst-case at 15s per server, so
-    // synchronous boot is bounded and the user sees live progress for every
-    // server.  The TUI starts immediately after this block.
-    let mcp_configs = settings.merged_mcp_servers();
-    let mcp_enabled = capabilities.is_enabled(cade_core::capabilities::Capability::Mcp);
-    let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() || !mcp_enabled {
-        if !mcp_configs.is_empty() && !mcp_enabled {
-            tracing::info!(
-                "Skipping {} MCP server(s) — Mcp capability not enabled",
-                mcp_configs.len()
-            );
-        }
-        std::sync::Arc::new(McpManager::empty())
-    } else {
-        let total = mcp_configs.len();
-        let sp_mcp = progress.start_mcp_boot(total);
+    let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
+    if !hook_engine.is_empty() {
+        tracing::info!("Hooks loaded from settings");
+    }
 
-        // Create per-server spinners (sorted for deterministic display order)
-        let mut server_names: Vec<&String> = mcp_configs.keys().collect();
-        server_names.sort();
-        let server_spinners: std::collections::HashMap<String, indicatif::ProgressBar> =
-            server_names
-                .iter()
-                .map(|name| (name.to_string(), progress.start_mcp_server(name)))
-                .collect();
+    let (mcp_tx, mcp_rx) = tokio::sync::oneshot::channel();
+    let startup_ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        tracing::info!("Starting {total} MCP server(s)…");
-        let (mgr, mcp_results) = McpManager::start(&mcp_configs).await;
+    let bg_client = client.clone();
+    let bg_agent = agent.clone();
+    let bg_mcp_configs = settings.merged_mcp_servers();
+    let bg_mcp_enabled = capabilities.is_enabled(cade_core::capabilities::Capability::Mcp);
+    let bg_capabilities = capabilities.clone();
+    let bg_toolset = toolset;
+    let bg_effective_system_prompt = effective_system_prompt.clone();
+    let bg_args_unlink = args.unlink;
+    let bg_args_link = args.link;
+    let bg_startup_ready = startup_ready.clone();
 
-        // Update per-server spinners based on results
-        let mut failed_count = 0usize;
-        for r in &mcp_results {
-            match r {
-                cade::mcp::McpStartResult::Ok { key, tool_count } => {
-                    if let Some(sp) = server_spinners.get(key) {
-                        StartupProgress::finish_ok(sp, format!("{key} — {tool_count} tool(s)"));
-                    }
-                }
-                cade::mcp::McpStartResult::Failed { key, error } => {
-                    if let Some(sp) = server_spinners.get(key) {
-                        StartupProgress::finish_err(sp, format!("{key}: {error}"));
-                    }
-                    failed_count += 1;
-                }
-                cade::mcp::McpStartResult::Timeout { key, timeout_secs } => {
-                    if let Some(sp) = server_spinners.get(key) {
-                        StartupProgress::finish_skip(
-                            sp,
-                            format!("{key} (timed out after {timeout_secs}s)"),
-                        );
-                    }
-                    failed_count += 1;
-                }
-            }
-        }
-
-        let ok_count = total - failed_count;
-        if ok_count == 0 {
-            StartupProgress::finish_warn(&sp_mcp, "No MCP servers started");
-        } else if failed_count > 0 {
-            StartupProgress::finish_warn(
-                &sp_mcp,
-                format!("MCP: {ok_count}/{total} server(s) ready ({failed_count} failed)"),
-            );
+    tokio::spawn(async move {
+        let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled {
+            std::sync::Arc::new(McpManager::empty())
         } else {
-            StartupProgress::finish_ok(&sp_mcp, format!("MCP: {ok_count}/{total} server(s) ready"));
-        }
-        std::sync::Arc::new(mgr)
-    };
+            let (mgr, _) = McpManager::start(&bg_mcp_configs).await;
+            std::sync::Arc::new(mgr)
+        };
 
-    // Sync MCP tools: remove stale MCP tool entries (from removed or
-    // disconnected servers) while preserving native/meta tool attachments.
-    let sp_tools = progress.start_tool_sync();
-    {
-        let non_mcp_ids: Vec<String> = client
-            .get_agent_tools(&agent.id)
+        let non_mcp_ids: Vec<String> = bg_client
+            .get_agent_tools(&bg_agent.id)
             .await
             .unwrap_or_default()
             .into_iter()
             .filter(|(_, name)| !name.contains("__"))
             .map(|(id, _)| id)
             .collect();
-        let _ = client.detach_agent_tools(&agent.id).await;
+        let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
         if !non_mcp_ids.is_empty() {
-            let _ = client.attach_agent_tools(&agent.id, &non_mcp_ids).await;
+            let _ = bg_client.attach_agent_tools(&bg_agent.id, &non_mcp_ids).await;
         }
-    }
 
-    // Register MCP tool schemas with cade-server + attach to agent.
-    if !mcp.is_empty().await {
-        sp_tools.set_message("Registering MCP tools…");
-        use agent::tools::register_mcp_tools;
-        let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|t| t.id)
-            .collect();
-        if !mcp_tool_ids.is_empty() {
-            if let Err(e) = client.attach_agent_tools(&agent.id, &mcp_tool_ids).await {
-                tracing::warn!("Failed to attach MCP tools to agent: {e}");
-            } else {
-                tracing::info!("Attached {} MCP tool(s) to agent", mcp_tool_ids.len());
-            }
-        }
-    }
-    StartupProgress::finish_ok(&sp_tools, "Tools synced");
-
-    // Build hook engine from merged settings (local > project > global)
-    let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
-    if !hook_engine.is_empty() {
-        tracing::info!("Hooks loaded from settings");
-    }
-
-    // Expose AGENT_ID to all child processes (bash tool, hooks, etc.) without touching
-    // global process env APIs (unsafe in Rust 2024).
-    cade_core::agent_env::set_agent_id(agent.id.clone());
-
-    // --unlink: detach all tools from agent, then continue
-    if args.unlink {
-        match client.detach_agent_tools(&agent.id).await {
-            Ok(n) => tracing::info!("Detached {n} tool(s) from agent"),
-            Err(e) => tracing::warn!("Detach failed: {e}"),
-        }
-    }
-
-    // --link: (re-)attach native + MCP tools to agent, then continue
-    if args.link {
-        register_and_attach_with_caps(&client, &agent.id, toolset, &capabilities).await;
-        if !mcp.is_empty().await {
+        if !mgr.is_empty().await {
             use agent::tools::register_mcp_tools;
-            let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
+            let mcp_tool_ids: Vec<String> = register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
                 .await
                 .unwrap_or_default()
                 .into_iter()
                 .map(|t| t.id)
                 .collect();
-            if !mcp_ids.is_empty() {
-                let _ = client.attach_agent_tools(&agent.id, &mcp_ids).await;
+            if !mcp_tool_ids.is_empty() {
+                let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_tool_ids).await;
             }
         }
-        tracing::info!("Tools linked to agent");
-    }
 
-    // --rename <new-name>: rename the resolved agent and exit (no REPL)
-    if let Some(new_name) = &args.rename {
-        let new_name = new_name.trim();
-        if new_name.is_empty() {
-            eprintln!("✗ --rename: name cannot be empty");
-            std::process::exit(1);
+        cade_core::agent_env::set_agent_id(bg_agent.id.clone());
+
+        if bg_args_unlink {
+            let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
         }
-        match client.rename_agent(&agent.id, new_name).await {
-            Ok(_) => println!("✓ Renamed '{}' → '{new_name}'  ({})", agent.name, agent.id),
-            Err(e) => {
-                eprintln!("✗ {e}");
-                std::process::exit(1);
+
+        if bg_args_link {
+            register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities).await;
+            if !mgr.is_empty().await {
+                use agent::tools::register_mcp_tools;
+                let mcp_ids: Vec<String> = register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|t| t.id)
+                    .collect();
+                if !mcp_ids.is_empty() {
+                    let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_ids).await;
+                }
             }
         }
-        return Ok(());
-    }
 
-    // Migrate old system prompt: if the stored prompt is the minimal server fallback
-    // (no "Never introduce yourself" rule) update it to effective_system_prompt.
-    // This runs once per old agent; after the update the check is skipped.
-    if agent
-        .system_prompt
-        .as_deref()
-        .map(|p| !p.contains("Never introduce yourself") || !p.contains("No rule acknowledgment"))
-        .unwrap_or(true)
-    {
-        if let Err(e) = client
-            .patch_agent_system_prompt(&agent.id, &effective_system_prompt)
-            .await
+        if bg_agent
+            .system_prompt
+            .as_deref()
+            .map(|p| !p.contains("Never introduce yourself") || !p.contains("No rule acknowledgment"))
+            .unwrap_or(true)
         {
-            tracing::warn!("migrate system_prompt: {e}");
-        } else {
-            tracing::info!("Migrated system_prompt for agent {}", agent.id);
+            let _ = bg_client
+                .patch_agent_system_prompt(&bg_agent.id, &bg_effective_system_prompt)
+                .await;
         }
-    }
 
-    // Seed default memory blocks if this agent has none yet
-    // (covers agents created before default block seeding was introduced)
-    let existing_blocks = client.get_memory(&agent.id).await.unwrap_or_default();
-    if existing_blocks.is_empty() {
-        seed_default_memory(&client, &agent.id).await;
-    } else {
-        // Migrate old persona blocks that describe CADE in a way that triggers
-        // self-introductions: third-person ("CADE is…") or first-person intro
-        // ("I am CADE…").  Replace with behavioral first-person phrasing.
-        for block in &existing_blocks {
-            if block.label == "persona" {
-                let v = block.value.trim_start();
-                let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
-                if needs_migration {
-                    let (_, new_val, new_desc, _, _) = cade::DEFAULT_MEMORY_BLOCKS[0]; // persona entry
-                    let _ = client
-                        .upsert_memory(&agent.id, "persona", new_val, Some(new_desc))
+        let existing_blocks = bg_client.get_memory(&bg_agent.id).await.unwrap_or_default();
+        if existing_blocks.is_empty() {
+            seed_default_memory(&bg_client, &bg_agent.id).await;
+        } else {
+            for block in &existing_blocks {
+                if block.label == "persona" {
+                    let v = block.value.trim_start();
+                    let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
+                    if needs_migration {
+                        let (_, new_val, new_desc, _, _) = cade::DEFAULT_MEMORY_BLOCKS[0];
+                        let _ = bg_client
+                            .upsert_memory(&bg_agent.id, "persona", new_val, Some(new_desc))
+                            .await;
+                    }
+                }
+                if matches!(block.label.as_str(), "persona" | "human" | "project")
+                    && block.tier.as_deref() != Some("pinned")
+                {
+                    let _ = bg_client
+                        .set_memory_tier(&bg_agent.id, &block.label, "pinned")
                         .await;
                 }
             }
-
-            // Ensure core blocks are pinned so they are never auto-archived.
-            // working_set intentionally stays as short-tier (it should age out
-            // when stale); session_summary is managed by the Sleeptime task.
-            if matches!(block.label.as_str(), "persona" | "human" | "project")
-                && block.tier.as_deref() != Some("pinned")
-            {
-                let _ = client
-                    .set_memory_tier(&agent.id, &block.label, "pinned")
-                    .await;
-            }
         }
-    }
+
+        let _ = mcp_tx.send(mgr);
+        bg_startup_ready.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
 
     // Headless — --prompt flag OR piped stdin
     let piped_stdin: Option<String> = if !std::io::stdin().is_terminal() {

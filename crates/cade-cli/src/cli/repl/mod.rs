@@ -197,6 +197,10 @@ pub struct Repl {
     pub(crate) mcp_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
     pub(crate) streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Receives the full MCP manager once the background boot completes.
+    pub(crate) mcp_rx: Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
+    /// True when background boot completes.
+    pub(crate) startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cumulative token usage for the session (input, output).
     pub(crate) session_input_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(crate) session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -256,6 +260,8 @@ impl Repl {
         theme: cade_tui::ThemeColors,
         exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
         capabilities: cade_core::capabilities::CapabilitySet,
+        mcp_rx: Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
+        startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         let perm_mode = permissions.mode();
         let agent_name_clone = agent_name.clone();
@@ -320,6 +326,8 @@ impl Repl {
             skill_reload_rx,
             mcp_reload_rx,
             streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            mcp_rx,
+            startup_ready,
             session_input_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_stats: std::sync::Arc::new(parking_lot::Mutex::new(SessionStats::new())),
@@ -337,6 +345,15 @@ impl Repl {
             turn_checkpoint_taken: false,
             capabilities,
         }
+    }
+
+    pub fn set_mcp(&mut self, mcp: std::sync::Arc<cade_agent::mcp::McpManager>) {
+        self.mcp = mcp;
+    }
+
+    pub fn set_tools_ready(&mut self) {
+        let mut app = self.app.lock();
+        app.push_silent(RenderLine::SystemMsg("  ✓ Tools loaded and ready".to_string()));
     }
 
     fn agent_id(&self) -> String {
@@ -573,6 +590,20 @@ impl Repl {
 
         let mut pending_input: Option<String> = None;
         loop {
+            // Check for MCP background load
+            if let Some(mut rx) = self.mcp_rx.take() {
+                match rx.try_recv() {
+                    Ok(mgr) => {
+                        self.set_mcp(mgr);
+                        self.set_tools_ready();
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                        self.mcp_rx = Some(rx);
+                    }
+                    Err(_) => {}
+                }
+            }
+
             // Check for completed background subagent results
             {
                 let mut results = self.background_results.lock();
