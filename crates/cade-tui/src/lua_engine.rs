@@ -32,11 +32,14 @@ impl LuaEngine {
             return;
         }
 
-        // Add plugin_dir to package.path for require() routing
+        // Add plugin_dir and cade-tui crate directories to package.path for require() routing
         if let Ok(package) = self.lua.globals().get::<mlua::Table>("package") {
             if let Ok(current_path) = package.get::<String>("path") {
                 let dir_str = plugin_dir.to_string_lossy();
-                let new_path = format!("{};{}/?.lua;{}/?/init.lua", current_path, dir_str, dir_str);
+                let new_path = format!(
+                    "{};{}/?.lua;{}/?/init.lua;./crates/cade-tui/?.lua;./cade-tui/?.lua", 
+                    current_path, dir_str, dir_str
+                );
                 let _ = package.set("path", new_path);
             }
         }
