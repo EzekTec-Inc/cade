@@ -1000,6 +1000,13 @@ impl TuiApp {
             std::io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         );
+        let lua_engine = crate::lua_engine::LuaEngine::new().ok();
+        let mut slots = crate::slots::SlotManager::new();
+        if let Some(engine) = &lua_engine {
+            let sidebar = Box::new(crate::lua_ui::LuaSidebarSlot::new(engine.ui_event_queue.clone()));
+            slots.set(crate::slots::UiSlot::Sidebar, sidebar);
+        }
+
         Self {
             terminal,
             lines: Vec::new(),
@@ -1035,8 +1042,8 @@ impl TuiApp {
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
-            slots: crate::slots::SlotManager::new(),
-            lua_engine: crate::lua_engine::LuaEngine::new().ok(),
+            slots,
+            lua_engine,
             pending_lines: 0,
             queued_count: 0,
             toast: None,

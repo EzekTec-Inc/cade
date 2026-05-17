@@ -139,6 +139,19 @@ pub(crate) enum ToolPreflightResult {
 
 use crate::cli::repl::format::mode_display;
 
+pub(crate) fn refresh_lua_ui(app: &mut TuiApp) {
+    if let Some(lua) = &app.lua_engine {
+        if let Some(sidebar_widget) = lua.get_sidebar_ui() {
+            let new_sidebar = Box::new(cade_tui::lua_ui::LuaSidebarSlot {
+                root: Some(sidebar_widget),
+                focused_idx: 0,
+                event_queue: lua.ui_event_queue.clone(),
+            });
+            app.slots.set(cade_tui::slots::UiSlot::Sidebar, new_sidebar);
+        }
+    }
+}
+
 pub struct Repl {
     pub(crate) client: HttpTransport,
     /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
@@ -296,6 +309,7 @@ impl Repl {
             }
             engine.load_plugins(&cwd.join(".cade").join("plugins"));
         }
+        refresh_lua_ui(&mut tui_app);
         {
             let bg_for_getter = Arc::clone(&background_results);
             tui_app.bg_pending_count = Some(Box::new(move || bg_for_getter.lock().len()));
@@ -685,6 +699,7 @@ impl Repl {
                     engine.load_plugins(&self.cwd.join(".cade").join("plugins"));
                 }
                 app.lua_engine = new_engine;
+                refresh_lua_ui(&mut app);
             }
 
             // Drain Lua command queue into pending_input if empty
@@ -693,6 +708,31 @@ impl Repl {
                 if let Some(lua) = &app.lua_engine {
                     if let Some(cmd) = lua.command_queue.lock().unwrap().pop_front() {
                         pending_input = Some(cmd);
+                    }
+                }
+            }
+
+            // Process Lua UI events
+            {
+                let mut app = self.app.lock();
+                let mut ui_events = Vec::new();
+                if let Some(lua) = &app.lua_engine {
+                    let mut eq = lua.ui_event_queue.lock().unwrap();
+                    ui_events.extend(eq.drain(..));
+                }
+
+                if !ui_events.is_empty() {
+                    let mut handled_any = false;
+                    if let Some(lua) = &app.lua_engine {
+                        for (id, args) in ui_events {
+                            if lua.handle_ui_event(&id, args) {
+                                handled_any = true;
+                            }
+                        }
+                    }
+                    if handled_any {
+                        refresh_lua_ui(&mut app);
+                        app.draw_dirty = true;
                     }
                 }
             }

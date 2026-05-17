@@ -6,6 +6,7 @@ pub struct LuaEngine {
     pub lua: Lua,
     pub command_queue: Arc<Mutex<VecDeque<String>>>,
     pub tool_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
+    pub ui_event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
 }
 
 impl LuaEngine {
@@ -25,6 +26,7 @@ impl LuaEngine {
 
         let command_queue = Arc::new(Mutex::new(VecDeque::new()));
         let tool_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let ui_event_queue = Arc::new(Mutex::new(VecDeque::new()));
 
         let cmd_q = command_queue.clone();
         let exec_cmd = lua.create_function(move |_, cmd: String| {
@@ -53,11 +55,15 @@ impl LuaEngine {
             CADE = {
                 _commands = {},
                 _keybindings = {},
+                _ui_callbacks = {},
                 register_command = function(name, cb)
                     CADE._commands[name] = cb
                 end,
                 bind_key = function(key, cb)
                     CADE._keybindings[key] = cb
+                end,
+                bind_ui_callback = function(id, cb)
+                    CADE._ui_callbacks[id] = cb
                 end,
                 execute_slash_command = function(cmd)
                     _CADE_execute_slash_command(cmd)
@@ -72,6 +78,7 @@ impl LuaEngine {
             lua,
             command_queue,
             tool_queue,
+            ui_event_queue,
         })
     }
 
@@ -158,6 +165,32 @@ impl LuaEngine {
                         tracing::warn!("Lua command error for {}: {}", command, e);
                     }
                     return true; // handled
+                }
+            }
+        }
+        false
+    }
+
+    pub fn get_sidebar_ui(&self) -> Option<Vec<crate::lua_ui::LuaWidget>> {
+        if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI") {
+            if let Ok(sidebar) = ui.get::<mlua::Value>("sidebar") {
+                if let Ok(widgets) = self.lua.from_value(sidebar) {
+                    return Some(widgets);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn handle_ui_event(&self, id: &str, args: serde_json::Value) -> bool {
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
+            if let Ok(cbs) = cade.get::<mlua::Table>("_ui_callbacks") {
+                if let Ok(func) = cbs.get::<mlua::Function>(id) {
+                    let lua_args = self.lua.to_value(&args).unwrap_or(mlua::Value::Nil);
+                    if let Err(e) = func.call::<()>(lua_args) {
+                        tracing::warn!("Lua UI callback error for {}: {}", id, e);
+                    }
+                    return true;
                 }
             }
         }

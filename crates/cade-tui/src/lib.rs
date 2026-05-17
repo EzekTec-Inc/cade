@@ -25,6 +25,7 @@ pub mod mcp_picker;
 pub mod menu;
 // pub mod mouse;
 pub mod lua_engine;
+pub mod lua_ui;
 pub mod overlay;
 pub mod overlay_component;
 pub mod question;
