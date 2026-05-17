@@ -8,7 +8,7 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 
 use crate::slots::SlotComponent;
 use crate::ThemeColors;
@@ -181,50 +181,10 @@ impl SlotComponent for LuaUiSlot {
         }
     }
 
-    fn handle_input(&mut self, key: KeyEvent) -> bool {
-        let interactives = self.interactive_ids();
-        if interactives.is_empty() {
-            return false;
-        }
-
-        match key.code {
-            KeyCode::Up => {
-                if self.focused_idx > 0 {
-                    self.focused_idx -= 1;
-                } else {
-                    self.focused_idx = interactives.len() - 1;
-                }
-                true
-            }
-            KeyCode::Down => {
-                if self.focused_idx + 1 < interactives.len() {
-                    self.focused_idx += 1;
-                } else {
-                    self.focused_idx = 0;
-                }
-                true
-            }
-            KeyCode::Enter => {
-                if let Some(id) = interactives.get(self.focused_idx) {
-                    self.event_queue.lock().unwrap().push_back((id.clone(), serde_json::Value::Null));
-                    true
-                } else {
-                    false
-                }
-            }
-            KeyCode::Char(c) => {
-                if let Some(id) = interactives.get(self.focused_idx) {
-                    self.event_queue.lock().unwrap().push_back((
-                        id.clone(),
-                        serde_json::json!({ "char": c.to_string() }),
-                    ));
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
+    fn handle_input(&mut self, _key: KeyEvent) -> bool {
+        // Plugin input capturing is restricted to prevent freezing the main input field.
+        // A proper focus mechanism is required before this can be safely re-enabled.
+        false
     }
 
     fn preferred_height(&self) -> u16 {
