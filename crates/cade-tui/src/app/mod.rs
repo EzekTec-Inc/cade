@@ -981,11 +981,16 @@ impl TuiApp {
         colors: ThemeColors,
     ) -> Self {
         let terminal = ratatui::init();
-        // No mouse capture on startup — terminal handles all mouse events
-        // natively (click-and-drag selects text, right-click copies).
-        // Scroll via keyboard: PgUp/PgDn, arrows, Ctrl+U/D.
-        // Use /mouse to opt-in to scroll-wheel capture if preferred.
-        let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange);
+        // Enable mouse capture on startup (Claude Code approach).
+        // The terminal will capture all mouse events (clicks, scrolls, drags),
+        // requiring a modifier key (Shift/Option) for native text selection.
+        // Use /mouse to toggle this off and return to native terminal handling.
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            EnableBracketedPaste,
+            EnableFocusChange,
+            crossterm::event::EnableMouseCapture
+        );
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
         // swallows the query. Unrecognized escape codes are safely ignored by VT100
