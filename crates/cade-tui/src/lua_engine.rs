@@ -33,15 +33,20 @@ impl LuaEngine {
         }
 
         let Ok(entries) = std::fs::read_dir(plugin_dir) else { return };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("lua") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Err(e) = self.lua.load(&content).set_name(path.to_string_lossy()).exec() {
-                        tracing::warn!("Failed to load UI plugin {}: {}", path.display(), e);
-                    } else {
-                        tracing::info!("Loaded UI plugin: {}", path.display());
-                    }
+        let mut paths: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("lua"))
+            .collect();
+            
+        paths.sort();
+
+        for path in paths {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Err(e) = self.lua.load(&content).set_name(path.to_string_lossy()).exec() {
+                    tracing::warn!("Failed to load UI plugin {}: {}", path.display(), e);
+                } else {
+                    tracing::info!("Loaded UI plugin: {}", path.display());
                 }
             }
         }
@@ -56,5 +61,24 @@ impl LuaEngine {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_multiple_plugins() {
+        let engine = LuaEngine::new().unwrap();
+        let dir = tempdir().unwrap();
+        
+        std::fs::write(dir.path().join("1.lua"), "CADE_UI.footer = 'p1'").unwrap();
+        std::fs::write(dir.path().join("2.lua"), "CADE_UI.footer = CADE_UI.footer .. 'p2'").unwrap();
+        
+        engine.load_plugins(dir.path());
+        
+        assert_eq!(engine.get_footer_text().unwrap(), "p1p2");
     }
 }
