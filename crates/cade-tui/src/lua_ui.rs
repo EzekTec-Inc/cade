@@ -133,7 +133,11 @@ impl SlotComponent for LuaUiSlot {
             let interactives = self.interactive_ids();
             let focused_id = interactives.get(self.focused_idx).cloned();
 
-            let constraints: Vec<Constraint> = std::iter::repeat(Constraint::Length(1)).take(children.len()).collect();
+            let constraints: Vec<Constraint> = if self.is_header {
+                std::iter::repeat(Constraint::Fill(1)).take(children.len()).collect()
+            } else {
+                std::iter::repeat(Constraint::Length(1)).take(children.len()).collect()
+            };
             let layout = Layout::default()
                 .direction(if self.is_header { Direction::Horizontal } else { Direction::Vertical })
                 .constraints(constraints)
