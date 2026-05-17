@@ -27,7 +27,7 @@ If a requested change would violate any of the above, stop, explain why, and ask
 For Rust coding sessions:
 
 - Use **Context7** mcp server for documentation and API reference lookups when documentation is needed
-- Use **OpenViking** mcp server for context and memory management, including preserving session facts, constraints, and known vs unknown information across the conversation
+- Use **cade-rag** mcp server for context and memory management, including preserving session facts, constraints, and known vs unknown information across the conversation
 
 Tool use never overrides the rules in this skill.
 
@@ -37,7 +37,7 @@ If either required tool is unavailable:
 2. State that the tooling requirement cannot be met
 3. Ask the user to provide the missing docs, snippets, or project context manually
 
-Ignore the Context7/OpenViking requirement for Neovim configuration work.
+Ignore the Context7/cade-rag requirement for Neovim configuration work.
 
 ## Execution Rules
 
