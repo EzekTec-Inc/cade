@@ -212,14 +212,14 @@ impl TuiApp {
     pub fn toggle_mouse_capture(&mut self) {
         self.mouse_capture_disabled = !self.mouse_capture_disabled;
         if self.mouse_capture_disabled {
-            let _ = crossterm::execute!(std::io::stdout(), crate::mouse::DisableScrollCapture);
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
             self.show_toast(
-                "Scroll capture disabled — use keyboard to scroll",
+                "Mouse capture disabled — native text selection restored",
                 ToastLevel::Info,
             );
         } else {
-            let _ = crossterm::execute!(std::io::stdout(), crate::mouse::EnableScrollCapture);
-            self.show_toast("Scroll capture enabled", ToastLevel::Info);
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+            self.show_toast("Mouse capture enabled", ToastLevel::Info);
         }
     }
 

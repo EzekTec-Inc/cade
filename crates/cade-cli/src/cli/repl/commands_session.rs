@@ -106,12 +106,12 @@ impl Repl {
         app.toggle_mouse_capture();
         if app.mouse_capture_disabled {
             let _ = app.push(RenderLine::SystemMsg(
-                "Scroll-wheel capture off — use keyboard to scroll (PgUp/PgDn, arrows). /mouse to re-enable."
+                "Mouse capture off — native terminal handling enabled. /mouse to re-enable."
                     .into(),
             ));
         } else {
             let _ = app.push(RenderLine::SuccessMsg(
-                "Scroll-wheel capture on — mouse wheel scrolls viewport. /mouse to disable.".into(),
+                "Mouse capture on — TUI handles all mouse events. /mouse to disable.".into(),
             ));
         }
         Ok(false)

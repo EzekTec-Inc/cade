@@ -1021,7 +1021,7 @@ impl TuiApp {
             session_tokens: (0, 0),
             turn_count: 0,
             token_history: Vec::new(),
-            mouse_capture_disabled: true,
+            mouse_capture_disabled: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
@@ -1386,9 +1386,9 @@ impl TuiApp {}
 impl Drop for TuiApp {
     fn drop(&mut self) {
         let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        // Only disable scroll capture if it was enabled via /mouse.
+        // Only disable mouse capture if it was enabled via /mouse.
         if !self.mouse_capture_disabled {
-            let _ = crossterm::execute!(std::io::stdout(), crate::mouse::DisableScrollCapture);
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
         }
         let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
         ratatui::restore();
