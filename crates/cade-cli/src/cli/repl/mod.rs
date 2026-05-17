@@ -423,7 +423,7 @@ impl Repl {
         };
 
         // 3. Apply new hooks and permissions
-        self.hooks = cade_core::hooks::HookEngine::new(new_hooks, self.cwd.clone());
+        self.hooks = cade_core::hooks::HookEngine::new(new_hooks, self.cwd.clone(), self.agent_id.lock().clone());
         self.permissions.reload_from_settings(&new_perms);
 
         // 4. Reload MCP servers

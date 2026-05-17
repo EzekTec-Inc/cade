@@ -302,7 +302,7 @@ async fn async_main() -> Result<()> {
         .await?;
     StartupProgress::finish_ok(&sp_agent, format!("Agent: {}", agent.name));
 
-    let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
+    let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone(), agent.id.clone());
     if !hook_engine.is_empty() {
         tracing::info!("Hooks loaded from settings");
     }

@@ -44,13 +44,15 @@ impl HookOutcome {
 pub struct HookEngine {
     hooks: Arc<HooksConfig>,
     cwd: PathBuf,
+    session_id: String,
 }
 
 impl HookEngine {
-    pub fn new(hooks: HooksConfig, cwd: PathBuf) -> Self {
+    pub fn new(hooks: HooksConfig, cwd: PathBuf, session_id: String) -> Self {
         Self {
             hooks: Arc::new(hooks),
             cwd,
+            session_id,
         }
     }
 
@@ -65,6 +67,7 @@ impl HookEngine {
         let input = json!({
             "event_type":        "PreToolUse",
             "working_directory": self.cwd,
+            "sessionId":         self.session_id,
             "tool_name":         tool_name,
             "tool_input":        args,
         });
@@ -85,6 +88,7 @@ impl HookEngine {
         let input = json!({
             "event_type":                "PostToolUse",
             "working_directory":         self.cwd,
+            "sessionId":                 self.session_id,
             "tool_name":                 tool_name,
             "tool_input":                args,
             "tool_output":               output,
@@ -107,6 +111,7 @@ impl HookEngine {
         let input = json!({
             "event_type":                "PostToolUseFailure",
             "working_directory":         self.cwd,
+            "sessionId":                 self.session_id,
             "tool_name":                 tool_name,
             "tool_input":                args,
             "error":                     error,
@@ -123,6 +128,7 @@ impl HookEngine {
         let input = json!({
             "event_type":        "PermissionRequest",
             "working_directory": self.cwd,
+            "sessionId":         self.session_id,
             "tool_name":         tool_name,
             "tool_input":        args,
         });
@@ -137,6 +143,7 @@ impl HookEngine {
         let input = json!({
             "event_type":        "UserPromptSubmit",
             "working_directory": self.cwd,
+            "sessionId":         self.session_id,
             "prompt":            prompt,
         });
         self.run_all_blocking(&self.hooks.user_prompt_submit, input)
@@ -155,6 +162,7 @@ impl HookEngine {
         let input = json!({
             "event_type":          "Stop",
             "working_directory":   self.cwd,
+            "sessionId":           self.session_id,
             "stop_reason":         stop_reason,
             "user_message":        user_message,
             "assistant_message":   assistant_message,
@@ -173,6 +181,7 @@ impl HookEngine {
         let input = json!({
             "event_type":     "SubagentStop",
             "working_directory": self.cwd,
+            "sessionId":      self.session_id,
             "subagent_type":  subagent_type,
             "result":         result,
             "is_error":       is_error,
@@ -186,6 +195,7 @@ impl HookEngine {
         let input = json!({
             "event_type":        "SessionStart",
             "working_directory": self.cwd,
+            "sessionId":         self.session_id,
             "agent_id":          agent_id,
         });
         self.run_entries_context(&self.hooks.session_start, "SessionStart", input)
@@ -197,6 +207,7 @@ impl HookEngine {
         let input = json!({
             "event_type":        "SessionEnd",
             "working_directory": self.cwd,
+            "sessionId":         self.session_id,
             "agent_id":          agent_id,
         });
         self.run_all_fire_forget(&self.hooks.session_end, input)
@@ -207,6 +218,8 @@ impl HookEngine {
     pub async fn notification(&self, message: &str, level: &str) {
         let input = json!({
             "event_type": "Notification",
+            "working_directory": self.cwd,
+            "sessionId":  self.session_id,
             "message":    message,
             "level":      level,
         });
@@ -513,7 +526,7 @@ mod tests {
 
     #[test]
     fn engine_empty_when_no_hooks() {
-        let engine = HookEngine::new(HooksConfig::default(), PathBuf::from("."));
+        let engine = HookEngine::new(HooksConfig::default(), PathBuf::from("."), "test_session".to_string());
         assert!(engine.is_empty());
     }
 
@@ -527,7 +540,7 @@ mod tests {
                 timeout: 5000,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         assert!(!engine.is_empty());
     }
 
@@ -617,7 +630,7 @@ mod tests {
                 timeout: 5000,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         assert!(!outcome.is_block());
     }
@@ -632,7 +645,7 @@ mod tests {
                 timeout: 5000,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         assert!(outcome.is_block());
         assert_eq!(outcome.reason(), Some("forbidden"));
@@ -648,7 +661,7 @@ mod tests {
                 timeout: 5000,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         assert!(!outcome.is_block());
     }
@@ -663,7 +676,7 @@ mod tests {
                 timeout: 5000,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         let ctx = engine
             .post_tool_use("bash", &json!({}), "output", None, None)
             .await;
@@ -680,7 +693,7 @@ mod tests {
                 timeout: 5000,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         // bash should not match ^edit_file$ → allow
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         assert!(!outcome.is_block());
@@ -696,7 +709,7 @@ mod tests {
                 timeout: 100,
             }],
         });
-        let engine = HookEngine::new(config, PathBuf::from("."));
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         // Timeout → treated as Continue (Allow)
         assert!(!outcome.is_block());

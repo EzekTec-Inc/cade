@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -201,7 +201,7 @@ impl SlotComponent for LuaUiSlot {
     }
 }
 
-fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, colors: &ThemeColors, focused_id: Option<&str>) {
+fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &ThemeColors, focused_id: Option<&str>) {
     match widget {
         LuaWidget::Text { content, color: _ } => {
             let p = Paragraph::new(content.as_str());

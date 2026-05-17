@@ -260,7 +260,7 @@ async fn run_task(
     // Run the prompt with timeout
     let permissions = PermissionManager::new(PermissionMode::BypassPermissions);
     let mcp = std::sync::Arc::new(McpManager::empty());
-    let hooks = cade_core::hooks::HookEngine::new(Default::default(), cwd.to_path_buf());
+    let hooks = cade_core::hooks::HookEngine::new(Default::default(), cwd.to_path_buf(), agent.id.clone());
 
     let run_fut = crate::cli::headless::run_headless(
         client,
