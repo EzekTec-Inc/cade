@@ -1,7 +1,11 @@
 use mlua::prelude::*;
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 
 pub struct LuaEngine {
     pub lua: Lua,
+    pub command_queue: Arc<Mutex<VecDeque<String>>>,
+    pub tool_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
 }
 
 impl LuaEngine {
@@ -18,6 +22,26 @@ impl LuaEngine {
             Ok(())
         })?;
         lua.globals().set("cade_log", print_fn)?;
+
+        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let tool_queue = Arc::new(Mutex::new(VecDeque::new()));
+
+        let cmd_q = command_queue.clone();
+        let exec_cmd = lua.create_function(move |_, cmd: String| {
+            tracing::info!("[Lua] execute_slash_command: {}", cmd);
+            cmd_q.lock().unwrap().push_back(cmd);
+            Ok(())
+        })?;
+        lua.globals().set("_CADE_execute_slash_command", exec_cmd)?;
+
+        let tool_q = tool_queue.clone();
+        let call_tool_fn = lua.create_function(move |lua_ctx, (name, args): (String, mlua::Value)| {
+            let args_json: serde_json::Value = lua_ctx.from_value(args)?;
+            tracing::info!("[Lua] call_tool: {} with args {}", name, args_json);
+            tool_q.lock().unwrap().push_back((name, args_json));
+            Ok(())
+        })?;
+        lua.globals().set("_CADE_call_tool", call_tool_fn)?;
 
         // UI Extensions table
         let ui_ext = lua.create_table()?;
@@ -36,18 +60,19 @@ impl LuaEngine {
                     CADE._keybindings[key] = cb
                 end,
                 execute_slash_command = function(cmd)
-                    cade_log("Lua requested slash command: " .. cmd)
-                    -- For now, this is a placeholder. 
-                    -- A full implementation would push this to a Rust channel.
+                    _CADE_execute_slash_command(cmd)
                 end,
                 call_tool = function(name, args)
-                    cade_log("Lua requested tool call: " .. name)
-                    -- For now, this is a placeholder.
+                    _CADE_call_tool(name, args)
                 end
             }
         "#).exec()?;
 
-        Ok(Self { lua })
+        Ok(Self { 
+            lua,
+            command_queue,
+            tool_queue,
+        })
     }
 
     pub fn load_plugins(&self, plugin_dir: &std::path::Path) {

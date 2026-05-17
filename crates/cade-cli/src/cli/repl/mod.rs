@@ -624,6 +624,16 @@ impl Repl {
                 tracing::info!("Skills auto-reloaded: {new_count} skills");
             }
 
+            // Drain Lua command queue into pending_input if empty
+            if pending_input.is_none() {
+                let mut app = self.app.lock();
+                if let Some(lua) = &app.lua_engine {
+                    if let Some(cmd) = lua.command_queue.lock().unwrap().pop_front() {
+                        pending_input = Some(cmd);
+                    }
+                }
+            }
+
             // Update app footer to reflect current mode/model before reading input.
             {
                 let mut app = self.app.lock();
