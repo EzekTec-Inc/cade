@@ -349,6 +349,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // length, no per-role caps), but still cap the total at
     // MAX_ARCHIVAL_PAYLOAD_CHARS so a single compaction event cannot blow up
     // the archival store.
+    let mut files_touched_block = String::new();
     {
         const MAX_ARCHIVAL_PAYLOAD_CHARS: usize = 64_000;
         let dropped_msg_count: usize = turns[..dropped].iter().map(|t| t.len()).sum();
@@ -401,6 +402,25 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
                 e,
             ),
         }
+        
+        // ── 3c. Cumulative Deterministic File Tracking ───────────────────────────
+        // Extract file paths from the full untruncated payload so the LLM doesn't have to guess.
+        let mut files = std::collections::HashSet::new();
+        if let Ok(re_path) = regex::Regex::new(r#""path"\s*:\s*"([^"]+)""#) {
+            for cap in re_path.captures_iter(&payload) {
+                files.insert(cap[1].to_string());
+            }
+        }
+        if let Ok(re_file) = regex::Regex::new(r#""file"\s*:\s*"([^"]+)""#) {
+            for cap in re_file.captures_iter(&payload) {
+                files.insert(cap[1].to_string());
+            }
+        }
+        let mut vec: Vec<_> = files.into_iter().collect();
+        vec.sort();
+        if !vec.is_empty() {
+            files_touched_block = format!("\n\n<files_touched>\n{}\n</files_touched>", vec.join("\n"));
+        }
     }
 
     // ── 4. Call the LLM to produce a consolidation summary ───────────────────
@@ -430,7 +450,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
          recover granular detail via conversation_search.]\n\
          \n\
          HISTORY:\n\
-         {history_text}"
+         {history_text}{files_touched_block}"
     );
 
     // Use the compaction model if configured, otherwise auto-default to the
@@ -472,12 +492,13 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         return;
     }
 
-    // ── 4b. Inflation guard — reject summary if it's larger than the dropped content ──
+    // ── 4b. Inflation Guard & Regex Fallback ──
     let dropped_chars = history_text.chars().count();
     let summary_chars = summary.chars().count();
-    if is_summary_inflated(summary_chars, dropped_chars) {
+    
+    let final_summary = if is_summary_inflated(summary_chars, dropped_chars) {
         tracing::warn!(
-            "consolidate [{}]: summary inflated ({} chars) vs dropped ({} chars) — skipping",
+            "consolidate [{}]: summary inflated ({} chars) vs dropped ({} chars) — falling back to regex anchors",
             agent_id,
             summary_chars,
             dropped_chars,
@@ -487,6 +508,39 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             .entry(agent_id.to_string())
             .or_default()
             .inflation_guard_hits += 1;
+            
+        // Fast regex fallback instead of skipping entirely
+        let mut anchors = std::collections::HashSet::new();
+        
+        if let Ok(re_file) = regex::Regex::new(r"(/[\w\./-]+\.\w+|src/[\w\./-]+\.\w+|crates/[\w\./-]+\.\w+)") {
+            for cap in re_file.captures_iter(&history_text) {
+                anchors.insert(cap[1].to_string());
+            }
+        }
+        
+        if let Ok(re_tool) = regex::Regex::new(r"(\w+__\w+)") {
+            for cap in re_tool.captures_iter(&history_text) {
+                if !cap[1].starts_with("default_api") { // basic filter
+                    anchors.insert(cap[1].to_string());
+                }
+            }
+        }
+        
+        if let Ok(re_err) = regex::Regex::new(r"(error\[E\d+\]|panic at|Exception)") {
+            for cap in re_err.captures_iter(&history_text) {
+                anchors.insert(cap[1].to_string());
+            }
+        }
+        
+        let mut vec: Vec<_> = anchors.into_iter().collect();
+        vec.sort();
+        vec.truncate(8);
+        format!("SEARCH ANCHORS: {}", vec.join(", "))
+    } else {
+        summary.clone()
+    };
+
+    if final_summary.is_empty() {
         return;
     }
 
@@ -500,15 +554,15 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         .unwrap_or("");
 
     let new_value = if existing.is_empty() {
-        summary.clone()
+        final_summary.clone()
     } else {
-        let combined = format!("{existing}\n\n---\n\n{summary}");
+        let combined = format!("{existing}\n\n---\n\n{final_summary}");
         if combined.chars().count() > SESSION_SUMMARY_MAX_CHARS {
             // Phase C: instead of losing the previous summary, rotate it into
             // the `session_summary_N` ring (long-term tier). The new live
             // value becomes just the latest summary.
             rotate_and_archive_session_summary(state, agent_id, existing);
-            summary.clone()
+            final_summary.clone()
         } else {
             combined
         }
@@ -1301,11 +1355,23 @@ fn extract_artifacts(text: &str) -> Vec<String> {
 fn group_turns(messages: &[(String, String)]) -> Vec<Vec<(String, String)>> {
     let mut turns: Vec<Vec<(String, String)>> = Vec::new();
     let mut current: Vec<(String, String)> = Vec::new();
+    let mut current_chars = 0;
+    
+    // Configurable threshold for split-turn boundary cuts (e.g. 64k chars ~ 16k tokens)
+    const MAX_TURN_CHARS: usize = 64_000;
+
     for msg in messages {
-        if msg.0 == "user" && !current.is_empty() {
+        let msg_chars = msg.1.chars().count();
+        let is_safe_boundary = msg.0 == "assistant";
+
+        if (msg.0 == "user" && !current.is_empty())
+            || (is_safe_boundary && current_chars >= MAX_TURN_CHARS && !current.is_empty())
+        {
             turns.push(std::mem::take(&mut current));
+            current_chars = 0;
         }
         current.push(msg.clone());
+        current_chars += msg_chars;
     }
     if !current.is_empty() {
         turns.push(current);

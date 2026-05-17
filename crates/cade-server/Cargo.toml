@@ -18,7 +18,7 @@ cade-agent = { path = "../cade-agent", default-features = false, optional = fals
 cade-mcp   = { path = "../cade-mcp", optional = true }
 # -- Error handling
 derive_more.workspace  = true
-# -- Serialisation
+regex.workspace        = true
 serde.workspace        = true
 serde_json.workspace   = true
 # -- Logging

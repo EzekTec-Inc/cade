@@ -370,13 +370,36 @@ pub(crate) async fn complete_with_overflow_recovery(
 pub(crate) fn group_into_turns(messages: &[LlmMessage]) -> Vec<Vec<LlmMessage>> {
     let mut turns: Vec<Vec<LlmMessage>> = Vec::new();
     let mut current: Vec<LlmMessage> = Vec::new();
+    let mut current_chars = 0;
+    
+    // Configurable threshold for split-turn boundary cuts (e.g. 64k chars ~ 16k tokens)
+    const MAX_TURN_CHARS: usize = 64_000;
+
     for msg in messages {
-        // A new user message starts a new turn (flush the current one first).
-        if msg.role == "user" && !current.is_empty() {
+        let msg_chars = msg.content.chars().count()
+            + msg.tool_calls
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|tc| tc.arguments.to_string().len())
+                .sum::<usize>();
+
+        // A new user message starts a new turn.
+        // Also split mid-turn if we've exceeded the budget and hit a safe boundary.
+        // A safe boundary is right before an assistant message (provided we aren't interrupting a tool call/result sequence).
+        let is_safe_boundary = msg.role == "assistant";
+
+        if (msg.role == "user" && !current.is_empty()) 
+            || (is_safe_boundary && current_chars >= MAX_TURN_CHARS && !current.is_empty())
+        {
             turns.push(std::mem::take(&mut current));
+            current_chars = 0;
         }
+        
         current.push(msg.clone());
+        current_chars += msg_chars;
     }
+    
     if !current.is_empty() {
         turns.push(current);
     }
@@ -550,10 +573,10 @@ pub(crate) async fn build_context(
     // Group into logical turns.
     let mut turns = group_into_turns(&all_llm_msgs);
 
-    // If the window cut off mid-turn, the oldest turn might not start with a user message.
+    // If the window cut off mid-turn, the oldest turn might not start with a user or assistant message.
     // Drop it to ensure we never split tool_call/tool_result pairs.
     if let Some(first_msg) = turns.first().and_then(|t| t.first())
-        && first_msg.role != "user"
+        && first_msg.role != "user" && first_msg.role != "assistant"
     {
         turns.remove(0);
     }
