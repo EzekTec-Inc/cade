@@ -485,8 +485,15 @@ impl Repl {
 
             if !read_indices.is_empty() {
                 let mut handles = Vec::new();
+                let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+                
                 for &i in &read_indices {
                     let (call_id, tool_name, args) = &tool_calls[i];
+                    
+                    // Pre-fill the result struct so it has the right IDs if we have to inject a JoinError later.
+                    results[i].tool_call_id = call_id.clone();
+                    results[i].tool_name = tool_name.clone();
+                    
                     let call_id = call_id.clone();
                     let tool_name = tool_name.clone();
                     let args = args.clone();
@@ -497,8 +504,10 @@ impl Repl {
                     let pa_c = pa.clone();
                     let rt_c = std::sync::Arc::clone(&runtime);
                     let stats_c = self.session_stats.clone();
+                    let sem_c = semaphore.clone();
 
-                    handles.push(tokio::spawn(async move {
+                    let handle = tokio::spawn(async move {
+                        let _permit = sem_c.acquire().await;
                         let r = Self::run_tool_inner(
                             &call_id,
                             &tool_name,
@@ -513,18 +522,28 @@ impl Repl {
                         )
                         .await;
                         (i, r)
-                    }));
+                    });
+                    
+                    handles.push(async move {
+                        match handle.await {
+                            Ok((i, r)) => (i, Ok(r)),
+                            Err(e) => (i, Err(e)),
+                        }
+                    });
                 }
                 let join_results = futures::future::join_all(handles).await;
-                for join_result in join_results {
+                for (i, join_result) in join_results {
                     match join_result {
-                        Ok((i, r)) => {
+                        Ok(r) => {
                             results[i] = r;
                         }
                         Err(join_err) => {
-                            // JoinError means the spawned task panicked or was cancelled.
-                            // Log the error so it's visible instead of silently swallowed.
                             tracing::error!("Parallel tool execution task failed: {join_err}");
+                            results[i].output = format!(
+                                "System Error: Tool execution task panicked or cancelled ({join_err}). \
+                                Please retry sequentially or reduce concurrency."
+                            );
+                            results[i].is_error = true;
                         }
                     }
                 }

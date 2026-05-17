@@ -413,12 +413,21 @@ pub(crate) async fn build_context(
     // prompt (10–30 KB of skill bodies).  Memory tiers (volatile per turn)
     // remain in `system_dynamic` and are correctly billed at full rate.
     {
+        let mut all_requested_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
+        
+        // 1. Explicitly loaded skills
         let agent_skills = state.agent_skills.read().await;
-        if let Some(loaded_ids) = agent_skills.get(agent_id)
-            && !loaded_ids.is_empty()
-        {
+        if let Some(loaded_ids) = agent_skills.get(agent_id) {
+            all_requested_skills.extend(loaded_ids.iter().cloned());
+        }
+
+        // 2. Auto-load required skills from [project] block
+        let required = parse_required_skills_from_project(&system_static);
+        all_requested_skills.extend(required);
+
+        if !all_requested_skills.is_empty() {
             let all_skills = state.all_skills.read().await;
-            let loaded: Vec<&cade_core::skills::Skill> = loaded_ids
+            let loaded: Vec<&cade_core::skills::Skill> = all_requested_skills
                 .iter()
                 .filter_map(|id| all_skills.iter().find(|s| s.id == *id))
                 .collect();
