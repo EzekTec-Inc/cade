@@ -626,7 +626,7 @@ impl Repl {
 
             // Drain Lua command queue into pending_input if empty
             if pending_input.is_none() {
-                let mut app = self.app.lock();
+                let app = self.app.lock();
                 if let Some(lua) = &app.lua_engine {
                     if let Some(cmd) = lua.command_queue.lock().unwrap().pop_front() {
                         pending_input = Some(cmd);
@@ -636,7 +636,7 @@ impl Repl {
 
             // Update app footer to reflect current mode/model before reading input.
             {
-                let app = self.app.lock();
+                let mut app = self.app.lock();
                 app.update_mode(self.permissions.mode());
                 app.update_model(self.current_model.lock().clone());
                 app.update_agent_name(self.agent_name());
