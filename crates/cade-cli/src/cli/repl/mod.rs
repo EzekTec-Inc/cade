@@ -150,10 +150,12 @@ pub(crate) fn refresh_lua_ui(app: &mut TuiApp) {
         }
 
         if let Some(header_widget) = lua.get_header_ui() {
+            tracing::info!("Found CADE_UI.header with {} widgets", header_widget.len());
             let mut new_header = Box::new(cade_tui::lua_ui::LuaUiSlot::new(true, lua.ui_event_queue.clone()));
             new_header.update(Some(header_widget));
             app.slots.set(cade_tui::slots::UiSlot::Header, new_header);
         } else {
+            tracing::info!("CADE_UI.header is None");
             let _ = app.slots.take(cade_tui::slots::UiSlot::Header);
         }
     }

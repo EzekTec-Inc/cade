@@ -134,7 +134,7 @@ impl SlotComponent for LuaUiSlot {
             let focused_id = interactives.get(self.focused_idx).cloned();
 
             let constraints: Vec<Constraint> = if self.is_header {
-                std::iter::repeat(Constraint::Fill(1)).take(children.len()).collect()
+                std::iter::repeat(Constraint::Percentage(100 / children.len() as u16)).take(children.len()).collect()
             } else {
                 std::iter::repeat(Constraint::Length(1)).take(children.len()).collect()
             };

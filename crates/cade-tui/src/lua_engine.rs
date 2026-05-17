@@ -174,8 +174,9 @@ impl LuaEngine {
     pub fn get_sidebar_ui(&self) -> Option<Vec<crate::lua_ui::LuaWidget>> {
         if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI") {
             if let Ok(sidebar) = ui.get::<mlua::Value>("sidebar") {
-                if let Ok(widgets) = self.lua.from_value(sidebar) {
-                    return Some(widgets);
+                match self.lua.from_value::<Vec<crate::lua_ui::LuaWidget>>(sidebar) {
+                    Ok(widgets) => return Some(widgets),
+                    Err(e) => tracing::warn!("Failed to deserialize CADE_UI.sidebar: {}", e),
                 }
             }
         }
@@ -185,10 +186,15 @@ impl LuaEngine {
     pub fn get_header_ui(&self) -> Option<Vec<crate::lua_ui::LuaWidget>> {
         if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI") {
             if let Ok(header) = ui.get::<mlua::Value>("header") {
-                if let Ok(widgets) = self.lua.from_value(header) {
-                    return Some(widgets);
+                match self.lua.from_value::<Vec<crate::lua_ui::LuaWidget>>(header) {
+                    Ok(widgets) => return Some(widgets),
+                    Err(e) => tracing::error!("Failed to deserialize CADE_UI.header: {}", e),
                 }
+            } else {
+                tracing::error!("CADE_UI has no 'header' field");
             }
+        } else {
+            tracing::error!("CADE_UI global table missing");
         }
         None
     }
@@ -234,5 +240,28 @@ mod tests {
         engine.load_plugins(dir.path());
         
         assert_eq!(engine.get_footer_text().unwrap(), "p1p2");
+    }
+}
+
+#[cfg(test)]
+mod additional_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_header_clock() {
+        let engine = LuaEngine::new().unwrap();
+        let dir = tempdir().unwrap();
+        
+        std::fs::write(dir.path().join("clock.lua"), "
+            CADE_UI.header = {
+                { type = 'clock', format = '%H:%M:%S', color = 'cyan' }
+            }
+        ").unwrap();
+        
+        engine.load_plugins(dir.path());
+        
+        let header = engine.get_header_ui();
+        assert!(header.is_some(), "Header was None!");
     }
 }
