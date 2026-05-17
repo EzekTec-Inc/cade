@@ -32,11 +32,33 @@ impl LuaEngine {
             return;
         }
 
+        // Add plugin_dir to package.path for require() routing
+        if let Ok(package) = self.lua.globals().get::<mlua::Table>("package") {
+            if let Ok(current_path) = package.get::<String>("path") {
+                let dir_str = plugin_dir.to_string_lossy();
+                let new_path = format!("{};{}/?.lua;{}/?/init.lua", current_path, dir_str, dir_str);
+                let _ = package.set("path", new_path);
+            }
+        }
+
         let Ok(entries) = std::fs::read_dir(plugin_dir) else { return };
         let mut paths: Vec<_> = entries
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("lua"))
+            .filter_map(|e| {
+                let path = e.path();
+                if path.is_dir() {
+                    let init_path = path.join("init.lua");
+                    if init_path.exists() {
+                        Some(init_path)
+                    } else {
+                        None
+                    }
+                } else if path.extension().and_then(|s| s.to_str()) == Some("lua") {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
             .collect();
             
         paths.sort();
@@ -74,8 +96,17 @@ mod tests {
         let engine = LuaEngine::new().unwrap();
         let dir = tempdir().unwrap();
         
-        std::fs::write(dir.path().join("1.lua"), "CADE_UI.footer = 'p1'").unwrap();
-        std::fs::write(dir.path().join("2.lua"), "CADE_UI.footer = CADE_UI.footer .. 'p2'").unwrap();
+        // 1. Standalone lua file
+        std::fs::write(dir.path().join("1-standalone.lua"), "CADE_UI.footer = 'p1'").unwrap();
+        
+        // 2. Folder-based plugin with init.lua and internal require routing
+        let folder_plugin = dir.path().join("2-folder");
+        std::fs::create_dir(&folder_plugin).unwrap();
+        std::fs::write(folder_plugin.join("helper.lua"), "return 'p2'").unwrap();
+        std::fs::write(folder_plugin.join("init.lua"), "
+            local helper = require('helper')
+            CADE_UI.footer = CADE_UI.footer .. helper
+        ").unwrap();
         
         engine.load_plugins(dir.path());
         
