@@ -209,8 +209,7 @@ impl Repl {
                                                     // Ctrl+Enter  → also queue as follow-up.
                                                     // Alt/Shift+Enter → same as plain Enter.
                                                     //
-                                                    // Ctrl+Enter: queue as follow-up (like plain Enter).
-                                                    // Steering is handled by Ctrl+C below.
+                                                    // Ctrl+Enter: Explicit Steering (cancel current turn and redirect).
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::CONTROL =>
                                                     {
@@ -223,12 +222,14 @@ impl Repl {
                                                             let post_modal = last_close > 0
                                                                 && now_ms.saturating_sub(last_close) < 300;
                                                             if !post_modal {
-                                                                tick_queued_followup.lock().push_back(msg);
-                                                                app.queued_count = tick_queued_followup.lock().len();
+                                                                // Steering: cancel current turn and
+                                                                // run this message immediately after.
+                                                                *tick_queued_steering.lock() = Some(msg);
                                                                 app.editor.clear();
                                                                 app.editor.set_cursor_pos(0);
                                                                 app.set_last_status(None);
                                                                 let _ = app.draw();
+                                                                tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                                             }
                                                         }
                                                     }
@@ -332,10 +333,9 @@ impl Repl {
                                                         app.draw_dirty = true;
                                                         let _ = app.draw();
                                                     }
-                                                    // Ctrl+C — always cancel the running turn.
-                                                    // Ctrl+C: if input is non-empty → steering
-                                                    // (cancel + redirect with typed text).
-                                                    // If input is empty → plain cancel.
+                                                    // Ctrl+C — strictly graceful interrupt (stop only).
+                                                    // Does NOT submit typed text (no steering).
+                                                    // Leaves typed text in the editor.
                                                     // Same 200 ms grace period as Esc to swallow
                                                     // stale events buffered just after a modal.
                                                     // Also suppressed for 500 ms post-modal close
@@ -347,22 +347,6 @@ impl Repl {
                                                         let cc_post_modal = cc_last_close > 0
                                                             && cc_now_ms.saturating_sub(cc_last_close) < 500;
                                                         if !cc_post_modal && tick_start.elapsed().as_millis() >= 200 {
-                                                            app.editor.expand_pastes();
-                                                            let msg = app.editor.text().trim().to_string();
-                                                            if !msg.is_empty() {
-                                                                // Steering: cancel current turn and
-                                                                // run this message immediately after.
-                                                                *tick_queued_steering.lock() = Some(msg);
-                                                                app.editor.clear();
-                                                                app.editor.set_cursor_pos(0);
-                                                                app.set_last_status(None);
-                                                                let _ = app.draw();
-                                                            } else {
-                                                                app.editor.clear();
-                                                                app.editor.set_cursor_pos(0);
-                                                                app.set_last_status(None);
-                                                                let _ = app.draw();
-                                                            }
                                                             tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                                         }
                                                     }
