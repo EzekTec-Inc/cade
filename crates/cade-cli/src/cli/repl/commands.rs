@@ -401,6 +401,9 @@ impl Repl {
             }
 
             // -- New commands
+            SlashCmd::Reload => {
+                return self.cmd_reload().await;
+            }
             SlashCmd::Marketplace => {
                 return self.cmd_marketplace().await;
             }

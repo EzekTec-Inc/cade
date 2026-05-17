@@ -202,6 +202,26 @@ impl Repl {
         Ok(false)
     }
 
+    pub(crate) async fn cmd_reload(&mut self) -> Result<bool> {
+        self.tui_dim("  Reloading UI plugins...");
+        let mut app = self.app.lock();
+        if let Some(lua) = app.lua_engine.take() {
+            drop(lua);
+        }
+        let new_engine = cade_tui::lua_engine::LuaEngine::new().ok();
+        if let Some(engine) = &new_engine {
+            if let Some(home) = dirs::home_dir() {
+                engine.load_plugins(&home.join(".cade").join("plugins"));
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                engine.load_plugins(&cwd.join(".cade").join("plugins"));
+            }
+        }
+        app.lua_engine = new_engine;
+        app.show_toast("UI Plugins reloaded", ToastLevel::Success);
+        Ok(false)
+    }
+
     pub(crate) async fn cmd_yolo(&mut self) -> Result<bool> {
         self.permissions.set_mode(PermissionMode::BypassPermissions);
         self.app

@@ -898,6 +898,9 @@ pub struct TuiApp {
     /// components; each gets a dedicated layout region when occupied.
     pub slots: crate::slots::SlotManager,
 
+    /// Lua script engine for UI extensions.
+    pub lua_engine: Option<crate::lua_engine::LuaEngine>,
+
     // -- Scroll indicator
     /// Number of committed lines pushed while the user was scrolled up.
     /// Reset to 0 whenever scroll returns to 0 (bottom).
@@ -1028,6 +1031,7 @@ impl TuiApp {
             header_lines: Vec::new(),
             footer_extra: None,
             slots: crate::slots::SlotManager::new(),
+            lua_engine: crate::lua_engine::LuaEngine::new().ok(),
             pending_lines: 0,
             queued_count: 0,
             toast: None,
@@ -1213,7 +1217,9 @@ impl TuiApp {
         let turn_count = self.turn_count;
         let token_history = self.token_history.clone();
         let header_lines = self.header_lines.clone();
-        let footer_extra = self.footer_extra.clone();
+        let footer_extra = self.footer_extra.clone().or_else(|| {
+            self.lua_engine.as_ref().and_then(|lua| lua.get_footer_text())
+        });
         let reasoning_effort = self.reasoning_effort.clone();
         let mut active_plan_snap = self.active_plan.clone();
         // Auto-scroll plan panel to keep first incomplete step visible
