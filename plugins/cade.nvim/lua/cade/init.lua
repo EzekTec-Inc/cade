@@ -6,6 +6,11 @@ local M = {}
 ---@param opts table|nil  See cade.config for available options.
 function M.setup(opts)
   require("cade.config").setup(opts)
+  
+  -- Try to setup hover edit hints if edit.lua is present
+  pcall(function()
+    require("cade.edit").setup_hints()
+  end)
 end
 
 -- ── Completion state passthrough ─────────────────────────────────────────────
@@ -38,6 +43,11 @@ function M.toggle()
     require("cade.ghost").clear()
   end
   vim.notify("CADE completions " .. (cfg.current.enabled and "enabled" or "disabled"))
+end
+
+--- Start a hover edit session for the visual selection
+function M.hover_edit()
+  return require("cade.edit").hover_edit()
 end
 
 -- ── Server probe (overridable for tests) ─────────────────────────────────────

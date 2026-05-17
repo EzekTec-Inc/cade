@@ -7,6 +7,7 @@ pub mod blocks;
 pub mod checkpoints;
 pub mod compact;
 pub mod complete;
+pub mod edit;
 pub mod context_stats;
 pub mod csrf;
 pub mod dashboard;
@@ -53,6 +54,7 @@ pub fn router(state: AppState) -> Router {
             post(messages::stream_message),
         )
         .route("/v1/agents/:id/complete", post(complete::complete))
+        .route("/v1/agents/:id/edit", post(edit::edit))
         .route("/v1/agents/:id/run", post(run::run_agent))
         .layer(middleware::from_fn_with_state(
             state.clone(),
