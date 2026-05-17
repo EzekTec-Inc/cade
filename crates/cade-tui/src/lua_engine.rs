@@ -24,6 +24,29 @@ impl LuaEngine {
         ui_ext.set("footer", "")?;
         lua.globals().set("CADE_UI", ui_ext)?;
 
+        // CADE core table (for commands and keybindings)
+        lua.load(r#"
+            CADE = {
+                _commands = {},
+                _keybindings = {},
+                register_command = function(name, cb)
+                    CADE._commands[name] = cb
+                end,
+                bind_key = function(key, cb)
+                    CADE._keybindings[key] = cb
+                end,
+                execute_slash_command = function(cmd)
+                    cade_log("Lua requested slash command: " .. cmd)
+                    -- For now, this is a placeholder. 
+                    -- A full implementation would push this to a Rust channel.
+                end,
+                call_tool = function(name, args)
+                    cade_log("Lua requested tool call: " .. name)
+                    -- For now, this is a placeholder.
+                end
+            }
+        "#).exec()?;
+
         Ok(Self { lua })
     }
 
@@ -86,6 +109,34 @@ impl LuaEngine {
             }
         }
         None
+    }
+
+    pub fn handle_keybinding(&self, key: &str) -> bool {
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
+            if let Ok(bindings) = cade.get::<mlua::Table>("_keybindings") {
+                if let Ok(func) = bindings.get::<mlua::Function>(key) {
+                    if let Err(e) = func.call::<()>(()) {
+                        tracing::warn!("Lua keybinding error for {}: {}", key, e);
+                    }
+                    return true; // handled
+                }
+            }
+        }
+        false
+    }
+
+    pub fn handle_command(&self, command: &str, args: Vec<String>) -> bool {
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
+            if let Ok(commands) = cade.get::<mlua::Table>("_commands") {
+                if let Ok(func) = commands.get::<mlua::Function>(command) {
+                    if let Err(e) = func.call::<()>(args) {
+                        tracing::warn!("Lua command error for {}: {}", command, e);
+                    }
+                    return true; // handled
+                }
+            }
+        }
+        false
     }
 }
 

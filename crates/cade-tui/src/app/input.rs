@@ -162,6 +162,39 @@ impl TuiApp {
             }
         }
 
+        // -- Lua global keybindings
+        if let Some(lua) = &self.lua_engine {
+            let mut key_str = String::new();
+            if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                key_str.push_str("C-");
+            }
+            if k.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
+                key_str.push_str("A-");
+            }
+            if k.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                key_str.push_str("S-");
+            }
+            match k.code {
+                crossterm::event::KeyCode::Char(c) => key_str.push(c),
+                crossterm::event::KeyCode::Enter => key_str.push_str("Enter"),
+                crossterm::event::KeyCode::Esc => key_str.push_str("Esc"),
+                crossterm::event::KeyCode::Tab => key_str.push_str("Tab"),
+                crossterm::event::KeyCode::Backspace => key_str.push_str("Backspace"),
+                crossterm::event::KeyCode::Delete => key_str.push_str("Delete"),
+                crossterm::event::KeyCode::Up => key_str.push_str("Up"),
+                crossterm::event::KeyCode::Down => key_str.push_str("Down"),
+                crossterm::event::KeyCode::Left => key_str.push_str("Left"),
+                crossterm::event::KeyCode::Right => key_str.push_str("Right"),
+                _ => {}
+            }
+            
+            if !key_str.is_empty() && lua.handle_keybinding(&key_str) {
+                self.draw_dirty = true;
+                let _ = self.draw();
+                return Ok(None);
+            }
+        }
+
         match (k.code, k.modifiers) {
             // -- Submit
             // Alt+Enter  — universal cross-terminal newline.

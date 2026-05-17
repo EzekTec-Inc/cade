@@ -770,6 +770,25 @@ impl Repl {
 
             // Slash commands (include loaded skill ids so /commit etc. work)
             let skill_ids: Vec<String> = self.skills.lock().iter().map(|s| s.id.clone()).collect();
+            
+            // Check Lua extensions for custom slash commands first
+            let mut handled_by_lua = false;
+            if input.starts_with('/') {
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                let cmd = parts[0];
+                let args = parts[1..].iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                
+                let mut app = self.app.lock();
+                if let Some(lua) = &app.lua_engine {
+                    if lua.handle_command(cmd, args) {
+                        handled_by_lua = true;
+                    }
+                }
+            }
+            if handled_by_lua {
+                continue;
+            }
+
             if let Some(cmd) = parse_slash_with_skills(&input, &skill_ids) {
                 if self
                     .handle_slash_command(cmd, &input, &mut stdout, &mut pending_input)
