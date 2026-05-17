@@ -50,7 +50,3 @@ Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent 
 | [Architecture](architecture.md) | You want to understand the crate structure and data flow |
 | [Development](development.md) | You want to build CADE from source and run the test suite |
 | [Developer Guide](developer-guide.md) | You want to contribute code and follow project conventions |
-
-## 📜 Historical Material
-
-`docs/history/` contains shipped or partially-shipped plan documents preserved for reference. They describe design intent at the time of writing, not necessarily current behaviour.
