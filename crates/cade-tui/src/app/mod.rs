@@ -1707,6 +1707,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires tty"]
     fn set_plan_initializes_scroll_offset_zero() {
         let mut app = TuiApp::new(
             cade_core::permissions::PermissionMode::Default,
