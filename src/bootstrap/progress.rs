@@ -67,20 +67,6 @@ impl StartupProgress {
         self.add_spinner("Resolving agent…")
     }
 
-    /// "Starting N MCP server(s)…" — returns a single summary spinner.
-    pub fn start_mcp_boot(&self, count: usize) -> ProgressBar {
-        self.add_spinner(format!("Starting {count} MCP server(s)…"))
-    }
-
-    /// Individual MCP server spinner — shows per-server status during boot.
-    pub fn start_mcp_server(&self, name: &str) -> ProgressBar {
-        self.add_spinner(format!("  ├─ {name}…"))
-    }
-
-    /// "Syncing tools…"
-    pub fn start_tool_sync(&self) -> ProgressBar {
-        self.add_spinner("Syncing tools…")
-    }
 
     // ------------------------------------------------------------------
     // Finish helpers
@@ -94,29 +80,6 @@ impl StartupProgress {
         pb.finish_with_message(format!("✔ {}", msg.into()));
     }
 
-    /// Mark a spinner as completed with a warning (yellow).
-    pub fn finish_warn(pb: &ProgressBar, msg: impl Into<String>) {
-        let warn_style = ProgressStyle::with_template("  {msg:.yellow}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner());
-        pb.set_style(warn_style);
-        pb.finish_with_message(format!("⚠ {}", msg.into()));
-    }
-
-    /// Mark a spinner as failed (red).
-    pub fn finish_err(pb: &ProgressBar, msg: impl Into<String>) {
-        let err_style = ProgressStyle::with_template("  {msg:.red}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner());
-        pb.set_style(err_style);
-        pb.finish_with_message(format!("✗ {}", msg.into()));
-    }
-
-    /// Mark a spinner as skipped/timed out (dim).
-    pub fn finish_skip(pb: &ProgressBar, msg: impl Into<String>) {
-        let skip_style = ProgressStyle::with_template("  {msg:.dim}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner());
-        pb.set_style(skip_style);
-        pb.finish_with_message(format!("⊘ {}", msg.into()));
-    }
 
     /// Clear the entire multi-progress display so the terminal is clean
     /// before `ratatui::init()` takes over.
