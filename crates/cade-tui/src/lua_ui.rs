@@ -56,6 +56,19 @@ pub enum LuaWidget {
         wrap: bool,
     },
 }
+impl LuaWidget {
+    pub fn height_constraint(&self) -> Constraint {
+        match self {
+            LuaWidget::Text { .. } => Constraint::Length(1),
+            LuaWidget::Button { .. } | LuaWidget::Toggle { .. } | LuaWidget::Clock { .. } => Constraint::Length(1),
+            LuaWidget::Gauge { .. } => Constraint::Length(3),
+            LuaWidget::List { items, .. } => Constraint::Length((items.len() as u16).max(1) + 2),
+            LuaWidget::Paragraph { .. } => Constraint::Min(2),
+            LuaWidget::Popup { .. } => Constraint::Min(5),
+            LuaWidget::Layout { .. } => Constraint::Min(1),
+        }
+    }
+}
 
 pub struct LuaUiSlot {
     pub is_header: bool,
@@ -160,7 +173,7 @@ impl SlotComponent for LuaUiSlot {
             let constraints: Vec<Constraint> = if self.is_header {
                 std::iter::repeat(Constraint::Percentage(100 / children.len() as u16)).take(children.len()).collect()
             } else {
-                std::iter::repeat(Constraint::Length(1)).take(children.len()).collect()
+                children.iter().map(|c| c.height_constraint()).collect()
             };
             let layout = Layout::default()
                 .direction(if self.is_header { Direction::Horizontal } else { Direction::Vertical })
