@@ -142,12 +142,19 @@ use crate::cli::repl::format::mode_display;
 pub(crate) fn refresh_lua_ui(app: &mut TuiApp) {
     if let Some(lua) = &app.lua_engine {
         if let Some(sidebar_widget) = lua.get_sidebar_ui() {
-            let new_sidebar = Box::new(cade_tui::lua_ui::LuaSidebarSlot {
-                root: Some(sidebar_widget),
-                focused_idx: 0,
-                event_queue: lua.ui_event_queue.clone(),
-            });
+            let mut new_sidebar = Box::new(cade_tui::lua_ui::LuaUiSlot::new(false, lua.ui_event_queue.clone()));
+            new_sidebar.update(Some(sidebar_widget));
             app.slots.set(cade_tui::slots::UiSlot::Sidebar, new_sidebar);
+        } else {
+            let _ = app.slots.take(cade_tui::slots::UiSlot::Sidebar);
+        }
+
+        if let Some(header_widget) = lua.get_header_ui() {
+            let mut new_header = Box::new(cade_tui::lua_ui::LuaUiSlot::new(true, lua.ui_event_queue.clone()));
+            new_header.update(Some(header_widget));
+            app.slots.set(cade_tui::slots::UiSlot::Header, new_header);
+        } else {
+            let _ = app.slots.take(cade_tui::slots::UiSlot::Header);
         }
     }
 }

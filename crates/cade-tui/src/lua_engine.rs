@@ -182,6 +182,17 @@ impl LuaEngine {
         None
     }
 
+    pub fn get_header_ui(&self) -> Option<Vec<crate::lua_ui::LuaWidget>> {
+        if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI") {
+            if let Ok(header) = ui.get::<mlua::Value>("header") {
+                if let Ok(widgets) = self.lua.from_value(header) {
+                    return Some(widgets);
+                }
+            }
+        }
+        None
+    }
+
     pub fn handle_ui_event(&self, id: &str, args: serde_json::Value) -> bool {
         if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
             if let Ok(cbs) = cade.get::<mlua::Table>("_ui_callbacks") {

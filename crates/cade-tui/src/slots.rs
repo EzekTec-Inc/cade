@@ -66,6 +66,11 @@ pub trait SlotComponent: Send + Sync {
     fn preferred_height(&self) -> u16 {
         1
     }
+
+    /// Whether this component requires continuous redrawing (e.g. for animations or clocks).
+    fn requires_tick(&self) -> bool {
+        false
+    }
 }
 
 /// Registry of [`SlotComponent`]s keyed by [`UiSlot`].
@@ -102,6 +107,10 @@ impl SlotManager {
     /// Borrow the component in `slot` for rendering.
     pub fn get_mut(&mut self, slot: UiSlot) -> Option<&mut Box<dyn SlotComponent>> {
         self.slots.get_mut(&slot)
+    }
+
+    pub fn requires_tick(&self) -> bool {
+        self.slots.values().any(|s| s.requires_tick())
     }
 
     /// `true` when `slot` currently holds a component.

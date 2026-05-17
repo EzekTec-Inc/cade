@@ -1003,7 +1003,7 @@ impl TuiApp {
         let lua_engine = crate::lua_engine::LuaEngine::new().ok();
         let mut slots = crate::slots::SlotManager::new();
         if let Some(engine) = &lua_engine {
-            let sidebar = Box::new(crate::lua_ui::LuaSidebarSlot::new(engine.ui_event_queue.clone()));
+            let sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(false, engine.ui_event_queue.clone()));
             slots.set(crate::slots::UiSlot::Sidebar, sidebar);
         }
 
