@@ -488,7 +488,15 @@ async fn async_main() -> Result<()> {
         (None, None) => None,
     };
 
+    let mut mcp_rx_opt = Some(mcp_rx);
+    let mut mcp = std::sync::Arc::new(cade_agent::mcp::McpManager::empty());
+
     if let Some(prompt) = headless_prompt {
+        if let Some(rx) = mcp_rx_opt.take() {
+            if let Ok(mgr) = rx.await {
+                mcp = mgr;
+            }
+        }
         let fmt = args.effective_output_format();
         let timeout_secs = args.timeout_secs;
 
@@ -723,6 +731,8 @@ async fn async_main() -> Result<()> {
         theme_colors,
         exec_backend,
         capabilities,
+        mcp_rx_opt,
+        startup_ready,
     );
     // --continue: mark first turn as already done so env context isn't re-injected
     if args.continue_last {

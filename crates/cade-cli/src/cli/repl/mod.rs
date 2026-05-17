@@ -849,6 +849,16 @@ impl Repl {
             }
 
             // Send to agent and handle tool loop
+            if !self.startup_ready.load(std::sync::atomic::Ordering::SeqCst) {
+                self.tui_dim("  ↻ Waiting for tools to load in background before starting turn…".to_string());
+                if let Some(rx) = self.mcp_rx.take() {
+                    if let Ok(mgr) = rx.await {
+                        self.set_mcp(mgr);
+                        self.set_tools_ready();
+                    }
+                }
+            }
+
             let mut final_input = input.clone();
             if let Some(ctx) = session_hook_ctx.take()
                 && !ctx.trim().is_empty()
