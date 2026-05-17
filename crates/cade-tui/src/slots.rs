@@ -67,6 +67,11 @@ pub trait SlotComponent: Send + Sync {
         1
     }
 
+    /// Preferred width in columns for vertical slots (e.g. Sidebar).
+    fn preferred_width(&self) -> u16 {
+        30
+    }
+
     /// Whether this component requires continuous redrawing (e.g. for animations or clocks).
     fn requires_tick(&self) -> bool {
         false

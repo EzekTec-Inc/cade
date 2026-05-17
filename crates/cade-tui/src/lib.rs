@@ -46,3 +46,4 @@ pub use question::{Question, QuestionAnswer, QuestionOption, QuestionWidget};
 pub use session_tree::{TreeAction, show_session_tree};
 
 // endregion: --- Modules
+pub mod test_rich;

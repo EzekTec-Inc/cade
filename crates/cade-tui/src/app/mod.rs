@@ -1345,7 +1345,10 @@ impl TuiApp {
 
                 // -- Sidebar slot: right edge (only when terminal is wide enough)
                 if let Some(sb) = slot_mgr.get_mut(UiSlot::Sidebar) {
-                    let sb_w = sb.preferred_height().min(full.width / 3).max(1);
+                    let mut sb_w = sb.preferred_width().min(full.width / 3);
+                    if sb_w == 0 {
+                        sb_w = 40.min(full.width / 3);
+                    }
                     let x = full.x + full.width.saturating_sub(sb_w);
                     let area = Rect::new(x, full.y, sb_w, full.height);
                     frame.render_widget(Clear, area);

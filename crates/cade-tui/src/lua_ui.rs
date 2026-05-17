@@ -191,6 +191,10 @@ impl SlotComponent for LuaUiSlot {
         if self.is_header { 1 } else { 0 }
     }
 
+    fn preferred_width(&self) -> u16 {
+        if self.is_header { 0 } else { 40 }
+    }
+
     fn requires_tick(&self) -> bool {
         self.has_clock
     }
