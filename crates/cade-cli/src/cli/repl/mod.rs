@@ -287,6 +287,12 @@ impl Repl {
             reasoning_effort.clone(),
             theme,
         );
+        if let Some(engine) = &tui_app.lua_engine {
+            if let Some(home) = dirs::home_dir() {
+                engine.load_plugins(&home.join(".cade").join("plugins"));
+            }
+            engine.load_plugins(&cwd.join(".cade").join("plugins"));
+        }
         {
             let bg_for_getter = Arc::clone(&background_results);
             tui_app.bg_pending_count = Some(Box::new(move || bg_for_getter.lock().len()));
