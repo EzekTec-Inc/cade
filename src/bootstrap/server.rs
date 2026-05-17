@@ -41,14 +41,17 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
             .map_err(|e| Error::custom(format!("create health-check client: {e}")))?;
 
         // Detect first-run: if the database file doesn't exist yet, the server
-        // needs extra time for initial migration + embedding model download.
+        // needs extra time for initial migration.
+        // Even if it's not a cold start for the DB, semantic-search models 
+        // might need to download (~25MB) on first run or cache clear, so give 
+        // it a generous timeout regardless.
         let is_cold_start = dirs::home_dir()
             .map(|h| !h.join(".cade").join("cade.db").exists())
             .unwrap_or(true);
         let total_timeout = if is_cold_start {
-            std::time::Duration::from_secs(30)
+            std::time::Duration::from_secs(60)
         } else {
-            std::time::Duration::from_secs(15)
+            std::time::Duration::from_secs(30)
         };
 
         let ready = poll_server_health(&mut child, &client, total_timeout).await;

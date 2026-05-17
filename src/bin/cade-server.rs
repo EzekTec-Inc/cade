@@ -183,7 +183,7 @@ async fn async_main() -> Result<()> {
         // calls reuse them. Failures fall back to None so the server still
         // boots and `search_memory_hybrid` transparently degrades to the
         // keyword-only path.
-        embedder: {
+        embedder: tokio::task::spawn_blocking(|| {
             #[cfg(feature = "semantic-search")]
             {
                 match cade_store::sqlite::embedding::FastEmbedder::new() {
@@ -204,7 +204,7 @@ async fn async_main() -> Result<()> {
             {
                 None
             }
-        },
+        }).await.unwrap_or(None),
     };
 
     // ── Embedding backfill (WI-SEMANTIC Phase 4) ────────────────────────────
