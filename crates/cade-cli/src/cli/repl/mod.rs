@@ -636,7 +636,7 @@ impl Repl {
 
             // Update app footer to reflect current mode/model before reading input.
             {
-                let mut app = self.app.lock();
+                let app = self.app.lock();
                 app.update_mode(self.permissions.mode());
                 app.update_model(self.current_model.lock().clone());
                 app.update_agent_name(self.agent_name());
@@ -788,7 +788,7 @@ impl Repl {
                 let cmd = parts[0];
                 let args = parts[1..].iter().map(|s| s.to_string()).collect::<Vec<_>>();
                 
-                let mut app = self.app.lock();
+                let app = self.app.lock();
                 if let Some(lua) = &app.lua_engine {
                     if lua.handle_command(cmd, args) {
                         handled_by_lua = true;
