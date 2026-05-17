@@ -195,6 +195,8 @@ pub struct Repl {
     /// Receives a signal whenever a CADE settings file changes on disk.
     /// The REPL polls this each loop iteration and triggers an MCP reload.
     pub(crate) mcp_reload_rx: tokio::sync::mpsc::Receiver<()>,
+    /// Receives a signal whenever a Lua plugin file changes on disk.
+    pub(crate) plugin_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
     pub(crate) streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Receives the full MCP manager once the background boot completes.
@@ -274,6 +276,7 @@ impl Repl {
         tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
         let skill_reload_rx = cade_core::skills::spawn_skill_watcher(&cwd);
         let mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
+        let plugin_reload_rx = spawn_plugin_watcher(&cwd);
 
         // Pre-construct the background-results queue + the TuiApp so we can
         // wire a `bg_pending_count` getter on the app pointing at the same
@@ -331,6 +334,7 @@ impl Repl {
             )),
             skill_reload_rx,
             mcp_reload_rx,
+            plugin_reload_rx,
             streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             mcp_rx,
             startup_ready,
@@ -661,6 +665,28 @@ impl Repl {
                 tracing::info!("Skills auto-reloaded: {new_count} skills");
             }
 
+            // Check for plugin file changes (live watcher) — reload if signalled
+            let mut plugin_changed = false;
+            while self.plugin_reload_rx.try_recv().is_ok() {
+                plugin_changed = true;
+            }
+            if plugin_changed {
+                self.tui_ok("  ↺ Lua plugins auto-reloaded".to_string());
+                tracing::info!("Lua plugins auto-reloaded");
+                let mut app = self.app.lock();
+                if let Some(lua) = app.lua_engine.take() {
+                    drop(lua);
+                }
+                let new_engine = cade_tui::lua_engine::LuaEngine::new().ok();
+                if let Some(engine) = &new_engine {
+                    if let Some(home) = dirs::home_dir() {
+                        engine.load_plugins(&home.join(".cade").join("plugins"));
+                    }
+                    engine.load_plugins(&self.cwd.join(".cade").join("plugins"));
+                }
+                app.lua_engine = new_engine;
+            }
+
             // Drain Lua command queue into pending_input if empty
             if pending_input.is_none() {
                 let app = self.app.lock();
@@ -903,4 +929,79 @@ impl Repl {
 
         Ok(())
     }
+}
+pub(crate) fn spawn_plugin_watcher(cwd: &std::path::Path) -> tokio::sync::mpsc::Receiver<()> {
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(8);
+
+    let home = dirs::home_dir();
+    let cade_home = home.as_ref().map(|h| h.join(".cade"));
+
+    let mut dirs_to_watch = Vec::new();
+
+    if let Some(ch) = &cade_home {
+        let global_plugins = ch.join("plugins");
+        if global_plugins.exists() {
+            dirs_to_watch.push(global_plugins);
+        }
+    }
+
+    let project_plugins = cwd.join(".cade/plugins");
+    if project_plugins.exists() {
+        dirs_to_watch.push(project_plugins);
+    }
+
+    if dirs_to_watch.is_empty() {
+        return rx;
+    }
+
+    std::thread::spawn(move || {
+        let (sync_tx, sync_rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
+
+        let mut watcher = match RecommendedWatcher::new(sync_tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!("plugin watcher: failed to create watcher: {e}");
+                return;
+            }
+        };
+
+        for dir in &dirs_to_watch {
+            if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
+                tracing::warn!("plugin watcher: cannot watch {}: {e}", dir.display());
+            } else {
+                tracing::info!("plugin watcher: watching {}", dir.display());
+            }
+        }
+
+        for res in sync_rx {
+            match res {
+                Ok(event) => {
+                    let relevant = matches!(
+                        event.kind,
+                        EventKind::Create(CreateKind::File)
+                            | EventKind::Create(CreateKind::Any)
+                            | EventKind::Modify(ModifyKind::Data(_))
+                            | EventKind::Modify(ModifyKind::Any)
+                            | EventKind::Remove(RemoveKind::File)
+                            | EventKind::Remove(RemoveKind::Any)
+                    );
+                    let is_lua_file = event.paths.iter().any(|p| {
+                        p.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e == "lua")
+                            .unwrap_or(false)
+                    });
+                    if relevant && is_lua_file {
+                        let _ = tx.try_send(());
+                    }
+                }
+                Err(e) => tracing::warn!("plugin watcher error: {e}"),
+            }
+        }
+    });
+
+    rx
 }
