@@ -37,6 +37,24 @@ pub enum LuaWidget {
         format: Option<String>,
         color: Option<String>,
     },
+    Gauge {
+        label: Option<String>,
+        ratio: f64,
+        color: Option<String>,
+    },
+    List {
+        id: Option<String>,
+        items: Vec<String>,
+        selected: Option<usize>,
+    },
+    Popup {
+        title: Option<String>,
+        content: Box<LuaWidget>,
+    },
+    Paragraph {
+        content: String,
+        wrap: bool,
+    },
 }
 
 pub struct LuaUiSlot {
@@ -74,13 +92,16 @@ impl LuaUiSlot {
         let mut ids = Vec::new();
         fn walk(widget: &LuaWidget, ids: &mut Vec<String>) {
             match widget {
-                LuaWidget::Button { id, .. } | LuaWidget::Toggle { id, .. } => {
+                LuaWidget::Button { id, .. } | LuaWidget::Toggle { id, .. } | LuaWidget::List { id: Some(id), .. } => {
                     ids.push(id.clone());
                 }
                 LuaWidget::Layout { children, .. } => {
                     for child in children {
                         walk(child, ids);
                     }
+                }
+                LuaWidget::Popup { content, .. } => {
+                    walk(content, ids);
                 }
                 _ => {}
             }
@@ -102,6 +123,9 @@ impl LuaUiSlot {
                     for child in children {
                         walk(child, has);
                     }
+                }
+                LuaWidget::Popup { content, .. } => {
+                    walk(content, has);
                 }
                 _ => {}
             }
@@ -188,6 +212,17 @@ impl SlotComponent for LuaUiSlot {
                     false
                 }
             }
+            KeyCode::Char(c) => {
+                if let Some(id) = interactives.get(self.focused_idx) {
+                    self.event_queue.lock().unwrap().push_back((
+                        id.clone(),
+                        serde_json::json!({ "char": c.to_string() }),
+                    ));
+                    true
+                } else {
+                    false
+                }
+            }
             _ => false,
         }
     }
@@ -236,6 +271,50 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             let time_str = chrono::Local::now().format(fmt_str).to_string();
             let p = Paragraph::new(time_str).alignment(ratatui::layout::Alignment::Right);
             frame.render_widget(p, area);
+        }
+        LuaWidget::Gauge { label, ratio, color: _ } => {
+            let mut gauge = ratatui::widgets::Gauge::default()
+                .block(ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL))
+                .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).bg(ratatui::style::Color::DarkGray))
+                .ratio((*ratio).clamp(0.0, 1.0));
+            if let Some(l) = label {
+                gauge = gauge.label(l.as_str());
+            }
+            frame.render_widget(gauge, area);
+        }
+        LuaWidget::List { id, items, selected } => {
+            let is_focused = id.as_deref() == focused_id;
+            let mut list_items = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                let mut style = ratatui::style::Style::default();
+                if Some(i) == *selected {
+                    style = style.fg(ratatui::style::Color::Black).bg(ratatui::style::Color::Cyan);
+                }
+                list_items.push(ratatui::widgets::ListItem::new(item.as_str()).style(style));
+            }
+            let mut block = ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL);
+            if is_focused {
+                block = block.border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+            }
+            let list = ratatui::widgets::List::new(list_items).block(block);
+            frame.render_widget(list, area);
+        }
+        LuaWidget::Paragraph { content, wrap } => {
+            let mut p = ratatui::widgets::Paragraph::new(content.as_str());
+            if *wrap {
+                p = p.wrap(ratatui::widgets::Wrap { trim: true });
+            }
+            frame.render_widget(p, area);
+        }
+        LuaWidget::Popup { title, content } => {
+            let block = ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .title(title.as_deref().unwrap_or(""))
+                .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+            frame.render_widget(ratatui::widgets::Clear, area); // Clear background
+            let inner_area = block.inner(area);
+            frame.render_widget(block, area);
+            render_widget(content, frame, inner_area, _colors, focused_id);
         }
     }
 }
