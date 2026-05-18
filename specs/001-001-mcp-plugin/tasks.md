@@ -35,6 +35,6 @@
 **Status**: Todo
 **Description**: Bind the transpiled widgets to the CADE TUI and handle mouse clicks.
 
-- [ ] Assign the transpiled widgets to a `LuaWidget::Popup` or inject them into `CADE_UI.sidebar`.
+- [ ] Assign the transpiled widgets to a `LuaWidget::Popup` or inject them into the main terminal viewport (`CADE_UI.main` or equivalent).
 - [ ] Use `CADE.bind_ui_callback` to listen for clicks on the newly generated buttons.
 - [ ] When a button is clicked, trigger the corresponding action defined in the MCP UI payload (e.g., executing another MCP tool or sending a state update request).

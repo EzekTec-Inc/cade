@@ -16,7 +16,7 @@ As a CADE user, when an MCP tool returns a UI resource URI (e.g., `_meta.ui.reso
 
 **Why this priority**: HTML transpilation is the baseline requirement for bridging web-centric MCP tools to a terminal UI.
 
-**Independent Test**: Can be tested by returning a mocked MCP tool response containing basic HTML and verifying it renders in the CADE sidebar.
+**Independent Test**: Can be tested by returning a mocked MCP tool response containing basic HTML and verifying it renders in the CADE terminal viewport.
 
 **Acceptance Scenarios**:
 
@@ -46,7 +46,7 @@ As a CADE user, when an MCP UI resource contains interactive elements (like butt
 - **FR-001**: System MUST intercept MCP tool results containing `_meta.ui.resourceUri`.
 - **FR-002**: System MUST fetch the UI payload from the MCP server using the provided URI.
 - **FR-003**: System MUST parse the incoming JSON and translate recognized HTML or UI schema into `LuaWidget` representations.
-- **FR-004**: System MUST render the resulting widgets inside CADE's sidebar or as a `LuaWidget::Popup`.
+- **FR-004**: System MUST render the resulting widgets inside the CADE terminal viewport or as a `LuaWidget::Popup`.
 - **FR-005**: System MUST route user interactions (e.g., button clicks) back to the corresponding MCP tool or state update mechanism.
 
 ### Key Entities 

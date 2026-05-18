@@ -6,7 +6,7 @@
 
 ## Summary
 
-Implement an `mcp-ui` Host inside CADE using a Lua plugin. The plugin will intercept MCP tool results containing `_meta.ui.resourceUri`, fetch the corresponding UI payloads (e.g., HTML or structured layout schemas), and transpile them into native `LuaWidget` components (like Paragraphs, Buttons, and Toggles) to be rendered dynamically in CADE's sidebar.
+Implement an `mcp-ui` Host inside CADE using a Lua plugin. The plugin will intercept MCP tool results containing `_meta.ui.resourceUri`, fetch the corresponding UI payloads (e.g., HTML or structured layout schemas), and transpile them into native `LuaWidget` components (like Paragraphs, Buttons, and Toggles) to be rendered dynamically in the CADE terminal viewport.
 
 ## Technical Context
 
@@ -71,5 +71,5 @@ crates/
    - Write a Lua function to fetch the UI payload.
    - Write an HTML/Schema-to-LuaWidget transpiler function (`transpile_to_widgets`).
 3. **Phase 3: Render & Interact**
-   - Update `CADE_UI.sidebar` dynamically with the transpiled widgets.
+   - Update the terminal viewport (`CADE_UI.main` or equivalent) dynamically with the transpiled widgets.
    - Bind click events back to the MCP server's state update endpoints.
