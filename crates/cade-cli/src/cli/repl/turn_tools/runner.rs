@@ -607,8 +607,10 @@ ui_resource_uri: None,
             // streams back the assistant response with full context of all results.
             let mut follow = Vec::new();
             for result in &results {
+                let _ = std::fs::write("/tmp/rust_mcp_trigger_start.txt", "Iterating results\n");
                 // Trigger Lua MCP UI plugin if a resource URI was returned.
                 if let Some(uri) = &result.ui_resource_uri {
+                    let _ = std::fs::write("/tmp/rust_mcp_uri.txt", format!("Found URI: {}\n", uri));
                     let mut app = self.app.lock();
                     if let Some(lua) = &app.lua_engine {
                         lua.trigger_mcp_ui(uri);
