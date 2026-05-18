@@ -1077,6 +1077,34 @@ impl TuiApp {
 
     // -- Rendering
 
+    pub fn refresh_lua_ui(&mut self) {
+        if let Some(lua) = &self.lua_engine {
+            // Sync context_pct to Lua
+            if let Some(pct) = self.context_pct {
+                let _ = lua.set_state_u8("context_pct", pct);
+            } else {
+                let _ = lua.set_state_nil("context_pct");
+            }
+
+            if let Some(sidebar_widget) = lua.get_sidebar_ui() {
+                let mut new_sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(false, lua.ui_event_queue.clone()));
+                new_sidebar.update(Some(sidebar_widget));
+                self.slots.set(crate::slots::UiSlot::Sidebar, new_sidebar);
+            } else {
+                let _ = self.slots.take(crate::slots::UiSlot::Sidebar);
+            }
+
+            if let Some(header_widget) = lua.get_header_ui() {
+                tracing::info!("Found CADE_UI.header with {} widgets", header_widget.len());
+                let mut new_header = Box::new(crate::lua_ui::LuaUiSlot::new(true, lua.ui_event_queue.clone()));
+                new_header.update(Some(header_widget));
+                self.slots.set(crate::slots::UiSlot::Header, new_header);
+            } else {
+                let _ = self.slots.take(crate::slots::UiSlot::Header);
+            }
+        }
+    }
+
     /// Redraw the full screen (unconditional — always redraws).
     pub fn draw(&mut self) -> Result<()> {
         self.draw_dirty = false;

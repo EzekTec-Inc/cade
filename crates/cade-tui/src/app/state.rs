@@ -419,6 +419,7 @@ impl TuiApp {
         if self.token_history.len() > 50 {
             self.token_history.remove(0);
         }
+        self.refresh_lua_ui();
     }
 
     /// Increment the turn counter (called when a user message is submitted).

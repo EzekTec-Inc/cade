@@ -139,34 +139,7 @@ pub(crate) enum ToolPreflightResult {
 
 use crate::cli::repl::format::mode_display;
 
-pub(crate) fn refresh_lua_ui(app: &mut TuiApp) {
-    if let Some(lua) = &app.lua_engine {
-        // Sync context_pct to Lua
-        if let Some(pct) = app.context_pct {
-            let _ = lua.set_state_u8("context_pct", pct);
-        } else {
-            let _ = lua.set_state_nil("context_pct");
-        }
 
-        if let Some(sidebar_widget) = lua.get_sidebar_ui() {
-            let mut new_sidebar = Box::new(cade_tui::lua_ui::LuaUiSlot::new(false, lua.ui_event_queue.clone()));
-            new_sidebar.update(Some(sidebar_widget));
-            app.slots.set(cade_tui::slots::UiSlot::Sidebar, new_sidebar);
-        } else {
-            let _ = app.slots.take(cade_tui::slots::UiSlot::Sidebar);
-        }
-
-        if let Some(header_widget) = lua.get_header_ui() {
-            tracing::info!("Found CADE_UI.header with {} widgets", header_widget.len());
-            let mut new_header = Box::new(cade_tui::lua_ui::LuaUiSlot::new(true, lua.ui_event_queue.clone()));
-            new_header.update(Some(header_widget));
-            app.slots.set(cade_tui::slots::UiSlot::Header, new_header);
-        } else {
-            tracing::info!("CADE_UI.header is None");
-            let _ = app.slots.take(cade_tui::slots::UiSlot::Header);
-        }
-    }
-}
 
 pub struct Repl {
     pub(crate) client: HttpTransport,
@@ -325,7 +298,7 @@ impl Repl {
             }
             engine.load_plugins(&cwd.join(".cade").join("plugins"));
         }
-        refresh_lua_ui(&mut tui_app);
+        tui_app.refresh_lua_ui();
         {
             let bg_for_getter = Arc::clone(&background_results);
             tui_app.bg_pending_count = Some(Box::new(move || bg_for_getter.lock().len()));
@@ -715,7 +688,7 @@ impl Repl {
                     engine.load_plugins(&self.cwd.join(".cade").join("plugins"));
                 }
                 app.lua_engine = new_engine;
-                refresh_lua_ui(&mut app);
+                app.refresh_lua_ui();
             }
 
             // Drain Lua command queue into pending_input if empty
@@ -747,7 +720,7 @@ impl Repl {
                         }
                     }
                     if handled_any {
-                        refresh_lua_ui(&mut app);
+                        app.refresh_lua_ui();
                         app.draw_dirty = true;
                     }
                 }
