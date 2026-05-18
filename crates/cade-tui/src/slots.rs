@@ -61,6 +61,11 @@ pub trait SlotComponent: Send + Sync {
         false
     }
 
+    /// Optionally consume a mouse event.
+    fn handle_mouse(&mut self, _mouse: crossterm::event::MouseEvent) -> bool {
+        false
+    }
+
     /// Preferred height in rows.  The host may grant fewer.  `0`
     /// means "use whatever is left".
     fn preferred_height(&self) -> u16 {
@@ -131,6 +136,15 @@ impl SlotManager {
 
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        for slot in self.slots.values_mut() {
+            if slot.handle_mouse(mouse) {
+                return true;
+            }
+        }
+        false
     }
 }
 

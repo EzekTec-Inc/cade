@@ -76,6 +76,7 @@ pub struct LuaUiSlot {
     pub focused_idx: usize,
     pub event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
     pub has_clock: bool,
+    pub hitboxes: Vec<(String, ratatui::layout::Rect)>,
 }
 
 impl LuaUiSlot {
@@ -86,6 +87,7 @@ impl LuaUiSlot {
             focused_idx: 0,
             event_queue,
             has_clock: false,
+            hitboxes: Vec::new(),
         }
     }
 
@@ -180,9 +182,10 @@ impl SlotComponent for LuaUiSlot {
                 .constraints(constraints)
                 .split(inner_area);
 
+            self.hitboxes.clear();
             for (i, child) in children.iter().enumerate() {
                 if let Some(child_area) = layout.get(i) {
-                    render_widget(child, frame, *child_area, colors, focused_id.as_deref());
+                    render_widget(child, frame, *child_area, colors, focused_id.as_deref(), &mut self.hitboxes);
                 }
             }
         } else {
@@ -200,6 +203,29 @@ impl SlotComponent for LuaUiSlot {
         false
     }
 
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            for (id, rect) in &self.hitboxes {
+                if mouse.column >= rect.x
+                    && mouse.column < rect.x + rect.width
+                    && mouse.row >= rect.y
+                    && mouse.row < rect.y + rect.height
+                {
+                    // Focus this widget
+                    let interactives = self.interactive_ids();
+                    if let Some(idx) = interactives.iter().position(|i| i == id) {
+                        self.focused_idx = idx;
+                    }
+                    // Trigger it
+                    self.event_queue.lock().unwrap().push_back((id.clone(), serde_json::Value::Null));
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn preferred_height(&self) -> u16 {
         if self.is_header { 1 } else { 0 }
     }
@@ -213,13 +239,14 @@ impl SlotComponent for LuaUiSlot {
     }
 }
 
-fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &ThemeColors, focused_id: Option<&str>) {
+fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &ThemeColors, focused_id: Option<&str>, hitboxes: &mut Vec<(String, ratatui::layout::Rect)>) {
     match widget {
         LuaWidget::Text { content, color: _ } => {
             let p = Paragraph::new(content.as_str());
             frame.render_widget(p, area);
         }
         LuaWidget::Button { id, label } => {
+            hitboxes.push((id.clone(), area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
@@ -230,6 +257,7 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             frame.render_widget(p, area);
         }
         LuaWidget::Toggle { id, label, state } => {
+            hitboxes.push((id.clone(), area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
@@ -260,6 +288,9 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             frame.render_widget(gauge, area);
         }
         LuaWidget::List { id, items, selected } => {
+            if let Some(lid) = id {
+                hitboxes.push((lid.clone(), area));
+            }
             let is_focused = id.as_deref() == focused_id;
             let mut list_items = Vec::new();
             for (i, item) in items.iter().enumerate() {
@@ -291,7 +322,7 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             frame.render_widget(ratatui::widgets::Clear, area); // Clear background
             let inner_area = block.inner(area);
             frame.render_widget(block, area);
-            render_widget(content, frame, inner_area, _colors, focused_id);
+            render_widget(content, frame, inner_area, _colors, focused_id, hitboxes);
         }
     }
 }

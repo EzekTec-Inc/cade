@@ -86,10 +86,16 @@ impl TuiApp {
                 }
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                        self.handle_scroll_mouse(m.kind);
-                        self.draw()?;
+                        if !self.slots.handle_mouse(m) {
+                            self.handle_scroll_mouse(m.kind);
+                            self.draw()?;
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        if self.slots.handle_mouse(m) {
+                            self.draw()?;
+                        }
+                    }
                 },
                 _ => {}
             }
