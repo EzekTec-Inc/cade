@@ -148,6 +148,7 @@ impl Repl {
                     tool_name: "ask_user_question".to_string(),
                     output: msg,
                     is_error: true,
+ui_resource_uri: None,
                 });
             }
         };
@@ -209,6 +210,7 @@ impl Repl {
                         tool_name: "ask_user_question".to_string(),
                         output: msg,
                         is_error: true,
+ui_resource_uri: None,
                     });
                 }
                 Some(answer) => {
@@ -247,6 +249,7 @@ impl Repl {
             tool_name: "ask_user_question".to_string(),
             output: result_content,
             is_error: false,
+ui_resource_uri: None,
         })
     }
 

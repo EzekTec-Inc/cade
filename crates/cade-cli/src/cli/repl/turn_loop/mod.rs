@@ -27,6 +27,7 @@ pub(crate) fn blocked_result(
         tool_name: tool_name.to_string(),
         output: output.into(),
         is_error: true,
+ui_resource_uri: None,
     })
 }
 

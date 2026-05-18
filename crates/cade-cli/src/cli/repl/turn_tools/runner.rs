@@ -397,6 +397,7 @@ impl Repl {
                 tool_name: String::new(),
                 output: String::new(),
                 is_error: false,
+ui_resource_uri: None,
             });
 
             // Fill in blocked results first.
@@ -677,6 +678,7 @@ impl Repl {
                 tool_name: tool_name.to_string(),
                 output,
                 is_error,
+ui_resource_uri: None,
             };
 
             if result.is_error {
@@ -718,6 +720,7 @@ impl Repl {
                 tool_name: tool_name.to_string(),
                 output: rt.output,
                 is_error: rt.is_error,
+ui_resource_uri: None,
             },
             Ok(None) => {
                 // ToolRuntime returned None — interactive-only tool not handled there;
@@ -738,6 +741,7 @@ impl Repl {
                             TOOL_TIMEOUT.as_secs()
                         ),
                         is_error: true,
+ui_resource_uri: None,
                     },
                 }
             }
@@ -750,6 +754,7 @@ impl Repl {
                     TOOL_TIMEOUT.as_secs()
                 ),
                 is_error: true,
+ui_resource_uri: None,
             },
         };
 
@@ -832,6 +837,7 @@ impl Repl {
                             "Permission denied: agent mode changes are disabled in settings.json"
                                 .to_string(),
                         is_error: true,
+ui_resource_uri: None,
                     }));
                 }
                 self.permissions
@@ -844,6 +850,7 @@ impl Repl {
                     tool_name: tool_name.to_string(),
                     output: "Plan mode entered. File modifications are now blocked.".to_string(),
                     is_error: false,
+ui_resource_uri: None,
                 }))
             }
             "ExitPlanMode" => {
@@ -860,6 +867,7 @@ impl Repl {
                             "Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings."
                                 .to_string(),
                         is_error: true,
+ui_resource_uri: None,
                     }));
                 }
                 self.permissions
@@ -872,6 +880,7 @@ impl Repl {
                     tool_name: tool_name.to_string(),
                     output: "Plan mode exited. Normal operation resumed.".to_string(),
                     is_error: false,
+ui_resource_uri: None,
                 }))
             }
             "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
@@ -902,6 +911,7 @@ impl Repl {
                     tool_name: tool_name.to_string(),
                     output: format!("Plan set with {} steps.", steps.len()),
                     is_error: false,
+ui_resource_uri: None,
                 }))
             }
             "UpdatePlan" => {
@@ -922,6 +932,7 @@ impl Repl {
                         if done { "done" } else { "not done" }
                     ),
                     is_error: false,
+ui_resource_uri: None,
                 }))
             }
             "finish_task" => {
@@ -972,6 +983,7 @@ impl Repl {
                     tool_name: tool_name.to_string(),
                     output: "Task finished. Audit log appended to CADE_AUDIT.md.".to_string(),
                     is_error: false,
+ui_resource_uri: None,
                 }))
             }
             _ => None,

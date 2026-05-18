@@ -373,11 +373,9 @@ impl McpManager {
         &self,
         prefixed_name: &str,
         args: &Value,
-    ) -> Option<Result<(String, bool)>> {
+    ) -> Option<Result<(String, bool, Option<String>)>> {
         let server_idx = self.find_tool_idx(prefixed_name).await?.0;
 
-        // -- Fast path: try the call directly
-        // Extract what we need under the read lock, then drop it before .await
         let (is_disabled, server_key, original_name, peer) = {
             let servers = self.servers.read().await;
             let server = &servers[server_idx];
@@ -413,16 +411,20 @@ impl McpManager {
             Ok(ctr) => {
                 let is_error = ctr.is_error.unwrap_or(false);
                 let text = extract_content_text(&ctr.content);
-                return Some(Ok((text, is_error)));
+                let ui_resource_uri = ctr.meta.as_ref().and_then(|meta| {
+                    serde_json::to_value(meta).ok().and_then(|val| {
+                        val.get("ui")
+                            .and_then(|ui| ui.get("resourceUri"))
+                            .and_then(|uri| uri.as_str().map(String::from))
+                    })
+                });
+                return Some(Ok((text, is_error, ui_resource_uri)));
             }
             Err(e) => e,
         };
 
-        // -- Slow path: call failed — attempt reconnect
         let error_msg = call_err.to_string();
 
-        // Protocol errors (-32XXX) mean the server is alive but rejected the call.
-        // Reconnecting won't fix a bad argument or unknown method — return immediately.
         if Self::is_rpc_protocol_error(&error_msg) {
             return Some(Err(Error::custom(error_msg.to_string())));
         }
@@ -438,7 +440,6 @@ impl McpManager {
             );
             tokio::time::sleep(tokio::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
 
-            // Capture old tool names before reconnect (for schema diff after replacement)
             let old_tool_names: std::collections::HashSet<String> = {
                 let s = self.servers.read().await;
                 s.get(server_idx)
@@ -446,7 +447,6 @@ impl McpManager {
                     .unwrap_or_default()
             };
 
-            // Re-read config for reconnect
             let (key, config) = {
                 let servers = self.servers.read().await;
                 let s = &servers[server_idx];
@@ -457,7 +457,6 @@ impl McpManager {
                 Ok(new_server) => {
                     info!("MCP server '{}' reconnected successfully", key);
 
-                    // Retry the original call on the new connection
                     let original_name = new_server
                         .tools
                         .iter()
@@ -473,10 +472,8 @@ impl McpManager {
                             )
                             .await
                     } else {
-                        // Tool disappeared after reconnect — server API changed
                         let mut servers = self.servers.write().await;
                         servers[server_idx] = new_server;
-                        // Schema definitely changed (tool vanished) — signal REPL
                         self.schemas_dirty
                             .store(true, std::sync::atomic::Ordering::SeqCst);
                         return Some(Err(Error::custom(format!(
@@ -484,11 +481,9 @@ impl McpManager {
                         ))));
                     };
 
-                    // Replace old server entry with the fresh connection
                     {
                         let mut servers = self.servers.write().await;
                         servers[server_idx] = new_server;
-                        // Check if tool schemas changed — signal REPL to re-register
                         let new_tool_names: std::collections::HashSet<String> = servers[server_idx]
                             .tools
                             .iter()
@@ -508,7 +503,14 @@ impl McpManager {
                         Ok(ctr) => {
                             let is_error = ctr.is_error.unwrap_or(false);
                             let text = extract_content_text(&ctr.content);
-                            Ok((text, is_error))
+                            let ui_resource_uri = ctr.meta.as_ref().and_then(|meta| {
+                                serde_json::to_value(meta).ok().and_then(|val| {
+                                    val.get("ui")
+                                        .and_then(|ui| ui.get("resourceUri"))
+                                        .and_then(|uri| uri.as_str().map(String::from))
+                                })
+                            });
+                            Ok((text, is_error, ui_resource_uri))
                         }
                         Err(e) => Err(Error::custom(format!(
                             "MCP call failed after reconnect: {e}"
@@ -520,14 +522,12 @@ impl McpManager {
                         "MCP reconnect attempt {attempt}/{MAX_RECONNECT_ATTEMPTS} failed for '{}': {e}",
                         key
                     );
-                    // Update reconnect_attempts counter
                     let mut servers = self.servers.write().await;
                     servers[server_idx].reconnect_attempts += 1;
                 }
             }
         }
 
-        // All reconnect attempts exhausted — disable the server
         {
             let mut servers = self.servers.write().await;
             let s = &mut servers[server_idx];

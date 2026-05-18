@@ -25,6 +25,7 @@ pub struct ToolResult {
     pub tool_name: String,
     pub output: String,
     pub is_error: bool,
+    pub ui_resource_uri: Option<String>,
 }
 
 /// Dispatch a tool call by name to its local Rust implementation or to an MCP server.
@@ -75,30 +76,31 @@ pub async fn dispatch(
                         allowed
                     ),
                     is_error: true,
+                    ui_resource_uri: None,
                 };
             }
         }
     }
 
     // Try native tools first, fall through to MCP
-    let (output, is_error) = match run_native_tool(tool_name, arguments).await {
-        Some(Ok(out)) => (out, false),
-        Some(Err(e)) => (format!("Error: {e}"), true),
+    let (output, is_error, ui_resource_uri) = match run_native_tool(tool_name, arguments).await {
+        Some(Ok(out)) => (out, false, None),
+        Some(Err(e)) => (format!("Error: {e}"), true, None),
         None => {
             // Not a native tool — try MCP servers
             match mcp.call_tool(tool_name, arguments).await {
-                Some(Ok((out, err_flag))) => (out, err_flag),
+                Some(Ok((out, err_flag, uri))) => (out, err_flag, uri),
                 Some(Err(e)) => {
                     let msg = e.to_string();
                     // rmcp already formats errors as "Mcp error: -32XXX: ..." — avoid
                     // double-prefixing as "MCP error: Mcp error: -32XXX: ...".
                     if msg.starts_with("Mcp error:") || msg.starts_with("MCP error:") {
-                        (msg, true)
+                        (msg, true, None)
                     } else {
-                        (format!("MCP error: {msg}"), true)
+                        (format!("MCP error: {msg}"), true, None)
                     }
                 }
-                None => (format!("Unknown tool: '{tool_name}'"), true),
+                None => (format!("Unknown tool: '{tool_name}'"), true, None),
             }
         }
     };
@@ -108,6 +110,7 @@ pub async fn dispatch(
         tool_name: tool_name.to_string(),
         output,
         is_error,
+        ui_resource_uri,
     }
 }
 
