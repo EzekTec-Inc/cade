@@ -924,7 +924,7 @@ ui_resource_uri: None,
                             tool_name: executed.tool_name,
                             output: executed.output,
                             is_error: executed.is_error,
-ui_resource_uri: None,
+                            ui_resource_uri: executed.ui_resource_uri,
                         }
                     } else {
                         cade_agent::tools::manager::ToolResult {

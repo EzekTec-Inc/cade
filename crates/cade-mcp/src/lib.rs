@@ -824,6 +824,3 @@ fn extract_content_text(content: &[rmcp::model::Content]) -> String {
         .join("\n")
 }
 
-#[cfg(test)]
-
-#[cfg(test)]

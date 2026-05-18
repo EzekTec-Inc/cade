@@ -668,6 +668,10 @@ ui_resource_uri: None,
     ) -> cade_agent::tools::ToolResult {
         let tool_start = std::time::Instant::now();
         use cade_agent::tools::dispatch;
+        
+        let num_servers = mcp.is_empty().await;
+        let _ = std::fs::write("/tmp/mcp_debug.txt", format!("Tool: {}, MCP empty: {}", tool_name, num_servers));
+
 
         // Bash tools — live-streaming path (buffered per-tool)
         if matches!(tool_name, "bash" | "run_command" | "execute_command") {
@@ -731,7 +735,7 @@ ui_resource_uri: None,
                 tool_name: tool_name.to_string(),
                 output: rt.output,
                 is_error: rt.is_error,
-ui_resource_uri: None,
+                ui_resource_uri: rt.ui_resource_uri,
             },
             Ok(None) => {
                 // ToolRuntime returned None — interactive-only tool not handled there;

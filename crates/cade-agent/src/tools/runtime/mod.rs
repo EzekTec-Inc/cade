@@ -34,6 +34,7 @@ pub struct RuntimeToolResult {
     pub tool_name: String,
     pub output: String,
     pub is_error: bool,
+    pub ui_resource_uri: Option<String>,
 }
 
 // endregion: --- Types
@@ -144,6 +145,8 @@ impl ToolRuntime {
         };
         let canonical = canonical_owned.as_str();
 
+        let mut ui_resource_uri = None;
+
         let t0 = std::time::Instant::now();
         let (output, is_error): (String, bool) = match canonical {
             // -- Memory tools (intercepted; use REST client)
@@ -229,6 +232,7 @@ impl ToolRuntime {
                     self.allowed_paths.as_deref(),
                 )
                 .await;
+                ui_resource_uri = r.ui_resource_uri;
                 (r.output, r.is_error)
             }
         };
@@ -260,6 +264,7 @@ impl ToolRuntime {
             tool_name: tool_name.to_string(),
             output,
             is_error,
+            ui_resource_uri,
         })
     }
 
