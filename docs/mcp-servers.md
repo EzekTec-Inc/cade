@@ -65,6 +65,12 @@ prevents collisions and makes tool provenance unambiguous.
 Hot reload — `/hooks` reloads MCP, hooks, and permissions in one pass
 without restarting the session.
 
+## MCP UI Overlays
+
+CADE supports native TUI rendering of interactive UI components returned by MCP tools via the `_meta.ui.resourceUri` field. When a tool call returns an output along with a UI resource URI, the CADE `mcp_ui_host` Lua plugin will intercept the response, fetch the associated resource payload (e.g. HTML or a structured JSON schema), and dynamically transpile it into `LuaWidget` components natively displayed as popups in the terminal or inside your IDE integrations.
+
+This allows MCP servers to trigger rich interactive flows (such as form inputs, confirmation dialogs, or dynamic data tables) directly on the host machine without having to stream text continuously.
+
 ## Built-in MCP servers (in-tree)
 
 | Server | Crate | Purpose |

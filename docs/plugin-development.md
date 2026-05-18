@@ -70,3 +70,17 @@ You just need to add a new entry to the `index.json` file in that repository:
 ```
 
 Once merged, any CADE user can type `/marketplace`, search for your plugin, and hit `Enter` to seamlessly install your skills, subagents, and MCP servers directly into their environment!
+
+## Building Lua UI Plugins
+
+If you want to extend the CADE Terminal UI to display rich popups, custom status lines, or intercept MCP UI responses, you can include Lua scripts inside a `.cade/plugins/` directory.
+
+A typical structure looks like:
+```text
+my-awesome-plugin/
+├── cade-plugin.json
+└── plugins/
+    └── my-ui-handler.lua
+```
+
+In your Lua script, you have access to the global `CADE_UI` object, which allows you to hook into tool results and push native TUI overlays, such as transpiling HTML resource URIs returned by your custom MCP servers into native `LuaWidget` trees!
