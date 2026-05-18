@@ -1,4 +1,0 @@
-{
-  "type": "rawHtml",
-  "htmlString": "<h1>Hello from MCP UI</h1><p>This is a test of the MCP UI integration!</p><p>If you can read this, the Lua plugin intercepted the request, fetched the JSON payload, and rendered it as native CADE widgets.</p>"
-}
