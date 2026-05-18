@@ -175,6 +175,7 @@ ratatui.workspace = true
 indicatif.workspace = true
 rmcp.workspace = true
 lru = "0.16"
+mlua = "0.11.6"
 
 [dev-dependencies]
 tokio-test = "0.4"

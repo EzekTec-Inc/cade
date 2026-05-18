@@ -276,9 +276,24 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             let p = Paragraph::new(format!("[{}] {}", if *state { "X" } else { " " }, label)).style(style);
             frame.render_widget(p, toggle_area);
         }
-        LuaWidget::Layout { direction: _, children: _ } => {
-            // Placeholder: layouts are more complex. For now, we only render flat children via the top-level loop.
-            // If we want nested layouts, we can implement it recursively.
+        LuaWidget::Layout { direction, children } => {
+            let is_horizontal = direction.as_deref() == Some("horizontal");
+            let mut constraints = Vec::new();
+            // Equal constraints for simplicity, or we could use constraints if provided.
+            for _ in children {
+                constraints.push(Constraint::Ratio(1, children.len().max(1) as u32));
+            }
+            let dir = if is_horizontal { Direction::Horizontal } else { Direction::Vertical };
+            let chunks = Layout::default()
+                .direction(dir)
+                .constraints(constraints)
+                .split(area);
+            
+            for (i, child) in children.iter().enumerate() {
+                if let Some(child_area) = chunks.get(i) {
+                    render_widget(child, frame, *child_area, _colors, focused_id, hitboxes);
+                }
+            }
         }
         LuaWidget::Clock { format, color: _ } => {
             let fmt_str = format.as_deref().unwrap_or("%H:%M:%S");

@@ -863,6 +863,7 @@ dependencies = [
  "dotenvy",
  "indicatif",
  "lru",
+ "mlua",
  "parking_lot",
  "ratatui",
  "rmcp",
