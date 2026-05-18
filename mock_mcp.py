@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import json
-import sys
 
 def main():
     while True:
@@ -26,7 +25,9 @@ def main():
                 "id": req_id,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "capabilities": {},
+                    "capabilities": {
+                        "tools": {}
+                    },
                     "serverInfo": {"name": "mock-mcp", "version": "1.0.0"}
                 }
             }
