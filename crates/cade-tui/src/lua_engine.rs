@@ -215,7 +215,11 @@ impl LuaEngine {
         if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
             if let Ok(cbs) = cade.get::<mlua::Table>("_ui_callbacks") {
                 if let Ok(func) = cbs.get::<mlua::Function>(id) {
-                    let lua_args = self.lua.to_value(&args).unwrap_or(mlua::Value::Nil);
+                    let lua_args = if args.is_null() {
+                        mlua::Value::Nil
+                    } else {
+                        self.lua.to_value(&args).unwrap_or(mlua::Value::Nil)
+                    };
                     if let Err(e) = func.call::<()>(lua_args) {
                         tracing::warn!("Lua UI callback error for {}: {}", id, e);
                     }
