@@ -211,6 +211,16 @@ impl LuaEngine {
         None
     }
 
+    pub fn trigger_mcp_ui(&self, uri: &str) -> bool {
+        if let Ok(func) = self.lua.globals().get::<mlua::Function>("CADE_TRIGGER_MCP_UI") {
+            if let Err(e) = func.call::<()>(uri) {
+                tracing::warn!("Lua CADE_TRIGGER_MCP_UI error: {}", e);
+            }
+            return true;
+        }
+        false
+    }
+
     pub fn handle_ui_event(&self, id: &str, args: serde_json::Value) -> bool {
         if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
             if let Ok(cbs) = cade.get::<mlua::Table>("_ui_callbacks") {

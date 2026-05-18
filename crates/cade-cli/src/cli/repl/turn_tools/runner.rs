@@ -607,6 +607,13 @@ ui_resource_uri: None,
             // streams back the assistant response with full context of all results.
             let mut follow = Vec::new();
             for result in &results {
+                // Trigger Lua MCP UI plugin if a resource URI was returned.
+                if let Some(uri) = &result.ui_resource_uri {
+                    if let Some(lua) = &self.app.lock().lua_engine {
+                        lua.trigger_mcp_ui(uri);
+                    }
+                }
+
                 // Event Logging (Immutable Audit)
                 let _ = self
                     .client
