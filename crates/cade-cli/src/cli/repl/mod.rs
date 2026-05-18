@@ -141,6 +141,13 @@ use crate::cli::repl::format::mode_display;
 
 pub(crate) fn refresh_lua_ui(app: &mut TuiApp) {
     if let Some(lua) = &app.lua_engine {
+        // Sync context_pct to Lua
+        if let Some(pct) = app.context_pct {
+            let _ = lua.set_state_u8("context_pct", pct);
+        } else {
+            let _ = lua.set_state_nil("context_pct");
+        }
+
         if let Some(sidebar_widget) = lua.get_sidebar_ui() {
             let mut new_sidebar = Box::new(cade_tui::lua_ui::LuaUiSlot::new(false, lua.ui_event_queue.clone()));
             new_sidebar.update(Some(sidebar_widget));

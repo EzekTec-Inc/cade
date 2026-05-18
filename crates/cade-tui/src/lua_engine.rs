@@ -82,6 +82,18 @@ impl LuaEngine {
         })
     }
 
+    pub fn set_state_u8(&self, key: &str, value: u8) -> mlua::Result<()> {
+        let state: mlua::Table = self.lua.globals().get("CADE_STATE")?;
+        state.set(key, value)?;
+        Ok(())
+    }
+    
+    pub fn set_state_nil(&self, key: &str) -> mlua::Result<()> {
+        let state: mlua::Table = self.lua.globals().get("CADE_STATE")?;
+        state.set(key, mlua::Value::Nil)?;
+        Ok(())
+    }
+
     pub fn load_plugins(&self, plugin_dir: &std::path::Path) {
         if !plugin_dir.exists() {
             return;
