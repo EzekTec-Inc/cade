@@ -609,9 +609,11 @@ ui_resource_uri: None,
             for result in &results {
                 // Trigger Lua MCP UI plugin if a resource URI was returned.
                 if let Some(uri) = &result.ui_resource_uri {
-                    if let Some(lua) = &self.app.lock().lua_engine {
+                    let mut app = self.app.lock();
+                    if let Some(lua) = &app.lua_engine {
                         lua.trigger_mcp_ui(uri);
                     }
+                    app.refresh_lua_ui();
                 }
 
                 // Event Logging (Immutable Audit)
