@@ -51,7 +51,7 @@ def main():
                     "content": [{"type": "text", "text": "Successfully triggered UI!"}],
                     "_meta": {
                         "ui": {
-                            "resourceUri": "http://127.0.0.1:8080/ui.json"
+                            "resourceUri": "file:///home/engr-uba/Downloads/02%20Rust-project/CADE/ui.json"
                         }
                     }
                 }
