@@ -218,7 +218,10 @@ impl SlotComponent for LuaUiSlot {
                         self.focused_idx = idx;
                     }
                     // Trigger it
-                    self.event_queue.lock().unwrap().push_back((id.clone(), serde_json::Value::Null));
+                    let mut args = serde_json::Map::new();
+                    args.insert("row_offset".to_string(), serde_json::Value::Number((mouse.row - rect.y).into()));
+                    args.insert("col_offset".to_string(), serde_json::Value::Number((mouse.column - rect.x).into()));
+                    self.event_queue.lock().unwrap().push_back((id.clone(), serde_json::Value::Object(args)));
                     return true;
                 }
             }
@@ -240,13 +243,18 @@ impl SlotComponent for LuaUiSlot {
 }
 
 fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &ThemeColors, focused_id: Option<&str>, hitboxes: &mut Vec<(String, ratatui::layout::Rect)>) {
+    use ratatui::layout::{Alignment, Rect};
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
+
     match widget {
         LuaWidget::Text { content, color: _ } => {
             let p = Paragraph::new(content.as_str());
             frame.render_widget(p, area);
         }
         LuaWidget::Button { id, label } => {
-            hitboxes.push((id.clone(), area));
+            let button_area = Rect { height: 1.min(area.height), ..area };
+            hitboxes.push((id.clone(), button_area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
@@ -254,10 +262,11 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
                 Style::default().fg(Color::White)
             };
             let p = Paragraph::new(format!("[ {} ]", label)).style(style);
-            frame.render_widget(p, area);
+            frame.render_widget(p, button_area);
         }
         LuaWidget::Toggle { id, label, state } => {
-            hitboxes.push((id.clone(), area));
+            let toggle_area = Rect { height: 1.min(area.height), ..area };
+            hitboxes.push((id.clone(), toggle_area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
@@ -265,7 +274,7 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
                 Style::default().fg(Color::White)
             };
             let p = Paragraph::new(format!("[{}] {}", if *state { "X" } else { " " }, label)).style(style);
-            frame.render_widget(p, area);
+            frame.render_widget(p, toggle_area);
         }
         LuaWidget::Layout { direction: _, children: _ } => {
             // Placeholder: layouts are more complex. For now, we only render flat children via the top-level loop.
@@ -274,13 +283,13 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
         LuaWidget::Clock { format, color: _ } => {
             let fmt_str = format.as_deref().unwrap_or("%H:%M:%S");
             let time_str = chrono::Local::now().format(fmt_str).to_string();
-            let p = Paragraph::new(time_str).alignment(ratatui::layout::Alignment::Right);
+            let p = Paragraph::new(time_str).alignment(Alignment::Right);
             frame.render_widget(p, area);
         }
         LuaWidget::Gauge { label, ratio, color: _ } => {
-            let mut gauge = ratatui::widgets::Gauge::default()
-                .block(ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL))
-                .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).bg(ratatui::style::Color::DarkGray))
+            let mut gauge = Gauge::default()
+                .block(Block::default().borders(Borders::ALL))
+                .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
                 .ratio((*ratio).clamp(0.0, 1.0));
             if let Some(l) = label {
                 gauge = gauge.label(l.as_str());
@@ -294,34 +303,41 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             let is_focused = id.as_deref() == focused_id;
             let mut list_items = Vec::new();
             for (i, item) in items.iter().enumerate() {
-                let mut style = ratatui::style::Style::default();
+                let mut style = Style::default();
                 if Some(i) == *selected {
-                    style = style.fg(ratatui::style::Color::Black).bg(ratatui::style::Color::Cyan);
+                    style = style.fg(Color::Black).bg(Color::Cyan);
                 }
-                list_items.push(ratatui::widgets::ListItem::new(item.as_str()).style(style));
+                list_items.push(ListItem::new(item.as_str()).style(style));
             }
-            let mut block = ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL);
+            let mut block = Block::default().borders(Borders::ALL);
             if is_focused {
-                block = block.border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+                block = block.border_style(Style::default().fg(Color::Cyan));
             }
-            let list = ratatui::widgets::List::new(list_items).block(block);
+            let list = List::new(list_items).block(block);
             frame.render_widget(list, area);
         }
         LuaWidget::Paragraph { content, wrap } => {
-            let mut p = ratatui::widgets::Paragraph::new(content.as_str());
+            let mut p = Paragraph::new(content.as_str());
             if *wrap {
-                p = p.wrap(ratatui::widgets::Wrap { trim: true });
+                p = p.wrap(Wrap { trim: true });
             }
             frame.render_widget(p, area);
         }
         LuaWidget::Popup { title, content } => {
-            let block = ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
+            let block = Block::default()
+                .borders(Borders::ALL)
                 .title(title.as_deref().unwrap_or(""))
-                .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
-            frame.render_widget(ratatui::widgets::Clear, area); // Clear background
-            let inner_area = block.inner(area);
-            frame.render_widget(block, area);
+                .border_style(Style::default().fg(Color::Cyan));
+            
+            let popup_w = 50u16.min(area.width.saturating_sub(2));
+            let popup_h = 10u16.min(area.height.saturating_sub(2));
+            let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+            let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+            let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+            frame.render_widget(Clear, popup_area); // Clear background
+            let inner_area = block.inner(popup_area);
+            frame.render_widget(block, popup_area);
             render_widget(content, frame, inner_area, _colors, focused_id, hitboxes);
         }
     }
