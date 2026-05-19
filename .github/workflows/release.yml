@@ -34,6 +34,9 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+      - name: Add Wasm Target
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Install dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxrandr-dev libdbus-1-dev
