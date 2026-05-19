@@ -357,23 +357,10 @@ pub(crate) async fn complete_with_overflow_recovery(
 //   build_context loads everything from SQLite — no new_message parameter.
 //   This prevents the double-message bug that breaks tool_use/tool_result ordering.
 
-/// Group a flat, oldest-first list of [`LlmMessage`]s into logical turns.
-///
-/// A turn starts at each `user` message and includes every following non-`user`
-/// message (assistant text, tool calls, tool results) up to but not including the
-/// next `user` message.
-///
-/// Turn grouping is the unit of inclusion/exclusion in the budget-based context
-/// builder.  A turn is always added or dropped as a whole so that `tool_call` /
-/// `tool_result` pairs are never split at the context boundary — a split would
-/// produce an invalid message sequence and a provider 400 error.
-pub(crate) fn group_into_turns(messages: &[LlmMessage]) -> Vec<Vec<LlmMessage>> {
+pub(crate) fn group_into_turns(messages: &[LlmMessage], max_turn_chars: usize) -> Vec<Vec<LlmMessage>> {
     let mut turns: Vec<Vec<LlmMessage>> = Vec::new();
     let mut current: Vec<LlmMessage> = Vec::new();
     let mut current_chars = 0;
-    
-    // Configurable threshold for split-turn boundary cuts (e.g. 64k chars ~ 16k tokens)
-    const MAX_TURN_CHARS: usize = 64_000;
 
     for msg in messages {
         let msg_chars = msg.content.chars().count()
@@ -390,7 +377,7 @@ pub(crate) fn group_into_turns(messages: &[LlmMessage]) -> Vec<Vec<LlmMessage>> 
         let is_safe_boundary = msg.role == "assistant";
 
         if (msg.role == "user" && !current.is_empty()) 
-            || (is_safe_boundary && current_chars >= MAX_TURN_CHARS && !current.is_empty())
+            || (is_safe_boundary && current_chars >= max_turn_chars && !current.is_empty())
         {
             turns.push(std::mem::take(&mut current));
             current_chars = 0;
@@ -571,7 +558,8 @@ pub(crate) async fn build_context(
         .collect();
 
     // Group into logical turns.
-    let mut turns = group_into_turns(&all_llm_msgs);
+    let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
+    let mut turns = group_into_turns(&all_llm_msgs, max_turn_chars);
 
     // If the window cut off mid-turn, the oldest turn might not start with a user or assistant message.
     // Drop it to ensure we never split tool_call/tool_result pairs.
@@ -1565,7 +1553,8 @@ pub(crate) async fn compute_context_stats(
 
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
-    let mut turns = group_into_turns(&all_llm_msgs);
+    let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
+    let mut turns = group_into_turns(&all_llm_msgs, max_turn_chars);
     if let Some(first_msg) = turns.first().and_then(|t| t.first())
         && first_msg.role != "user"
     {

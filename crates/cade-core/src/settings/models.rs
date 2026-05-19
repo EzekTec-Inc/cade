@@ -106,6 +106,9 @@ pub struct GlobalSettings {
     /// Maximum context budget (in characters). Caps the default token-based limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_budget: Option<usize>,
+    /// Maximum tokens per turn. Exceeding this triggers a split turn boundary cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens_per_turn: Option<usize>,
     /// Extra context file paths (appended to AGENTS.md discovery results).
     #[serde(default)]
     pub extra_context_files: Vec<std::path::PathBuf>,
@@ -246,6 +249,9 @@ pub struct ProjectSettings {
     /// Maximum context budget (in characters). Caps the default token-based limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_budget: Option<usize>,
+    /// Maximum tokens per turn. Exceeding this triggers a split turn boundary cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens_per_turn: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -279,6 +285,9 @@ pub struct LocalSettings {
     /// Local override for reasoning effort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Maximum tokens per turn. Exceeding this triggers a split turn boundary cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens_per_turn: Option<usize>,
 }
 
 // region:    --- Tests

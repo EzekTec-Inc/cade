@@ -18,6 +18,8 @@ pub struct ServerConfig {
     pub allowed_origin: Option<String>,
     /// Optional maximum context budget in characters
     pub max_context_budget: Option<usize>,
+    /// Optional maximum tokens per turn
+    pub max_tokens_per_turn: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,15 +154,25 @@ impl ServerConfig {
         let mut max_context_budget = std::env::var("CADE_MAX_CONTEXT_BUDGET")
             .ok()
             .and_then(|v| v.parse().ok());
-        if max_context_budget.is_none()
-            && let Some(home) = dirs::home_dir()
-        {
+        let mut max_tokens_per_turn = std::env::var("CADE_MAX_TOKENS_PER_TURN")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
+        if let Some(home) = dirs::home_dir() {
             let settings_path = home.join(".cade").join("settings.json");
-            if let Ok(content) = std::fs::read_to_string(&settings_path)
-                && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
-                && let Some(budget) = json.get("max_context_budget").and_then(|v| v.as_u64())
-            {
-                max_context_budget = Some(budget as usize);
+            if let Ok(content) = std::fs::read_to_string(&settings_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if max_context_budget.is_none() {
+                        if let Some(budget) = json.get("max_context_budget").and_then(|v| v.as_u64()) {
+                            max_context_budget = Some(budget as usize);
+                        }
+                    }
+                    if max_tokens_per_turn.is_none() {
+                        if let Some(tokens) = json.get("max_tokens_per_turn").and_then(|v| v.as_u64()) {
+                            max_tokens_per_turn = Some(tokens as usize);
+                        }
+                    }
+                }
             }
         }
 
@@ -181,6 +193,7 @@ impl ServerConfig {
             api_key: resolve_api_key(),
             allowed_origin: std::env::var("CADE_ALLOWED_ORIGIN").ok(),
             max_context_budget,
+            max_tokens_per_turn,
         })
     }
 

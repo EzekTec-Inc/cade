@@ -244,7 +244,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     let char_budget = (input_tokens * CHARS_PER_TOKEN).clamp(8_000, 6_000_000);
     let history_budget = (char_budget as f64 * HISTORY_BUDGET_FRACTION).round() as usize;
 
-    let turns = group_turns(&flat);
+    let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
+    let turns = group_turns(&flat, max_turn_chars);
     let total_turns = turns.len();
 
     let mut in_context = 0usize;
@@ -1349,23 +1350,17 @@ fn extract_artifacts(text: &str) -> Vec<String> {
     artifacts
 }
 
-/// Group `(role, text)` pairs into logical turns.
-/// A turn starts at each `user` message and includes all following non-`user`
-/// messages (assistant, tool) until the next `user` message.
-fn group_turns(messages: &[(String, String)]) -> Vec<Vec<(String, String)>> {
+fn group_turns(messages: &[(String, String)], max_turn_chars: usize) -> Vec<Vec<(String, String)>> {
     let mut turns: Vec<Vec<(String, String)>> = Vec::new();
     let mut current: Vec<(String, String)> = Vec::new();
     let mut current_chars = 0;
-    
-    // Configurable threshold for split-turn boundary cuts (e.g. 64k chars ~ 16k tokens)
-    const MAX_TURN_CHARS: usize = 64_000;
 
     for msg in messages {
         let msg_chars = msg.1.chars().count();
         let is_safe_boundary = msg.0 == "assistant";
 
         if (msg.0 == "user" && !current.is_empty())
-            || (is_safe_boundary && current_chars >= MAX_TURN_CHARS && !current.is_empty())
+            || (is_safe_boundary && current_chars >= max_turn_chars && !current.is_empty())
         {
             turns.push(std::mem::take(&mut current));
             current_chars = 0;

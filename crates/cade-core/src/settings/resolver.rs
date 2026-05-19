@@ -244,6 +244,14 @@ impl SettingsManager {
             .or(self.global.max_context_budget)
     }
 
+    /// Retrieve the optional maximum tokens per turn limit.
+    pub fn max_tokens_per_turn(&self) -> Option<usize> {
+        self.local
+            .max_tokens_per_turn
+            .or(self.project.max_tokens_per_turn)
+            .or(self.global.max_tokens_per_turn)
+    }
+
     /// Remove the API key from global settings and persist.
     /// Used by `/logout` to clear stored credentials.
     pub fn clear_api_key(&mut self) {
