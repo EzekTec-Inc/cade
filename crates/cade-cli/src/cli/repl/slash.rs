@@ -83,6 +83,8 @@ pub(crate) enum SlashCmd {
     Marketplace,
     /// Reload Lua UI plugins.
     Reload,
+    /// Check for and apply CADE updates.
+    Update,
 }
 
 pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -120,6 +122,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "teams" | "team" => Some(SlashCmd::Teams),
         "marketplace" | "plugins" => Some(SlashCmd::Marketplace),
         "reload" => Some(SlashCmd::Reload),
+        "update" => Some(SlashCmd::Update),
         "theme" => Some(SlashCmd::Theme(arg)),
         "providers" | "provider-list" => Some(SlashCmd::Providers),
         "connect" => Some(SlashCmd::Connect(arg)),

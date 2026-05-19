@@ -44,6 +44,7 @@ ignore.workspace       = true
 notify.workspace       = true
 cade-plugin = { version = "0.2.0", path = "../cade-plugin" }
 mlua = { version = "0.11.6", features = ["lua54", "vendored", "serialize", "send"] }
+self_update = { version = "0.44.0", features = ["archive-tar", "compression-flate2", "rustls"] }
 
 [lints.rust]
 unsafe_code = "forbid"
