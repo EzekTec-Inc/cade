@@ -208,6 +208,7 @@ impl TuiApp {
                 if self.editor.is_empty() {
                     return Ok(Some(None)); // Exit if prompt is empty
                 } else {
+                    self.editor.expand_pastes();
                     return Ok(Some(Some(self.editor.text()))); // Submit if non-empty
                 }
             }

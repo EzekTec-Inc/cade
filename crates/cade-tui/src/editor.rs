@@ -289,7 +289,10 @@ impl crate::editor_component::EditorComponent for Editor {
         match (key.code, key.modifiers) {
             // Plain Enter submits.  Shift+Enter / Alt+Enter still reach
             // the textarea below to insert a newline.
-            (KeyCode::Enter, m) if m == KeyModifiers::NONE => EditorAction::Submit(self.text()),
+            (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
+                self.expand_pastes();
+                EditorAction::Submit(self.text())
+            }
             (KeyCode::Esc, _) => EditorAction::Cancel,
             _ => {
                 let modified = self.handle_key_event(key, max_width);
