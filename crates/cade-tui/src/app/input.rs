@@ -87,7 +87,7 @@ impl TuiApp {
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                         if !self.slots.handle_mouse(m) {
-                            self.handle_scroll_mouse(m);
+                            self.handle_scroll_mouse(m.kind);
                             self.draw()?;
                         }
                     }
@@ -194,14 +194,8 @@ impl TuiApp {
                 _ => {}
             }
             if !key_str.is_empty() {
-                if let Some(mut req) = lua.handle_global_keymap(&key_str) {
-                    // LuaAction enum check removed, checking if unhandled directly
-                        // event consumed with no action
-                        return Ok(None);
-                    }
-                    if self.handle_lua_request(&mut req)? {
-                        return Ok(None); // event consumed
-                    }
+                if lua.handle_keybinding(&key_str) {
+                    return Ok(None); // event consumed
                 }
             }
         }
@@ -238,61 +232,74 @@ impl TuiApp {
 
             KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.lines.clear();
-                self.clear_images();
+                self.pending_submit_images.clear();
+                self.pending_paste_images.clear();
                 self.draw_dirty = true;
             }
             KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(plan) = &mut self.active_plan {
+                let msg = if let Some(plan) = &mut self.active_plan {
                     plan.is_visible = !plan.is_visible;
                     self.draw_dirty = true;
-                    self.show_toast(
-                        if plan.is_visible {
-                            "Plan panel shown"
-                        } else {
-                            "Plan panel hidden"
-                        },
-                        ToastLevel::Info,
-                    );
+                    if plan.is_visible {
+                        "Plan panel shown"
+                    } else {
+                        "Plan panel hidden"
+                    }
+                } else {
+                    ""
+                };
+                if !msg.is_empty() {
+                    self.show_toast(msg, ToastLevel::Info);
                 }
             }
 
             // PageUp / PageDown
             KeyCode::PageUp => {
-                let viewport = self.viewport_height.saturating_sub(6); // Approx prompt height
-                self.scroll_page_up(viewport);
+                let viewport = self.terminal.size()?.height.saturating_sub(6); // Approx prompt height
+                self.scroll = scroll_page_up(self.scroll, viewport);
                 self.draw_dirty = true;
             }
             KeyCode::PageDown => {
-                let viewport = self.viewport_height.saturating_sub(6);
-                self.scroll_page_down(viewport);
+                let viewport = self.terminal.size()?.height.saturating_sub(6);
+                let (new_scroll, should_follow) = scroll_page_down(self.scroll, viewport);
+                self.scroll = new_scroll;
+                if should_follow {
+                    self.follow = true;
+                }
                 self.draw_dirty = true;
             }
 
             KeyCode::Up if !k.modifiers.contains(KeyModifiers::SHIFT) => {
-                if self.editor.is_first_line() {
-                    // Navigate history
+                let text = self.editor.text();
+                let pos = self.editor.cursor_pos();
+                let is_first_line = !text[..pos].contains('\n');
+                if is_first_line {
                     if !history.is_empty() {
                         let current_idx = hist_idx.unwrap_or(history.len());
                         if current_idx > 0 {
                             *hist_idx = Some(current_idx - 1);
                             let new_content = history[current_idx - 1].clone();
-                            self.editor.set_text(&new_content);
+                            self.editor.set_text(new_content);
                             self.draw_dirty = true;
                         }
                     }
+                    return Ok(None);
                 } else {
-                    self.editor.move_cursor_up();
+                    let _action = self.editor.handle_input(k, self.term_width);
                     self.draw_dirty = true;
+                    return Ok(None);
                 }
             }
             KeyCode::Down if !k.modifiers.contains(KeyModifiers::SHIFT) => {
-                if self.editor.is_last_line() {
-                    // Navigate history
+                let text = self.editor.text();
+                let pos = self.editor.cursor_pos();
+                let is_last_line = !text[pos..].contains('\n');
+                if is_last_line {
                     if let Some(idx) = *hist_idx {
                         if idx + 1 < history.len() {
                             *hist_idx = Some(idx + 1);
                             let new_content = history[idx + 1].clone();
-                            self.editor.set_text(&new_content);
+                            self.editor.set_text(new_content);
                             self.draw_dirty = true;
                         } else {
                             *hist_idx = None;
@@ -300,78 +307,47 @@ impl TuiApp {
                             self.draw_dirty = true;
                         }
                     }
+                    return Ok(None);
                 } else {
-                    self.editor.move_cursor_down();
+                    let _action = self.editor.handle_input(k, self.term_width);
                     self.draw_dirty = true;
+                    return Ok(None);
                 }
-            }
-
-            KeyCode::Left => {
-                self.editor.move_cursor_left();
-                self.draw_dirty = true;
-            }
-            KeyCode::Right => {
-                self.editor.move_cursor_right();
-                self.draw_dirty = true;
-            }
-            KeyCode::Backspace => {
-                if self.editor.delete_backward() {
-                    self.draw_dirty = true;
-                }
-            }
-            KeyCode::Delete => {
-                if self.editor.delete_forward() {
-                    self.draw_dirty = true;
-                }
-            }
-            KeyCode::Home => {
-                self.editor.move_to_start_of_line();
-                self.draw_dirty = true;
-            }
-            KeyCode::End => {
-                self.editor.move_to_end_of_line();
-                self.draw_dirty = true;
-            }
-
-            KeyCode::Enter => {
-                if is_newline_shortcut(k) {
-                    self.editor.insert_char('\n');
-                    self.draw_dirty = true;
-                } else if !self.editor.is_empty() {
-                    let text = self.editor.text();
-                    if !text.trim().is_empty() {
-                        self.editor.clear();
-                        self.draw_dirty = true;
-                        return Ok(Some(Some(text)));
-                    } else {
-                        // Just empty space
-                        self.editor.clear();
-                        self.draw_dirty = true;
-                    }
-                }
-            }
-
-            KeyCode::Char(c) => {
-                if !k.modifiers.contains(KeyModifiers::CONTROL)
-                    && !k.modifiers.contains(KeyModifiers::ALT)
-                    // If Shift is pressed with an alphabetic char, insert it; otherwise ignore Shift modifier
-                    && (!k.modifiers.contains(KeyModifiers::SHIFT) || c.is_alphabetic() || c.is_ascii_punctuation())
-                {
-                    self.editor.insert_char(c);
-                    self.draw_dirty = true;
-                }
-            }
-
-            KeyCode::Tab => {
-                self.editor.insert_str("    ");
-                self.draw_dirty = true;
             }
             KeyCode::BackTab => {
-                // If BackTab isn't consumed by autocomplete, return mode toggle sentinel
                 return Ok(Some(Some("__BACKTAB__".to_string())));
             }
-
-            _ => {}
+            KeyCode::Enter if is_newline_shortcut(k.modifiers) => {
+                self.editor.insert_newline();
+                self.draw_dirty = true;
+            }
+            _ => {
+                use crate::editor_component::EditorAction;
+                let action = self.editor.handle_input(k, self.term_width);
+                match action {
+                    EditorAction::Consumed => {
+                        self.draw_dirty = true;
+                        return Ok(None);
+                    }
+                    EditorAction::Submit(text) => {
+                        if !text.trim().is_empty() {
+                            self.editor.clear();
+                            self.draw_dirty = true;
+                            return Ok(Some(Some(text)));
+                        } else {
+                            self.editor.clear();
+                            self.draw_dirty = true;
+                            return Ok(None);
+                        }
+                    }
+                    EditorAction::Cancel => {
+                        self.editor.clear();
+                        self.draw_dirty = true;
+                        return Ok(None);
+                    }
+                    EditorAction::Unhandled(_) => {}
+                }
+            }
         }
 
         Ok(None)
