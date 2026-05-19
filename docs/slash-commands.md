@@ -20,6 +20,7 @@ the GUI palette uses the same triggers via `cade-core::resources::palette`.
 | `/feedback` | | Submit feedback to the CADE team |
 | `/logout` | | Clear credentials and return to login |
 | `/stream` | | Toggle streaming on/off |
+| `/update` | | Check for and apply CADE updates (updates CLI and server) |
 
 ## Agents & conversations
 
