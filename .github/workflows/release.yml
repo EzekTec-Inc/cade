@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-upload:
+    name: Build and Upload
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - build: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - build: macos
+            os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - build: windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Package (Linux / macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir staging
+          cp target/release/cade staging/
+          cp target/release/cade-server staging/
+          cd staging
+          tar czvf ../cade-${{ matrix.target }}.${{ matrix.archive }} cade cade-server
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir staging
+          cp target/release/cade.exe staging/
+          cp target/release/cade-server.exe staging/
+          cd staging
+          Compress-Archive -Path * -DestinationPath ../cade-${{ matrix.target }}.${{ matrix.archive }}
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cade-${{ matrix.target }}.${{ matrix.archive }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
