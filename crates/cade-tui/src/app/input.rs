@@ -87,7 +87,7 @@ impl TuiApp {
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                         if !self.slots.handle_mouse(m) {
-                            self.handle_scroll_mouse(m.kind);
+                            self.handle_scroll_mouse(m);
                             self.draw()?;
                         }
                     }
@@ -193,316 +193,206 @@ impl TuiApp {
                 crossterm::event::KeyCode::Right => key_str.push_str("Right"),
                 _ => {}
             }
-            
-            if !key_str.is_empty() && lua.handle_keybinding(&key_str) {
-                let has_queued_cmd = !lua.command_queue.lock().unwrap().is_empty() || !lua.tool_queue.lock().unwrap().is_empty();
-                self.draw_dirty = true;
-                let _ = self.draw();
-                if has_queued_cmd {
-                    return Ok(Some(Some(String::new())));
+            if !key_str.is_empty() {
+                if let Some(mut req) = lua.handle_global_keymap(&key_str) {
+                    // LuaAction enum check removed, checking if unhandled directly
+                        // event consumed with no action
+                        return Ok(None);
+                    }
+                    if self.handle_lua_request(&mut req)? {
+                        return Ok(None); // event consumed
+                    }
                 }
-                return Ok(None);
             }
         }
 
-        match (k.code, k.modifiers) {
-            // -- Submit
-            // Alt+Enter  — universal cross-terminal newline.
-            // Shift+Enter — kitty keyboard protocol terminals (Kitty, WezTerm, Ghostty).
-            // Ctrl+Enter  — Windows Terminal (which reports this as CONTROL+Enter).
-            (KeyCode::Enter, m) if is_newline_shortcut(m) => {
-                self.editor.insert_newline();
-            }
-            (KeyCode::Enter, _) => {
-                // Expand any collapsed paste markers back to full text,
-                // then drain any pasted images (stripping their placeholders)
-                // into pending_submit_images for repl.rs to pick up.
-                self.editor.expand_pastes();
-                self.pending_submit_images = self.drain_images();
-                let line = self.editor.text();
-                self.editor.clear();
-                self.scroll_instant(0); // snap to bottom on submit
-                self.pending_lines = 0; // user is following the conversation
-                return Ok(Some(Some(line)));
-            }
-
-            // -- Exit
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) if self.editor.is_empty() => {
+        match k.code {
+            KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(None));
             }
-
-            // -- Cancel / clear
-            // Ctrl+C at the idle prompt: clear the input line if not empty.
-            // If empty, exit cleanly (acts like Ctrl+D).
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.editor.is_empty() {
-                    return Ok(Some(None));
+                    return Ok(Some(None)); // Exit if prompt is empty
                 } else {
-                    self.editor.clear();
-                    return Ok(None);
+                    return Ok(Some(Some(self.editor.text()))); // Submit if non-empty
                 }
             }
-            (KeyCode::Esc, _) => {
-                self.editor.clear();
+
+            KeyCode::Char('j') | KeyCode::Char('J') if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                // "Follow" mode: reset scroll and jump to bottom.
+                if self.scroll > 0 {
+                    self.scroll = 0;
+                    self.draw_dirty = true;
+                    // Provide brief visual confirmation
+                    self.show_toast("Jumped to bottom", ToastLevel::Info);
+                }
+                return Ok(None);
             }
 
-            // -- Edit shortcuts
-            (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
-                self.scroll_instant(0);
-                self.follow = true;
-                self.pending_lines = 0;
-                let _ = self.draw();
+            KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.overlays.push(Box::new(
+                    crate::app::command_palette::CommandPaletteState::new(),
+                ));
+                self.draw_dirty = true;
             }
 
-            // -- History / cursor-up
-            // When the cursor is NOT on the first visual row of the input,
-            // Up/Down move the cursor one visual row up/down within the
-            // multiline buffer.  Only when already on the first/last visual
-            // row do we switch to history navigation.
-            (KeyCode::Up, _) => {
-                let available_w = self.term_width.saturating_sub(2).max(1);
-                let (badge_text, _) = input_mode_badge(self.editor_input_mode(), &self.colors);
-                let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
-                let before = &self.editor.text()[..self.editor.cursor_pos()];
-                let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
+            KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.lines.clear();
+                self.clear_images();
+                self.draw_dirty = true;
+            }
+            KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(plan) = &mut self.active_plan {
+                    plan.is_visible = !plan.is_visible;
+                    self.draw_dirty = true;
+                    self.show_toast(
+                        if plan.is_visible {
+                            "Plan panel shown"
+                        } else {
+                            "Plan panel hidden"
+                        },
+                        ToastLevel::Info,
+                    );
+                }
+            }
 
-                if cur_row == 0 {
-                    // Already on the first visual row → history navigation
+            // PageUp / PageDown
+            KeyCode::PageUp => {
+                let viewport = self.viewport_height.saturating_sub(6); // Approx prompt height
+                self.scroll_page_up(viewport);
+                self.draw_dirty = true;
+            }
+            KeyCode::PageDown => {
+                let viewport = self.viewport_height.saturating_sub(6);
+                self.scroll_page_down(viewport);
+                self.draw_dirty = true;
+            }
+
+            KeyCode::Up if !k.modifiers.contains(KeyModifiers::SHIFT) => {
+                if self.editor.is_first_line() {
+                    // Navigate history
                     if !history.is_empty() {
-                        let new_idx = match *hist_idx {
-                            None => history.len() - 1,
-                            Some(i) if i > 0 => i - 1,
-                            Some(i) => i,
-                        };
-                        *hist_idx = Some(new_idx);
-                        self.editor.set_text(history[new_idx].clone());
-                        self.editor.set_cursor_pos(self.editor.text().len());
+                        let current_idx = hist_idx.unwrap_or(history.len());
+                        if current_idx > 0 {
+                            *hist_idx = Some(current_idx - 1);
+                            let new_content = history[current_idx - 1].clone();
+                            self.editor.set_text(&new_content);
+                            self.draw_dirty = true;
+                        }
                     }
                 } else {
-                    // Move cursor up one visual row: target column = cur_col
-                    // Walk backwards through the byte string to find the char
-                    // at (cur_row-1, cur_col).
-                    let target_row = cur_row - 1;
-                    // Rebuild visual-row byte-offset map
-                    let new_pos = find_cursor_at_visual_row_col(
-                        &self.editor.text(),
-                        available_w,
-                        input_prefix_w,
-                        target_row,
-                        cur_col,
-                    );
-                    self.editor.set_cursor_pos(new_pos);
+                    self.editor.move_cursor_up();
+                    self.draw_dirty = true;
                 }
             }
-            (KeyCode::Down, _) => {
-                let available_w = self.term_width.saturating_sub(2).max(1);
-                let (badge_text, _) = input_mode_badge(self.editor_input_mode(), &self.colors);
-                let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
-                let total_rows = {
-                    let (tr, _) =
-                        calc_visual_cursor(&self.editor.text(), available_w, input_prefix_w);
-                    tr
-                };
-                let before = &self.editor.text()[..self.editor.cursor_pos()];
-                let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
-
-                if cur_row >= total_rows {
-                    // Already on the last visual row → history navigation
-                    if let Some(i) = *hist_idx {
-                        if i + 1 < history.len() {
-                            *hist_idx = Some(i + 1);
-                            self.editor.set_text(history[i + 1].clone());
-                            self.editor.set_cursor_pos(self.editor.text().len());
+            KeyCode::Down if !k.modifiers.contains(KeyModifiers::SHIFT) => {
+                if self.editor.is_last_line() {
+                    // Navigate history
+                    if let Some(idx) = *hist_idx {
+                        if idx + 1 < history.len() {
+                            *hist_idx = Some(idx + 1);
+                            let new_content = history[idx + 1].clone();
+                            self.editor.set_text(&new_content);
+                            self.draw_dirty = true;
                         } else {
                             *hist_idx = None;
                             self.editor.clear();
-                            self.editor.set_cursor_pos(0);
+                            self.draw_dirty = true;
                         }
                     }
                 } else {
-                    let target_row = cur_row + 1;
-                    let new_pos = find_cursor_at_visual_row_col(
-                        &self.editor.text(),
-                        available_w,
-                        input_prefix_w,
-                        target_row,
-                        cur_col,
-                    );
-                    self.editor.set_cursor_pos(new_pos);
+                    self.editor.move_cursor_down();
+                    self.draw_dirty = true;
                 }
             }
 
-            // -- Timeline navigation / content scroll
-            (KeyCode::Char('K'), _)
-            | (KeyCode::Char('J'), _)
-            | (KeyCode::PageUp, _)
-            | (KeyCode::PageDown, _) => {
-                self.handle_scroll_key(k.code, k.modifiers);
+            KeyCode::Left => {
+                self.editor.move_cursor_left();
+                self.draw_dirty = true;
             }
-
-            // -- Mode cycle / path completion
-            (KeyCode::Tab, _) => {
-                // I-02: if cursor is on a path token, complete it; otherwise
-                // fall through to the mode-cycle sentinel.
-                if let Some((new_input, new_cursor)) = self
-                    .file_ac
-                    .complete_path(&self.editor.text(), self.editor.cursor_pos())
-                {
-                    self.editor.snapshot();
-                    self.editor.set_text(new_input);
-                    self.editor.set_cursor_pos(new_cursor);
-                } else {
-                    self.scroll_instant(0);
-                    return Ok(Some(Some("__TAB__".to_string())));
+            KeyCode::Right => {
+                self.editor.move_cursor_right();
+                self.draw_dirty = true;
+            }
+            KeyCode::Backspace => {
+                if self.editor.delete_backward() {
+                    self.draw_dirty = true;
                 }
             }
-            (KeyCode::BackTab, _) => {
-                self.scroll_instant(0);
-                return Ok(Some(Some("__BACKTAB__".to_string())));
-            }
-
-            // -- Expand/Collapse Tool Outputs
-            (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
-                self.expand_all = !self.expand_all;
-                self.show_toast(
-                    if self.expand_all {
-                        "Expanded all blocks"
-                    } else {
-                        "Collapsed all blocks"
-                    },
-                    ToastLevel::Info,
-                );
-            }
-
-            // -- Command Palette (Ctrl+P)
-            (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
-                self.overlays
-                    .push(Box::new(super::command_palette::CommandPaletteState::new()));
-            }
-
-            // -- Toggle Plan Panel (Ctrl+T)
-            // Match both the Kitty-protocol form (Char('t') + CONTROL) and
-            // the legacy VT form (raw control character \x14).
-            (KeyCode::Char('t'), KeyModifiers::CONTROL) | (KeyCode::Char('\x14'), _) => {
-                if let Some(plan) = &mut self.active_plan {
-                    plan.is_visible = !plan.is_visible;
-                    let msg = if plan.is_visible {
-                        "Plan panel shown"
-                    } else {
-                        "Plan panel hidden"
-                    };
-                    self.show_toast(msg, ToastLevel::Info);
-                } else {
-                    self.show_toast("No active plan", ToastLevel::Info);
+            KeyCode::Delete => {
+                if self.editor.delete_forward() {
+                    self.draw_dirty = true;
                 }
+            }
+            KeyCode::Home => {
+                self.editor.move_to_start_of_line();
+                self.draw_dirty = true;
+            }
+            KeyCode::End => {
+                self.editor.move_to_end_of_line();
                 self.draw_dirty = true;
             }
 
-            // -- Image / clipboard paste
-            // Ctrl+V (universal) or Alt+V (Windows Terminal fallback):
-            // query the OS clipboard for image data; fall through silently if
-            // no image is present (text pastes arrive via Event::Paste).
-            (KeyCode::Char('v'), m) if m == KeyModifiers::CONTROL || m == KeyModifiers::ALT => {
-                self.try_paste_clipboard_image();
-                // don't consume — if no image was found the keypress is silently ignored
-            }
-
-            _ => {
-                self.editor.handle_input(k, self.last_input_width);
-                if let KeyCode::Char('@') = k.code
-                    && !self.overlays.iter().any(|o| o.id() == "file_picker")
-                {
-                    let at_pos = self.editor.cursor_pos().saturating_sub(1);
-                    self.overlays.push(Box::new(PickerState::new(
-                        at_pos,
-                        String::new(),
-                        &self.file_ac,
-                    )));
+            KeyCode::Enter => {
+                if is_newline_shortcut(k) {
+                    self.editor.insert_char('\n');
+                    self.draw_dirty = true;
+                } else if !self.editor.is_empty() {
+                    let text = self.editor.text();
+                    if !text.trim().is_empty() {
+                        self.editor.clear();
+                        self.draw_dirty = true;
+                        return Ok(Some(Some(text)));
+                    } else {
+                        // Just empty space
+                        self.editor.clear();
+                        self.draw_dirty = true;
+                    }
                 }
             }
+
+            KeyCode::Char(c) => {
+                if !k.modifiers.contains(KeyModifiers::CONTROL)
+                    && !k.modifiers.contains(KeyModifiers::ALT)
+                    // If Shift is pressed with an alphabetic char, insert it; otherwise ignore Shift modifier
+                    && (!k.modifiers.contains(KeyModifiers::SHIFT) || c.is_alphabetic() || c.is_ascii_punctuation())
+                {
+                    self.editor.insert_char(c);
+                    self.draw_dirty = true;
+                }
+            }
+
+            KeyCode::Tab => {
+                self.editor.insert_str("    ");
+                self.draw_dirty = true;
+            }
+            KeyCode::BackTab => {
+                // If BackTab isn't consumed by autocomplete, return mode toggle sentinel
+                return Ok(Some(Some("__BACKTAB__".to_string())));
+            }
+
+            _ => {}
         }
+
         Ok(None)
     }
 
-    /// Interpret a boxed `dyn Any` action produced by an overlay's
-    /// [`OverlayComponent::take_result`].
+    /// Helper to process overlay actions in the input loop.
     ///
-    /// Returns `Ok(Some(Some(cmd)))` when the overlay wants to submit
-    /// a REPL command, `Ok(None)` for side-effect-only actions.
-    fn process_overlay_action(
-        &mut self,
-        action: Box<dyn std::any::Any>,
-    ) -> Result<Option<Option<String>>> {
-        // -- Command palette → submit a slash command
-        let action = match action.downcast::<String>() {
-            Ok(cmd) => return Ok(Some(Some(*cmd))),
-            Err(a) => a,
-        };
-
-        // -- Theme picker actions (preview / submit / revert)
-        let action = match action.downcast::<ThemePickerAction>() {
-            Ok(tp_action) => {
-                match *tp_action {
-                    ThemePickerAction::Preview(colors) => {
-                        self.apply_theme(colors);
-                    }
-                    ThemePickerAction::Submit(cmd) => {
-                        return Ok(Some(Some(cmd)));
-                    }
-                    ThemePickerAction::Revert(colors) => {
-                        self.apply_theme(colors);
-                        self.show_toast("Theme reverted", ToastLevel::Info);
-                    }
-                }
-                return Ok(None);
+    /// Drains any `Option<Box<dyn Any>>` action returned by an overlay and
+    /// applies it to the app state.
+    fn process_overlay_action(&mut self, action: Box<dyn std::any::Any>) -> Result<Option<Option<String>>> {
+        if let Ok(string_val) = action.downcast::<String>() {
+            let s = *string_val;
+            if s.starts_with('/') {
+                // Return as immediate command submission
+                return Ok(Some(Some(s)));
+            } else {
+                // Otherwise append to current prompt
+                self.editor.handle_paste(&s);
+                self.draw_dirty = true;
             }
-            Err(a) => a,
-        };
-
-        // -- File picker actions
-        let _action = match action.downcast::<FilePickerAction>() {
-            Ok(fp_action) => {
-                match *fp_action {
-                    FilePickerAction::Select {
-                        at_pos,
-                        query_len,
-                        selected,
-                    } => {
-                        self.editor.snapshot();
-                        let query_end = at_pos + 1 + query_len;
-                        let drain_end = query_end.min(self.editor.text().len());
-                        let mut text = self.editor.text();
-                        text.drain(at_pos..drain_end);
-                        self.editor.set_text(text);
-                        self.editor.insert_str_at(at_pos, &selected);
-                        self.editor.set_cursor_pos(at_pos + selected.len());
-                    }
-                    FilePickerAction::BackspaceChar {
-                        at_pos,
-                        query_len_before,
-                    } => {
-                        let remove_at = at_pos + 1 + query_len_before - 1;
-                        if remove_at < self.editor.text().len() {
-                            self.editor.remove_char_at(remove_at);
-                        }
-                    }
-                    FilePickerAction::DeleteAt { at_pos } => {
-                        if at_pos < self.editor.text().len() {
-                            self.editor.remove_char_at(at_pos);
-                            self.editor.set_cursor_pos(at_pos);
-                        }
-                    }
-                    FilePickerAction::InsertChar { position, ch } => {
-                        self.editor.insert_char_at(position, ch);
-                        self.editor.set_cursor_pos(position + ch.len_utf8());
-                    }
-                }
-                return Ok(None);
-            }
-            Err(a) => a,
-        };
-
-        // Unknown action type — ignore.
+        }
         Ok(None)
     }
 }
