@@ -71,7 +71,7 @@ impl CadeApp {
     /// Construct from the `CreationContext` handed to us by eframe.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Apply the CADE dark theme once at startup.
-        crate::theme::apply_theme(&cc.egui_ctx, &crate::theme::ThemeColors::dark());
+        crate::theme::apply_theme(&cc.egui_ctx, &crate::theme::ThemeColors::default());
 
         // Resolve the server URL from the page origin.  In production
         // the dashboard is served by cade-server, so origin == API host.
@@ -100,7 +100,7 @@ impl CadeApp {
             server_url: config.server_url,
             md_cache: CommonMarkCache::default(),
             input_id: egui::Id::new("chat_input"),
-            theme: crate::theme::ThemeColors::dark(),
+            theme: crate::theme::ThemeColors::default(),
             viewport: crate::responsive::Viewport::Desktop,
             sidebar_drawer_open: false,
         }
@@ -290,8 +290,10 @@ impl eframe::App for CadeApp {
                     let _version = health.version.as_deref().unwrap_or("unknown");
 
                     if let Some(new_theme) = theme_update.take() {
-                        self.theme = new_theme;
-                        crate::theme::apply_theme(ui.ctx(), &self.theme);
+                        if let Some(t) = cade_core::resources::get_theme(&new_theme) {
+                            self.theme = t;
+                            crate::theme::apply_theme(ui.ctx(), &self.theme);
+                        }
                     }
 
                     let has_agent = selected_agent.is_some();

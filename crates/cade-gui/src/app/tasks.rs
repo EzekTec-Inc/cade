@@ -1042,7 +1042,7 @@ impl CadeApp {
                                 s.on_finish_reason(&reason);
                             }
                             StreamEvent::ThemeUpdate(theme) => {
-                                s.on_theme_update(*theme);
+                                s.on_theme_update(theme.to_string());
                             }
                             StreamEvent::SubagentStarted {
                                 subagent_id,
@@ -1092,6 +1092,9 @@ impl CadeApp {
                                     // notice as a toast in the GUI.
                                     s.push_info(&message);
                                 }
+                            }
+                            StreamEvent::PlanUpdate(_) => {
+                                // Plan UI not fully implemented in GUI yet
                             }
                         }
                     }
@@ -1640,7 +1643,7 @@ impl CadeApp {
                     // the command stays invisible in the chat timeline.
                     if let crate::api::StreamEvent::ThemeUpdate(colors) = evt {
                         if let Some(s) = session_clone.borrow_mut().as_mut() {
-                            s.on_theme_update(*colors);
+                            s.on_theme_update(colors.to_string());
                         }
                         ctx_clone.request_repaint();
                     }
