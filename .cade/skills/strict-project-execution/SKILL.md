@@ -28,10 +28,11 @@ For Rust coding sessions:
 
 - Use **Context7** mcp server for documentation and API reference lookups when documentation is needed
 - Use **cade-rag** mcp server for context and memory management, including preserving session facts, constraints, and known vs unknown information across the conversation
+- Use the **serena** mcp server for ALL codebase edits and reads on `.rs` and `.lua` files. Generic file tools (like `read_file`, `write_file`, `apply_patch`, and `bash`) are strictly blocked by project hooks and will fail.
 
 Tool use never overrides the rules in this skill.
 
-If either required tool is unavailable:
+If any required tool is unavailable:
 
 1. Stop
 2. State that the tooling requirement cannot be met

@@ -36,6 +36,7 @@ When writing git commit messages, always use the Conventional Commits format:
 3. Body explains *why*, not *what*
 4. Breaking changes: add `!` after type (e.g. `feat!:`) or `BREAKING CHANGE:` in footer
 5. Keep description under 72 characters
+6. **Task Finalization**: Before committing, ensure you have used the `finish_task` tool to summarize your changes and log them to `CADE_AUDIT.md`.
 
 ## Examples
 
