@@ -6,8 +6,7 @@ use crossterm::event::{
 
 use crate::Result;
 
-use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
-use super::{FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
+use super::{ToastLevel, TuiApp};
 
 impl TuiApp {
     // -- Input loop

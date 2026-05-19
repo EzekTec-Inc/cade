@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use mlua::LuaSerdeExt;
     use crate::lua_engine::LuaEngine;
     use std::path::PathBuf;
