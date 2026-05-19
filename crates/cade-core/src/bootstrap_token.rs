@@ -45,7 +45,7 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
     }
 
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes)
+    getrandom::fill(&mut bytes)
         .map_err(|e| std::io::Error::other(format!("getrandom failed: {e}")))?;
     let token = hex_encode(&bytes);
 
