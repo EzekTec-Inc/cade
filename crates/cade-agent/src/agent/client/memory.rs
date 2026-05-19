@@ -47,9 +47,8 @@ impl HttpTransport {
     pub async fn search_memory(&self, agent_id: &str, query: &str) -> Result<Vec<Value>> {
         let resp = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/memory")))
+            .get(self.url(&format!("/agents/{agent_id}/memory?q={}", urlencoding::encode(query))))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&[("q", query)])
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -231,9 +230,8 @@ impl HttpTransport {
     ) -> Result<Vec<Value>> {
         let resp = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/archival/search")))
+            .get(self.url(&format!("/agents/{agent_id}/archival/search?q={}&limit={limit}", urlencoding::encode(query))))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&[("q", query), ("limit", &limit.to_string())])
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -349,13 +347,15 @@ impl HttpTransport {
         agent_id: &str,
         conversation_id: Option<&str>,
     ) -> Result<Value> {
-        let mut req = self
+        let url = if let Some(conv) = conversation_id {
+            format!("/agents/{agent_id}/context?conversation_id={}", urlencoding::encode(conv))
+        } else {
+            format!("/agents/{agent_id}/context")
+        };
+        let req = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/context")))
+            .get(self.url(&url))
             .header("Authorization", format!("Bearer {}", self.api_key));
-        if let Some(conv) = conversation_id {
-            req = req.query(&[("conversation_id", conv)]);
-        }
         let resp = req.send().await?;
         if !resp.status().is_success() {
             return Err(crate::Error::custom(format!(
@@ -393,14 +393,15 @@ impl HttpTransport {
         query: &str,
         conversation_id: Option<&str>,
     ) -> Result<Vec<Value>> {
-        let mut req = self
+        let url = if let Some(cid) = conversation_id {
+            format!("/agents/{agent_id}/messages?q={}&conversation_id={}", urlencoding::encode(query), urlencoding::encode(cid))
+        } else {
+            format!("/agents/{agent_id}/messages?q={}", urlencoding::encode(query))
+        };
+        let req = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/messages")))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&[("q", query)]);
-        if let Some(cid) = conversation_id {
-            req = req.query(&[("conversation_id", cid)]);
-        }
+            .get(self.url(&url))
+            .header("Authorization", format!("Bearer {}", self.api_key));
         let resp = req.send().await?;
         if !resp.status().is_success() {
             return Err(crate::Error::custom(format!(
@@ -419,15 +420,15 @@ impl HttpTransport {
         keyword: &str,
         limit: Option<usize>,
     ) -> Result<Vec<Value>> {
-        let mut query_params = vec![("q", keyword.to_string())];
-        if let Some(l) = limit {
-            query_params.push(("limit", l.to_string()));
-        }
+        let url = if let Some(l) = limit {
+            format!("/agents/{agent_id}/events?q={}&limit={l}", urlencoding::encode(keyword))
+        } else {
+            format!("/agents/{agent_id}/events?q={}", urlencoding::encode(keyword))
+        };
         let resp = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/events")))
+            .get(self.url(&url))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&query_params)
             .send()
             .await?;
         if !resp.status().is_success() {

@@ -69,7 +69,7 @@ pub fn query_event_log(
         "#,
     )?;
 
-    let iter = stmt.query_map(params![agent_id, keyword, limit], |row| {
+    let iter = stmt.query_map(params![agent_id, keyword, limit as i64], |row| {
         Ok(EventLogEntry {
             id: row.get(0)?,
             agent_id: row.get(1)?,
@@ -99,7 +99,7 @@ pub fn list_recent_events(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<E
         "#,
     )?;
 
-    let iter = stmt.query_map(params![agent_id, limit], |row| {
+    let iter = stmt.query_map(params![agent_id, limit as i64], |row| {
         Ok(EventLogEntry {
             id: row.get(0)?,
             agent_id: row.get(1)?,

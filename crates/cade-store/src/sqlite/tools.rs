@@ -597,7 +597,7 @@ pub fn search_archival_memory(
          LIMIT ?3",
     )?;
 
-    let rows = stmt.query_map(params![agent_id, fts_query, limit], |row| {
+    let rows = stmt.query_map(params![agent_id, fts_query, limit as i64], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,

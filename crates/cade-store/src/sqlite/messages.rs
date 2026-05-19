@@ -181,7 +181,7 @@ pub fn list_messages_since_last_compaction(
                     let s: String = row.get(4)?;
                     serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
                 },
-                char_count: row.get(5).unwrap_or(0),
+                char_count: row.get::<_, i64>(5).unwrap_or(0) as usize,
             })
         })?
         .filter_map(|r| r.ok())

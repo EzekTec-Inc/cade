@@ -76,7 +76,7 @@ fn get_root_secret() -> Result<String> {
     // Fresh install: generate a random key and persist it at the
     // canonical path with 0o600 perms on Unix.
     let mut key = [0u8; 32];
-    getrandom::getrandom(&mut key).map_err(|e| Error::custom(format!("getrandom failed: {e}")))?;
+    getrandom::fill(&mut key).map_err(|e| Error::custom(format!("getrandom failed: {e}")))?;
     let secret = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, key);
 
     // Ensure parent dir exists with tight perms (0o700 on Unix).
@@ -186,7 +186,7 @@ fn derive_key_pbkdf2(salt: &[u8]) -> Result<[u8; 32]> {
 /// produces a different output.
 pub fn encrypt(plaintext: &str) -> Result<String> {
     let mut salt = [0u8; 16];
-    getrandom::getrandom(&mut salt)
+    getrandom::fill(&mut salt)
         .map_err(|e| Error::custom(format!("getrandom (salt) failed: {e}")))?;
 
     let key_bytes = derive_key_argon2id(&salt)?;
@@ -194,7 +194,7 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
         .map_err(|e| Error::custom(format!("Cipher init failed: {e}")))?;
 
     let mut nonce_bytes = [0u8; 12];
-    getrandom::getrandom(&mut nonce_bytes)
+    getrandom::fill(&mut nonce_bytes)
         .map_err(|e| Error::custom(format!("getrandom (nonce) failed: {e}")))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
@@ -530,11 +530,11 @@ mod tests {
         let plaintext = "legacy-pbkdf2-value";
 
         let mut salt = [0u8; 16];
-        getrandom::getrandom(&mut salt).map_err(|e| format!("{e}"))?;
+        getrandom::fill(&mut salt).map_err(|e| format!("{e}"))?;
         let key_bytes = derive_key_pbkdf2(&salt)?;
         let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| format!("{e}"))?;
         let mut nonce_bytes = [0u8; 12];
-        getrandom::getrandom(&mut nonce_bytes).map_err(|e| format!("{e}"))?;
+        getrandom::fill(&mut nonce_bytes).map_err(|e| format!("{e}"))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ct = cipher
             .encrypt(nonce, plaintext.as_bytes())
@@ -568,7 +568,7 @@ mod tests {
         let key_bytes = derive_key_pbkdf2(legacy_salt)?;
         let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| format!("{e}"))?;
         let mut nonce_bytes = [0u8; 12];
-        getrandom::getrandom(&mut nonce_bytes).map_err(|e| format!("{e}"))?;
+        getrandom::fill(&mut nonce_bytes).map_err(|e| format!("{e}"))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ct = cipher
             .encrypt(nonce, plaintext.as_bytes())
