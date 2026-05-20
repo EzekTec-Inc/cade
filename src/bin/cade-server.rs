@@ -261,11 +261,7 @@ async fn async_main() -> Result<()> {
                 let sem = consolidation_semaphore.clone();
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await;
-                    cade::server::consolidation::consolidate_agent(
-                        &state_c,
-                        &agent_id,
-                        conv_id.as_deref(),
-                    )
+                    cade::server::consolidation::consolidate_agent(&state_c, &agent_id, conv_id.as_deref(), None)
                     .await;
                 });
             }

@@ -514,6 +514,7 @@ async fn run_agent_loop(
                     &state2,
                     &agent_id2,
                     conv_id2.as_deref(),
+                    None,
                 ))
                 .await;
                 // Drop cached context entry so build_context recomputes.

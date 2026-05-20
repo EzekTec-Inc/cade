@@ -286,6 +286,7 @@ pub(crate) async fn complete_with_overflow_recovery(
                 state,
                 agent_id,
                 conversation_id,
+                None,
             ))
             .await;
 
@@ -835,6 +836,7 @@ pub(crate) async fn build_context(
                     &state_eager,
                     &agent_eager,
                     conv_for_eager.as_deref(),
+                    None,
                 )
                 .await;
             });

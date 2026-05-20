@@ -69,7 +69,7 @@ const SESSION_SUMMARY_ARCHIVED_MAX_CHARS: usize = 4_000;
 const SESSION_INDEX_MAX_CHARS: usize = 10_000;
 
 /// Maximum tokens for the P7 active_goal auto-update LLM call.
-const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
+// const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
 
 /// Fraction of the estimated history budget used as the threshold: turns that
 /// fit within `char_budget * HISTORY_BUDGET_FRACTION` are considered "in
