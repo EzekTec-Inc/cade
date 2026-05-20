@@ -466,10 +466,9 @@ impl IdeMcpServer {
         self.get_file_content_impl(path).await.map(Json)
     }
 
-    /// Apply a batch of text edits to a single open file.
     #[tool(
         name = "apply_edit",
-        description = "Apply a batch of text edits (LSP TextEdit shape) to a single open file. Errors with method_not_found if no editor adapter is attached, or with invalid_params when the path is not open."
+        description = "Apply a batch of text edits (LSP TextEdit shape) to a single open file. You MUST provide the 'path' argument (absolute file path) along with the 'text_edits'. Errors with method_not_found if no editor adapter is attached, or with invalid_params when the path is not open."
     )]
     async fn apply_edit(
         &self,
