@@ -72,6 +72,22 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     // -- OpenAI
     (
         "openai",
+        "GPT-5",
+        "openai/gpt-5",
+        "codex",
+        100_000,
+        200_000,
+    ),
+    (
+        "openai",
+        "GPT-5.5",
+        "openai/gpt-5.5",
+        "codex",
+        100_000,
+        200_000,
+    ),
+    (
+        "openai",
         "GPT-4.5",
         "openai/gpt-4.5",
         "codex",
