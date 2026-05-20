@@ -211,7 +211,7 @@ mod tests {
 
     fn make_test_state() -> AppState {
         let db = cade_store::sqlite::open(":memory:").unwrap();
-        let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        let config = std::sync::Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
             addr: "127.0.0.1:0".parse().unwrap(),
             db_path: ":memory:".into(),
             llm_provider: crate::server::config::LlmProviderKind::Anthropic,

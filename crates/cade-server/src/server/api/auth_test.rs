@@ -12,7 +12,7 @@ use tower::ServiceExt; // for `oneshot`
 fn make_state(api_key: Option<String>) -> AppState {
     let db = cade_store::sqlite::open(":memory:").unwrap();
 
-    let config = Arc::new(crate::server::config::ServerConfig {
+    let config = Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
         llm_provider: crate::server::config::LlmProviderKind::Anthropic,

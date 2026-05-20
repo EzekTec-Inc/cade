@@ -1293,11 +1293,7 @@ mod tests {
 
     #[test]
     fn empty_produces_no_turns() {
-        assert!(group_turns(&[]).is_empty());
-    }
-
-    #[test]
-    fn single_user_message_is_one_turn() {
+        assert!(group_turns($1, 64_000) {
         let turns = group_turns(&[m("user", "hello")]);
         assert_eq!(turns.len(), 1);
     }
@@ -1310,8 +1306,7 @@ mod tests {
             m("user", "q2"),
             m("assistant", "a2"),
         ];
-        let turns = group_turns(&msgs);
-        assert_eq!(turns.len(), 2);
+        let turns = group_turns($1, 64_000), 2);
         assert_eq!(turns[0][0].0, "user");
         assert_eq!(turns[1][0].0, "user");
     }
@@ -1325,8 +1320,7 @@ mod tests {
             m("assistant", "done"),
             m("user", "next"),
         ];
-        let turns = group_turns(&msgs);
-        assert_eq!(turns.len(), 2);
+        let turns = group_turns($1, 64_000), 2);
         // First turn: user + assistant + tool + assistant = 4 messages
         assert_eq!(turns[0].len(), 4);
     }
