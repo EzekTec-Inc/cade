@@ -365,17 +365,39 @@ impl TuiApp {
     /// Drains any `Option<Box<dyn Any>>` action returned by an overlay and
     /// applies it to the app state.
     fn process_overlay_action(&mut self, action: Box<dyn std::any::Any>) -> Result<Option<Option<String>>> {
-        if let Ok(string_val) = action.downcast::<String>() {
-            let s = *string_val;
-            if s.starts_with('/') {
-                // Return as immediate command submission
-                return Ok(Some(Some(s)));
-            } else {
-                // Otherwise append to current prompt
-                self.editor.handle_paste(&s);
-                self.draw_dirty = true;
+        let action = match action.downcast::<String>() {
+            Ok(string_val) => {
+                let s = *string_val;
+                if s.starts_with('/') {
+                    return Ok(Some(Some(s)));
+                } else {
+                    self.editor.handle_paste(&s);
+                    self.draw_dirty = true;
+                }
+                return Ok(None);
             }
-        }
+            Err(action) => action,
+        };
+
+        let _action = match action.downcast::<crate::app::ThemePickerAction>() {
+            Ok(tp_action) => {
+                match *tp_action {
+                    crate::app::ThemePickerAction::Preview(colors) => {
+                        self.apply_theme(colors);
+                    }
+                    crate::app::ThemePickerAction::Submit(cmd) => {
+                        return Ok(Some(Some(cmd)));
+                    }
+                    crate::app::ThemePickerAction::Revert(colors) => {
+                        self.apply_theme(colors);
+                        self.show_toast("Theme picker cancelled", crate::app::ToastLevel::Info);
+                    }
+                }
+                return Ok(None);
+            }
+            Err(action) => action,
+        };
+
         Ok(None)
     }
 }
