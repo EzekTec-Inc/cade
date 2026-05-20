@@ -849,6 +849,7 @@ impl eframe::App for CadeApp {
                                     .desired_width(320.0)
                                     .hint_text("CADE_API_KEY"),
                             );
+                            resp.request_focus();
                             if resp.changed() {
                                 self.login.on_input(&editable);
                             }
