@@ -29,7 +29,7 @@ pub async fn compact_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conversation_id = params.get("conversation_id").map(String::as_str);
 
-    crate::server::consolidation::consolidate_agent(&state, &agent_id, conversation_id).await;
+    crate::server::consolidation::consolidate_agent(&state, &agent_id, conversation_id, None).await;
 
     // Inspect the resulting session_summary block (if any) so the client
     // can render a meaningful toast.

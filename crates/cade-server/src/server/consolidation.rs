@@ -185,7 +185,7 @@ pub(crate) fn should_eager_consolidate(
 ///
 /// This is safe to call concurrently for different agents; all DB access is
 /// through the existing `Arc<parking_lot::Mutex<Connection>>` pool.
-pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id: Option<&str>) {
+pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id: Option<&str>, override_history_budget: Option<usize>) {
     let agent = match sqlite::get_agent(&state.db, agent_id) {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -242,7 +242,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     let output_reserve = ((window_tokens as f64) * 0.15).round() as usize;
     let input_tokens = window_tokens.saturating_sub(output_reserve);
     let char_budget = (input_tokens * CHARS_PER_TOKEN).clamp(8_000, 6_000_000);
-    let history_budget = (char_budget as f64 * HISTORY_BUDGET_FRACTION).round() as usize;
+    let history_budget = override_history_budget.unwrap_or_else(|| (char_budget as f64 * HISTORY_BUDGET_FRACTION).round() as usize);
 
     let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
     let turns = group_turns(&flat, max_turn_chars);
@@ -605,22 +605,11 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         dropped,
     );
 
-    // ── 5b. P7: Auto-update `active_goal` from the summary ──────────────────
-    // The agent often forgets to call `update_memory(active_goal)`. Rather than
-    // only nagging (C3 staleness), we extract a fresh snapshot from the summary
-    // we just produced. This runs on the same cheap compaction model.
-    // Box::pin: auto_update_active_goal and auto_extract_facts each hold
+    // Box::pin: auto_extract_facts holds
     // an LLM CompletionRequest + response locals across their await point.
-    // Boxing their futures prevents them from inflating consolidate_agent's
+    // Boxing its future prevents it from inflating consolidate_agent's
     // already-large state machine, which contributes to the tokio worker
     // thread stack overflow on archival/historic content access paths.
-    Box::pin(auto_update_active_goal(
-        state,
-        agent_id,
-        &summary,
-        &compaction_model,
-    ))
-    .await;
 
     // Phase B: Automated Extraction of durable facts
     Box::pin(auto_extract_facts(
@@ -820,98 +809,7 @@ fn is_high_priority_message(role: &str, content: &str) -> bool {
 
 // ── P7: active_goal auto-update ───────────────────────────────────────────────
 
-/// Extract a fresh `active_goal` snapshot from the consolidation summary.
-///
-/// Called at the end of `consolidate_agent` with the summary text that was just
-/// written to `session_summary`. Uses the same cheap compaction model so the
-/// marginal cost is ~400 tokens.
-///
-/// If the LLM returns "UNCHANGED" or fails, the existing `active_goal` is left
-/// untouched — this is best-effort and must never break the main path.
-async fn auto_update_active_goal(
-    state: &AppState,
-    agent_id: &str,
-    summary: &str,
-    compaction_model: &str,
-) {
-    if summary.trim().is_empty() {
-        return;
-    }
 
-    let prompt = format!(
-        "You are a memory maintenance sub-agent. Based on this consolidation summary, \
-         produce an updated `active_goal` memory block.\n\
-         \n\
-         Include:\n\
-         1. **Current task** — what is being worked on\n\
-         2. **Status** — in-progress / completed / blocked\n\
-         3. **Files in play** — exact paths of files being modified\n\
-         4. **Key decisions made** — and why\n\
-         5. **Next steps** — what should happen next\n\
-         \n\
-         Write as a concise structured note (max 200 words). Be factual and specific.\n\
-         If the summary does not contain enough information to determine the current task, \
-         respond with exactly: UNCHANGED\n\
-         \n\
-         SUMMARY:\n\
-         {summary}"
-    );
-
-    let req = CompletionRequest {
-        model: compaction_model.to_string(),
-        messages: vec![LlmMessage {
-            role: "user".to_string(),
-            content: prompt,
-            tool_call_id: None,
-            tool_calls: None,
-            images: None,
-        }],
-        tools: vec![],
-        max_tokens: ACTIVE_GOAL_UPDATE_MAX_TOKENS,
-        reasoning_effort: None,
-    };
-
-    let goal_text = match state.llm.complete(&req).await {
-        Ok(resp) => resp.content.unwrap_or_default().trim().to_string(),
-        Err(e) => {
-            tracing::debug!(
-                "consolidate [{}]: P7 active_goal auto-update LLM failed: {}",
-                agent_id,
-                e
-            );
-            return;
-        }
-    };
-
-    if goal_text.is_empty() || goal_text == "UNCHANGED" {
-        tracing::debug!(agent_id = %agent_id, "consolidate:  P7 active_goal unchanged");
-        return;
-    }
-
-    if let Err(e) = sqlite::upsert_memory_block(
-        &state.db,
-        agent_id,
-        "active_goal",
-        &goal_text,
-        Some("Auto-updated by Sleeptime consolidation (P7)"),
-        Some(3_000),
-    ) {
-        tracing::debug!(
-            "consolidate [{}]: P7 active_goal upsert failed: {}",
-            agent_id,
-            e
-        );
-        return;
-    }
-
-    let _ = sqlite::set_memory_tier(&state.db, agent_id, "active_goal", "pinned", true);
-
-    tracing::debug!(
-        "consolidate [{}]: P7 auto-updated active_goal ({} chars)",
-        agent_id,
-        goal_text.chars().count(),
-    );
-}
 
 /// Phase B: Automated Extraction of durable facts from consolidation summaries.
 ///
@@ -1968,7 +1866,7 @@ mod tests {
         let state = mk_state(db.clone(), llm_trait);
 
         // ── act ─────────────────────────────────────────────────────────
-        consolidate_agent(&state, agent_id, None).await;
+        consolidate_agent(&state, agent_id, None, None).await;
 
         // ── assert ──────────────────────────────────────────────────────
 
@@ -2037,7 +1935,7 @@ mod tests {
         let llm_trait: Arc<dyn LlmProvider> = llm.clone();
         let state = mk_state(db.clone(), llm_trait);
 
-        consolidate_agent(&state, agent_id, None).await;
+        consolidate_agent(&state, agent_id, None, None).await;
 
         // The raw seed text included `compute_<n>` tokens for each turn —
         // every dropped turn's user message contains one. Searching archival
@@ -2107,7 +2005,7 @@ mod tests {
         let llm: Arc<dyn LlmProvider> = Arc::new(FailingLlm);
         let state = mk_state(db.clone(), llm);
 
-        consolidate_agent(&state, agent_id, None).await;
+        consolidate_agent(&state, agent_id, None, None).await;
 
         // No session_summary was written (LLM failed) — but the archival cache
         // must still hold the raw dropped turns.
