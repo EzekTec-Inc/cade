@@ -49,6 +49,7 @@ M.defaults = {
     accept_word = "<M-]>",
     dismiss     = "<C-e>",
     toggle      = "<leader>ct",
+    edit        = "<leader>ce",
   },
 }
 

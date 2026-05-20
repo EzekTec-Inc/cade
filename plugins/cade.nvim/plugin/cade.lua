@@ -72,6 +72,11 @@ if cfg.keymaps ~= false then
   if km.toggle then
     vim.keymap.set("n", km.toggle, cade.toggle, { desc = "CADE: toggle completions" })
   end
+
+  -- Visual-mode edit
+  if km.edit then
+    vim.keymap.set("v", km.edit, cade.hover_edit, { desc = "CADE: hover edit" })
+  end
 end
 
 -- User commands
