@@ -13,7 +13,7 @@ pub enum PaletteCmd {
     Copy,
     Artifacts,
     Checkpoints,
-    Skills,
+    Skills(String),
     Mcp,
     Logout,
     // Settings / config commands
@@ -235,7 +235,7 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "copy" | "cp" => PaletteCmd::Copy,
         "artifacts" | "artifact" => PaletteCmd::Artifacts,
         "checkpoints" | "checkpoint" | "undo" | "tree" => PaletteCmd::Checkpoints,
-        "skills" | "skill" => PaletteCmd::Skills,
+        "skills" | "skill" => PaletteCmd::Skills(arg),
         "mcp" => PaletteCmd::Mcp,
         "logout" | "exit" | "quit" => PaletteCmd::Logout,
         "compact" | "consolidate" => PaletteCmd::Compact,

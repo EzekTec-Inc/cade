@@ -1358,7 +1358,7 @@ impl CadeApp {
                     ));
                 }
             }
-            PaletteCmd::Skills => {
+            PaletteCmd::Skills(_) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected {
                         skills_overlay_open,

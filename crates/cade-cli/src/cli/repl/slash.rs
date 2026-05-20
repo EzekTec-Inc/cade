@@ -117,7 +117,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "memory" => Some(SlashCmd::Memory),
         "search" => Some(SlashCmd::Search(arg.unwrap_or_default())),
         "feedback" => Some(SlashCmd::Feedback),
-        "skills" => Some(SlashCmd::Skills(arg)),
+        "skills" | "skill" => Some(SlashCmd::Skills(arg)),
         "subagents" | "agents-list" => Some(SlashCmd::Subagents),
         "teams" | "team" => Some(SlashCmd::Teams),
         "marketplace" | "plugins" => Some(SlashCmd::Marketplace),
