@@ -106,8 +106,7 @@ impl Repl {
         app.toggle_mouse_capture();
         if app.mouse_capture_disabled {
             let _ = app.push(RenderLine::SystemMsg(
-                "Mouse capture off — native terminal handling enabled. /mouse to re-enable."
-                    .into(),
+                "Mouse capture off — native terminal handling enabled. /mouse to re-enable.".into(),
             ));
         } else {
             let _ = app.push(RenderLine::SuccessMsg(

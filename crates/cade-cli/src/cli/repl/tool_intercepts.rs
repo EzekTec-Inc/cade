@@ -24,7 +24,7 @@ impl Repl {
                 tool_name: "run_subagent".to_string(),
                 output: reason,
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             });
         }
 
@@ -380,7 +380,7 @@ ui_resource_uri: None,
                     task_id_c
                 ),
                 is_error: false,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             })
         } else {
             // Run synchronously — acquire permit, wait for result, release
@@ -474,7 +474,7 @@ ui_resource_uri: None,
                 tool_name: "run_subagent".to_string(),
                 output: final_output,
                 is_error: final_is_error,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             })
         }
     }
@@ -493,7 +493,7 @@ ui_resource_uri: None,
                 tool_name: "message_agent".to_string(),
                 output: "error: 'target' and 'message' are required".to_string(),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             });
         }
 
@@ -509,7 +509,7 @@ ui_resource_uri: None,
                         tool_name: "message_agent".to_string(),
                         output: format!("Error: Agent '{target}' not found"),
                         is_error: true,
-ui_resource_uri: None,
+                        ui_resource_uri: None,
                     });
                 }
             }
@@ -519,7 +519,7 @@ ui_resource_uri: None,
                     tool_name: "message_agent".to_string(),
                     output: format!("Failed to query agents: {e}"),
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 });
             }
         };
@@ -554,7 +554,7 @@ ui_resource_uri: None,
                     tool_name: "message_agent".to_string(),
                     output: final_output,
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 })
             }
             Err(e) => Ok(cade_agent::tools::ToolResult {
@@ -562,7 +562,7 @@ ui_resource_uri: None,
                 tool_name: "message_agent".to_string(),
                 output: format!("Failed to message agent: {e}"),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             }),
         }
     }
@@ -582,7 +582,7 @@ ui_resource_uri: None,
                     tool_name: "run_parallel_subagents".to_string(),
                     output: "error: 'tasks' array is required".to_string(),
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 });
             }
         };
@@ -593,7 +593,7 @@ ui_resource_uri: None,
                 tool_name: "run_parallel_subagents".to_string(),
                 output: "error: 'tasks' array cannot be empty".to_string(),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             });
         }
 
@@ -648,7 +648,7 @@ ui_resource_uri: None,
             output: serde_json::to_string_pretty(&aggregated)
                 .unwrap_or_else(|e| format!("error serializing results: {e}")),
             is_error: false,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         })
     }
 
@@ -667,7 +667,7 @@ ui_resource_uri: None,
                     tool_name: "cancel_subagent".to_string(),
                     output: "error: 'subagent_id' is required".to_string(),
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 });
             }
         };
@@ -684,7 +684,7 @@ ui_resource_uri: None,
                 tool_name: "cancel_subagent".to_string(),
                 output: format!("Cancel signal sent to subagent {subagent_id}"),
                 is_error: false,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             })
         } else {
             Ok(ToolResult {
@@ -692,7 +692,7 @@ ui_resource_uri: None,
                 tool_name: "cancel_subagent".to_string(),
                 output: format!("error: no active subagent found with ID {subagent_id}"),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             })
         }
     }

@@ -170,7 +170,9 @@ impl TuiApp {
         // -- Lua global keybindings
         if let Some(lua) = &self.lua_engine {
             let mut key_str = String::new();
-            if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+            if k.modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+            {
                 key_str.push_str("C-");
             }
             if k.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
@@ -192,10 +194,15 @@ impl TuiApp {
                 crossterm::event::KeyCode::Right => key_str.push_str("Right"),
                 _ => {}
             }
-            if !key_str.is_empty() {
-                if lua.handle_keybinding(&key_str) {
-                    return Ok(None); // event consumed
+            if !key_str.is_empty() && lua.handle_keybinding(&key_str) {
+                let has_queued_cmd = !lua.command_queue.lock().unwrap().is_empty()
+                    || !lua.tool_queue.lock().unwrap().is_empty();
+                self.draw_dirty = true;
+                let _ = self.draw();
+                if has_queued_cmd {
+                    return Ok(Some(Some(String::new())));
                 }
+                return Ok(None); // event consumed
             }
         }
 

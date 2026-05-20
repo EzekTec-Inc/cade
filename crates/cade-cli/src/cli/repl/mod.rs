@@ -139,8 +139,6 @@ pub(crate) enum ToolPreflightResult {
 
 use crate::cli::repl::format::mode_display;
 
-
-
 pub struct Repl {
     pub(crate) client: HttpTransport,
     /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
@@ -202,7 +200,8 @@ pub struct Repl {
     /// Whether SSE token streaming is enabled (toggled by /stream).
     pub(crate) streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Receives the full MCP manager once the background boot completes.
-    pub(crate) mcp_rx: Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
+    pub(crate) mcp_rx:
+        Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
     /// True when background boot completes.
     pub(crate) startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cumulative token usage for the session (input, output).
@@ -366,7 +365,9 @@ impl Repl {
 
     pub fn set_tools_ready(&mut self) {
         let mut app = self.app.lock();
-        app.push_silent(RenderLine::SystemMsg("  ✓ Tools loaded and ready".to_string()));
+        app.push_silent(RenderLine::SystemMsg(
+            "  ✓ Tools loaded and ready".to_string(),
+        ));
     }
 
     fn agent_id(&self) -> String {
@@ -403,7 +404,11 @@ impl Repl {
         };
 
         // 3. Apply new hooks and permissions
-        self.hooks = cade_core::hooks::HookEngine::new(new_hooks, self.cwd.clone(), self.agent_id.lock().clone());
+        self.hooks = cade_core::hooks::HookEngine::new(
+            new_hooks,
+            self.cwd.clone(),
+            self.agent_id.lock().clone(),
+        );
         self.permissions.reload_from_settings(&new_perms);
 
         // 4. Reload MCP servers
@@ -694,10 +699,10 @@ impl Repl {
             // Drain Lua command queue into pending_input if empty
             if pending_input.is_none() {
                 let app = self.app.lock();
-                if let Some(lua) = &app.lua_engine {
-                    if let Some(cmd) = lua.command_queue.lock().unwrap().pop_front() {
-                        pending_input = Some(cmd);
-                    }
+                if let Some(lua) = &app.lua_engine
+                    && let Some(cmd) = lua.command_queue.lock().unwrap().pop_front()
+                {
+                    pending_input = Some(cmd);
                 }
             }
 
@@ -872,19 +877,19 @@ impl Repl {
 
             // Slash commands (include loaded skill ids so /commit etc. work)
             let skill_ids: Vec<String> = self.skills.lock().iter().map(|s| s.id.clone()).collect();
-            
+
             // Check Lua extensions for custom slash commands first
             let mut handled_by_lua = false;
             if input.starts_with('/') {
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
                 let args = parts[1..].iter().map(|s| s.to_string()).collect::<Vec<_>>();
-                
+
                 let app = self.app.lock();
-                if let Some(lua) = &app.lua_engine {
-                    if lua.handle_command(cmd, args) {
-                        handled_by_lua = true;
-                    }
+                if let Some(lua) = &app.lua_engine
+                    && lua.handle_command(cmd, args)
+                {
+                    handled_by_lua = true;
                 }
             }
             if handled_by_lua {
@@ -911,12 +916,14 @@ impl Repl {
 
             // Send to agent and handle tool loop
             if !self.startup_ready.load(std::sync::atomic::Ordering::SeqCst) {
-                self.tui_dim("  ↻ Waiting for tools to load in background before starting turn…".to_string());
-                if let Some(rx) = self.mcp_rx.take() {
-                    if let Ok(mgr) = rx.await {
-                        self.set_mcp(mgr);
-                        self.set_tools_ready();
-                    }
+                self.tui_dim(
+                    "  ↻ Waiting for tools to load in background before starting turn…".to_string(),
+                );
+                if let Some(rx) = self.mcp_rx.take()
+                    && let Ok(mgr) = rx.await
+                {
+                    self.set_mcp(mgr);
+                    self.set_tools_ready();
                 }
             }
 

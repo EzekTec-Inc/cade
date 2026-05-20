@@ -774,7 +774,7 @@ async fn run_agent_loop(
                     tool_name: tc.name.clone(),
                     output: format!("Plan set with {n} step(s)."),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }
             } else if tc.name == "UpdatePlan" {
                 let args: serde_json::Value =
@@ -828,7 +828,7 @@ ui_resource_uri: None,
                         format!("error: Step {step_id} not found in the active plan.")
                     },
                     is_error: !found,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }
             } else if tc.name == "finish_task" {
                 let args: serde_json::Value =
@@ -878,7 +878,7 @@ ui_resource_uri: None,
                     tool_name: tc.name.clone(),
                     output: "Task finished. Audit log appended to CADE_AUDIT.md.".to_string(),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }
             } else if let Some(executed) = runtime
                 .execute(tc.id.clone(), &tc.name, &tc.arguments)
@@ -901,7 +901,7 @@ ui_resource_uri: None,
                         tc.name
                     ),
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }
             };
 

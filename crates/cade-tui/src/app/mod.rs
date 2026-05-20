@@ -1003,7 +1003,10 @@ impl TuiApp {
         let lua_engine = crate::lua_engine::LuaEngine::new().ok();
         let mut slots = crate::slots::SlotManager::new();
         if let Some(engine) = &lua_engine {
-            let sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(false, engine.ui_event_queue.clone()));
+            let sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(
+                false,
+                engine.ui_event_queue.clone(),
+            ));
             slots.set(crate::slots::UiSlot::Sidebar, sidebar);
         }
 
@@ -1087,7 +1090,10 @@ impl TuiApp {
             }
 
             if let Some(sidebar_widget) = lua.get_sidebar_ui() {
-                let mut new_sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(false, lua.ui_event_queue.clone()));
+                let mut new_sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(
+                    false,
+                    lua.ui_event_queue.clone(),
+                ));
                 new_sidebar.update(Some(sidebar_widget));
                 self.slots.set(crate::slots::UiSlot::Sidebar, new_sidebar);
             } else {
@@ -1096,7 +1102,10 @@ impl TuiApp {
 
             if let Some(header_widget) = lua.get_header_ui() {
                 tracing::info!("Found CADE_UI.header with {} widgets", header_widget.len());
-                let mut new_header = Box::new(crate::lua_ui::LuaUiSlot::new(true, lua.ui_event_queue.clone()));
+                let mut new_header = Box::new(crate::lua_ui::LuaUiSlot::new(
+                    true,
+                    lua.ui_event_queue.clone(),
+                ));
                 new_header.update(Some(header_widget));
                 self.slots.set(crate::slots::UiSlot::Header, new_header);
             } else {
@@ -1258,7 +1267,9 @@ impl TuiApp {
         let token_history = self.token_history.clone();
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone().or_else(|| {
-            self.lua_engine.as_ref().and_then(|lua| lua.get_footer_text())
+            self.lua_engine
+                .as_ref()
+                .and_then(|lua| lua.get_footer_text())
         });
         let reasoning_effort = self.reasoning_effort.clone();
         let mut active_plan_snap = self.active_plan.clone();

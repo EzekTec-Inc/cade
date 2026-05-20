@@ -148,7 +148,7 @@ impl Repl {
                     tool_name: "ask_user_question".to_string(),
                     output: msg,
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 });
             }
         };
@@ -210,7 +210,7 @@ ui_resource_uri: None,
                         tool_name: "ask_user_question".to_string(),
                         output: msg,
                         is_error: true,
-ui_resource_uri: None,
+                        ui_resource_uri: None,
                     });
                 }
                 Some(answer) => {
@@ -249,7 +249,7 @@ ui_resource_uri: None,
             tool_name: "ask_user_question".to_string(),
             output: result_content,
             is_error: false,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         })
     }
 

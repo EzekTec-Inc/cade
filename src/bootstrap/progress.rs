@@ -67,7 +67,6 @@ impl StartupProgress {
         self.add_spinner("Resolving agent…")
     }
 
-
     // ------------------------------------------------------------------
     // Finish helpers
     // ------------------------------------------------------------------
@@ -79,7 +78,6 @@ impl StartupProgress {
         pb.set_style(done_style);
         pb.finish_with_message(format!("✔ {}", msg.into()));
     }
-
 
     /// Clear the entire multi-progress display so the terminal is clean
     /// before `ratatui::init()` takes over.

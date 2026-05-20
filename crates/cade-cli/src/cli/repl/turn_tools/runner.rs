@@ -397,7 +397,7 @@ impl Repl {
                 tool_name: String::new(),
                 output: String::new(),
                 is_error: false,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             });
 
             // Fill in blocked results first.
@@ -487,14 +487,14 @@ ui_resource_uri: None,
             if !read_indices.is_empty() {
                 let mut handles = Vec::new();
                 let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-                
+
                 for &i in &read_indices {
                     let (call_id, tool_name, args) = &tool_calls[i];
-                    
+
                     // Pre-fill the result struct so it has the right IDs if we have to inject a JoinError later.
                     results[i].tool_call_id = call_id.clone();
                     results[i].tool_name = tool_name.clone();
-                    
+
                     let call_id = call_id.clone();
                     let tool_name = tool_name.clone();
                     let args = args.clone();
@@ -524,7 +524,7 @@ ui_resource_uri: None,
                         .await;
                         (i, r)
                     });
-                    
+
                     handles.push(async move {
                         match handle.await {
                             Ok((i, r)) => (i, Ok(r)),
@@ -610,7 +610,8 @@ ui_resource_uri: None,
                 let _ = std::fs::write("/tmp/rust_mcp_trigger_start.txt", "Iterating results\n");
                 // Trigger Lua MCP UI plugin if a resource URI was returned.
                 if let Some(uri) = &result.ui_resource_uri {
-                    let _ = std::fs::write("/tmp/rust_mcp_uri.txt", format!("Found URI: {}\n", uri));
+                    let _ =
+                        std::fs::write("/tmp/rust_mcp_uri.txt", format!("Found URI: {}\n", uri));
                     let mut app = self.app.lock();
                     if let Some(lua) = &app.lua_engine {
                         lua.trigger_mcp_ui(uri);
@@ -693,7 +694,7 @@ ui_resource_uri: None,
                 tool_name: tool_name.to_string(),
                 output,
                 is_error,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             };
 
             if result.is_error {
@@ -756,7 +757,7 @@ ui_resource_uri: None,
                             TOOL_TIMEOUT.as_secs()
                         ),
                         is_error: true,
-ui_resource_uri: None,
+                        ui_resource_uri: None,
                     },
                 }
             }
@@ -769,7 +770,7 @@ ui_resource_uri: None,
                     TOOL_TIMEOUT.as_secs()
                 ),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             },
         };
 
@@ -852,7 +853,7 @@ ui_resource_uri: None,
                             "Permission denied: agent mode changes are disabled in settings.json"
                                 .to_string(),
                         is_error: true,
-ui_resource_uri: None,
+                        ui_resource_uri: None,
                     }));
                 }
                 self.permissions
@@ -865,7 +866,7 @@ ui_resource_uri: None,
                     tool_name: tool_name.to_string(),
                     output: "Plan mode entered. File modifications are now blocked.".to_string(),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }))
             }
             "ExitPlanMode" => {
@@ -895,7 +896,7 @@ ui_resource_uri: None,
                     tool_name: tool_name.to_string(),
                     output: "Plan mode exited. Normal operation resumed.".to_string(),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }))
             }
             "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
@@ -926,7 +927,7 @@ ui_resource_uri: None,
                     tool_name: tool_name.to_string(),
                     output: format!("Plan set with {} steps.", steps.len()),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }))
             }
             "UpdatePlan" => {
@@ -947,7 +948,7 @@ ui_resource_uri: None,
                         if done { "done" } else { "not done" }
                     ),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }))
             }
             "finish_task" => {
@@ -998,7 +999,7 @@ ui_resource_uri: None,
                     tool_name: tool_name.to_string(),
                     output: "Task finished. Audit log appended to CADE_AUDIT.md.".to_string(),
                     is_error: false,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 }))
             }
             _ => None,

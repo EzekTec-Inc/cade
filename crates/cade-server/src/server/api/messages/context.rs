@@ -363,9 +363,11 @@ pub(crate) fn group_into_turns(messages: &[LlmMessage], max_turn_chars: usize) -
     let mut current: Vec<LlmMessage> = Vec::new();
     let mut current_chars = 0;
 
+
     for msg in messages {
         let msg_chars = msg.content.chars().count()
-            + msg.tool_calls
+            + msg
+                .tool_calls
                 .as_deref()
                 .unwrap_or_default()
                 .iter()
@@ -383,11 +385,11 @@ pub(crate) fn group_into_turns(messages: &[LlmMessage], max_turn_chars: usize) -
             turns.push(std::mem::take(&mut current));
             current_chars = 0;
         }
-        
+
         current.push(msg.clone());
         current_chars += msg_chars;
     }
-    
+
     if !current.is_empty() {
         turns.push(current);
     }
@@ -424,8 +426,9 @@ pub(crate) async fn build_context(
     // prompt (10–30 KB of skill bodies).  Memory tiers (volatile per turn)
     // remain in `system_dynamic` and are correctly billed at full rate.
     {
-        let mut all_requested_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
-        
+        let mut all_requested_skills: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         // 1. Explicitly loaded skills
         let agent_skills = state.agent_skills.read().await;
         if let Some(loaded_ids) = agent_skills.get(agent_id) {
@@ -565,7 +568,8 @@ pub(crate) async fn build_context(
     // If the window cut off mid-turn, the oldest turn might not start with a user or assistant message.
     // Drop it to ensure we never split tool_call/tool_result pairs.
     if let Some(first_msg) = turns.first().and_then(|t| t.first())
-        && first_msg.role != "user" && first_msg.role != "assistant"
+        && first_msg.role != "user"
+        && first_msg.role != "assistant"
     {
         turns.remove(0);
     }

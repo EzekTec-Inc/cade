@@ -1,17 +1,17 @@
+use crossterm::event::KeyEvent;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use crossterm::event::KeyEvent;
 
-use crate::slots::SlotComponent;
 use crate::ThemeColors;
+use crate::slots::SlotComponent;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -60,7 +60,9 @@ impl LuaWidget {
     pub fn height_constraint(&self) -> Constraint {
         match self {
             LuaWidget::Text { .. } => Constraint::Length(1),
-            LuaWidget::Button { .. } | LuaWidget::Toggle { .. } | LuaWidget::Clock { .. } => Constraint::Length(1),
+            LuaWidget::Button { .. } | LuaWidget::Toggle { .. } | LuaWidget::Clock { .. } => {
+                Constraint::Length(1)
+            }
             LuaWidget::Gauge { .. } => Constraint::Length(3),
             LuaWidget::List { items, .. } => Constraint::Length((items.len() as u16).max(1) + 2),
             LuaWidget::Paragraph { .. } => Constraint::Min(2),
@@ -80,7 +82,10 @@ pub struct LuaUiSlot {
 }
 
 impl LuaUiSlot {
-    pub fn new(is_header: bool, event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>) -> Self {
+    pub fn new(
+        is_header: bool,
+        event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
+    ) -> Self {
         Self {
             is_header,
             root: None,
@@ -107,7 +112,9 @@ impl LuaUiSlot {
         let mut ids = Vec::new();
         fn walk(widget: &LuaWidget, ids: &mut Vec<String>) {
             match widget {
-                LuaWidget::Button { id, .. } | LuaWidget::Toggle { id, .. } | LuaWidget::List { id: Some(id), .. } => {
+                LuaWidget::Button { id, .. }
+                | LuaWidget::Toggle { id, .. }
+                | LuaWidget::List { id: Some(id), .. } => {
                     ids.push(id.clone());
                 }
                 LuaWidget::Layout { children, .. } => {
@@ -173,19 +180,34 @@ impl SlotComponent for LuaUiSlot {
             let focused_id = interactives.get(self.focused_idx).cloned();
 
             let constraints: Vec<Constraint> = if self.is_header {
-                std::iter::repeat(Constraint::Percentage(100 / children.len() as u16)).take(children.len()).collect()
+                std::iter::repeat_n(
+                    Constraint::Percentage(100 / children.len() as u16),
+                    children.len(),
+                )
+                .collect()
             } else {
                 children.iter().map(|c| c.height_constraint()).collect()
             };
             let layout = Layout::default()
-                .direction(if self.is_header { Direction::Horizontal } else { Direction::Vertical })
+                .direction(if self.is_header {
+                    Direction::Horizontal
+                } else {
+                    Direction::Vertical
+                })
                 .constraints(constraints)
                 .split(inner_area);
 
             self.hitboxes.clear();
             for (i, child) in children.iter().enumerate() {
                 if let Some(child_area) = layout.get(i) {
-                    render_widget(child, frame, *child_area, colors, focused_id.as_deref(), &mut self.hitboxes);
+                    render_widget(
+                        child,
+                        frame,
+                        *child_area,
+                        colors,
+                        focused_id.as_deref(),
+                        &mut self.hitboxes,
+                    );
                 }
             }
         } else {
@@ -204,7 +226,7 @@ impl SlotComponent for LuaUiSlot {
     }
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
-        use crossterm::event::{MouseEventKind, MouseButton};
+        use crossterm::event::{MouseButton, MouseEventKind};
         if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
             for (id, rect) in &self.hitboxes {
                 if mouse.column >= rect.x
@@ -219,9 +241,18 @@ impl SlotComponent for LuaUiSlot {
                     }
                     // Trigger it
                     let mut args = serde_json::Map::new();
-                    args.insert("row_offset".to_string(), serde_json::Value::Number((mouse.row - rect.y).into()));
-                    args.insert("col_offset".to_string(), serde_json::Value::Number((mouse.column - rect.x).into()));
-                    self.event_queue.lock().unwrap().push_back((id.clone(), serde_json::Value::Object(args)));
+                    args.insert(
+                        "row_offset".to_string(),
+                        serde_json::Value::Number((mouse.row - rect.y).into()),
+                    );
+                    args.insert(
+                        "col_offset".to_string(),
+                        serde_json::Value::Number((mouse.column - rect.x).into()),
+                    );
+                    self.event_queue
+                        .lock()
+                        .unwrap()
+                        .push_back((id.clone(), serde_json::Value::Object(args)));
                     return true;
                 }
             }
@@ -242,7 +273,14 @@ impl SlotComponent for LuaUiSlot {
     }
 }
 
-fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &ThemeColors, focused_id: Option<&str>, hitboxes: &mut Vec<(String, ratatui::layout::Rect)>) {
+fn render_widget(
+    widget: &LuaWidget,
+    frame: &mut Frame,
+    area: Rect,
+    _colors: &ThemeColors,
+    focused_id: Option<&str>,
+    hitboxes: &mut Vec<(String, ratatui::layout::Rect)>,
+) {
     use ratatui::layout::{Alignment, Rect};
     use ratatui::style::{Color, Style};
     use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
@@ -253,7 +291,10 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             frame.render_widget(p, area);
         }
         LuaWidget::Button { id, label } => {
-            let button_area = Rect { height: 1.min(area.height), ..area };
+            let button_area = Rect {
+                height: 1.min(area.height),
+                ..area
+            };
             hitboxes.push((id.clone(), button_area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
@@ -265,7 +306,10 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             frame.render_widget(p, button_area);
         }
         LuaWidget::Toggle { id, label, state } => {
-            let toggle_area = Rect { height: 1.min(area.height), ..area };
+            let toggle_area = Rect {
+                height: 1.min(area.height),
+                ..area
+            };
             hitboxes.push((id.clone(), toggle_area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
@@ -273,22 +317,30 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             } else {
                 Style::default().fg(Color::White)
             };
-            let p = Paragraph::new(format!("[{}] {}", if *state { "X" } else { " " }, label)).style(style);
+            let p = Paragraph::new(format!("[{}] {}", if *state { "X" } else { " " }, label))
+                .style(style);
             frame.render_widget(p, toggle_area);
         }
-        LuaWidget::Layout { direction, children } => {
+        LuaWidget::Layout {
+            direction,
+            children,
+        } => {
             let is_horizontal = direction.as_deref() == Some("horizontal");
             let mut constraints = Vec::new();
             // Equal constraints for simplicity, or we could use constraints if provided.
             for _ in children {
                 constraints.push(Constraint::Ratio(1, children.len().max(1) as u32));
             }
-            let dir = if is_horizontal { Direction::Horizontal } else { Direction::Vertical };
+            let dir = if is_horizontal {
+                Direction::Horizontal
+            } else {
+                Direction::Vertical
+            };
             let chunks = Layout::default()
                 .direction(dir)
                 .constraints(constraints)
                 .split(area);
-            
+
             for (i, child) in children.iter().enumerate() {
                 if let Some(child_area) = chunks.get(i) {
                     render_widget(child, frame, *child_area, _colors, focused_id, hitboxes);
@@ -301,7 +353,11 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             let p = Paragraph::new(time_str).alignment(Alignment::Right);
             frame.render_widget(p, area);
         }
-        LuaWidget::Gauge { label, ratio, color: _ } => {
+        LuaWidget::Gauge {
+            label,
+            ratio,
+            color: _,
+        } => {
             let mut gauge = Gauge::default()
                 .block(Block::default().borders(Borders::ALL))
                 .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
@@ -311,7 +367,11 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
             }
             frame.render_widget(gauge, area);
         }
-        LuaWidget::List { id, items, selected } => {
+        LuaWidget::List {
+            id,
+            items,
+            selected,
+        } => {
             if let Some(lid) = id {
                 hitboxes.push((lid.clone(), area));
             }
@@ -343,7 +403,7 @@ fn render_widget(widget: &LuaWidget, frame: &mut Frame, area: Rect, _colors: &Th
                 .borders(Borders::ALL)
                 .title(title.as_deref().unwrap_or(""))
                 .border_style(Style::default().fg(Color::Cyan));
-            
+
             let popup_w = 50u16.min(area.width.saturating_sub(2));
             let popup_h = 10u16.min(area.height.saturating_sub(2));
             let x = area.x + (area.width.saturating_sub(popup_w)) / 2;

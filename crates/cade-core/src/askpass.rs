@@ -118,7 +118,7 @@ pub fn apply_askpass_env<C: CommandAskpassEnv>(cmd: &mut C) -> bool {
     cmd.set_askpass_env("SUDO_ASKPASS", &helper_str);
     cmd.set_askpass_env("SSH_ASKPASS", &helper_str);
     cmd.set_askpass_env("GIT_ASKPASS", &helper_str);
-    
+
     // `sudo` normally requires `-A` to use the askpass helper when a terminal is present.
     // By exporting a bash function, any `bash -c` invocation that calls `sudo`
     // will automatically use `-A`, triggering our helper instead of hanging on /dev/tty.

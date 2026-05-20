@@ -204,7 +204,9 @@ async fn async_main() -> Result<()> {
             {
                 None
             }
-        }).await.unwrap_or(None),
+        })
+        .await
+        .unwrap_or(None),
     };
 
     // ── Embedding backfill (WI-SEMANTIC Phase 4) ────────────────────────────
@@ -261,7 +263,12 @@ async fn async_main() -> Result<()> {
                 let sem = consolidation_semaphore.clone();
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await;
-                    cade::server::consolidation::consolidate_agent(&state_c, &agent_id, conv_id.as_deref(), None)
+                    cade::server::consolidation::consolidate_agent(
+                        &state_c,
+                        &agent_id,
+                        conv_id.as_deref(),
+                        None,
+                    )
                     .await;
                 });
             }

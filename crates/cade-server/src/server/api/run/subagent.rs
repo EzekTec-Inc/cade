@@ -355,7 +355,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 cfg.depth
             ),
             is_error: true,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         };
     }
 
@@ -365,7 +365,7 @@ ui_resource_uri: None,
             tool_name: "run_subagent".to_string(),
             output: reason,
             is_error: true,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         };
     }
 
@@ -385,7 +385,7 @@ ui_resource_uri: None,
                 tool_name: "run_subagent".to_string(),
                 output: "error: subagent semaphore closed.".to_string(),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             };
         }
         Err(_) => {
@@ -402,7 +402,7 @@ ui_resource_uri: None,
                         .unwrap_or(4)
                 ),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             };
         }
     };
@@ -1021,7 +1021,7 @@ ui_resource_uri: None,
         tool_name: "run_subagent".to_string(),
         output: output_final,
         is_error,
-ui_resource_uri: None,
+        ui_resource_uri: None,
     }
 }
 
@@ -1045,7 +1045,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                     tool_name: "run_parallel_subagents".to_string(),
                     output: "error: 'prompt' is required when 'team_id' is provided".to_string(),
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 };
             }
         };
@@ -1060,7 +1060,7 @@ ui_resource_uri: None,
                     tool_name: "run_parallel_subagents".to_string(),
                     output: format!("error: team not found: {}", team_id),
                     is_error: true,
-ui_resource_uri: None,
+                    ui_resource_uri: None,
                 };
             }
         };
@@ -1101,7 +1101,7 @@ ui_resource_uri: None,
             output: "error: either 'tasks' array OR 'team_id' and 'prompt' are required"
                 .to_string(),
             is_error: true,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         };
     }
 
@@ -1111,7 +1111,7 @@ ui_resource_uri: None,
             tool_name: "run_parallel_subagents".to_string(),
             output: "error: task list cannot be empty (team may have no members)".to_string(),
             is_error: true,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         };
     }
 
@@ -1156,7 +1156,7 @@ ui_resource_uri: None,
         output: serde_json::to_string_pretty(&aggregated)
             .unwrap_or_else(|e| format!("error serializing results: {e}")),
         is_error: false, // The parallel executor itself succeeded, individual tasks may have failed
-ui_resource_uri: None,
+        ui_resource_uri: None,
     }
 }
 pub(super) async fn handle_cancel_subagent_tool(
@@ -1174,7 +1174,7 @@ pub(super) async fn handle_cancel_subagent_tool(
                 tool_name: "cancel_subagent".to_string(),
                 output: "error: 'subagent_id' is required".to_string(),
                 is_error: true,
-ui_resource_uri: None,
+                ui_resource_uri: None,
             };
         }
     };
@@ -1192,7 +1192,7 @@ ui_resource_uri: None,
             tool_name: "cancel_subagent".to_string(),
             output: format!("Cancel signal sent to subagent {subagent_id}"),
             is_error: false,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         }
     } else {
         ToolResult {
@@ -1200,7 +1200,7 @@ ui_resource_uri: None,
             tool_name: "cancel_subagent".to_string(),
             output: format!("error: no active subagent found with ID {subagent_id}"),
             is_error: true,
-ui_resource_uri: None,
+            ui_resource_uri: None,
         }
     }
 }

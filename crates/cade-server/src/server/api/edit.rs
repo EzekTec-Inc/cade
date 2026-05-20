@@ -60,10 +60,7 @@ pub async fn edit(
     let language = body["language"].as_str().unwrap_or("text");
 
     if instruction.is_empty() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "'instruction' must be provided",
-        );
+        return err(StatusCode::BAD_REQUEST, "'instruction' must be provided");
     }
 
     // ── Resolve model ────────────────────────────────────────────────────
@@ -196,7 +193,7 @@ mod tests {
         let selected_text = "println!(\"hello\");";
         let suffix = "\n}\n";
         let instruction = "Change to hello world";
-        
+
         let prompt = format!(
             "# language: {language}\n\
              <instruction>\n{instruction}\n</instruction>\n\
@@ -204,7 +201,7 @@ mod tests {
              <selected_text>\n{selected_text}\n</selected_text>\n\
              <suffix>\n{suffix}</suffix>"
         );
-        
+
         assert!(prompt.contains("# language: rust"));
         assert!(prompt.contains("<instruction>\nChange to hello world"));
         assert!(prompt.contains("<prefix>\nfn main()"));
@@ -283,7 +280,7 @@ mod tests {
     async fn test_edit_endpoint_returns_sse_stream() {
         let state = make_test_state();
         let agent_id = "test-agent".to_string();
-        
+
         cade_store::sqlite::create_agent(
             &state.db,
             &cade_store::sqlite::AgentRow {
@@ -308,12 +305,22 @@ mod tests {
             "language": "rust"
         });
 
-        let response = edit(axum::extract::State(state), axum::extract::Path(agent_id), axum::Json(body)).await;
-        
+        let response = edit(
+            axum::extract::State(state),
+            axum::extract::Path(agent_id),
+            axum::Json(body),
+        )
+        .await;
+
         let status = response.status();
         assert_eq!(status, StatusCode::OK, "Expected 200 OK from edit endpoint");
-        
-        let content_type = response.headers().get("content-type").unwrap().to_str().unwrap();
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(content_type.starts_with("text/event-stream"));
     }
 }

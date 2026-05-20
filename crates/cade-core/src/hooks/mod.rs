@@ -526,7 +526,11 @@ mod tests {
 
     #[test]
     fn engine_empty_when_no_hooks() {
-        let engine = HookEngine::new(HooksConfig::default(), PathBuf::from("."), "test_session".to_string());
+        let engine = HookEngine::new(
+            HooksConfig::default(),
+            PathBuf::from("."),
+            "test_session".to_string(),
+        );
         assert!(engine.is_empty());
     }
 

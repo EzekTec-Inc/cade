@@ -339,19 +339,24 @@ async fn async_main() -> Result<()> {
             .collect();
         let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
         if !non_mcp_ids.is_empty() {
-            let _ = bg_client.attach_agent_tools(&bg_agent.id, &non_mcp_ids).await;
+            let _ = bg_client
+                .attach_agent_tools(&bg_agent.id, &non_mcp_ids)
+                .await;
         }
 
         if !mgr.is_empty().await {
             use agent::tools::register_mcp_tools;
-            let mcp_tool_ids: Vec<String> = register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|t| t.id)
-                .collect();
+            let mcp_tool_ids: Vec<String> =
+                register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|t| t.id)
+                    .collect();
             if !mcp_tool_ids.is_empty() {
-                let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_tool_ids).await;
+                let _ = bg_client
+                    .attach_agent_tools(&bg_agent.id, &mcp_tool_ids)
+                    .await;
             }
         }
 
@@ -362,15 +367,17 @@ async fn async_main() -> Result<()> {
         }
 
         if bg_args_link {
-            register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities).await;
+            register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities)
+                .await;
             if !mgr.is_empty().await {
                 use agent::tools::register_mcp_tools;
-                let mcp_ids: Vec<String> = register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|t| t.id)
-                    .collect();
+                let mcp_ids: Vec<String> =
+                    register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|t| t.id)
+                        .collect();
                 if !mcp_ids.is_empty() {
                     let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_ids).await;
                 }
@@ -380,7 +387,9 @@ async fn async_main() -> Result<()> {
         if bg_agent
             .system_prompt
             .as_deref()
-            .map(|p| !p.contains("Never introduce yourself") || !p.contains("No rule acknowledgment"))
+            .map(|p| {
+                !p.contains("Never introduce yourself") || !p.contains("No rule acknowledgment")
+            })
             .unwrap_or(true)
         {
             let _ = bg_client
@@ -492,10 +501,10 @@ async fn async_main() -> Result<()> {
     let mut mcp = std::sync::Arc::new(cade_agent::mcp::McpManager::empty());
 
     if let Some(prompt) = headless_prompt {
-        if let Some(rx) = mcp_rx_opt.take() {
-            if let Ok(mgr) = rx.await {
-                mcp = mgr;
-            }
+        if let Some(rx) = mcp_rx_opt.take()
+            && let Ok(mgr) = rx.await
+        {
+            mcp = mgr;
         }
         let fmt = args.effective_output_format();
         let timeout_secs = args.timeout_secs;

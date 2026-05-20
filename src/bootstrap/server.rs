@@ -42,8 +42,8 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
 
         // Detect first-run: if the database file doesn't exist yet, the server
         // needs extra time for initial migration.
-        // Even if it's not a cold start for the DB, semantic-search models 
-        // might need to download (~25MB) on first run or cache clear, so give 
+        // Even if it's not a cold start for the DB, semantic-search models
+        // might need to download (~25MB) on first run or cache clear, so give
         // it a generous timeout regardless.
         let is_cold_start = dirs::home_dir()
             .map(|h| !h.join(".cade").join("cade.db").exists())

@@ -185,7 +185,12 @@ pub(crate) fn should_eager_consolidate(
 ///
 /// This is safe to call concurrently for different agents; all DB access is
 /// through the existing `Arc<parking_lot::Mutex<Connection>>` pool.
-pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id: Option<&str>, override_history_budget: Option<usize>) {
+pub async fn consolidate_agent(
+    state: &AppState,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    override_history_budget: Option<usize>,
+) {
     let agent = match sqlite::get_agent(&state.db, agent_id) {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -242,7 +247,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     let output_reserve = ((window_tokens as f64) * 0.15).round() as usize;
     let input_tokens = window_tokens.saturating_sub(output_reserve);
     let char_budget = (input_tokens * CHARS_PER_TOKEN).clamp(8_000, 6_000_000);
-    let history_budget = override_history_budget.unwrap_or_else(|| (char_budget as f64 * HISTORY_BUDGET_FRACTION).round() as usize);
+    let history_budget = override_history_budget
+        .unwrap_or_else(|| (char_budget as f64 * HISTORY_BUDGET_FRACTION).round() as usize);
 
     let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
     let turns = group_turns(&flat, max_turn_chars);
@@ -403,7 +409,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
                 e,
             ),
         }
-        
+
         // ── 3c. Cumulative Deterministic File Tracking ───────────────────────────
         // Extract file paths from the full untruncated payload so the LLM doesn't have to guess.
         let mut files = std::collections::HashSet::new();
@@ -420,7 +426,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         let mut vec: Vec<_> = files.into_iter().collect();
         vec.sort();
         if !vec.is_empty() {
-            files_touched_block = format!("\n\n<files_touched>\n{}\n</files_touched>", vec.join("\n"));
+            files_touched_block =
+                format!("\n\n<files_touched>\n{}\n</files_touched>", vec.join("\n"));
         }
     }
 
@@ -496,7 +503,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // ── 4b. Inflation Guard & Regex Fallback ──
     let dropped_chars = history_text.chars().count();
     let summary_chars = summary.chars().count();
-    
+
     let final_summary = if is_summary_inflated(summary_chars, dropped_chars) {
         tracing::warn!(
             "consolidate [{}]: summary inflated ({} chars) vs dropped ({} chars) — falling back to regex anchors",
@@ -509,30 +516,33 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             .entry(agent_id.to_string())
             .or_default()
             .inflation_guard_hits += 1;
-            
+
         // Fast regex fallback instead of skipping entirely
         let mut anchors = std::collections::HashSet::new();
-        
-        if let Ok(re_file) = regex::Regex::new(r"(/[\w\./-]+\.\w+|src/[\w\./-]+\.\w+|crates/[\w\./-]+\.\w+)") {
+
+        if let Ok(re_file) =
+            regex::Regex::new(r"(/[\w\./-]+\.\w+|src/[\w\./-]+\.\w+|crates/[\w\./-]+\.\w+)")
+        {
             for cap in re_file.captures_iter(&history_text) {
                 anchors.insert(cap[1].to_string());
             }
         }
-        
+
         if let Ok(re_tool) = regex::Regex::new(r"(\w+__\w+)") {
             for cap in re_tool.captures_iter(&history_text) {
-                if !cap[1].starts_with("default_api") { // basic filter
+                if !cap[1].starts_with("default_api") {
+                    // basic filter
                     anchors.insert(cap[1].to_string());
                 }
             }
         }
-        
+
         if let Ok(re_err) = regex::Regex::new(r"(error\[E\d+\]|panic at|Exception)") {
             for cap in re_err.captures_iter(&history_text) {
                 anchors.insert(cap[1].to_string());
             }
         }
-        
+
         let mut vec: Vec<_> = anchors.into_iter().collect();
         vec.sort();
         vec.truncate(8);
@@ -808,8 +818,6 @@ fn is_high_priority_message(role: &str, content: &str) -> bool {
 }
 
 // ── P7: active_goal auto-update ───────────────────────────────────────────────
-
-
 
 /// Phase B: Automated Extraction of durable facts from consolidation summaries.
 ///
@@ -1252,6 +1260,7 @@ fn group_turns(messages: &[(String, String)], max_turn_chars: usize) -> Vec<Vec<
     let mut turns: Vec<Vec<(String, String)>> = Vec::new();
     let mut current: Vec<(String, String)> = Vec::new();
     let mut current_chars = 0;
+
 
     for msg in messages {
         let msg_chars = msg.1.chars().count();

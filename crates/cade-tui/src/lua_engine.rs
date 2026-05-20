@@ -1,6 +1,6 @@
 use mlua::prelude::*;
-use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 pub struct LuaEngine {
     pub lua: Lua,
@@ -37,12 +37,13 @@ impl LuaEngine {
         lua.globals().set("_CADE_execute_slash_command", exec_cmd)?;
 
         let tool_q = tool_queue.clone();
-        let call_tool_fn = lua.create_function(move |lua_ctx, (name, args): (String, mlua::Value)| {
-            let args_json: serde_json::Value = lua_ctx.from_value(args)?;
-            tracing::info!("[Lua] call_tool: {} with args {}", name, args_json);
-            tool_q.lock().unwrap().push_back((name, args_json));
-            Ok(())
-        })?;
+        let call_tool_fn =
+            lua.create_function(move |lua_ctx, (name, args): (String, mlua::Value)| {
+                let args_json: serde_json::Value = lua_ctx.from_value(args)?;
+                tracing::info!("[Lua] call_tool: {} with args {}", name, args_json);
+                tool_q.lock().unwrap().push_back((name, args_json));
+                Ok(())
+            })?;
         lua.globals().set("_CADE_call_tool", call_tool_fn)?;
 
         // UI Extensions table
@@ -51,7 +52,8 @@ impl LuaEngine {
         lua.globals().set("CADE_UI", ui_ext)?;
 
         // CADE core table (for commands and keybindings)
-        lua.load(r#"
+        lua.load(
+            r#"
             CADE = {
                 _commands = {},
                 _keybindings = {},
@@ -72,9 +74,11 @@ impl LuaEngine {
                     _CADE_call_tool(name, args)
                 end
             }
-        "#).exec()?;
+        "#,
+        )
+        .exec()?;
 
-        Ok(Self { 
+        Ok(Self {
             lua,
             command_queue,
             tool_queue,
@@ -87,7 +91,7 @@ impl LuaEngine {
         state.set(key, value)?;
         Ok(())
     }
-    
+
     pub fn set_state_nil(&self, key: &str) -> mlua::Result<()> {
         let state: mlua::Table = self.lua.globals().get("CADE_STATE")?;
         state.set(key, mlua::Value::Nil)?;
@@ -100,18 +104,20 @@ impl LuaEngine {
         }
 
         // Add plugin_dir and cade-tui crate directories to package.path for require() routing
-        if let Ok(package) = self.lua.globals().get::<mlua::Table>("package") {
-            if let Ok(current_path) = package.get::<String>("path") {
-                let dir_str = plugin_dir.to_string_lossy();
-                let new_path = format!(
-                    "{};{}/?.lua;{}/?/init.lua;./crates/cade-tui/?.lua;./cade-tui/?.lua", 
-                    current_path, dir_str, dir_str
-                );
-                let _ = package.set("path", new_path);
-            }
+        if let Ok(package) = self.lua.globals().get::<mlua::Table>("package")
+            && let Ok(current_path) = package.get::<String>("path")
+        {
+            let dir_str = plugin_dir.to_string_lossy();
+            let new_path = format!(
+                "{};{}/?.lua;{}/?/init.lua;./crates/cade-tui/?.lua;./cade-tui/?.lua",
+                current_path, dir_str, dir_str
+            );
+            let _ = package.set("path", new_path);
         }
 
-        let Ok(entries) = std::fs::read_dir(plugin_dir) else { return };
+        let Ok(entries) = std::fs::read_dir(plugin_dir) else {
+            return;
+        };
         let mut paths: Vec<_> = entries
             .flatten()
             .filter_map(|e| {
@@ -130,12 +136,17 @@ impl LuaEngine {
                 }
             })
             .collect();
-            
+
         paths.sort();
 
         for path in paths {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Err(e) = self.lua.load(&content).set_name(path.to_string_lossy()).exec() {
+                if let Err(e) = self
+                    .lua
+                    .load(&content)
+                    .set_name(path.to_string_lossy())
+                    .exec()
+                {
                     tracing::warn!("Failed to load UI plugin {}: {}", path.display(), e);
                 } else {
                     tracing::info!("Loaded UI plugin: {}", path.display());
@@ -145,51 +156,51 @@ impl LuaEngine {
     }
 
     pub fn get_footer_text(&self) -> Option<String> {
-        if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI") {
-            if let Ok(footer) = ui.get::<String>("footer") {
-                if !footer.is_empty() {
-                    return Some(footer);
-                }
-            }
+        if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI")
+            && let Ok(footer) = ui.get::<String>("footer")
+            && !footer.is_empty()
+        {
+            return Some(footer);
         }
         None
     }
 
     pub fn handle_keybinding(&self, key: &str) -> bool {
-        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
-            if let Ok(bindings) = cade.get::<mlua::Table>("_keybindings") {
-                if let Ok(func) = bindings.get::<mlua::Function>(key) {
-                    if let Err(e) = func.call::<()>(()) {
-                        tracing::warn!("Lua keybinding error for {}: {}", key, e);
-                    }
-                    return true; // handled
-                }
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE")
+            && let Ok(bindings) = cade.get::<mlua::Table>("_keybindings")
+            && let Ok(func) = bindings.get::<mlua::Function>(key)
+        {
+            if let Err(e) = func.call::<()>(()) {
+                tracing::warn!("Lua keybinding error for {}: {}", key, e);
             }
+            return true; // handled
         }
         false
     }
 
     pub fn handle_command(&self, command: &str, args: Vec<String>) -> bool {
-        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
-            if let Ok(commands) = cade.get::<mlua::Table>("_commands") {
-                if let Ok(func) = commands.get::<mlua::Function>(command) {
-                    if let Err(e) = func.call::<()>(args) {
-                        tracing::warn!("Lua command error for {}: {}", command, e);
-                    }
-                    return true; // handled
-                }
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE")
+            && let Ok(commands) = cade.get::<mlua::Table>("_commands")
+            && let Ok(func) = commands.get::<mlua::Function>(command)
+        {
+            if let Err(e) = func.call::<()>(args) {
+                tracing::warn!("Lua command error for {}: {}", command, e);
             }
+            return true; // handled
         }
         false
     }
 
     pub fn get_sidebar_ui(&self) -> Option<Vec<crate::lua_ui::LuaWidget>> {
-        if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI") {
-            if let Ok(sidebar) = ui.get::<mlua::Value>("sidebar") {
-                match self.lua.from_value::<Vec<crate::lua_ui::LuaWidget>>(sidebar) {
-                    Ok(widgets) => return Some(widgets),
-                    Err(e) => tracing::warn!("Failed to deserialize CADE_UI.sidebar: {}", e),
-                }
+        if let Ok(ui) = self.lua.globals().get::<mlua::Table>("CADE_UI")
+            && let Ok(sidebar) = ui.get::<mlua::Value>("sidebar")
+        {
+            match self
+                .lua
+                .from_value::<Vec<crate::lua_ui::LuaWidget>>(sidebar)
+            {
+                Ok(widgets) => return Some(widgets),
+                Err(e) => tracing::warn!("Failed to deserialize CADE_UI.sidebar: {}", e),
             }
         }
         None
@@ -212,7 +223,11 @@ impl LuaEngine {
     }
 
     pub fn trigger_mcp_ui(&self, uri: &str) -> bool {
-        if let Ok(func) = self.lua.globals().get::<mlua::Function>("CADE_TRIGGER_MCP_UI") {
+        if let Ok(func) = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("CADE_TRIGGER_MCP_UI")
+        {
             if let Err(e) = func.call::<()>(uri) {
                 tracing::warn!("Lua CADE_TRIGGER_MCP_UI error: {}", e);
             }
@@ -222,20 +237,19 @@ impl LuaEngine {
     }
 
     pub fn handle_ui_event(&self, id: &str, args: serde_json::Value) -> bool {
-        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE") {
-            if let Ok(cbs) = cade.get::<mlua::Table>("_ui_callbacks") {
-                if let Ok(func) = cbs.get::<mlua::Function>(id) {
-                    let lua_args = if args.is_null() {
-                        mlua::Value::Nil
-                    } else {
-                        self.lua.to_value(&args).unwrap_or(mlua::Value::Nil)
-                    };
-                    if let Err(e) = func.call::<()>(lua_args) {
-                        tracing::warn!("Lua UI callback error for {}: {}", id, e);
-                    }
-                    return true;
-                }
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE")
+            && let Ok(cbs) = cade.get::<mlua::Table>("_ui_callbacks")
+            && let Ok(func) = cbs.get::<mlua::Function>(id)
+        {
+            let lua_args = if args.is_null() {
+                mlua::Value::Nil
+            } else {
+                self.lua.to_value(&args).unwrap_or(mlua::Value::Nil)
+            };
+            if let Err(e) = func.call::<()>(lua_args) {
+                tracing::warn!("Lua UI callback error for {}: {}", id, e);
             }
+            return true;
         }
         false
     }
@@ -250,21 +264,25 @@ mod tests {
     fn test_multiple_plugins() {
         let engine = LuaEngine::new().unwrap();
         let dir = tempdir().unwrap();
-        
+
         // 1. Standalone lua file
         std::fs::write(dir.path().join("1-standalone.lua"), "CADE_UI.footer = 'p1'").unwrap();
-        
+
         // 2. Folder-based plugin with init.lua and internal require routing
         let folder_plugin = dir.path().join("2-folder");
         std::fs::create_dir(&folder_plugin).unwrap();
         std::fs::write(folder_plugin.join("helper.lua"), "return 'p2'").unwrap();
-        std::fs::write(folder_plugin.join("init.lua"), "
+        std::fs::write(
+            folder_plugin.join("init.lua"),
+            "
             local helper = require('helper')
             CADE_UI.footer = CADE_UI.footer .. helper
-        ").unwrap();
-        
+        ",
+        )
+        .unwrap();
+
         engine.load_plugins(dir.path());
-        
+
         assert_eq!(engine.get_footer_text().unwrap(), "p1p2");
     }
 }
@@ -278,15 +296,19 @@ mod additional_tests {
     fn test_header_clock() {
         let engine = LuaEngine::new().unwrap();
         let dir = tempdir().unwrap();
-        
-        std::fs::write(dir.path().join("clock.lua"), "
+
+        std::fs::write(
+            dir.path().join("clock.lua"),
+            "
             CADE_UI.header = {
                 { type = 'clock', format = '%H:%M:%S', color = 'cyan' }
             }
-        ").unwrap();
-        
+        ",
+        )
+        .unwrap();
+
         engine.load_plugins(dir.path());
-        
+
         let header = engine.get_header_ui();
         assert!(header.is_some(), "Header was None!");
     }
