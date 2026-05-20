@@ -28,6 +28,10 @@ function M._parse_sse_line(line)
     return { type = "delta", content = obj.content }
   end
 
+  if obj.message_type == "stream_end" then
+    return { type = "done" }
+  end
+
   if obj.error then
     return { type = "error", message = obj.error }
   end

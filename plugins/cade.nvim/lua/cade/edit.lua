@@ -86,14 +86,15 @@ end
 local function get_visual_selection()
   local _, start_row, start_col, _ = unpack(vim.fn.getpos("'<"))
   local _, end_row, end_col, _ = unpack(vim.fn.getpos("'>"))
-  start_row = start_row - 1
-  end_row = end_row - 1
-  start_col = start_col - 1
-
+  
   if start_row > end_row or (start_row == end_row and start_col > end_col) then
     start_row, end_row = end_row, start_row
     start_col, end_col = end_col, start_col
   end
+
+  start_row = start_row - 1
+  end_row = end_row - 1
+  start_col = start_col - 1
   
   -- For line mode ('V'), end_col is usually v:maxcol, we need to clamp it
   local line_len = string.len(vim.api.nvim_buf_get_lines(0, end_row, end_row+1, true)[1] or "")
@@ -128,11 +129,14 @@ function M.update_visual_hint()
   local cfg = require("cade.config").get()
   local key = (cfg.keymaps and cfg.keymaps.edit) or "<leader>ce"
   
-  pcall(vim.api.nvim_buf_set_extmark, 0, hint_ns, row, 0, {
+  local ok, err = pcall(vim.api.nvim_buf_set_extmark, 0, hint_ns, row, 0, {
     virt_text = { { " [" .. key .. ": ask cade]", "DiagnosticInfo" } },
     virt_text_pos = "eol",
     hl_mode = "combine",
   })
+  if not ok then
+    vim.notify("Hint error: " .. tostring(err), vim.log.levels.WARN)
+  end
 end
 
 function M.setup_hints()
@@ -228,7 +232,7 @@ function M.hover_edit()
     
     vim.keymap.set("i", "<CR>", function()
       local instruction = table.concat(vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false), "\n")
-      if instruction == vim.trim("") then return end
+      if vim.trim(instruction) == "" then return end
       
       vim.cmd("stopinsert")
       
@@ -238,17 +242,24 @@ function M.hover_edit()
       vim.api.nvim_win_set_config(prompt_win, { title = " ✨ CADE Edit (Streaming...) ", title_pos = "center" })
       
       local accumulated_response = ""
+      local error_occurred = false
       
       vim.keymap.set("n", "<CR>", function()
-        if not cancel then
-          local start_pos = vim.api.nvim_buf_get_extmark_by_id(buf, sel_ns, sel_extmark, {details=true})
-          if #start_pos > 0 then
-            local cur_s_row, cur_s_col, details = start_pos[1], start_pos[2], start_pos[3]
-            local cur_e_row, cur_e_col = details.end_row, details.end_col
-            replace_text(buf, cur_s_row, cur_s_col, cur_e_row, cur_e_col, accumulated_response)
-          end
-          close_all()
+        if cancel then
+          vim.notify("Wait for the edit to finish streaming, or press Esc to cancel.", vim.log.levels.INFO)
+          return
         end
+        if error_occurred then
+          vim.notify("Edit failed. Press Esc to close.", vim.log.levels.WARN)
+          return
+        end
+        local start_pos = vim.api.nvim_buf_get_extmark_by_id(buf, sel_ns, sel_extmark, {details=true})
+        if #start_pos > 0 then
+          local cur_s_row, cur_s_col, details = start_pos[1], start_pos[2], start_pos[3]
+          local cur_e_row, cur_e_col = details.end_row, details.end_col
+          replace_text(buf, cur_s_row, cur_s_col, cur_e_row, cur_e_col, accumulated_response)
+        end
+        close_all()
       end, { buffer = prompt_buf })
       
       vim.keymap.set("n", "<Esc>", close_all, { buffer = prompt_buf })
@@ -258,25 +269,29 @@ function M.hover_edit()
           accumulated_response = snap
           local lines = vim.split(snap, "\n", {plain=true})
           table.insert(lines, "```")
-          vim.api.nvim_buf_set_lines(prompt_buf, response_start_row, -1, false, lines)
+          local ok = pcall(vim.api.nvim_buf_set_lines, prompt_buf, response_start_row, -1, false, lines)
+          if not ok then return end
           
-          local new_height = vim.api.nvim_win_text_height(prompt_win, {}).all
-          if new_height > 0 then
-            vim.api.nvim_win_set_config(prompt_win, { height = math.min(max_h, new_height) })
+          local ok_h, new_height = pcall(function() return vim.api.nvim_win_text_height(prompt_win, {}).all end)
+          if ok_h and new_height > 0 then
+            pcall(vim.api.nvim_win_set_config, prompt_win, { height = math.min(max_h, new_height) })
           end
           
           -- Auto-scroll to the bottom as new lines stream in
-          local line_count = vim.api.nvim_buf_line_count(prompt_buf)
-          pcall(vim.api.nvim_win_set_cursor, prompt_win, {line_count, 0})
+          local ok_c, line_count = pcall(vim.api.nvim_buf_line_count, prompt_buf)
+          if ok_c then
+            pcall(vim.api.nvim_win_set_cursor, prompt_win, {line_count, 0})
+          end
         end,
         function()
           cancel = nil
-          vim.api.nvim_win_set_config(prompt_win, { title = " ✨ Press Enter to Apply, Esc to Cancel ", title_pos = "center" })
+          pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Press Enter to Apply, Esc to Cancel ", title_pos = "center" })
         end,
         function(err)
           cancel = nil
+          error_occurred = true
           vim.notify("CADE Edit error: " .. err, vim.log.levels.ERROR)
-          vim.api.nvim_win_set_config(prompt_win, { title = " ✨ Error ", title_pos = "center" })
+          pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Error ", title_pos = "center" })
         end
       )
     end, { buffer = prompt_buf })
