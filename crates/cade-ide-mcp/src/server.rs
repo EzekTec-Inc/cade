@@ -189,8 +189,9 @@ pub struct OpenFileOut {}
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SetSelectionIn {
     /// Absolute filesystem path of the file whose selection to update.
-    /// Must currently be open.
-    pub path: String,
+    /// Must currently be open. If omitted, uses the active file.
+    #[serde(default)]
+    pub path: Option<String>,
     /// Inclusive-start, exclusive-end range to select.
     pub range: crate::state::Range,
 }
@@ -202,8 +203,9 @@ pub struct SetSelectionOut {}
 /// Input of the `save_file` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SaveFileIn {
-    /// Absolute filesystem path of the buffer to save.
-    pub path: String,
+    /// Absolute filesystem path of the buffer to save. If omitted, uses the active file.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// Output of the `save_file` / `save_all` tools. Empty on success.
@@ -477,11 +479,10 @@ impl IdeMcpServer {
             Some(p) => p,
             None => {
                 let active = self.get_active_file_impl().await;
-                active.path.ok_or_else(|| ErrorData {
-                    code: -32602,
-                    message: "missing field `path` and no active file found".to_string(),
-                    data: None,
-                })?
+                active.path.ok_or_else(|| ErrorData::invalid_params(
+                    "missing field `path` and no active file found",
+                    None,
+                ))?
             }
         };
         self.get_file_content_impl(p).await.map(Json)
@@ -499,11 +500,10 @@ impl IdeMcpServer {
             Some(p) => p,
             None => {
                 let active = self.get_active_file_impl().await;
-                active.path.ok_or_else(|| ErrorData {
-                    code: -32602,
-                    message: "missing field `path` and no active file found".to_string(),
-                    data: None,
-                })?
+                active.path.ok_or_else(|| ErrorData::invalid_params(
+                    "missing field `path` and no active file found",
+                    None,
+                ))?
             }
         };
         let apply_req = crate::state::ApplyEditRequest {
@@ -528,24 +528,44 @@ impl IdeMcpServer {
     /// Move the editor's active selection to the given range.
     #[tool(
         name = "set_selection",
-        description = "Move the editor's active selection to `range` inside `path`. The file must currently be open. Errors with method_not_found if no editor adapter is attached."
+        description = "Move the editor's active selection to `range` inside `path`. The file must currently be open. If 'path' is omitted, uses the currently active file. Errors with method_not_found if no editor adapter is attached."
     )]
     async fn set_selection(
         &self,
-        Parameters(SetSelectionIn { path, range }): Parameters<SetSelectionIn>,
+        Parameters(req): Parameters<SetSelectionIn>,
     ) -> Result<Json<SetSelectionOut>, ErrorData> {
-        self.set_selection_impl(path, range).await.map(Json)
+        let path = match req.path {
+            Some(p) => p,
+            None => {
+                let active = self.get_active_file_impl().await;
+                active.path.ok_or_else(|| ErrorData::invalid_params(
+                    "missing field `path` and no active file found",
+                    None,
+                ))?
+            }
+        };
+        self.set_selection_impl(path, req.range).await.map(Json)
     }
 
     /// Save a single open buffer to disk.
     #[tool(
         name = "save_file",
-        description = "Save the open buffer at `path` to disk. Errors with method_not_found if no editor adapter is attached."
+        description = "Save the open buffer at `path` to disk. If 'path' is omitted, uses the currently active file. Errors with method_not_found if no editor adapter is attached."
     )]
     async fn save_file(
         &self,
-        Parameters(SaveFileIn { path }): Parameters<SaveFileIn>,
+        Parameters(req): Parameters<SaveFileIn>,
     ) -> Result<Json<SaveOut>, ErrorData> {
+        let path = match req.path {
+            Some(p) => p,
+            None => {
+                let active = self.get_active_file_impl().await;
+                active.path.ok_or_else(|| ErrorData::invalid_params(
+                    "missing field `path` and no active file found",
+                    None,
+                ))?
+            }
+        };
         self.save_file_impl(path).await.map(Json)
     }
 

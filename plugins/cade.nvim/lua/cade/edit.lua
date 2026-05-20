@@ -308,15 +308,14 @@ function M.hover_edit()
     vim.keymap.set("n", "<Esc>", close_all, { buffer = prompt_buf })
     vim.keymap.set("i", "<Esc>", function()
       vim.cmd("stopinsert")
-      close_all()
     end, { buffer = prompt_buf })
     
-    -- Let <CR> add a new line in insert mode
-    -- Use <C-s> or <C-CR> to submit or apply
+    -- Use <C-s> or <CR> to submit or apply
     vim.keymap.set("n", "<C-s>", submit_or_apply, { buffer = prompt_buf })
     vim.keymap.set("i", "<C-s>", submit_or_apply, { buffer = prompt_buf })
     
     vim.keymap.set("n", "<CR>", submit_or_apply, { buffer = prompt_buf })
+    vim.keymap.set("i", "<CR>", submit_or_apply, { buffer = prompt_buf })
   end)
 end
 
