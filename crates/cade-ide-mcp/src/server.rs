@@ -144,7 +144,17 @@ pub struct GetVisibleRangeOut {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetFileContentIn {
     /// Absolute filesystem path of an open file to read.
-    pub path: String,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Input of the `apply_edit` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplyEditIn {
+    /// Absolute filesystem path of an open file to edit.
+    #[serde(default)]
+    pub path: Option<String>,
+    pub text_edits: Vec<crate::state::TextEdit>,
 }
 
 /// Output of the `get_file_content` tool. Mirrors the LSP
@@ -457,24 +467,50 @@ impl IdeMcpServer {
     /// Return the full text of a single open file.
     #[tool(
         name = "get_file_content",
-        description = "Return the full buffer text of a single open file, identified by its absolute path. Errors if the path is not currently open in the editor — the agent should not trigger a filesystem read; the editor adapter owns buffer state."
+        description = "Return the full buffer text of a single open file, identified by its absolute path. If path is omitted, uses the currently active file. Errors if the path is not currently open in the editor — the agent should not trigger a filesystem read; the editor adapter owns buffer state."
     )]
     async fn get_file_content(
         &self,
         Parameters(GetFileContentIn { path }): Parameters<GetFileContentIn>,
     ) -> Result<Json<GetFileContentOut>, ErrorData> {
-        self.get_file_content_impl(path).await.map(Json)
+        let p = match path {
+            Some(p) => p,
+            None => {
+                let active = self.get_active_file_impl().await;
+                active.path.ok_or_else(|| ErrorData {
+                    code: -32602,
+                    message: "missing field `path` and no active file found".to_string(),
+                    data: None,
+                })?
+            }
+        };
+        self.get_file_content_impl(p).await.map(Json)
     }
 
     #[tool(
         name = "apply_edit",
-        description = "Apply a batch of text edits (LSP TextEdit shape) to a single open file. You MUST provide the 'path' argument (absolute file path) along with the 'text_edits'. Errors with method_not_found if no editor adapter is attached, or with invalid_params when the path is not open."
+        description = "Apply a batch of text edits (LSP TextEdit shape) to a single open file. If 'path' is omitted, uses the currently active file. Errors with method_not_found if no editor adapter is attached, or with invalid_params when the path is not open."
     )]
     async fn apply_edit(
         &self,
-        Parameters(req): Parameters<crate::state::ApplyEditRequest>,
+        Parameters(req): Parameters<ApplyEditIn>,
     ) -> Result<Json<ApplyEditOut>, ErrorData> {
-        self.apply_edit_impl(req).await.map(Json)
+        let path = match req.path {
+            Some(p) => p,
+            None => {
+                let active = self.get_active_file_impl().await;
+                active.path.ok_or_else(|| ErrorData {
+                    code: -32602,
+                    message: "missing field `path` and no active file found".to_string(),
+                    data: None,
+                })?
+            }
+        };
+        let apply_req = crate::state::ApplyEditRequest {
+            path,
+            text_edits: req.text_edits,
+        };
+        self.apply_edit_impl(apply_req).await.map(Json)
     }
 
     /// Open a file in the editor and bring it into focus.

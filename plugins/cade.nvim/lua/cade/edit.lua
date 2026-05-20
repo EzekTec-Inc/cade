@@ -223,6 +223,10 @@ function M.hover_edit()
     vim.cmd("startinsert")
     
     local cancel = nil
+    local accumulated_response = ""
+    local error_occurred = false
+    local response_start_row = 0
+    local is_streaming = false
     
     local function close_all()
       if cancel then cancel() end
@@ -230,29 +234,19 @@ function M.hover_edit()
       pcall(vim.api.nvim_buf_del_extmark, buf, sel_ns, sel_extmark)
     end
     
-    vim.keymap.set("i", "<CR>", function()
-      local instruction = table.concat(vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false), "\n")
-      if vim.trim(instruction) == "" then return end
+    local function submit_or_apply()
+      if is_streaming then
+        vim.notify("Wait for the edit to finish streaming, or press Esc to cancel.", vim.log.levels.INFO)
+        return
+      end
       
-      vim.cmd("stopinsert")
+      if error_occurred then
+        vim.notify("Edit failed. Press Esc to close.", vim.log.levels.WARN)
+        return
+      end
       
-      vim.api.nvim_buf_set_lines(prompt_buf, -1, -1, false, { "", "---", "", "```" .. language, "```" })
-      local response_start_row = vim.api.nvim_buf_line_count(prompt_buf) - 1
-      
-      vim.api.nvim_win_set_config(prompt_win, { title = " ✨ CADE Edit (Streaming...) ", title_pos = "center" })
-      
-      local accumulated_response = ""
-      local error_occurred = false
-      
-      vim.keymap.set("n", "<CR>", function()
-        if cancel then
-          vim.notify("Wait for the edit to finish streaming, or press Esc to cancel.", vim.log.levels.INFO)
-          return
-        end
-        if error_occurred then
-          vim.notify("Edit failed. Press Esc to close.", vim.log.levels.WARN)
-          return
-        end
+      -- If we already have a response, apply it
+      if accumulated_response ~= "" then
         local start_pos = vim.api.nvim_buf_get_extmark_by_id(buf, sel_ns, sel_extmark, {details=true})
         if #start_pos > 0 then
           local cur_s_row, cur_s_col, details = start_pos[1], start_pos[2], start_pos[3]
@@ -260,16 +254,29 @@ function M.hover_edit()
           replace_text(buf, cur_s_row, cur_s_col, cur_e_row, cur_e_col, accumulated_response)
         end
         close_all()
-      end, { buffer = prompt_buf })
+        return
+      end
       
-      vim.keymap.set("n", "<Esc>", close_all, { buffer = prompt_buf })
+      -- Otherwise, submit instruction
+      local lines = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
+      local instruction = vim.trim(table.concat(lines, "\n"))
+      if instruction == "" then return end
+      
+      vim.cmd("stopinsert")
+      
+      vim.api.nvim_buf_set_lines(prompt_buf, -1, -1, false, { "", "---", "", "```" .. language, "```" })
+      response_start_row = vim.api.nvim_buf_line_count(prompt_buf) - 1
+      
+      vim.api.nvim_win_set_config(prompt_win, { title = " ✨ CADE Edit (Streaming...) ", title_pos = "center" })
+      
+      is_streaming = true
       
       cancel = M.fetch_edit(prefix, selected_text, suffix, instruction, language, 
         function(snap)
           accumulated_response = snap
-          local lines = vim.split(snap, "\n", {plain=true})
-          table.insert(lines, "```")
-          local ok = pcall(vim.api.nvim_buf_set_lines, prompt_buf, response_start_row, -1, false, lines)
+          local rsp_lines = vim.split(snap, "\n", {plain=true})
+          table.insert(rsp_lines, "```")
+          local ok = pcall(vim.api.nvim_buf_set_lines, prompt_buf, response_start_row, -1, false, rsp_lines)
           if not ok then return end
           
           local ok_h, new_height = pcall(function() return vim.api.nvim_win_text_height(prompt_win, {}).all end)
@@ -284,23 +291,32 @@ function M.hover_edit()
           end
         end,
         function()
+          is_streaming = false
           cancel = nil
-          pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Press Enter to Apply, Esc to Cancel ", title_pos = "center" })
+          pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Press <C-s> to Apply, Esc to Cancel ", title_pos = "center" })
         end,
         function(err)
+          is_streaming = false
           cancel = nil
           error_occurred = true
           vim.notify("CADE Edit error: " .. err, vim.log.levels.ERROR)
           pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Error ", title_pos = "center" })
         end
       )
-    end, { buffer = prompt_buf })
+    end
     
     vim.keymap.set("n", "<Esc>", close_all, { buffer = prompt_buf })
     vim.keymap.set("i", "<Esc>", function()
       vim.cmd("stopinsert")
       close_all()
     end, { buffer = prompt_buf })
+    
+    -- Let <CR> add a new line in insert mode
+    -- Use <C-s> or <C-CR> to submit or apply
+    vim.keymap.set("n", "<C-s>", submit_or_apply, { buffer = prompt_buf })
+    vim.keymap.set("i", "<C-s>", submit_or_apply, { buffer = prompt_buf })
+    
+    vim.keymap.set("n", "<CR>", submit_or_apply, { buffer = prompt_buf })
   end)
 end
 
