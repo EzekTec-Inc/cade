@@ -1,6 +1,6 @@
 [package]
 name        = "cade-gui"
-version     = "2.2.1"
+version = "2.3.0"
 edition     = "2024"
 description = "CADE — web GUI (WASM) served by cade-server at /dashboard"
 license     = "MIT OR Apache-2.0"

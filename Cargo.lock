@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "cade-agent"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "cade-ai"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "cade-api-types"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "cade-cli"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "cade-core"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "chrono",
  "derive_more",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "cade-desktop"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "base64 0.22.1",
  "cade-core",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "cade-gui"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "cade-api-types",
  "cade-core",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "cade-mcp"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "cade-core",
  "derive_more",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "cade-plugin"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "cade-agent",
  "cade-core",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "cade-sdk"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "cade-agent",
  "cade-core",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "cade-server"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "cade-store"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "cade-tui"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "ansi-to-tui",
  "arboard",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "cade-web"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "cade-core",
  "derive_more",
