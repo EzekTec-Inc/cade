@@ -66,6 +66,7 @@ impl SshBackend {
         for arg in self.base_ssh_args() {
             cmd.arg(arg);
         }
+        cmd.kill_on_drop(true);
         cmd.arg("--").arg("bash").arg("-c").arg(&wrapped);
 
         let result = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output())

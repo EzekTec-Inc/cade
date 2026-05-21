@@ -489,6 +489,7 @@ impl Repl {
 
             if !read_indices.is_empty() {
                 let mut handles = Vec::new();
+                let mut abort_handles = Vec::new();
                 let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
 
                 for &i in &read_indices {
@@ -528,6 +529,8 @@ impl Repl {
                         (i, r)
                     });
 
+                    abort_handles.push(handle.abort_handle());
+
                     handles.push(async move {
                         match handle.await {
                             Ok((i, r)) => (i, Ok(r)),
@@ -535,7 +538,22 @@ impl Repl {
                         }
                     });
                 }
-                let join_results = futures::future::join_all(handles).await;
+                
+                let mut join_fut = Box::pin(futures::future::join_all(handles));
+                let join_results = loop {
+                    tokio::select! {
+                        res = &mut join_fut => break res,
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => {
+                            if self.cancel_turn.load(std::sync::atomic::Ordering::SeqCst) {
+                                for ah in abort_handles {
+                                    ah.abort();
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
+                };
+
                 for (i, join_result) in join_results {
                     match join_result {
                         Ok(r) => {
@@ -560,8 +578,12 @@ impl Repl {
 
             // Execute write tools sequentially.
             for &i in &write_indices {
+                if self.cancel_turn.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Ok(());
+                }
+
                 let (call_id, tool_name, args) = &tool_calls[i];
-                let r = Self::run_tool_inner(
+                let mut run_fut = Box::pin(Self::run_tool_inner(
                     call_id,
                     tool_name,
                     args,
@@ -572,8 +594,21 @@ impl Repl {
                     pr.as_deref(),
                     pa.as_deref(),
                     &self.session_stats,
-                )
-                .await;
+                ));
+
+                let r = loop {
+                    tokio::select! {
+                        res = &mut run_fut => break res,
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => {
+                            if self.cancel_turn.load(std::sync::atomic::Ordering::SeqCst) {
+                                // Dropping `run_fut` will drop the inner futures (like exec_bash)
+                                // and kill the child process if it was configured with kill_on_drop(true).
+                                return Ok(());
+                            }
+                        }
+                    }
+                };
+
                 results[i] = r;
                 // Refresh grace period after each write tool so the next tool (or
                 // Phase 3 streaming) is protected from stale terminal events.

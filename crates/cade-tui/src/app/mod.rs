@@ -1237,6 +1237,7 @@ impl TuiApp {
             let text = self.editor.text();
             let cursor_byte = self.editor.cursor_pos();
             let mut ta = tui_textarea::TextArea::from(text.lines().map(|s| s.to_string()));
+            ta.set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
             // Restore cursor position from byte offset
             let lines = ta.lines().to_vec();
             let mut remaining = cursor_byte;

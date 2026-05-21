@@ -198,6 +198,12 @@ impl SettingsManager {
     pub fn global(&self) -> &GlobalSettings {
         &self.global
     }
+    pub fn project_settings_mut(&mut self) -> &mut ProjectSettings {
+        &mut self.project
+    }
+    pub fn local_settings_mut(&mut self) -> &mut LocalSettings {
+        &mut self.local
+    }
     pub fn global_settings_mut(&mut self) -> &mut GlobalSettings {
         &mut self.global
     }
@@ -215,6 +221,9 @@ impl SettingsManager {
         )
     }
     /// Persist global settings to disk.
+    pub fn save_project(&self) -> Result<()> {
+        Self::save_json(&self.project_path, &self.project)
+    }
     pub fn save_global(&self) -> Result<()> {
         Self::save_json(&self.global_path, &self.global)
     }

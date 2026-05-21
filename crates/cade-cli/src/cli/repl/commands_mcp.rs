@@ -23,18 +23,29 @@ impl Repl {
             .await?
         {
             Some(cade_tui::mcp_picker::McpAction::Toggle(key)) => {
-                let mut s = self.settings.lock();
-                if let Some(server) = s.global_settings_mut().mcp_servers.get_mut(&key) {
+                                let mut s = self.settings.lock();
+                if let Some(server) = s.local_settings_mut().mcp_servers.get_mut(&key) {
                     server.disabled = !server.disabled;
+                    let _ = s.save_local();
+                } else if let Some(server) = s.project_settings_mut().mcp_servers.get_mut(&key) {
+                    server.disabled = !server.disabled;
+                    let _ = s.save_project();
+                } else if let Some(server) = s.global_settings_mut().mcp_servers.get_mut(&key) {
+                    server.disabled = !server.disabled;
+                    let _ = s.save_global();
                 }
-                let _ = s.save_global();
                 drop(s);
                 self.do_settings_reload().await;
             }
             Some(cade_tui::mcp_picker::McpAction::Delete(key)) => {
-                let mut s = self.settings.lock();
-                s.global_settings_mut().mcp_servers.remove(&key);
-                let _ = s.save_global();
+                                let mut s = self.settings.lock();
+                if s.local_settings_mut().mcp_servers.remove(&key).is_some() {
+                    let _ = s.save_local();
+                } else if s.project_settings_mut().mcp_servers.remove(&key).is_some() {
+                    let _ = s.save_project();
+                } else if s.global_settings_mut().mcp_servers.remove(&key).is_some() {
+                    let _ = s.save_global();
+                }
                 drop(s);
                 self.do_settings_reload().await;
             }
@@ -59,18 +70,14 @@ impl Repl {
                 ));
             }
             Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
-                let config = self
-                    .settings
-                    .lock()
-                    .global_settings_mut()
-                    .mcp_servers
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_default();
+                let s = self.settings.lock();
+                let config = s.merged_mcp_servers().get(&key).cloned().unwrap_or_default();
+                drop(s);
                 let tmpl = serde_json::json!({ key: config });
                 let mut app = self.app.lock();
                 let text = format!(
-                    "/mcp-save\n{}",
+                    "/mcp-save
+{}",
                     serde_json::to_string_pretty(&tmpl).unwrap()
                 );
                 app.editor.set_text(text.clone());

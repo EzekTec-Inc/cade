@@ -43,6 +43,7 @@ impl DockerBackend {
         cmd.arg(&self.image);
         // Use POSIX `sh` instead of `bash` for Alpine and minimal image compat.
         cmd.args(["sh", "-c", command]);
+        cmd.kill_on_drop(true);
         cade_core::agent_env::apply_agent_env(&mut cmd);
         cmd
     }

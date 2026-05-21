@@ -30,6 +30,7 @@ impl ExecutionBackend for LocalBackend {
             cmd.current_dir(cwd)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
+                .kill_on_drop(true)
                 .spawn()
         })
         .await

@@ -310,20 +310,17 @@ impl TuiApp {
         self.draw()
     }
 
-    /// Temporarily suspends the TUI, runs the provided closure, and then restores it.
-    pub fn suspend_for<F>(&mut self, f: F) -> Result<()>
-    where
-        F: FnOnce(),
-    {
+    pub fn suspend(&mut self) -> Result<()> {
         crossterm::terminal::disable_raw_mode().map_err(|e| crate::Error::Custom(e.to_string()))?;
         crossterm::execute!(
             self.terminal.backend_mut(),
             crossterm::terminal::LeaveAlternateScreen
         )
         .map_err(|e| crate::Error::Custom(e.to_string()))?;
+        Ok(())
+    }
 
-        f();
-
+    pub fn resume(&mut self) -> Result<()> {
         crossterm::terminal::enable_raw_mode().map_err(|e| crate::Error::Custom(e.to_string()))?;
         crossterm::execute!(
             self.terminal.backend_mut(),
@@ -334,6 +331,17 @@ impl TuiApp {
             .clear()
             .map_err(|e| crate::Error::Custom(e.to_string()))?;
         self.draw()?;
+        Ok(())
+    }
+
+    /// Temporarily suspends the TUI, runs the provided closure, and then restores it.
+    pub fn suspend_for<F>(&mut self, f: F) -> Result<()>
+    where
+        F: FnOnce(),
+    {
+        self.suspend()?;
+        f();
+        self.resume()?;
         Ok(())
     }
 
