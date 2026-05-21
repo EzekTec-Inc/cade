@@ -5,6 +5,7 @@ Neovim plugin for [CADE](https://github.com/EzekTec-Inc/CADE) providing **inline
 ## Features
 
 - **Ghost-text completions** — suggestions appear inline at the cursor, rendered via `nvim_buf_set_extmark`.
+- **Interactive Hover Edits** — select code and press `<leader>ce` to open a floating prompt to ask CADE to rewrite or refactor the selection, with streaming results.
 - **MCP Adapter** — live access to editor state (open buffers, selections) and enables the agent to apply edits, open files, run terminals, and control `nvim-dap`.
 - **Streaming SSE** — tokens render incrementally as the CADE server produces them, giving instant feedback.
 - **Debounced trigger** — fires only after a configurable idle period so it never blocks typing.

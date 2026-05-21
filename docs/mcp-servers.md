@@ -87,11 +87,9 @@ This allows MCP servers to trigger rich interactive flows (such as form inputs, 
 5. Forwards `state_update` (open buffers, selection, diagnostics) and
    `callback_request` frames in both directions
 
-Editor adapters live in `extensions/`:
+Editor adapters live in `plugins/` (or external repos):
 
-- `cade-neovim/` — Neovim plugin
-- `cade-vscode/` — VS Code extension
-- `cade-jetbrains/` — IntelliJ-platform plugin
+- `plugins/cade.nvim/` — Neovim plugin
 
 ## Recommended public servers
 

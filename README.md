@@ -114,11 +114,13 @@ Type `/help` inside any session to browse all commands. Here are the essentials:
 | `/skills` | Manage loaded skills |
 | `/init` | Scan your project and populate memory |
 | `/checkpoint` | Save your working tree before risky changes |
-| `/mcp` | Check MCP server status and tools |
+| `/mcp` | Interactive picker to manage MCP servers |
+| `/link` | Sync and re-register tools to active session |
 | `/yolo` | Auto-approve everything (when you trust the task) |
 | `/plan` | Read-only mode — explore without changing anything |
 | `/cost` | See what you've spent this session |
 | `/context` | Visualise context window usage |
+| `/backend [name]` | Switch execution backend (local, docker, ssh, readonly) |
 
 📖 Complete reference → [docs/slash-commands.md](docs/slash-commands.md)
 

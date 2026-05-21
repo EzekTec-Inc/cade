@@ -80,7 +80,9 @@ See [memory-system.md](memory-system.md) for tier semantics.
 
 | Command | Description |
 |---|---|
-| `/mcp` | List MCP servers and their tools |
+| `/mcp` | Interactive picker to manage MCP servers and their tools |
+| `/link` | Re-scan and re-attach all tools to the active session |
+| `/unlink` | Detach all tools from the active session |
 | `/mcp-save <name>` | Persist a connected server to `settings.json` |
 | `/connect <name>` | Re-attach a saved MCP server |
 | `/disconnect <name>` | Stop and detach an MCP server |

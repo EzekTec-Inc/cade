@@ -28,10 +28,8 @@ crates/
 ├── cade-askpass/                # SSH/GPG password prompt (IPC, token auth)
 └── cade-gui/                    # WASM dashboard (eframe/egui)
 
-extensions/
-├── cade-neovim/                 # Neovim adapter
-├── cade-vscode/                 # VS Code adapter
-└── cade-jetbrains/              # JetBrains adapter
+plugins/
+└── cade.nvim/                   # Neovim plugin and IDE bridge
 ```
 
 ## Process model
