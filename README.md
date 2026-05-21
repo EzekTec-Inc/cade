@@ -208,6 +208,22 @@ CADE stores state per-project so you pick up right where you left off:
 | [Keybindings](docs/keybindings.md) | [Hooks](docs/hooks.md) |
 | [Themes](docs/themes.md) | [Permissions](docs/permissions.md) |
 
+## Installation
+
+### Linux / macOS
+You can install CADE quickly by running the following command in your terminal. It will download the latest binaries and install them in `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EzekTec-Inc/CADE/master/install.sh | bash
+```
+
+### Windows
+Open PowerShell as an Administrator and run:
+
+```powershell
+iwr https://raw.githubusercontent.com/EzekTec-Inc/CADE/master/install.ps1 -useb | iex
+```
+
 ---
 
 ## Building from Source

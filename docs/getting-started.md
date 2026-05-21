@@ -2,28 +2,44 @@
 
 Up and running in five minutes.
 
-## 1. Prerequisites
+## 1. Installation
 
-- Rust toolchain (1.85+ required — Edition 2024) — `rustup` from <https://rustup.rs>
-- An LLM API key (one of):
-  - Anthropic — `ANTHROPIC_API_KEY=sk-ant-...`
-  - OpenAI — `OPENAI_API_KEY=sk-...`
-  - Google Gemini — `GOOGLE_API_KEY=...`
-  - Local Ollama — no key needed; just have `ollama` running
-- Optional Linux extras for screen capture / window control:
-  ```bash
-  sudo apt install libpipewire-0.3-dev libclang-dev libgbm-dev xdotool
-  ```
+The fastest way to get started is using the official quick-install scripts, which automatically detect your system, download the latest binaries from GitHub, configure your `PATH`, and launch CADE for the first time.
 
-## 2. Build
+**Linux / macOS**
+```bash
+curl -fsSL https://raw.githubusercontent.com/EzekTec-Inc/CADE/master/install.sh | bash
+```
+
+**Windows**
+Open PowerShell as an Administrator and run:
+```powershell
+iwr https://raw.githubusercontent.com/EzekTec-Inc/CADE/master/install.ps1 -useb | iex
+```
+
+## 2. API Keys
+
+CADE requires access to a Large Language Model to operate. You must configure an API key for your preferred provider by setting an environment variable (or placing it in a `.env` file):
+
+- Anthropic — `ANTHROPIC_API_KEY=sk-ant-...`
+- OpenAI — `OPENAI_API_KEY=sk-...`
+- Google Gemini — `GOOGLE_API_KEY=...`
+- Local Ollama — no key needed; just have `ollama` running
+
+## 3. Building from Source (Alternative)
+
+If you prefer to compile CADE from source, ensure you have the Rust toolchain (1.85+ required — Edition 2024).
 
 ```bash
+# Optional Linux extras for screen capture / window control:
+sudo apt install libpipewire-0.3-dev libclang-dev libgbm-dev xdotool
+
 git clone https://github.com/EzekTec-Inc/CADE
 cd CADE
 cargo build --release
 ```
 
-The release binary is `target/release/cade` (CLI) and `target/release/cade-server`
+The release binaries are `target/release/cade` (CLI) and `target/release/cade-server`
 (HTTP server).
 
 ### Semantic Memory Search (enabled by default)
