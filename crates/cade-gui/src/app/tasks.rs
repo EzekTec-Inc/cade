@@ -1241,12 +1241,9 @@ impl CadeApp {
             }
             PaletteCmd::Providers => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected {
-                        providers_open,
-                        providers_loading,
-                        ..
-                    } = s
-                    {
+                    if let SessionState::Connected(session) = s {
+            let providers_open = &session.providers_open;
+            let providers_loading = &session.providers_loading;
                         *providers_open = true;
                         *providers_loading = true;
                     }
@@ -1255,65 +1252,64 @@ impl CadeApp {
             }
             PaletteCmd::Permissions => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected {
-                        permissions_open, ..
-                    } = s
-                    {
+                    if let SessionState::Connected(session) = s {
+            let permissions_open = &session.permissions_open;
                         *permissions_open = true;
                     }
                 }
             }
             PaletteCmd::Theme => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected {
-                        theme_picker_open, ..
-                    } = s
-                    {
+                    if let SessionState::Connected(session) = s {
+            let theme_picker_open = &session.theme_picker_open;
                         *theme_picker_open = true;
                     }
                 }
             }
             PaletteCmd::Hooks => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { hooks_open, .. } = s {
+                    if let SessionState::Connected(session) = s {
+            let hooks_open = &session.hooks_open;
                         *hooks_open = true;
                     }
                 }
             }
             PaletteCmd::Mode(_mode_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected {
-                        permissions_open, ..
-                    } = s
-                    {
+                    if let SessionState::Connected(session) = s {
+            let permissions_open = &session.permissions_open;
                         *permissions_open = true;
                     }
                 }
             }
             PaletteCmd::Toolset(_ts_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { toolset_open, .. } = s {
+                    if let SessionState::Connected(session) = s {
+            let toolset_open = &session.toolset_open;
                         *toolset_open = true;
                     }
                 }
             }
             PaletteCmd::Pricing => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { pricing_open, .. } = s {
+                    if let SessionState::Connected(session) = s {
+            let pricing_open = &session.pricing_open;
                         *pricing_open = true;
                     }
                 }
             }
             PaletteCmd::Backend(_be_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { backend_open, .. } = s {
+                    if let SessionState::Connected(session) = s {
+            let backend_open = &session.backend_open;
                         *backend_open = true;
                     }
                 }
             }
             PaletteCmd::Reasoning(_level_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { reasoning_open, .. } = s {
+                    if let SessionState::Connected(session) = s {
+            let reasoning_open = &session.reasoning_open;
                         *reasoning_open = true;
                     }
                 }
@@ -1360,12 +1356,9 @@ impl CadeApp {
             }
             PaletteCmd::Skills(_) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected {
-                        skills_overlay_open,
-                        skills_loading,
-                        ..
-                    } = s
-                    {
+                    if let SessionState::Connected(session) = s {
+            let skills_overlay_open = &session.skills_overlay_open;
+            let skills_loading = &session.skills_loading;
                         *skills_overlay_open = true;
                         *skills_loading = true;
                     }

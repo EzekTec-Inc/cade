@@ -43,7 +43,8 @@ pub fn render(
                         .color(theme.primary()),
                 );
 
-                if let Some(SessionState::Connected { last_usage, .. }) = session_snapshot {
+                if let Some(SessionState::Connected(session)) = session_snapshot {
+                    let last_usage = &session.last_usage;
                     if let Some((_, _, Some(ref model))) = *last_usage {
                         ui.add_space(4.0);
                         egui::Frame::new()
@@ -61,10 +62,9 @@ pub fn render(
                     }
                 }
 
-                if let Some(SessionState::Connected {
-                    streaming, health, ..
-                }) = session_snapshot
-                {
+                if let Some(SessionState::Connected(session)) = session_snapshot {
+                    let streaming = &session.streaming;
+                    let health = &session.health;
                     let version = health.version.as_deref().unwrap_or("unknown");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(

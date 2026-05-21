@@ -7,14 +7,11 @@ pub fn render(
     session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
 ) {
-    if let Some(SessionState::Connected {
-        streaming,
-        last_usage,
-        total_input_tokens,
-        total_output_tokens,
-        ..
-    }) = session_snapshot
-    {
+    if let Some(SessionState::Connected(session)) = session_snapshot {
+                    let streaming = &session.streaming;
+                    let last_usage = &session.last_usage;
+                    let total_input_tokens = &session.total_input_tokens;
+                    let total_output_tokens = &session.total_output_tokens;
         egui::Panel::bottom("cade_status_bar")
             .exact_size(18.0)
             .frame(egui::Frame::new().fill(theme.bg_surface0()))
