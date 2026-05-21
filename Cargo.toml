@@ -27,7 +27,7 @@ async-stream   = "0.3"
 async-trait    = "0.1"
 
 # HTTP
-reqwest        = { version = "0.13", features = ["json", "stream"] }
+reqwest        = { version = "0.12", features = ["json", "stream"] }
 reqwest-eventsource = "0.6"
 
 # Serialisation
@@ -115,7 +115,7 @@ schemars       = "1"
 
 [package]
 name        = "cade"
-version     = "2.2.0"
+version     = "2.3.0"
 edition     = "2024"
 authors     = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
 description = "CADE — Coding AI assistant with Desktop Extensions"
