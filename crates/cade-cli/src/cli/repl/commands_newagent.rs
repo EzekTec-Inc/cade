@@ -116,39 +116,7 @@ impl Repl {
                         "  ✓ Copied {n} memory block(s) from previous agent"
                     )));
                 }
-                // Attach native + MCP tools in background
-                let client2 = self.client.clone();
-                let mcp2 = std::sync::Arc::clone(&self.mcp);
-                let toolset2 = *self.current_toolset.lock();
-                let new_id = a.id.clone();
-                let allow_agent_mode = self
-                    .settings
-                    .lock()
-                    .permission_settings()
-                    .allow_agent_mode_changes;
-                tokio::spawn(async move {
-                    use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
-                    let native_ids: Vec<String> =
-                        register_cade_tools(&client2, toolset2, allow_agent_mode)
-                            .await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|t| t.id)
-                            .collect();
-                    if !native_ids.is_empty() {
-                        let _ = client2.attach_agent_tools(&new_id, &native_ids).await;
-                    }
-                    let mcp_ids: Vec<String> =
-                        register_mcp_tools(&client2, mcp2.all_tool_schemas().await)
-                            .await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|t| t.id)
-                            .collect();
-                    if !mcp_ids.is_empty() {
-                        let _ = client2.attach_agent_tools(&new_id, &mcp_ids).await;
-                    }
-                });
+                self.spawn_tool_reregister();
             }
             Err(e) => self.tui_err(e.to_string()),
         }
