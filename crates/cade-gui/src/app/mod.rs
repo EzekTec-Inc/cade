@@ -92,9 +92,12 @@ impl CadeApp {
 
         let mut login = LoginState::new();
 
-        // If a token was previously saved, pre-fill and auto-submit so the
-        // first render frame triggers spawn_connect via the existing flow.
-        if let Some(saved_token) = crate::storage::load(crate::storage::StorageKey::ApiToken) {
+        // If a token was provided via query param (?key=...), use it immediately.
+        // Otherwise, fall back to the persisted token in storage.
+        if !config.api_key.is_empty() {
+            login.on_input(&config.api_key);
+            login.on_submit();
+        } else if let Some(saved_token) = crate::storage::load(crate::storage::StorageKey::ApiToken) {
             if !saved_token.is_empty() {
                 login.on_input(&saved_token);
                 login.on_submit();

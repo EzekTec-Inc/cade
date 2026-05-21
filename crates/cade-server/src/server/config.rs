@@ -220,10 +220,11 @@ impl ServerConfig {
 /// unwritable filesystem), falls back to `None`; the auth middleware will
 /// then reject every non-health request with 401.
 fn resolve_api_key() -> Option<String> {
-    if let Ok(k) = std::env::var("CADE_API_KEY")
-        && !k.is_empty()
-    {
-        return Some(k);
+    if let Ok(k) = std::env::var("CADE_API_KEY") {
+        let trimmed = k.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
     }
     let path = crate::server::bootstrap::default_token_path()?;
     match crate::server::bootstrap::load_or_create_token(&path) {
