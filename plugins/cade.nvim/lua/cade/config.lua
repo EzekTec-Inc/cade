@@ -31,7 +31,7 @@ local function resolve_agent_id(settings_path)
 end
 
 M.defaults = {
-  enabled       = true,
+  enabled       = true,     -- legacy toggle for completions
   server_port   = 8284,
   agent_id      = resolve_agent_id(),
   api_key       = vim.env.CADE_API_KEY  or "",
@@ -50,6 +50,15 @@ M.defaults = {
     dismiss     = "<C-e>",
     toggle      = "<leader>ct",
     edit        = "<leader>ce",
+  },
+  completions   = {
+    enabled = true,
+  },
+  mcp = {
+    enabled = true,
+    debounce_ms = 50,
+    discovery_dir = nil,
+    log = nil,
   },
 }
 
@@ -71,6 +80,11 @@ function M.setup(opts)
   end
 
   M.current = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+
+  -- Backward compatibility
+  if opts.enabled ~= nil then
+    M.current.completions.enabled = opts.enabled
+  end
 end
 
 --- Return the active config table.

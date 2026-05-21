@@ -13,7 +13,8 @@ use tokio::sync::RwLock;
 #[tokio::test]
 async fn list_eval_tasks_returns_empty_on_fresh_db() {
     let db = cade_store::sqlite::open(":memory:").unwrap();
-    let config = Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
+    let config = Arc::new(crate::server::config::ServerConfig {
+        max_tokens_per_turn: Some(64_000),
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
         llm_provider: crate::server::config::LlmProviderKind::Anthropic,
@@ -51,7 +52,7 @@ async fn list_eval_tasks_returns_empty_on_fresh_db() {
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
         memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        agent_metrics: Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
         context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,

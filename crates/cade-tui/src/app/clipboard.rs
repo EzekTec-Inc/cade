@@ -68,6 +68,4 @@ impl TuiApp {
         self.handle_image_paste(media_type, b64, w, h);
         true
     }
-
-
 }

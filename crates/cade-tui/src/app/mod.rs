@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod command_palette;
+pub mod copy_overlay;
 pub mod input;
 pub mod layout;
 pub mod password;

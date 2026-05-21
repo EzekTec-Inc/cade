@@ -219,7 +219,9 @@ impl TuiApp {
                 }
             }
 
-            KeyCode::Char('j') | KeyCode::Char('J') if k.modifiers.contains(KeyModifiers::SHIFT) => {
+            KeyCode::Char('j') | KeyCode::Char('J')
+                if k.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
                 // "Follow" mode: reset scroll and jump to bottom.
                 if self.scroll > 0 {
                     self.scroll = 0;
@@ -228,6 +230,14 @@ impl TuiApp {
                     self.show_toast("Jumped to bottom", ToastLevel::Info);
                 }
                 return Ok(None);
+            }
+
+            KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.overlays
+                    .push(Box::new(crate::app::copy_overlay::CopyOverlay::new(
+                        &self.lines,
+                    )));
+                self.draw_dirty = true;
             }
 
             KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -364,7 +374,39 @@ impl TuiApp {
     ///
     /// Drains any `Option<Box<dyn Any>>` action returned by an overlay and
     /// applies it to the app state.
-    fn process_overlay_action(&mut self, action: Box<dyn std::any::Any>) -> Result<Option<Option<String>>> {
+    fn process_overlay_action(
+        &mut self,
+        action: Box<dyn std::any::Any>,
+    ) -> Result<Option<Option<String>>> {
+        let action = match action.downcast::<crate::app::copy_overlay::CopyAction>() {
+            Ok(copy_action) => {
+                let text = copy_action.0;
+
+                // 1. OSC 52 Universal Fallback
+                use base64::Engine;
+                let b64 = base64::prelude::BASE64_STANDARD.encode(&text);
+                print!("\x1b]52;c;{}\x07", b64);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+
+                // 2. Native OS clipboard
+                #[cfg(feature = "clipboard-images")]
+                {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        let _ = cb.set_text(&text);
+                    }
+                }
+
+                self.show_toast(
+                    "Content copied to clipboard",
+                    crate::app::ToastLevel::Success,
+                );
+                self.draw_dirty = true;
+                return Ok(None);
+            }
+            Err(action) => action,
+        };
+
         let action = match action.downcast::<String>() {
             Ok(string_val) => {
                 let s = *string_val;

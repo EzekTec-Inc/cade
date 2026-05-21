@@ -2,7 +2,7 @@
 -- Tests for lua/cade_ide/protocol.lua
 -- Runs headless: nvim --headless --noplugin -u test/runner.lua
 
-local proto = require("cade_ide.protocol")
+local proto = require("cade.mcp.protocol")
 
 -- Inject a minimal JSON shim so tests don't depend on vim.json quirks.
 -- vim.json IS available in headless Neovim, so this just makes intent explicit.

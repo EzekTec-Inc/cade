@@ -49,8 +49,6 @@ pub(crate) enum SlashCmd {
     Usage,
     /// /stats [model]
     Stats(Option<String>),
-    Copy,
-    Mouse,
     /// Export the current agent to a JSON file: /export [output.json]
     Export(Option<String>),
     /// Show current context window usage.
@@ -153,8 +151,6 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "pricing" => Some(SlashCmd::Pricing(arg)),
         "context" => Some(SlashCmd::Context),
         "debug-last" | "debug_last" => Some(SlashCmd::DebugLast),
-        "copy" => Some(SlashCmd::Copy),
-        "mouse" | "select" => Some(SlashCmd::Mouse),
         "export" => Some(SlashCmd::Export(arg)),
         "checkpoint" | "cp" => Some(SlashCmd::Checkpoint(arg)),
         "undo" => Some(SlashCmd::Undo),

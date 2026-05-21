@@ -2,8 +2,8 @@
 -- Tests for lua/cade_ide/connection.lua
 -- Uses a real in-process TCP server via vim.loop.
 
-local conn_mod = require("cade_ide.connection")
-local proto    = require("cade_ide.protocol")
+local conn_mod = require("cade.mcp.connection")
+local proto    = require("cade.mcp.protocol")
 
 local function eq(a, b, msg)
   if a ~= b then

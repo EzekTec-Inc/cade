@@ -210,9 +210,6 @@ impl AnthropicProvider {
             .tools
             .iter()
             .map(|schema| {
-                // Accept either "parameters" or "input_schema"; filter out null
-                // values (can occur when schemas with the wrong key were stored in
-                // the DB) and fall back to a valid empty object schema.
                 let params = schema
                     .get("parameters")
                     .filter(|v| !v.is_null())
@@ -230,6 +227,30 @@ impl AnthropicProvider {
         // Mark the last tool with cache_control to cache the entire tools list.
         if let Some(last) = tools.last_mut() {
             last["cache_control"] = json!({"type": "ephemeral"});
+        }
+
+        // 3. Historical context caching
+        // Place a cache_control breakpoint on the second-to-last user message
+        // (the last historical user turn, skipping the current request).
+        let mut user_count = 0;
+        for msg in anthropic_messages.iter_mut().rev() {
+            if msg["role"] == "user" {
+                user_count += 1;
+                if user_count == 2 {
+                    // Convert content to array if it isn't one.
+                    if let Some(content_str) = msg["content"].as_str() {
+                        msg["content"] = json!([{
+                            "type": "text",
+                            "text": content_str,
+                            "cache_control": { "type": "ephemeral" }
+                        }]);
+                    } else if let Some(arr) = msg["content"].as_array_mut()
+                        && let Some(last_block) = arr.last_mut() {
+                            last_block["cache_control"] = json!({ "type": "ephemeral" });
+                        }
+                    break;
+                }
+            }
         }
 
         let mut body = json!({

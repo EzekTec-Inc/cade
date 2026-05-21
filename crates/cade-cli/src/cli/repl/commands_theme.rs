@@ -2,7 +2,7 @@
 //!
 //! Resolution order:
 //!   1. Built-in registry (`ThemeColors::builtin_by_name`) — dark, light, etc.
-//!   2. User JSON themes discovered in project `.cade/themes/` + `~/.cade/themes/`
+//!   2. User TOML themes discovered in project `.cade/themes/` + `~/.cade/themes/`
 //!
 //! Both sources are merged for the picker list so built-ins and custom themes
 //! appear together with no duplicates.

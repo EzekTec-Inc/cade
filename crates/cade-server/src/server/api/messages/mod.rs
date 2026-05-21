@@ -734,7 +734,7 @@ pub async fn stream_message(
                         let agent_metrics = state_clone.agent_metrics.clone();
                         let agent_id_for_metrics = agent_id_clone.clone();
                         tokio::spawn(async move {
-                            let mut map = agent_metrics.write().await;
+                            let map = agent_metrics;
                             map.entry(agent_id_for_metrics)
                                 .or_default()
                                 .accumulate_usage(&snap);

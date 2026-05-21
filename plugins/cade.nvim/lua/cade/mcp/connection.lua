@@ -12,7 +12,7 @@
 --
 -- The public API is a table returned by M.new().
 
-local proto = require("cade_ide.protocol")
+local proto = require("cade.mcp.protocol")
 
 local PROTOCOL_VERSION = 1
 local RECONNECT_MS     = 3000

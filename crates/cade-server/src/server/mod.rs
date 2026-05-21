@@ -4,6 +4,7 @@ pub mod api;
 pub mod bootstrap;
 pub mod config;
 pub mod consolidation;
+pub mod defragment;
 pub mod error;
 pub mod poison;
 pub mod rate_limit;

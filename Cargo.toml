@@ -176,6 +176,7 @@ indicatif.workspace = true
 rmcp.workspace = true
 lru = "0.16"
 mlua = "0.11.6"
+dashmap = "6.2.1"
 
 [dev-dependencies]
 tokio-test = "0.4"

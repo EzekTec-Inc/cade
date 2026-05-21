@@ -40,22 +40,22 @@ pub fn router(state: AppState) -> Router {
     // -- Inference routes (rate-limited)
     let inference = Router::new()
         .route(
-            "/v1/agents/:id/messages",
+            "/v1/agents/{id}/messages",
             post(messages::send_message)
                 .delete(agents::clear_messages_handler)
                 .get(agents::search_messages_handler),
         )
         .route(
-            "/v1/agents/:id/messages/latest",
+            "/v1/agents/{id}/messages/latest",
             get(agents::latest_assistant_message),
         )
         .route(
-            "/v1/agents/:id/messages/stream",
+            "/v1/agents/{id}/messages/stream",
             post(messages::stream_message),
         )
-        .route("/v1/agents/:id/complete", post(complete::complete))
-        .route("/v1/agents/:id/edit", post(edit::edit))
-        .route("/v1/agents/:id/run", post(run::run_agent))
+        .route("/v1/agents/{id}/complete", post(complete::complete))
+        .route("/v1/agents/{id}/edit", post(edit::edit))
+        .route("/v1/agents/{id}/run", post(run::run_agent))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -77,16 +77,16 @@ pub fn router(state: AppState) -> Router {
             "/dashboard",
             Router::new()
                 .route("/", get(dashboard::get_dashboard))
-                .route("/*path", get(dashboard::get_dashboard_asset))
+                .route("/{*path}", get(dashboard::get_dashboard_asset))
                 .layer(tower_http::compression::CompressionLayer::new()),
         )
         // Real context-window stats (D2)
         .route(
-            "/v1/agents/:id/context",
+            "/v1/agents/{id}/context",
             get(messages::get_context_stats_handler),
         )
         .route(
-            "/v1/agents/:id/context-breakdown",
+            "/v1/agents/{id}/context-breakdown",
             get(messages::get_context_breakdown_handler),
         )
         // Agents
@@ -95,132 +95,135 @@ pub fn router(state: AppState) -> Router {
             post(agents::create_agent).get(agents::list_agents),
         )
         .route(
-            "/v1/agents/:id",
+            "/v1/agents/{id}",
             get(agents::get_agent)
                 .delete(agents::delete_agent)
                 .patch(agents::patch_agent),
         )
         .route(
-            "/v1/agents/:id/events",
+            "/v1/agents/{id}/events",
             post(agents::insert_event_handler).get(agents::query_events_handler),
         )
-        .route("/v1/agents/:id/metrics", get(agents::get_agent_metrics))
+        .route("/v1/agents/{id}/metrics", get(agents::get_agent_metrics))
         .route(
-            "/v1/agents/:id/context_stats",
+            "/v1/agents/{id}/context_stats",
             get(context_stats::get_context_stats),
         )
         // Agent tools
         .route(
-            "/v1/agents/:id/tools",
+            "/v1/agents/{id}/tools",
             get(agents::get_agent_tools)
                 .post(agents::attach_tools)
                 .delete(agents::detach_tools),
         )
         // Agent memory
-        .route("/v1/agents/:id/memory", get(agents::search_memory_handler))
+        .route("/v1/agents/{id}/memory", get(agents::search_memory_handler))
         // Standalone shared blocks
         .route(
             "/v1/blocks",
             post(blocks::create_block).get(blocks::list_blocks),
         )
         .route(
-            "/v1/blocks/:block_id",
+            "/v1/blocks/{block_id}",
             get(blocks::get_block)
                 .put(blocks::update_block)
                 .delete(blocks::delete_block),
         )
-        .route("/v1/agents/:id/blocks/attach", post(blocks::attach_block))
-        .route("/v1/agents/:id/blocks/detach", post(blocks::detach_block))
+        .route("/v1/agents/{id}/blocks/attach", post(blocks::attach_block))
+        .route("/v1/agents/{id}/blocks/detach", post(blocks::detach_block))
         .route(
-            "/v1/agents/:id/archival",
+            "/v1/agents/{id}/archival",
             post(agents::insert_archival_memory_handler),
         )
         .route(
-            "/v1/agents/:id/archival/search",
+            "/v1/agents/{id}/archival/search",
             get(agents::search_archival_memory_handler),
         )
         .route(
-            "/v1/agents/:id/memory/:label",
+            "/v1/agents/{id}/memory/{label}",
             put(agents::upsert_memory).delete(agents::delete_memory),
         )
         .route(
-            "/v1/agents/:id/memory/:label/tier",
+            "/v1/agents/{id}/memory/{label}/tier",
             put(agents::set_memory_tier_handler),
         )
         .route(
-            "/v1/agents/:id/memory/:label/history",
+            "/v1/agents/{id}/memory/{label}/history",
             get(agents::get_memory_history),
         )
         .route(
-            "/v1/agents/:id/memory/:label/restore/:rev_id",
+            "/v1/agents/{id}/memory/{label}/restore/{rev_id}",
             put(agents::restore_memory_revision),
         )
         .route(
-            "/v1/agents/:id/memory/export",
+            "/v1/agents/{id}/memory/export",
             post(agents::export_memory_handler),
         )
         // Memory provenance + reflection
         .route(
-            "/v1/agents/:id/memory/:label/evidence",
+            "/v1/agents/{id}/memory/{label}/evidence",
             get(memory_evidence::list_evidence).post(memory_evidence::add_evidence),
         )
         .route(
-            "/v1/agents/:id/memory/:label/why",
+            "/v1/agents/{id}/memory/{label}/why",
             get(memory_evidence::memory_why),
         )
         .route(
-            "/v1/agents/:id/reflect",
+            "/v1/agents/{id}/reflect",
             post(memory_evidence::trigger_reflect),
         )
-        .route("/v1/agents/:id/compact", post(compact::compact_handler))
+        .route("/v1/agents/{id}/compact", post(compact::compact_handler))
         .route(
-            "/v1/agents/:id/reflection",
+            "/v1/agents/{id}/reflection",
             get(memory_evidence::list_reflection),
         )
         // Conversations
         .route(
-            "/v1/agents/:id/conversations",
+            "/v1/agents/{id}/conversations",
             get(agents::list_conversations).post(agents::create_conversation),
         )
         .route(
-            "/v1/agents/:id/conversations/:conv_id",
+            "/v1/agents/{id}/conversations/{conv_id}",
             delete(agents::delete_conversation),
         )
         // Runs (background mode)
-        .route("/v1/runs/:run_id", get(runs::get_run))
-        .route("/v1/runs/:run_id/stream", get(runs::stream_run))
+        .route("/v1/runs/{run_id}", get(runs::get_run))
+        .route("/v1/runs/{run_id}/stream", get(runs::stream_run))
         // Skills
         .route("/v1/skills", get(skills::list_all_skills))
-        .route("/v1/agents/:id/skills", get(skills::list_agent_skills))
-        .route("/v1/agents/:id/skills/load", post(skills::load_skill))
-        .route("/v1/agents/:id/skills/unload", post(skills::unload_skill))
-        .route("/v1/agents/:id/skills/disable", post(skills::disable_skill))
-        .route("/v1/agents/:id/skills/enable", post(skills::enable_skill))
+        .route("/v1/agents/{id}/skills", get(skills::list_agent_skills))
+        .route("/v1/agents/{id}/skills/load", post(skills::load_skill))
+        .route("/v1/agents/{id}/skills/unload", post(skills::unload_skill))
+        .route(
+            "/v1/agents/{id}/skills/disable",
+            post(skills::disable_skill),
+        )
+        .route("/v1/agents/{id}/skills/enable", post(skills::enable_skill))
         // Tool execution log
         .route(
-            "/v1/agents/:id/tool_executions",
+            "/v1/agents/{id}/tool_executions",
             post(tool_executions::log_tool_execution),
         )
         // Checkpoints
         .route(
-            "/v1/agents/:id/checkpoints",
+            "/v1/agents/{id}/checkpoints",
             post(checkpoints::create_checkpoint).get(checkpoints::list_checkpoints),
         )
         .route(
-            "/v1/agents/:id/checkpoints/:cp_id",
+            "/v1/agents/{id}/checkpoints/{cp_id}",
             get(checkpoints::get_checkpoint_handler).delete(checkpoints::delete_checkpoint_handler),
         )
         .route(
-            "/v1/agents/:id/checkpoints/:cp_id/restore",
+            "/v1/agents/{id}/checkpoints/{cp_id}/restore",
             post(checkpoints::restore_checkpoint_handler),
         )
         // Artifacts
         .route(
-            "/v1/agents/:id/artifacts",
+            "/v1/agents/{id}/artifacts",
             post(artifacts::create_artifact).get(artifacts::list_artifacts),
         )
         .route(
-            "/v1/agents/:id/artifacts/:art_id",
+            "/v1/agents/{id}/artifacts/{art_id}",
             get(artifacts::get_artifact_handler).delete(artifacts::delete_artifact_handler),
         )
         // Evals
@@ -233,7 +236,7 @@ pub fn router(state: AppState) -> Router {
             post(evals::create_eval_run_handler).get(evals::list_eval_runs),
         )
         .route(
-            "/v1/evals/runs/:id",
+            "/v1/evals/runs/{id}",
             get(evals::get_eval_run).patch(evals::update_eval_run_handler),
         )
         // Tools
@@ -250,7 +253,7 @@ pub fn router(state: AppState) -> Router {
             post(providers::add_provider).get(providers::list_providers),
         )
         .route("/v1/providers/presets", get(providers::list_presets))
-        .route("/v1/providers/:name", delete(providers::remove_provider));
+        .route("/v1/providers/{name}", delete(providers::remove_provider));
 
     // Merge and apply middleware to everything.
     //

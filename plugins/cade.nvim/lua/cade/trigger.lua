@@ -53,7 +53,7 @@ end
 --- Fires after the debounce timer elapses. Builds context and starts a fetch.
 local function fire()
   local cfg = require("cade.config").get()
-  if not cfg.enabled then return end
+  if not cfg.completions.enabled then return end
 
   -- Filetype filtering
   if #cfg.filetypes > 0 then

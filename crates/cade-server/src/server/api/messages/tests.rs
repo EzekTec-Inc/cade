@@ -1,5 +1,9 @@
 use super::*;
 
+fn group_into_turns_helper(messages: &[LlmMessage]) -> Vec<Vec<LlmMessage>> {
+    group_into_turns(messages, 8000)
+}
+
 fn user(text: &str) -> LlmMessage {
     LlmMessage {
         role: "user".to_string(),
@@ -34,12 +38,12 @@ fn tool_result(id: &str, content: &str) -> LlmMessage {
 
 #[test]
 fn empty_input_produces_no_turns() {
-    assert!(group_into_turns(&[]).is_empty());
+    assert!(group_into_turns_helper(&[]).is_empty());
 }
 
 #[test]
 fn single_user_message_is_one_turn() {
-    let turns = group_into_turns(&[user("hello")]);
+    let turns = group_into_turns_helper(&[user("hello")]);
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].len(), 1);
     assert_eq!(turns[0][0].role, "user");
@@ -48,7 +52,7 @@ fn single_user_message_is_one_turn() {
 #[test]
 fn user_assistant_is_one_turn() {
     let msgs = vec![user("q"), assistant("a")];
-    let turns = group_into_turns(&msgs);
+    let turns = group_into_turns_helper(&msgs);
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].len(), 2);
 }
@@ -56,7 +60,7 @@ fn user_assistant_is_one_turn() {
 #[test]
 fn two_user_messages_produce_two_turns() {
     let msgs = vec![user("q1"), assistant("a1"), user("q2"), assistant("a2")];
-    let turns = group_into_turns(&msgs);
+    let turns = group_into_turns_helper(&msgs);
     assert_eq!(turns.len(), 2);
     assert_eq!(turns[0][0].content, "q1");
     assert_eq!(turns[1][0].content, "q2");
@@ -71,7 +75,7 @@ fn tool_call_and_result_stay_within_same_turn() {
         tool_result("tc1", "ok"),
         assistant("done"), // assistant responds after tool
     ];
-    let turns = group_into_turns(&msgs);
+    let turns = group_into_turns_helper(&msgs);
     // All four messages are in one turn (only one user message)
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].len(), 4);
@@ -88,7 +92,7 @@ fn multi_tool_call_turn_stays_intact() {
         user("next q"),
         assistant("a2"),
     ];
-    let turns = group_into_turns(&msgs);
+    let turns = group_into_turns_helper(&msgs);
     assert_eq!(turns.len(), 2);
     // First turn has 5 messages (user + assistant + 2 tool results + assistant)
     assert_eq!(turns[0].len(), 5);
@@ -100,7 +104,7 @@ fn multi_tool_call_turn_stays_intact() {
 fn orphaned_assistant_at_start_forms_its_own_turn() {
     // Unusual but must not panic; sanitize_messages cleans it up later.
     let msgs = vec![assistant("orphan"), user("q"), assistant("a")];
-    let turns = group_into_turns(&msgs);
+    let turns = group_into_turns_helper(&msgs);
     // "orphan" assistant has no preceding user → it starts a turn by itself
     // because current is empty when we encounter it, so the flush branch
     // never triggers.  Then user("q") flushes that turn.
@@ -112,7 +116,7 @@ fn orphaned_assistant_at_start_forms_its_own_turn() {
 #[test]
 fn back_to_back_user_messages_each_start_a_turn() {
     let msgs = vec![user("a"), user("b"), user("c")];
-    let turns = group_into_turns(&msgs);
+    let turns = group_into_turns_helper(&msgs);
     assert_eq!(turns.len(), 3);
     for (i, t) in turns.iter().enumerate() {
         assert_eq!(t.len(), 1);
@@ -502,7 +506,8 @@ async fn send_message_blocking_triggers_needs_consolidation() {
             .unwrap();
     }
 
-    let config = std::sync::Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        max_tokens_per_turn: Some(64_000),
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
         llm_provider: crate::server::config::LlmProviderKind::Anthropic,
@@ -547,9 +552,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
+        agent_metrics: std::sync::Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -714,7 +717,8 @@ async fn build_context_caps_oversize_tool_result_messages() {
             .unwrap();
     }
 
-    let config = std::sync::Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        max_tokens_per_turn: Some(64_000),
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
         llm_provider: crate::server::config::LlmProviderKind::Anthropic,
@@ -757,9 +761,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
+        agent_metrics: std::sync::Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -933,7 +935,8 @@ fn build_minimal_state(
     db: cade_store::sqlite::Db,
     llm: std::sync::Arc<dyn cade_ai::LlmProvider>,
 ) -> AppState {
-    let config = std::sync::Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        max_tokens_per_turn: Some(64_000),
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
         llm_provider: crate::server::config::LlmProviderKind::Anthropic,
@@ -970,9 +973,7 @@ fn build_minimal_state(
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
+        agent_metrics: std::sync::Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),

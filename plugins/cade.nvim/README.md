@@ -1,10 +1,11 @@
 # cade.nvim
 
-Neovim plugin for [CADE](https://github.com/EzekTec-Inc/CADE) providing **inline AI code completions** (ghost text) powered by the CADE agent server.
+Neovim plugin for [CADE](https://github.com/EzekTec-Inc/CADE) providing **inline AI code completions** (ghost text) and **MCP IDE state synchronization** powered by the CADE agent server.
 
 ## Features
 
 - **Ghost-text completions** — suggestions appear inline at the cursor, rendered via `nvim_buf_set_extmark`.
+- **MCP Adapter** — live access to editor state (open buffers, selections) and enables the agent to apply edits, open files, run terminals, and control `nvim-dap`.
 - **Streaming SSE** — tokens render incrementally as the CADE server produces them, giving instant feedback.
 - **Debounced trigger** — fires only after a configurable idle period so it never blocks typing.
 - **Partial acceptance** — accept the full completion, one line, or one word at a time.
@@ -35,7 +36,14 @@ return {
     lazy = false,
     config = function()
       require("cade").setup({
-        -- All values below are the defaults:
+        -- Structured configuration:
+        completions = {
+          enabled = true,
+        },
+        mcp = {
+          enabled = true,
+        },
+        -- All values below are the defaults for completions:
         server_port = 8284,
         -- agent_id = "",  -- override or set $CADE_AGENT_ID
         -- api_key  = "",  -- override or set $CADE_API_KEY

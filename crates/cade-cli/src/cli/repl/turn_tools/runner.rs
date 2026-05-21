@@ -55,7 +55,9 @@ pub(crate) fn tool_calls_update_active_goal(
     tool_calls: &[(String, String, serde_json::Value)],
 ) -> bool {
     tool_calls.iter().any(|(_, name, args)| {
-        let is_memory_write = name == "update_memory" || name == "update_memory_typed";
+        let is_memory_write = name == "update_memory"
+            || name == "update_memory_typed"
+            || name == "memory_apply_patch";
         if !is_memory_write {
             return false;
         }
@@ -319,8 +321,9 @@ impl Repl {
                     && is_write
                     && tool_name != "update_memory"
                     && tool_name != "update_memory_typed"
+                    && tool_name != "memory_apply_patch"
                 {
-                    let msg = "[BLOCKED: Your `active_goal` memory block is empty or stale (no update in the last several write operations). Call update_memory(label='active_goal', value=...) with your current task, modified files, blockers, and next steps before executing further write operations. This block survives context rotation and is the only way to recover task state across new sessions.]".to_string();
+                    let msg = "[BLOCKED: Your `active_goal` memory block is empty or stale (no update in the last several write operations). Call update_memory(label='active_goal', value=...) or memory_apply_patch(label='active_goal', ...) with your current task, modified files, blockers, and next steps before executing further write operations. This block survives context rotation and is the only way to recover task state across new sessions.]".to_string();
                     let _ = self.app.lock().push(RenderLine::ToolResult {
                         is_error: true,
                         content: msg.clone(),
@@ -669,10 +672,12 @@ impl Repl {
     ) -> cade_agent::tools::ToolResult {
         let tool_start = std::time::Instant::now();
         use cade_agent::tools::dispatch;
-        
-        let num_servers = mcp.is_empty().await;
-        let _ = std::fs::write("/tmp/mcp_debug.txt", format!("Tool: {}, MCP empty: {}", tool_name, num_servers));
 
+        let num_servers = mcp.is_empty().await;
+        let _ = std::fs::write(
+            "/tmp/mcp_debug.txt",
+            format!("Tool: {}, MCP empty: {}", tool_name, num_servers),
+        );
 
         // Bash tools — live-streaming path (buffered per-tool)
         if matches!(tool_name, "bash" | "run_command" | "execute_command") {

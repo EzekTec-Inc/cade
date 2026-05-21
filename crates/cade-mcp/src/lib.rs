@@ -823,4 +823,3 @@ fn extract_content_text(content: &[rmcp::model::Content]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-

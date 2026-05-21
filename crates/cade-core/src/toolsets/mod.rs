@@ -112,7 +112,12 @@ impl Toolset {
         match self {
             Self::Codex => &[
                 // memory write
+                "update_memory",
+                "update_memory_typed",
+                "update_memory_field",
                 "memory_apply_patch",
+                "link_memory_evidence",
+                "reflect",
                 // memory retrieval — must always be available so the agent can
                 // recover archived context even on long coding sessions
                 "search_memory",
@@ -126,10 +131,20 @@ impl Toolset {
                 "run_skill_script",
                 "load_skill_ref",
                 "run_subagent",
+                // checkpoints
+                "create_checkpoint",
+                "list_checkpoints",
+                "restore_checkpoint",
+                "store_artifact",
             ],
             _ => &[
                 // memory write
                 "update_memory",
+                "update_memory_typed",
+                "update_memory_field",
+                "memory_apply_patch",
+                "link_memory_evidence",
+                "reflect",
                 // memory retrieval — must always be available so the agent can
                 // recover archived context even on long coding sessions
                 "search_memory",
@@ -143,6 +158,11 @@ impl Toolset {
                 "run_skill_script",
                 "load_skill_ref",
                 "run_subagent",
+                // checkpoints
+                "create_checkpoint",
+                "list_checkpoints",
+                "restore_checkpoint",
+                "store_artifact",
             ],
         }
     }

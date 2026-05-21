@@ -104,20 +104,12 @@ impl LuaEngine {
         }
 
         // Add plugin_dir and cade-tui crate directories to package.path for require() routing
-        if let Ok(package) = self.lua.globals().get::<mlua::Table>("package")
-            && let Ok(current_path) = package.get::<String>("path")
-        {
-            let dir_str = plugin_dir.to_string_lossy();
-            let new_path = format!(
-                "{};{}/?.lua;{}/?/init.lua;./crates/cade-tui/?.lua;./cade-tui/?.lua",
-                current_path, dir_str, dir_str
-            );
-            let _ = package.set("path", new_path);
-        }
-
         let Ok(entries) = std::fs::read_dir(plugin_dir) else {
             return;
         };
+
+        let mut dirs_with_init = Vec::new();
+
         let mut paths: Vec<_> = entries
             .flatten()
             .filter_map(|e| {
@@ -125,6 +117,7 @@ impl LuaEngine {
                 if path.is_dir() {
                     let init_path = path.join("init.lua");
                     if init_path.exists() {
+                        dirs_with_init.push(path.to_string_lossy().into_owned());
                         Some(init_path)
                     } else {
                         None
@@ -136,6 +129,21 @@ impl LuaEngine {
                 }
             })
             .collect();
+
+        // Add plugin_dir and cade-tui crate directories to package.path for require() routing
+        if let Ok(package) = self.lua.globals().get::<mlua::Table>("package")
+            && let Ok(current_path) = package.get::<String>("path")
+        {
+            let dir_str = plugin_dir.to_string_lossy();
+            let mut new_path = format!(
+                "{};{}/?.lua;{}/?/init.lua;./crates/cade-tui/?.lua;./cade-tui/?.lua",
+                current_path, dir_str, dir_str
+            );
+            for d in dirs_with_init {
+                new_path.push_str(&format!(";{}/?.lua;{}/?/init.lua", d, d));
+            }
+            let _ = package.set("path", new_path);
+        }
 
         paths.sort();
 

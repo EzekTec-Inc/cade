@@ -2,13 +2,13 @@
 -- Entry point for the cade-ide Neovim plugin.
 --
 -- Usage:
---   require("cade_ide").setup()          -- call automatically from plugin/cade_ide.lua
+--   require("cade_ide").setup()          -- call automatically from plugin/cade.mcp.lua
 --   require("cade_ide").setup({ ... })   -- with options
 --   require("cade_ide").reconnect()      -- manual reconnect
 
-local connection     = require("cade_ide.connection")
-local state_pub      = require("cade_ide.state_publisher")
-local callback_handler = require("cade_ide.callback_handler")
+local connection     = require("cade.mcp.connection")
+local state_pub      = require("cade.mcp.state_publisher")
+local callback_handler = require("cade.mcp.callback_handler")
 
 local M = {}
 

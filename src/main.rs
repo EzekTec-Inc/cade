@@ -318,7 +318,6 @@ async fn async_main() -> Result<()> {
     let bg_toolset = toolset;
     let bg_effective_system_prompt = effective_system_prompt.clone();
     let bg_args_unlink = args.unlink;
-    let bg_args_link = args.link;
     let bg_startup_ready = startup_ready.clone();
 
     tokio::spawn(async move {
@@ -364,9 +363,9 @@ async fn async_main() -> Result<()> {
 
         if bg_args_unlink {
             let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
-        }
-
-        if bg_args_link {
+        } else {
+            // Unconditionally ensure all tools (native, meta, mcp) are attached for this session,
+            // so updates to Toolsets or MCP configs apply immediately without needing --new.
             register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities)
                 .await;
             if !mgr.is_empty().await {

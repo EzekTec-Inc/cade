@@ -2,8 +2,8 @@
 -- Tests for the pure helper logic in state_publisher.lua.
 -- No autocmd registration — just snapshot helpers.
 
-local sp_mod = require("cade_ide.state_publisher")
-local proto  = require("cade_ide.protocol")
+local sp_mod = require("cade.mcp.state_publisher")
+local proto  = require("cade.mcp.protocol")
 
 local function eq(a, b, msg)
   if a ~= b then

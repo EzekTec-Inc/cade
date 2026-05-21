@@ -33,40 +33,92 @@ pub struct AgentActivity {
     pub last_consolidation_turn: i64,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+#[derive(Debug, Default)]
 pub struct AgentMetrics {
-    pub tool_outputs_compacted: usize,
-    pub consolidation_runs: usize,
-    pub chars_summarised: usize,
-    pub chars_produced: usize,
-    pub inflation_guard_hits: usize,
+    pub tool_outputs_compacted: AtomicUsize,
+    pub consolidation_runs: AtomicUsize,
+    pub chars_summarised: AtomicUsize,
+    pub chars_produced: AtomicUsize,
+    pub inflation_guard_hits: AtomicUsize,
     /// P2: cumulative token totals for this agent across the server's
     /// lifetime.  Includes cache_read / cache_write so cost dashboards and
     /// future server-side cost guardrails see the full Anthropic / Gemini
     /// caching picture (previously dropped).
-    pub input_tokens_total: u64,
-    pub output_tokens_total: u64,
-    pub cache_read_tokens_total: u64,
-    pub cache_write_tokens_total: u64,
+    pub input_tokens_total: AtomicU64,
+    pub output_tokens_total: AtomicU64,
+    pub cache_read_tokens_total: AtomicU64,
+    pub cache_write_tokens_total: AtomicU64,
+}
+
+impl serde::Serialize for AgentMetrics {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("AgentMetrics", 9)?;
+        state.serialize_field(
+            "tool_outputs_compacted",
+            &self.tool_outputs_compacted.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "consolidation_runs",
+            &self.consolidation_runs.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "chars_summarised",
+            &self.chars_summarised.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "chars_produced",
+            &self.chars_produced.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "inflation_guard_hits",
+            &self.inflation_guard_hits.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "input_tokens_total",
+            &self.input_tokens_total.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "output_tokens_total",
+            &self.output_tokens_total.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "cache_read_tokens_total",
+            &self.cache_read_tokens_total.load(Ordering::Relaxed),
+        )?;
+        state.serialize_field(
+            "cache_write_tokens_total",
+            &self.cache_write_tokens_total.load(Ordering::Relaxed),
+        )?;
+        state.end()
+    }
+}
+
+fn saturate_add_atomic(atomic: &AtomicU64, val: u64) {
+    let mut current = atomic.load(Ordering::Relaxed);
+    loop {
+        let new_val = current.saturating_add(val);
+        match atomic.compare_exchange_weak(current, new_val, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(v) => current = v,
+        }
+    }
 }
 
 impl AgentMetrics {
     /// Add a single `TokenUsage` chunk into the cumulative totals.
     /// All four fields are accumulated atomically; cache fields are no
     /// longer dropped on the floor as in the pre-P2 implementation.
-    pub fn accumulate_usage(&mut self, u: &cade_ai::TokenUsage) {
-        self.input_tokens_total = self
-            .input_tokens_total
-            .saturating_add(u.input_tokens as u64);
-        self.output_tokens_total = self
-            .output_tokens_total
-            .saturating_add(u.output_tokens as u64);
-        self.cache_read_tokens_total = self
-            .cache_read_tokens_total
-            .saturating_add(u.cache_read_tokens as u64);
-        self.cache_write_tokens_total = self
-            .cache_write_tokens_total
-            .saturating_add(u.cache_write_tokens as u64);
+    pub fn accumulate_usage(&self, u: &cade_ai::TokenUsage) {
+        saturate_add_atomic(&self.input_tokens_total, u.input_tokens as u64);
+        saturate_add_atomic(&self.output_tokens_total, u.output_tokens as u64);
+        saturate_add_atomic(&self.cache_read_tokens_total, u.cache_read_tokens as u64);
+        saturate_add_atomic(&self.cache_write_tokens_total, u.cache_write_tokens as u64);
     }
 
     /// P4: compute cumulative session cost in USD using the provided pricing
@@ -78,10 +130,15 @@ impl AgentMetrics {
     /// model" as "no guardrail".
     pub fn compute_cost_usd(&self, pricing: &cade_ai::ModelPricing) -> f64 {
         const PER_M: f64 = 1_000_000.0;
-        (self.input_tokens_total as f64) * pricing.input / PER_M
-            + (self.output_tokens_total as f64) * pricing.output / PER_M
-            + (self.cache_read_tokens_total as f64) * pricing.cache_read / PER_M
-            + (self.cache_write_tokens_total as f64) * pricing.cache_write / PER_M
+        let in_tot = self.input_tokens_total.load(Ordering::Relaxed) as f64;
+        let out_tot = self.output_tokens_total.load(Ordering::Relaxed) as f64;
+        let cr_tot = self.cache_read_tokens_total.load(Ordering::Relaxed) as f64;
+        let cw_tot = self.cache_write_tokens_total.load(Ordering::Relaxed) as f64;
+
+        in_tot * pricing.input / PER_M
+            + out_tot * pricing.output / PER_M
+            + cr_tot * pricing.cache_read / PER_M
+            + cw_tot * pricing.cache_write / PER_M
     }
 }
 
@@ -168,7 +225,7 @@ pub struct AppState {
     /// covers continuous sessions that never hit the idle timer.
     pub agent_activity: Arc<RwLock<std::collections::HashMap<String, AgentActivity>>>,
     /// Tracks lifetime context efficiency metrics per agent.
-    pub agent_metrics: Arc<RwLock<std::collections::HashMap<String, AgentMetrics>>>,
+    pub agent_metrics: Arc<dashmap::DashMap<String, AgentMetrics>>,
     /// Phase 4: most-recent `ContextTelemetry` per agent, captured at the
     /// end of every successful `build_context` call.  Read-only by
     /// outside callers; the `/v1/agents/:id/context_stats` endpoint
@@ -255,17 +312,33 @@ mod tests {
             model: "anthropic/claude-sonnet-4".into(),
         });
 
-        assert_eq!(m.input_tokens_total, 125);
-        assert_eq!(m.output_tokens_total, 60);
+        assert_eq!(
+            m.input_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            125
+        );
+        assert_eq!(
+            m.output_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            60
+        );
         // P2 fix: cache fields must accumulate, not be silently dropped.
-        assert_eq!(m.cache_read_tokens_total, 1_500);
-        assert_eq!(m.cache_write_tokens_total, 200);
+        assert_eq!(
+            m.cache_read_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1_500
+        );
+        assert_eq!(
+            m.cache_write_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            200
+        );
     }
 
     #[test]
     fn accumulate_usage_saturates_on_overflow() {
         let mut m = AgentMetrics {
-            input_tokens_total: u64::MAX - 5,
+            input_tokens_total: (u64::MAX - 5).into(),
             ..Default::default()
         };
         m.accumulate_usage(&TokenUsage {
@@ -275,17 +348,37 @@ mod tests {
             cache_write_tokens: 0,
             model: String::new(),
         });
-        assert_eq!(m.input_tokens_total, u64::MAX);
+        assert_eq!(
+            m.input_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
     }
 
     #[test]
     fn accumulate_usage_zero_is_noop() {
         let mut m = AgentMetrics::default();
         m.accumulate_usage(&TokenUsage::default());
-        assert_eq!(m.input_tokens_total, 0);
-        assert_eq!(m.output_tokens_total, 0);
-        assert_eq!(m.cache_read_tokens_total, 0);
-        assert_eq!(m.cache_write_tokens_total, 0);
+        assert_eq!(
+            m.input_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            m.output_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            m.cache_read_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            m.cache_write_tokens_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     // ── P4: compute_cost_usd ───────────────────────────────────────────────
@@ -300,10 +393,10 @@ mod tests {
             cache_write: 3.75,
         };
         let m = AgentMetrics {
-            input_tokens_total: 1_000_000,
-            output_tokens_total: 200_000,
-            cache_read_tokens_total: 5_000_000,
-            cache_write_tokens_total: 100_000,
+            input_tokens_total: 1_000_000.into(),
+            output_tokens_total: 200_000.into(),
+            cache_read_tokens_total: 5_000_000.into(),
+            cache_write_tokens_total: 100_000.into(),
             ..Default::default()
         };
         // 3 + 3 + 1.5 + 0.375 = 7.875
@@ -315,10 +408,10 @@ mod tests {
     fn compute_cost_usd_zero_pricing_returns_zero() {
         // Unknown model → Default pricing (all zeros) → no guardrail trigger.
         let m = AgentMetrics {
-            input_tokens_total: 999_999_999,
-            output_tokens_total: 999_999_999,
-            cache_read_tokens_total: 999_999_999,
-            cache_write_tokens_total: 999_999_999,
+            input_tokens_total: 999_999_999.into(),
+            output_tokens_total: 999_999_999.into(),
+            cache_read_tokens_total: 999_999_999.into(),
+            cache_write_tokens_total: 999_999_999.into(),
             ..Default::default()
         };
         let cost = m.compute_cost_usd(&cade_ai::ModelPricing::default());

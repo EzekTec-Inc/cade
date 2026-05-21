@@ -47,6 +47,7 @@ rust-embed = "8.11.0"
 lru = "0.16"
 async-trait.workspace = true
 cade-plugin = { version = "0.2.0", path = "../cade-plugin" }
+dashmap = "6.2.1"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -2,7 +2,7 @@
 -- Tests for lua/cade_ide/callback_handler.lua
 -- Uses real Neovim buffers; no LSP/DAP required for core ops.
 
-local handler = require("cade_ide.callback_handler")
+local handler = require("cade.mcp.callback_handler")
 
 local function eq(a, b, msg)
   if a ~= b then

@@ -250,7 +250,11 @@ pub async fn consolidate_agent(
     let history_budget = override_history_budget
         .unwrap_or_else(|| (char_budget as f64 * HISTORY_BUDGET_FRACTION).round() as usize);
 
-    let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
+    let max_turn_chars = state
+        .config
+        .max_tokens_per_turn
+        .map(cade_ai::chars_for_tokens)
+        .unwrap_or(64_000);
     let turns = group_turns(&flat, max_turn_chars);
     let total_turns = turns.len();
 
@@ -511,11 +515,12 @@ pub async fn consolidate_agent(
             summary_chars,
             dropped_chars,
         );
-        let mut metrics = state.agent_metrics.write().await;
+        let metrics = state.agent_metrics.clone();
         metrics
             .entry(agent_id.to_string())
             .or_default()
-            .inflation_guard_hits += 1;
+            .inflation_guard_hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Fast regex fallback instead of skipping entirely
         let mut anchors = std::collections::HashSet::new();
@@ -729,11 +734,14 @@ pub async fn consolidate_agent(
         }
     }
 
-    let mut metrics = state.agent_metrics.write().await;
+    let metrics = state.agent_metrics.clone();
     let m = metrics.entry(agent_id.to_string()).or_default();
-    m.consolidation_runs += 1;
-    m.chars_summarised += dropped_chars;
-    m.chars_produced += summary_chars;
+    m.consolidation_runs
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    m.chars_summarised
+        .fetch_add(dropped_chars, std::sync::atomic::Ordering::Relaxed);
+    m.chars_produced
+        .fetch_add(summary_chars, std::sync::atomic::Ordering::Relaxed);
 
     // ── P8: Prune old observations during consolidation ──────────────────
     // Keep the observation table bounded by removing entries from turns
@@ -1261,7 +1269,6 @@ fn group_turns(messages: &[(String, String)], max_turn_chars: usize) -> Vec<Vec<
     let mut current: Vec<(String, String)> = Vec::new();
     let mut current_chars = 0;
 
-
     for msg in messages {
         let msg_chars = msg.1.chars().count();
         let is_safe_boundary = msg.0 == "assistant";
@@ -1782,6 +1789,7 @@ mod tests {
             db_path: ":memory:".into(),
             llm_provider: LlmProviderKind::Ollama,
             default_model: "m".into(),
+            max_tokens_per_turn: Some(64_000),
             anthropic_api_key: None,
             openai_api_key: None,
             google_api_key: None,
@@ -1801,7 +1809,7 @@ mod tests {
             rate_limiter: RateLimiter::from_env(),
             memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
-            agent_metrics: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+            agent_metrics: Arc::new(dashmap::DashMap::new()),
             agent_context_telemetry: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
                 crate::server::state::CONTEXT_CACHE_CAPACITY,
@@ -1885,8 +1893,8 @@ mod tests {
         //    (c) Phase B auto_extract_facts (added during memory architecture rework)
         assert_eq!(
             llm.calls.load(Ordering::SeqCst),
-            3,
-            "consolidate_agent must call LLM.complete three times (summary + P7 active_goal + auto_extract_facts)"
+            2,
+            "consolidate_agent must call LLM.complete two times (summary + auto_extract_facts)"
         );
 
         // 2. `session_summary` block exists and contains the mock output verbatim.

@@ -389,5 +389,6 @@ mod tests {
         let mut e = Editor::new();
         e.insert_newline();
         assert_eq!(e.text(), "\n");
+        assert_eq!(e.textarea.cursor(), (1, 0));
     }
 }

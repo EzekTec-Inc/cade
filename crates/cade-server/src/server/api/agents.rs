@@ -272,9 +272,12 @@ pub async fn get_agent_metrics(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let metrics = state.agent_metrics.read().await;
-    let m = metrics.get(&agent_id).cloned().unwrap_or_default();
-    Ok(Json(json!(m)))
+    let metrics = state.agent_metrics;
+    let json_val = metrics
+        .get(&agent_id)
+        .map(|v| serde_json::json!(v.value()))
+        .unwrap_or_else(|| serde_json::json!(crate::server::state::AgentMetrics::default()));
+    Ok(Json(json_val))
 }
 
 // -- Memory endpoints

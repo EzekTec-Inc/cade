@@ -405,7 +405,9 @@ impl Repl {
                 return self.cmd_reload().await;
             }
             SlashCmd::Update => {
-                crate::cli::update::run_update(false).await.map_err(|e| crate::error::Error::custom(e.to_string()))?;
+                crate::cli::update::run_update(false)
+                    .await
+                    .map_err(|e| crate::error::Error::custom(e.to_string()))?;
                 self.tui_ok("Update complete! Please restart CADE.".to_string());
                 return Ok(false);
             }
@@ -421,12 +423,7 @@ impl Repl {
             SlashCmd::Cost => {
                 return self.cmd_cost().await;
             }
-            SlashCmd::Copy => {
-                return self.cmd_copy().await;
-            }
-            SlashCmd::Mouse => {
-                return self.cmd_mouse().await;
-            }
+
             SlashCmd::Export(out_arg) => {
                 return self.cmd_export(out_arg).await;
             }

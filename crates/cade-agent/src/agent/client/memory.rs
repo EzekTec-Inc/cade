@@ -47,7 +47,10 @@ impl HttpTransport {
     pub async fn search_memory(&self, agent_id: &str, query: &str) -> Result<Vec<Value>> {
         let resp = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/memory?q={}", urlencoding::encode(query))))
+            .get(self.url(&format!(
+                "/agents/{agent_id}/memory?q={}",
+                urlencoding::encode(query)
+            )))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
@@ -230,7 +233,10 @@ impl HttpTransport {
     ) -> Result<Vec<Value>> {
         let resp = self
             .client
-            .get(self.url(&format!("/agents/{agent_id}/archival/search?q={}&limit={limit}", urlencoding::encode(query))))
+            .get(self.url(&format!(
+                "/agents/{agent_id}/archival/search?q={}&limit={limit}",
+                urlencoding::encode(query)
+            )))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
@@ -348,7 +354,10 @@ impl HttpTransport {
         conversation_id: Option<&str>,
     ) -> Result<Value> {
         let url = if let Some(conv) = conversation_id {
-            format!("/agents/{agent_id}/context?conversation_id={}", urlencoding::encode(conv))
+            format!(
+                "/agents/{agent_id}/context?conversation_id={}",
+                urlencoding::encode(conv)
+            )
         } else {
             format!("/agents/{agent_id}/context")
         };
@@ -394,9 +403,16 @@ impl HttpTransport {
         conversation_id: Option<&str>,
     ) -> Result<Vec<Value>> {
         let url = if let Some(cid) = conversation_id {
-            format!("/agents/{agent_id}/messages?q={}&conversation_id={}", urlencoding::encode(query), urlencoding::encode(cid))
+            format!(
+                "/agents/{agent_id}/messages?q={}&conversation_id={}",
+                urlencoding::encode(query),
+                urlencoding::encode(cid)
+            )
         } else {
-            format!("/agents/{agent_id}/messages?q={}", urlencoding::encode(query))
+            format!(
+                "/agents/{agent_id}/messages?q={}",
+                urlencoding::encode(query)
+            )
         };
         let req = self
             .client
@@ -421,9 +437,15 @@ impl HttpTransport {
         limit: Option<usize>,
     ) -> Result<Vec<Value>> {
         let url = if let Some(l) = limit {
-            format!("/agents/{agent_id}/events?q={}&limit={l}", urlencoding::encode(keyword))
+            format!(
+                "/agents/{agent_id}/events?q={}&limit={l}",
+                urlencoding::encode(keyword)
+            )
         } else {
-            format!("/agents/{agent_id}/events?q={}", urlencoding::encode(keyword))
+            format!(
+                "/agents/{agent_id}/events?q={}",
+                urlencoding::encode(keyword)
+            )
         };
         let resp = self
             .client

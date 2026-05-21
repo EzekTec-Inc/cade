@@ -277,6 +277,14 @@ async fn run_agent_loop(
     theme_cmd: Option<String>,
     tx: SseTx,
 ) {
+    let send_raw = |json_string: String| {
+        let tx = tx.clone();
+        let ev = Event::default().data(json_string);
+        async move {
+            let _ = tx.send(Ok(ev)).await;
+        }
+    };
+
     let send = |data: Value| {
         let tx = tx.clone();
         let ev = Event::default().data(data.to_string());
@@ -415,7 +423,7 @@ async fn run_agent_loop(
         // (unset env var → no cap).  Pricing comes from ~/.cade/pricing.json
         // or the bundled fallback table.
         if let Some(cap) = max_session_cost_usd() {
-            let map = state2.agent_metrics.read().await;
+            let map = state2.agent_metrics.clone();
             if let Some(m) = map.get(&agent_id2) {
                 let pricing = pricing_registry()
                     .pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
@@ -613,7 +621,10 @@ async fn run_agent_loop(
                     match chunk {
                         Ok(StreamChunk::Text(t)) => {
                             text_acc.push_str(&t);
-                            send(json!({ "message_type": "assistant_message", "content": t })).await;
+                            // Zero-allocation structured string building for high frequency streaming
+                            // Using a pre-allocated format to avoid json! macro dynamic allocations
+                            let json_str = format!("{{\"message_type\":\"assistant_message\",\"content\":{}}}", serde_json::to_string(&t).unwrap_or_default());
+                            send_raw(json_str).await;
                         }
                         Ok(StreamChunk::Reasoning(r)) => {
                             send(json!({ "message_type": "reasoning_message", "reasoning": r })).await;
@@ -634,7 +645,7 @@ async fn run_agent_loop(
                             // P2: accumulate into AgentMetrics so cache tokens
                             // are not silently dropped server-side.
                             {
-                                let mut map = state2.agent_metrics.write().await;
+                                let map = state2.agent_metrics.clone();
                                 map.entry(agent_id2.clone())
                                     .or_default()
                                     .accumulate_usage(&u);

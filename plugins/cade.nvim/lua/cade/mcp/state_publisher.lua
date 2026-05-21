@@ -4,7 +4,7 @@
 --
 -- Pure Neovim API — no external deps beyond connection.lua / protocol.lua.
 
-local proto = require("cade_ide.protocol")
+local proto = require("cade.mcp.protocol")
 
 local DEBOUNCE_MS = 50
 

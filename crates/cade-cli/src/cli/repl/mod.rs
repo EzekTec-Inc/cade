@@ -448,29 +448,51 @@ impl Repl {
         let client = self.client.clone();
         let mcp_arc = std::sync::Arc::clone(&self.mcp);
         let toolset = *self.current_toolset.lock();
+        let capabilities = self.capabilities.clone();
         let allow_agent_mode = self
             .settings
             .lock()
             .permission_settings()
             .allow_agent_mode_changes;
         tokio::spawn(async move {
+            use cade_agent::agent::client::CreateToolRequest;
             use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
+            use cade_agent::tools::catalog::meta_schemas_for_capabilities;
+
+            let mut all_ids = Vec::new();
+
+            // 1. Meta tools
+            for schema in meta_schemas_for_capabilities(&capabilities) {
+                let req = CreateToolRequest {
+                    source_code: String::new(),
+                    source_type: "json".to_string(),
+                    json_schema: Some(schema),
+                    tags: vec!["cade".to_string(), "meta".to_string()],
+                };
+                if let Ok(tool) = client.create_tool(req).await {
+                    all_ids.push(tool.id);
+                }
+            }
+
+            // 2. Native tools
             let tools = register_cade_tools(&client, toolset, allow_agent_mode)
                 .await
                 .unwrap_or_default();
-            let ids: Vec<String> = tools.into_iter().map(|t| t.id).collect();
-            if !ids.is_empty() {
-                let _ = client.attach_agent_tools(&agent_id, &ids).await;
+            for t in tools {
+                all_ids.push(t.id);
             }
-            let mcp_ids: Vec<String> =
-                register_mcp_tools(&client, mcp_arc.all_tool_schemas().await)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|t| t.id)
-                    .collect();
-            if !mcp_ids.is_empty() {
-                let _ = client.attach_agent_tools(&agent_id, &mcp_ids).await;
+
+            // 3. MCP tools
+            let mcp_tools = register_mcp_tools(&client, mcp_arc.all_tool_schemas().await)
+                .await
+                .unwrap_or_default();
+            for t in mcp_tools {
+                all_ids.push(t.id);
+            }
+
+            // Attach all together
+            if !all_ids.is_empty() {
+                let _ = client.attach_agent_tools(&agent_id, &all_ids).await;
             }
         });
     }

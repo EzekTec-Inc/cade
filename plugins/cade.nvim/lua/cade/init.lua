@@ -11,6 +11,14 @@ function M.setup(opts)
   pcall(function()
     require("cade.edit").setup_hints()
   end)
+
+  local cfg = require("cade.config").get()
+  
+  if cfg.mcp and cfg.mcp.enabled then
+    pcall(function()
+      require("cade.mcp").setup(cfg.mcp)
+    end)
+  end
 end
 
 -- ── Completion state passthrough ─────────────────────────────────────────────
@@ -38,11 +46,11 @@ end
 --- Toggle completions on/off.
 function M.toggle()
   local cfg = require("cade.config")
-  cfg.current.enabled = not cfg.current.enabled
-  if not cfg.current.enabled then
+  cfg.current.completions.enabled = not cfg.current.completions.enabled
+  if not cfg.current.completions.enabled then
     require("cade.ghost").clear()
   end
-  vim.notify("CADE completions " .. (cfg.current.enabled and "enabled" or "disabled"))
+  vim.notify("CADE completions " .. (cfg.current.completions.enabled and "enabled" or "disabled"))
 end
 
 --- Start a hover edit session for the visual selection
@@ -97,8 +105,9 @@ function M.status()
   end
 
   local lines = {
-    "CADE Completions",
-    string.format("  Status:     %s", cfg.enabled and "enabled" or "disabled"),
+    "CADE Plugin Status",
+    string.format("  Completions: %s", cfg.completions.enabled and "enabled" or "disabled"),
+    string.format("  MCP Adapter: %s", cfg.mcp.enabled and "enabled" or "disabled"),
     string.format("  Agent ID:   %s", agent_display),
     string.format("  Server:     http://127.0.0.1:%d  %s %s", cfg.server_port, server_icon, server_label),
     string.format("  API key:    %s", key_display),

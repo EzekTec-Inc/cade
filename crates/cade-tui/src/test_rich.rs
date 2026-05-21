@@ -2,7 +2,6 @@
 mod tests {
 
     use super::*;
-    use mlua::LuaSerdeExt;
     use crate::lua_engine::LuaEngine;
     use mlua::LuaSerdeExt;
     use std::path::PathBuf;

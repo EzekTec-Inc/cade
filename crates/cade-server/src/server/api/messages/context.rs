@@ -358,11 +358,13 @@ pub(crate) async fn complete_with_overflow_recovery(
 //   build_context loads everything from SQLite — no new_message parameter.
 //   This prevents the double-message bug that breaks tool_use/tool_result ordering.
 
-pub(crate) fn group_into_turns(messages: &[LlmMessage], max_turn_chars: usize) -> Vec<Vec<LlmMessage>> {
+pub(crate) fn group_into_turns(
+    messages: &[LlmMessage],
+    max_turn_chars: usize,
+) -> Vec<Vec<LlmMessage>> {
     let mut turns: Vec<Vec<LlmMessage>> = Vec::new();
     let mut current: Vec<LlmMessage> = Vec::new();
     let mut current_chars = 0;
-
 
     for msg in messages {
         let msg_chars = msg.content.chars().count()
@@ -379,7 +381,7 @@ pub(crate) fn group_into_turns(messages: &[LlmMessage], max_turn_chars: usize) -
         // A safe boundary is right before an assistant message (provided we aren't interrupting a tool call/result sequence).
         let is_safe_boundary = msg.role == "assistant";
 
-        if (msg.role == "user" && !current.is_empty()) 
+        if (msg.role == "user" && !current.is_empty())
             || (is_safe_boundary && current_chars >= max_turn_chars && !current.is_empty())
         {
             turns.push(std::mem::take(&mut current));
@@ -550,9 +552,20 @@ pub(crate) async fn build_context(
     //     char budget allows.  The most-recent turn is ALWAYS included — it
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
-    let all_rows =
-        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
-            .unwrap_or_default();
+    let db_pool = state.db.clone();
+    let agent_id_clone = agent_id.to_string();
+    let conv_id_clone = conversation_id.map(|s| s.to_string());
+    let all_rows = tokio::task::spawn_blocking(move || {
+        sqlite::get_context_window(
+            &db_pool,
+            &agent_id_clone,
+            conv_id_clone.as_deref(),
+            context_char_budget,
+        )
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
     let all_llm_msgs: Vec<LlmMessage> = all_rows
@@ -562,7 +575,11 @@ pub(crate) async fn build_context(
         .collect();
 
     // Group into logical turns.
-    let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
+    let max_turn_chars = state
+        .config
+        .max_tokens_per_turn
+        .map(cade_ai::chars_for_tokens)
+        .unwrap_or(64_000);
     let mut turns = group_into_turns(&all_llm_msgs, max_turn_chars);
 
     // If the window cut off mid-turn, the oldest turn might not start with a user or assistant message.
@@ -868,11 +885,12 @@ pub(crate) async fn build_context(
                         n,
                     );
                     // P6-A: Track tool outputs compacted
-                    let mut metrics = state.agent_metrics.write().await;
+                    let metrics = state.agent_metrics.clone();
                     metrics
                         .entry(agent_id.to_string())
                         .or_default()
-                        .tool_outputs_compacted += n;
+                        .tool_outputs_compacted
+                        .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -1553,13 +1571,28 @@ pub(crate) async fn compute_context_stats(
     };
 
     // ── Load and group messages (same as build_context) ─────────────────────
-    let all_rows =
-        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
-            .unwrap_or_default();
+    let db_pool = state.db.clone();
+    let agent_id_clone = agent_id.to_string();
+    let conv_id_clone = conversation_id.map(|s| s.to_string());
+    let all_rows = tokio::task::spawn_blocking(move || {
+        sqlite::get_context_window(
+            &db_pool,
+            &agent_id_clone,
+            conv_id_clone.as_deref(),
+            context_char_budget,
+        )
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
 
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
-    let max_turn_chars = state.config.max_tokens_per_turn.map(|t| cade_ai::chars_for_tokens(t)).unwrap_or(64_000);
+    let max_turn_chars = state
+        .config
+        .max_tokens_per_turn
+        .map(cade_ai::chars_for_tokens)
+        .unwrap_or(64_000);
     let mut turns = group_into_turns(&all_llm_msgs, max_turn_chars);
     if let Some(first_msg) = turns.first().and_then(|t| t.first())
         && first_msg.role != "user"
@@ -1714,9 +1747,20 @@ async fn compute_context_breakdown(
         }
         budget
     };
-    let all_rows =
-        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
-            .unwrap_or_default();
+    let db_pool = state.db.clone();
+    let agent_id_clone = agent_id.to_string();
+    let conv_id_clone = conversation_id.map(|s| s.to_string());
+    let all_rows = tokio::task::spawn_blocking(move || {
+        sqlite::get_context_window(
+            &db_pool,
+            &agent_id_clone,
+            conv_id_clone.as_deref(),
+            context_char_budget,
+        )
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
     let msg_chars: usize = all_rows.iter().map(|r| r.char_count).sum();
     let msg_tok = (msg_chars / 3) as u64;
 

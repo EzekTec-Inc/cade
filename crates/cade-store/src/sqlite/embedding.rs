@@ -146,7 +146,7 @@ pub fn search_memory_blocks_fts(
 pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<usize> {
     // Snapshot the (id, value) pairs under a short-lived lock so we don't
     // hold the connection while running CPU-bound embedding work.
-    let pending: Vec<(String, String)> = {
+    let pending_blocks: Vec<(String, String)> = {
         let conn = db.get()?;
         let mut stmt =
             conn.prepare("SELECT id, value FROM shared_memory_blocks WHERE embedding IS NULL")?;
@@ -154,21 +154,28 @@ pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<us
         rows.filter_map(|r| r.ok()).collect()
     };
 
-    if pending.is_empty() {
+    let pending_chunks: Vec<(String, String)> = {
+        let conn = db.get()?;
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM memory_chunks WHERE embedding IS NULL")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    if pending_blocks.is_empty() && pending_chunks.is_empty() {
         return Ok(0);
     }
 
     let mut written = 0usize;
-    for (id, value) in &pending {
+    for (id, value) in &pending_blocks {
         let vec = match embedder.embed(value) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("backfill_embeddings: embedder failed on id {id}: {e}");
+                tracing::warn!("backfill_embeddings: embedder failed on block id {id}: {e}");
                 continue;
             }
         };
         if vec.is_empty() {
-            // NoopEmbedder or similar — skip silently.
             continue;
         }
         let mut bytes: Vec<u8> = Vec::with_capacity(vec.len() * 4);
@@ -181,9 +188,35 @@ pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<us
             rusqlite::params![bytes, id],
         ) {
             Ok(_) => written += 1,
-            Err(e) => tracing::warn!("backfill_embeddings: UPDATE failed on id {id}: {e}"),
+            Err(e) => tracing::warn!("backfill_embeddings: UPDATE failed on block id {id}: {e}"),
         }
     }
+
+    for (id, value) in &pending_chunks {
+        let vec = match embedder.embed(value) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("backfill_embeddings: embedder failed on chunk id {id}: {e}");
+                continue;
+            }
+        };
+        if vec.is_empty() {
+            continue;
+        }
+        let mut bytes: Vec<u8> = Vec::with_capacity(vec.len() * 4);
+        for f in &vec {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        let conn = db.get()?;
+        match conn.execute(
+            "UPDATE memory_chunks SET embedding = ?1 WHERE id = ?2",
+            rusqlite::params![bytes, id],
+        ) {
+            Ok(_) => written += 1,
+            Err(e) => tracing::warn!("backfill_embeddings: UPDATE failed on chunk id {id}: {e}"),
+        }
+    }
+
     Ok(written)
 }
 
@@ -237,7 +270,13 @@ pub fn search_memory_semantic(
             "SELECT b.id, b.label, b.value, b.embedding
              FROM shared_memory_blocks b
              JOIN agent_memory_blocks amb ON amb.block_id = b.id
-             WHERE amb.agent_id = ?1 AND b.memory_type = ?2 AND b.embedding IS NOT NULL",
+             WHERE amb.agent_id = ?1 AND b.memory_type = ?2 AND b.embedding IS NOT NULL
+             UNION ALL
+             SELECT b.id, b.label, b.value, c.embedding
+             FROM memory_chunks c
+             JOIN shared_memory_blocks b ON b.id = c.block_id
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND b.memory_type = ?2 AND c.embedding IS NOT NULL",
         )?;
         stmt.query_map(rusqlite::params![agent_id, mtype], |row| {
             Ok((
@@ -254,7 +293,13 @@ pub fn search_memory_semantic(
             "SELECT b.id, b.label, b.value, b.embedding
              FROM shared_memory_blocks b
              JOIN agent_memory_blocks amb ON amb.block_id = b.id
-             WHERE amb.agent_id = ?1 AND b.embedding IS NOT NULL",
+             WHERE amb.agent_id = ?1 AND b.embedding IS NOT NULL
+             UNION ALL
+             SELECT b.id, b.label, b.value, c.embedding
+             FROM memory_chunks c
+             JOIN shared_memory_blocks b ON b.id = c.block_id
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND c.embedding IS NOT NULL",
         )?;
         stmt.query_map(rusqlite::params![agent_id], |row| {
             Ok((
@@ -268,7 +313,8 @@ pub fn search_memory_semantic(
         .collect::<Vec<_>>()
     };
 
-    let mut scored: Vec<(String, f64, String, String)> = Vec::new();
+    let mut scored_map: std::collections::HashMap<String, (f64, String, String)> =
+        std::collections::HashMap::new();
     for r in rows {
         let (id, label, value, blob) = r;
         let Some(vec) = decode_embedding_blob(&blob) else {
@@ -277,8 +323,21 @@ pub fn search_memory_semantic(
         let Some(sim) = cosine_similarity(query_embedding, &vec) else {
             continue;
         };
-        scored.push((id, sim as f64, label, value));
+
+        // Keep the highest similarity for this block id
+        let current_best = scored_map
+            .get(&id)
+            .map(|v| v.0)
+            .unwrap_or(f64::NEG_INFINITY);
+        if sim as f64 > current_best {
+            scored_map.insert(id, (sim as f64, label, value));
+        }
     }
+
+    let mut scored: Vec<(String, f64, String, String)> = scored_map
+        .into_iter()
+        .map(|(id, (sim, label, value))| (id, sim, label, value))
+        .collect();
 
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);

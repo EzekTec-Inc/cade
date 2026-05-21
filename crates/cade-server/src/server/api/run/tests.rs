@@ -95,7 +95,8 @@ impl cade_ai::LlmProvider for PanicOnCallLlm {
 
 pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>) -> AppState {
     let db = cade_store::sqlite::open(":memory:").unwrap();
-    let config = std::sync::Arc::new(crate::server::config::ServerConfig { max_tokens_per_turn: 64_000,
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        max_tokens_per_turn: Some(64_000),
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
         llm_provider: crate::server::config::LlmProviderKind::Anthropic,
@@ -132,9 +133,7 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
+        agent_metrics: std::sync::Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),

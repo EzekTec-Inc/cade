@@ -479,10 +479,9 @@ impl IdeMcpServer {
             Some(p) => p,
             None => {
                 let active = self.get_active_file_impl().await;
-                active.path.ok_or_else(|| ErrorData::invalid_params(
-                    "missing field `path` and no active file found",
-                    None,
-                ))?
+                active.path.ok_or_else(|| {
+                    ErrorData::invalid_params("missing field `path` and no active file found", None)
+                })?
             }
         };
         self.get_file_content_impl(p).await.map(Json)
@@ -500,10 +499,9 @@ impl IdeMcpServer {
             Some(p) => p,
             None => {
                 let active = self.get_active_file_impl().await;
-                active.path.ok_or_else(|| ErrorData::invalid_params(
-                    "missing field `path` and no active file found",
-                    None,
-                ))?
+                active.path.ok_or_else(|| {
+                    ErrorData::invalid_params("missing field `path` and no active file found", None)
+                })?
             }
         };
         let apply_req = crate::state::ApplyEditRequest {
@@ -538,10 +536,9 @@ impl IdeMcpServer {
             Some(p) => p,
             None => {
                 let active = self.get_active_file_impl().await;
-                active.path.ok_or_else(|| ErrorData::invalid_params(
-                    "missing field `path` and no active file found",
-                    None,
-                ))?
+                active.path.ok_or_else(|| {
+                    ErrorData::invalid_params("missing field `path` and no active file found", None)
+                })?
             }
         };
         self.set_selection_impl(path, req.range).await.map(Json)
@@ -560,10 +557,9 @@ impl IdeMcpServer {
             Some(p) => p,
             None => {
                 let active = self.get_active_file_impl().await;
-                active.path.ok_or_else(|| ErrorData::invalid_params(
-                    "missing field `path` and no active file found",
-                    None,
-                ))?
+                active.path.ok_or_else(|| {
+                    ErrorData::invalid_params("missing field `path` and no active file found", None)
+                })?
             }
         };
         self.save_file_impl(path).await.map(Json)
