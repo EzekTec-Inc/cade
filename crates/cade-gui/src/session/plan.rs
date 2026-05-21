@@ -29,13 +29,11 @@ impl SessionState {
     /// Mark a plan step as done or not done. `step_id` is 1-based.
     pub fn update_plan_step(&mut self, step_id: usize, done: bool) -> bool {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            active_plan: Some(plan),
-            ..
-         } = &mut **session;
-            if let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
-                step.is_done = done;
-                return true;
+            if let Some(plan) = &mut session.active_plan {
+                if let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
+                    step.is_done = done;
+                    return true;
+                }
             }
         }
         false

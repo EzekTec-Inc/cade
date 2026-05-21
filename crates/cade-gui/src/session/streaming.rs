@@ -10,12 +10,9 @@ impl SessionState {
     /// assistant message is created.
     pub fn on_stream_chunk(&mut self, text: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            messages,
-            streaming: true,
-            auto_scroll,
-            ..
-         } = &mut **session;
+            if !session.streaming { return; }
+            let messages = &mut session.messages;
+            let auto_scroll = &mut session.auto_scroll;
             // Append to existing assistant message or create one.
             if let Some(last) = messages.last_mut()
                 && last.role == "assistant"
@@ -52,11 +49,8 @@ impl SessionState {
     /// Consecutive reasoning chunks accumulate into the same message.
     pub fn on_stream_reasoning(&mut self, text: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            messages,
-            streaming: true,
-            ..
-         } = &mut **session;
+            if !session.streaming { return; }
+            let messages = &mut session.messages;
             if let Some(last) = messages.last_mut()
                 && last.role == "reasoning"
                 && last.id.is_empty()
@@ -85,15 +79,12 @@ impl SessionState {
     /// question so the inline widget can render.
     pub fn on_stream_tool_call(&mut self, id: &str, name: &str, arguments: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            messages,
-            streaming: true,
-            active_question,
-            question_cursor,
-            question_checked,
-            active_plan,
-            ..
-         } = &mut **session;
+            if !session.streaming { return; }
+            let messages = &mut session.messages;
+            let active_question = &mut session.active_question;
+            let question_cursor = &mut session.question_cursor;
+            let question_checked = &mut session.question_checked;
+            let active_plan = &mut session.active_plan;
             messages.push(ChatMessage {
                 id: String::new(),
                 role: "tool_call".to_string(),
@@ -164,11 +155,8 @@ impl SessionState {
     /// Appended as a `role = "tool_result"` message for display in the timeline.
     pub fn on_stream_tool_result(&mut self, id: &str, name: &str, output: &str, is_error: bool) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            messages,
-            streaming: true,
-            ..
-         } = &mut **session;
+            if !session.streaming { return; }
+            let messages = &mut session.messages;
             messages.push(ChatMessage {
                 id: String::new(),
                 role: "tool_result".to_string(),

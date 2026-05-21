@@ -43,8 +43,17 @@ use overlays::{
 };
 // Bring view helpers into scope.
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivePage {
+    Overview,
+    Chat,
+    Logs,
+}
+
 /// Top-level eframe app for the cade-gui dashboard.
 pub struct CadeApp {
+    /// Active tab in the dashboard.
+    active_page: ActivePage,
     /// Login form state — driven by user input events.
     login: LoginState,
     /// Post-login session state — driven by async HTTP results.
@@ -93,6 +102,7 @@ impl CadeApp {
         }
 
         Self {
+            active_page: ActivePage::Overview,
             login,
             session: Rc::new(RefCell::new(None)),
             connect_started: false,

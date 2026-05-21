@@ -46,11 +46,7 @@ impl SessionState {
     /// Immutable reference to the active question, if any.
     pub fn active_question(&self) -> Option<&crate::api::Question> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            active_question: Some(q),
-            ..
-         } = &**session;
-            Some(q)
+            session.active_question.as_ref()
         } else {
             None
         }
@@ -59,17 +55,14 @@ impl SessionState {
     /// Move the question cursor up or down (wraps).  `delta` is -1 or +1.
     pub fn move_question_cursor(&mut self, delta: i32) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            active_question: Some(q),
-            question_cursor,
-            ..
-         } = &mut **session;
-            let n = q.options.len();
-            if n == 0 {
-                return;
+            if let Some(q) = &session.active_question {
+                let n = q.options.len();
+                if n == 0 {
+                    return;
+                }
+                let cur = session.question_cursor as i32;
+                session.question_cursor = ((cur + delta).rem_euclid(n as i32)) as usize;
             }
-            let cur = *question_cursor as i32;
-            *question_cursor = ((cur + delta).rem_euclid(n as i32)) as usize;
         }
     }
 
@@ -77,16 +70,12 @@ impl SessionState {
     /// (multi-select mode only).
     pub fn toggle_question_checked(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            active_question: Some(q),
-            question_cursor,
-            question_checked,
-            ..
-         } = &mut **session;
-            if q.multi_select {
-                let idx = *question_cursor;
-                if let Some(v) = question_checked.get_mut(idx) {
-                    *v = !*v;
+            if let Some(q) = &session.active_question {
+                if q.multi_select {
+                    let idx = session.question_cursor;
+                    if let Some(v) = session.question_checked.get_mut(idx) {
+                        *v = !*v;
+                    }
                 }
             }
         }
@@ -99,14 +88,9 @@ impl SessionState {
     /// Returns `None` when no question is active or nothing is selected.
     pub fn commit_question_answer(&mut self) -> Option<String> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            active_question: Some(q),
-            question_cursor,
-            question_checked,
-            ..
-         } = &mut **session;
+            let q = session.active_question.as_ref()?;
             let answer = if q.multi_select {
-                let labels: Vec<&str> = question_checked
+                let labels: Vec<&str> = session.question_checked
                     .iter()
                     .enumerate()
                     .filter(|(_, c)| **c)
@@ -117,7 +101,7 @@ impl SessionState {
                 }
                 labels.join(", ")
             } else {
-                q.options.get(*question_cursor).map(|o| o.label.clone())?
+                q.options.get(session.question_cursor).map(|o| o.label.clone())?
             };
             Some(answer)
         } else {
@@ -492,10 +476,7 @@ impl SessionState {
 
     /// Whether the palette overlay is currently open.
     pub fn is_palette_open(&self) -> bool {
-        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession { 
-                palette_open: true,
-                ..
-             }))
+        matches!(self, Self::Connected(session) if session.palette_open)
     }
 
     /// Parse the currently-selected palette entry into a concrete
@@ -503,17 +484,12 @@ impl SessionState {
     /// closed or there are no matching entries for the query.
     pub fn selected_palette_cmd(&self) -> Option<crate::palette::PaletteCmd> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            palette_open: true,
-            palette_input,
-            palette_selection,
-            ..
-         } = &**session;
-            let filtered = crate::palette::fuzzy_filter(palette_input);
+            if !session.palette_open { return None; }
+            let filtered = crate::palette::fuzzy_filter(&session.palette_input);
             if filtered.is_empty() {
                 return None;
             }
-            let idx = (*palette_selection).min(filtered.len() - 1);
+            let idx = session.palette_selection.min(filtered.len() - 1);
             Some(crate::palette::parse_palette_input(
                 filtered[idx].def.trigger,
             ))
@@ -595,17 +571,12 @@ impl SessionState {
     /// Parse the currently-selected menu entry.
     pub fn selected_menu_cmd(&self) -> Option<crate::palette::PaletteCmd> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            menu_open: true,
-            menu_input,
-            menu_selection,
-            ..
-         } = &**session;
-            let filtered = crate::palette::fuzzy_filter(menu_input);
+            if !session.menu_open { return None; }
+            let filtered = crate::palette::fuzzy_filter(&session.menu_input);
             if filtered.is_empty() {
                 return None;
             }
-            let idx = (*menu_selection).min(filtered.len() - 1);
+            let idx = session.menu_selection.min(filtered.len() - 1);
             Some(crate::palette::parse_palette_input(
                 filtered[idx].def.trigger,
             ))

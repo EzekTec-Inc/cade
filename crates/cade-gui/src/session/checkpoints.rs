@@ -124,11 +124,7 @@ impl SessionState {
     /// Read the current notice string (e.g. "Restored cp-abc…").
     pub fn checkpoints_notice(&self) -> Option<&str> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints_notice: Some(n),
-            ..
-         } = &**session;
-            Some(n.as_str())
+            session.checkpoints_notice.as_deref()
         } else {
             None
         }

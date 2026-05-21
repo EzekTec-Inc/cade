@@ -136,12 +136,7 @@ impl SessionState {
     /// by the delete button to pass the right id to the spawn helper.
     pub fn selected_artifact_id(&self) -> Option<String> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            artifacts,
-            artifact_selection: Some(idx),
-            ..
-         } = &**session;
-            artifacts.get(*idx).map(|a| a.id.clone())
+            session.artifact_selection.and_then(|idx| session.artifacts.get(idx).map(|a| a.id.clone()))
         } else {
             None
         }

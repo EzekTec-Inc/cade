@@ -764,9 +764,16 @@ impl Repl {
 
         // Try ToolRuntime first (handles memory, skills, checkpoints, web, etc.).
         // Fall back to native dispatch / MCP for tools ToolRuntime does not handle.
-        const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        let timeout_val = args.get("timeout").and_then(|v| v.as_u64());
+        let outer_timeout = if let Some(t) = timeout_val {
+            std::time::Duration::from_secs(t + 5)
+        } else {
+            // A generous fallback for tools without an explicit timeout
+            std::time::Duration::from_secs(600)
+        };
+
         let mut result = match tokio::time::timeout(
-            TOOL_TIMEOUT,
+            outer_timeout,
             runtime.execute(call_id.to_string(), tool_name, args),
         )
         .await
@@ -782,7 +789,7 @@ impl Repl {
                 // ToolRuntime returned None — interactive-only tool not handled there;
                 // fall through to native dispatch / MCP.
                 match tokio::time::timeout(
-                    TOOL_TIMEOUT,
+                    outer_timeout,
                     dispatch(call_id.to_string(), tool_name, args, mcp, None),
                 )
                 .await
@@ -794,7 +801,7 @@ impl Repl {
                         output: format!(
                             "Tool '{}' timed out after {}s",
                             tool_name,
-                            TOOL_TIMEOUT.as_secs()
+                            outer_timeout.as_secs()
                         ),
                         is_error: true,
                         ui_resource_uri: None,
@@ -807,7 +814,7 @@ impl Repl {
                 output: format!(
                     "Tool '{}' timed out after {}s",
                     tool_name,
-                    TOOL_TIMEOUT.as_secs()
+                    outer_timeout.as_secs()
                 ),
                 is_error: true,
                 ui_resource_uri: None,

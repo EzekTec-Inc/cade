@@ -143,6 +143,13 @@ impl Repl {
                             if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
                                 *tick_bar.lock() =
                                     format!("assessing… (Ctrl+c to interrupt · {secs}s · {toks}↑)");
+                            } else if cur.starts_with('●') {
+                                let base = if let Some(idx) = cur.find(" (Ctrl+c") {
+                                    &cur[..idx]
+                                } else {
+                                    &cur
+                                };
+                                *tick_bar.lock() = format!("{base} (Ctrl+c to interrupt · {secs}s)");
                             }
                         }
                         // R-01: Only draw if the app has pending state changes

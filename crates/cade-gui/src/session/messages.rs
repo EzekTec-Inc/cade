@@ -74,32 +74,23 @@ impl SessionState {
     ///   3. Sets `streaming = true`.
     pub fn on_send(&mut self) -> Option<String> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            selected_agent: Some(_),
-            input_buffer,
-            messages,
-            streaming,
-            last_usage,
-            last_finish_reason,
-            ..
-         } = &mut **session;
-            if *streaming {
+            if session.selected_agent.is_none() || session.streaming {
                 return None;
             }
-            let trimmed = input_buffer.trim().to_string();
+            let trimmed = session.input_buffer.trim().to_string();
             if trimmed.is_empty() {
                 return None;
             }
-            messages.push(ChatMessage {
+            session.messages.push(ChatMessage {
                 id: String::new(), // server assigns a real ID
                 role: "user".to_string(),
                 content: serde_json::Value::String(trimmed.clone()),
                 conversation_id: None,
             });
-            input_buffer.clear();
-            *streaming = true;
-            *last_usage = None;
-            *last_finish_reason = None;
+            session.input_buffer.clear();
+            session.streaming = true;
+            session.last_usage = None;
+            session.last_finish_reason = None;
             Some(trimmed)
         } else {
             None

@@ -164,16 +164,13 @@ impl SessionState {
     /// is closed or no block is selected.
     pub fn memory_selected_label_value(&self) -> Option<(String, String)> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_open: true,
-            memory_blocks,
-            memory_selection,
-            memory_edit_buffer,
-            ..
-         } = &**session;
-            memory_blocks
-                .get(*memory_selection)
-                .map(|b| (b.label.clone(), memory_edit_buffer.clone()))
+            if session.memory_open {
+                session.memory_blocks
+                    .get(session.memory_selection)
+                    .map(|b| (b.label.clone(), session.memory_edit_buffer.clone()))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -185,16 +182,13 @@ impl SessionState {
     /// overlay is closed, no block is selected, or buffer == saved value.
     pub fn is_memory_dirty(&self) -> bool {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_open: true,
-            memory_blocks,
-            memory_selection,
-            memory_edit_buffer,
-            ..
-         } = &**session;
-            match memory_blocks.get(*memory_selection) {
-                Some(b) => b.value != *memory_edit_buffer,
-                None => false,
+            if session.memory_open {
+                match session.memory_blocks.get(session.memory_selection) {
+                    Some(b) => b.value != session.memory_edit_buffer,
+                    None => false,
+                }
+            } else {
+                false
             }
         } else {
             false
@@ -205,11 +199,7 @@ impl SessionState {
     /// `None` when no save has completed since the last open/select/error.
     pub fn memory_save_notice(&self) -> Option<&str> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_save_notice: Some(n),
-            ..
-         } = &**session;
-            Some(n.as_str())
+            session.memory_save_notice.as_deref()
         } else {
             None
         }
