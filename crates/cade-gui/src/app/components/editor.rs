@@ -100,11 +100,9 @@ pub fn render(
                         }
 
                         if resp.changed() {
-                            if let Some(SessionState::Connected {
-                                input_buffer: buf, ..
-                            }) = session.borrow_mut().as_mut()
+                            if let Some(SessionState::Connected(s)) = session.borrow_mut().as_mut()
                             {
-                                *buf = input_edit.clone();
+                                s.input_buffer = input_edit.clone();
                             }
                         }
 

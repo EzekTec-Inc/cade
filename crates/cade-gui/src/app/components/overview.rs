@@ -1,7 +1,7 @@
 use eframe::egui;
-use egui_plot::{Bar, BarChart, Plot};
+use crate::theme::EguiThemeExt;
 
-pub fn render(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
+pub fn render(ui: &mut egui::Ui, session: &crate::session::ConnectedSession, theme: &crate::theme::ThemeColors) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(20.0);
         
@@ -22,9 +22,11 @@ pub fn render(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
                 // Current Configuration
                 ui.group(|ui| {
                     ui.heading(egui::RichText::new("Current Configuration").color(theme.primary()));
-                    ui.label("Model: Auto-detect");
-                    ui.label("Permissions: Default");
-                    ui.label("Memory: Advanced enabled");
+                    
+                    let model = session.context_stats.as_ref().and_then(|c| c.model.clone()).unwrap_or_else(|| "Auto-detect".into());
+                    ui.label(format!("Model: {}", model));
+                    ui.label(format!("Available Tools: {}", session.tools.len()));
+                    ui.label(format!("MCP Servers: {}", session.mcp_servers.len()));
                 });
             });
 
@@ -32,19 +34,16 @@ pub fn render(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
             columns[1].vertical(|ui| {
                 // Tool Usage Chart
                 ui.group(|ui| {
-                    ui.heading(egui::RichText::new("Tool Usage").color(theme.primary()));
-                    let chart = BarChart::new(vec![
-                        Bar::new(0.5, 10.0).name("bash").fill(theme.primary()),
-                        Bar::new(1.5, 5.0).name("read_file").fill(theme.success()),
-                        Bar::new(2.5, 8.0).name("edit_file").fill(theme.warning()),
-                        Bar::new(3.5, 2.0).name("update_memory").fill(theme.error()),
-                    ])
-                    .width(0.8)
-                    .name("Usage Count");
+                    ui.heading(egui::RichText::new("Agent Metrics").color(theme.primary()));
+                    
+                    let metrics = &session.agent_metrics;
+                    let compacted = metrics.as_ref().map(|m| m.tool_outputs_compacted as f64).unwrap_or(0.0);
+                    let runs = metrics.as_ref().map(|m| m.consolidation_runs as f64).unwrap_or(0.0);
+                    let guard_hits = metrics.as_ref().map(|m| m.inflation_guard_hits as f64).unwrap_or(0.0);
 
-                    Plot::new("tool_usage_plot")
-                        .view_aspect(2.0)
-                        .show(ui, |plot_ui| plot_ui.bar_chart(chart));
+                    ui.label(format!("Compacted: {}", compacted));
+                    ui.label(format!("Consolidations: {}", runs));
+                    ui.label(format!("Guard Hits: {}", guard_hits));
                 });
 
                 ui.add_space(20.0);
@@ -52,7 +51,14 @@ pub fn render(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
                 // Execution Queue
                 ui.group(|ui| {
                     ui.heading(egui::RichText::new("Executions Queue").color(theme.primary()));
-                    ui.label("No active background executions.");
+                    let cards = &session.subagent_cards;
+                    if cards.is_empty() {
+                        ui.label("No active background executions.");
+                    } else {
+                        for card in cards {
+                            ui.label(format!("Task: {} [{}]", card.task, card.status));
+                        }
+                    }
                 });
                 
                 ui.add_space(20.0);
@@ -60,8 +66,17 @@ pub fn render(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
                 // Last Execution
                 ui.group(|ui| {
                     ui.heading(egui::RichText::new("Last Execution").color(theme.primary()));
-                    ui.label("Status: Success");
-                    ui.label("Duration: 1.2s");
+                    if let Some(reason) = &session.last_finish_reason {
+                        ui.label(format!("Status: {}", reason));
+                    } else {
+                        ui.label("Status: N/A");
+                    }
+                    
+                    if let Some((input, output, _)) = &session.last_usage {
+                        ui.label(format!("Tokens: {} in, {} out", input, output));
+                    } else {
+                        ui.label("Tokens: N/A");
+                    }
                 });
             });
         });

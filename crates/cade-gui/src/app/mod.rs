@@ -164,7 +164,7 @@ impl eframe::App for CadeApp {
             }
 
             // Snapshot session state for this frame's render pass.
-            let mut session_snapshot = self.session.borrow().clone();
+            let session_snapshot = self.session.borrow().clone();
 
             match session_snapshot {
                 Some(SessionState::Connecting { .. }) => {
@@ -175,108 +175,107 @@ impl eframe::App for CadeApp {
                     ui.label("Server reached — loading agents...");
                     ui.spinner();
                 }
-                Some(SessionState::Connected(session)) => {
-                    let agents = &session.agents;
+                Some(SessionState::Connected(mut session)) => {
+                                        let agents = &session.agents;
                     let health = &session.health;
                     let selected_agent = &session.selected_agent;
                     let messages = &session.messages;
                     let input_buffer = &session.input_buffer;
-                    let streaming = &session.streaming;
-                    let auto_scroll = &session.auto_scroll;
+                    let streaming = session.streaming;
+                    let auto_scroll = session.auto_scroll;
                     let error_toast = &session.error_toast;
                     let last_usage = &session.last_usage;
                     let last_finish_reason = &session.last_finish_reason;
                     let conversations = &session.conversations;
                     let selected_conversation = &session.selected_conversation;
-                    let has_more_messages = &session.has_more_messages;
-                    let palette_open = &session.palette_open;
+                    let has_more_messages = session.has_more_messages;
+                    let palette_open = session.palette_open;
                     let palette_input = &session.palette_input;
-                    let palette_selection = &session.palette_selection;
-                    let menu_open = &session.menu_open;
+                    let palette_selection = session.palette_selection;
+                    let menu_open = session.menu_open;
                     let menu_input = &session.menu_input;
-                    let menu_selection = &session.menu_selection;
-                    let memory_open = &session.memory_open;
+                    let menu_selection = session.menu_selection;
+                    let memory_open = session.memory_open;
                     let memory_blocks = &session.memory_blocks;
-                    let memory_selection = &session.memory_selection;
+                    let memory_selection = session.memory_selection;
                     let memory_edit_buffer = &session.memory_edit_buffer;
-                    let memory_loading = &session.memory_loading;
+                    let memory_loading = session.memory_loading;
                     let memory_saving = &session.memory_saving;
                     let memory_error = &session.memory_error;
                     let memory_save_notice = &session.memory_save_notice;
-                    let checkpoints_open = &session.checkpoints_open;
+                    let checkpoints_open = session.checkpoints_open;
                     let checkpoints = &session.checkpoints;
-                    let checkpoints_loading = &session.checkpoints_loading;
-                    let checkpoints_busy = &session.checkpoints_busy;
+                    let checkpoints_loading = session.checkpoints_loading;
+                    let checkpoints_busy = session.checkpoints_busy;
                     let checkpoints_error = &session.checkpoints_error;
                     let checkpoints_notice = &session.checkpoints_notice;
-                    let artifacts_open = &session.artifacts_open;
+                    let artifacts_open = session.artifacts_open;
                     let artifacts = &session.artifacts;
-                    let artifact_selection = &session.artifact_selection;
+                    let artifact_selection = session.artifact_selection;
                     let artifact_detail = &session.artifact_detail;
-                    let artifacts_loading = &session.artifacts_loading;
-                    let artifacts_busy = &session.artifacts_busy;
+                    let artifacts_loading = session.artifacts_loading;
+                    let artifacts_busy = session.artifacts_busy;
                     let artifacts_error = &session.artifacts_error;
-                    let tools_open = &session.tools_open;
+                    let tools_open = session.tools_open;
                     let tools = &session.tools;
-                    let tools_loading = &session.tools_loading;
+                    let tools_loading = session.tools_loading;
                     let tools_error = &session.tools_error;
                     let active_question = &session.active_question;
-                    let question_cursor = &session.question_cursor;
+                    let question_cursor = session.question_cursor;
                     let question_checked = &session.question_checked;
                     let agent_metrics = &session.agent_metrics;
-                    let total_input_tokens = &session.total_input_tokens;
-                    let total_output_tokens = &session.total_output_tokens;
-                    let context_open = &session.context_open;
+                    let total_input_tokens = session.total_input_tokens;
+                    let total_output_tokens = session.total_output_tokens;
+                    let context_open = session.context_open;
                     let context_stats = &session.context_stats;
-                    let context_loading = &session.context_loading;
+                    let context_loading = session.context_loading;
                     let context_error = &session.context_error;
-                    let agents_open = &session.agents_open;
-                    let stats_open = &session.stats_open;
-                    let mcp_open = &session.mcp_open;
+                    let agents_open = session.agents_open;
+                    let stats_open = session.stats_open;
+                    let mcp_open = session.mcp_open;
                     let mcp_servers = &session.mcp_servers;
-                    let mcp_loading = &session.mcp_loading;
+                    let mcp_loading = session.mcp_loading;
                     let mcp_error = &session.mcp_error;
-                    let theme_update = &session.theme_update;
-                    let model_picker_open = &session.model_picker_open;
+                    let model_picker_open = session.model_picker_open;
                     let model_picker_models = &session.model_picker_models;
                     let model_picker_custom_providers = &session.model_picker_custom_providers;
                     let model_picker_query = &session.model_picker_query;
-                    let model_picker_selection = &session.model_picker_selection;
-                    let model_picker_loading = &session.model_picker_loading;
+                    let model_picker_selection = session.model_picker_selection;
+                    let model_picker_loading = session.model_picker_loading;
                     let model_picker_error = &session.model_picker_error;
                     let active_plan = &session.active_plan;
                     let live_outputs = &session.live_outputs;
                     let context_breakdown = &session.context_breakdown;
-                    let context_breakdown_loading = &session.context_breakdown_loading;
-                    let providers_open = &session.providers_open;
+                    let context_breakdown_loading = session.context_breakdown_loading;
+                    let providers_open = session.providers_open;
                     let providers = &session.providers;
-                    let providers_loading = &session.providers_loading;
-                    let permissions_open = &session.permissions_open;
+                    let providers_loading = session.providers_loading;
+                    let permissions_open = session.permissions_open;
                     let current_permission_mode = &session.current_permission_mode;
-                    let theme_picker_open = &session.theme_picker_open;
+                    let theme_picker_open = session.theme_picker_open;
                     let available_themes = &session.available_themes;
                     let current_theme_name = &session.current_theme_name;
-                    let hooks_open = &session.hooks_open;
+                    let hooks_open = session.hooks_open;
                     let hooks = &session.hooks;
-                    let hooks_loading = &session.hooks_loading;
-                    let toolset_open = &session.toolset_open;
+                    let hooks_loading = session.hooks_loading;
+                    let toolset_open = session.toolset_open;
                     let current_toolset = &session.current_toolset;
-                    let pricing_open = &session.pricing_open;
+                    let pricing_open = session.pricing_open;
                     let pricing_info = &session.pricing_info;
-                    let backend_open = &session.backend_open;
+                    let backend_open = session.backend_open;
                     let current_backend = &session.current_backend;
-                    let reasoning_open = &session.reasoning_open;
+                    let reasoning_open = session.reasoning_open;
                     let current_reasoning_effort = &session.current_reasoning_effort;
-                    let skills_overlay_open = &session.skills_overlay_open;
+                    let skills_overlay_open = session.skills_overlay_open;
                     let all_skills_list = &session.all_skills_list;
                     let loaded_skill_ids = &session.loaded_skill_ids;
-                    let skills_loading = &session.skills_loading;
+                    let skills_loading = session.skills_loading;
                     let skills_filter = &session.skills_filter;
                     let subagent_cards = &session.subagent_cards;
                     // ── Connected: 3-panel layout ───────────────────
                     let _version = health.version.as_deref().unwrap_or("unknown");
 
-                    if let Some(new_theme) = theme_update.take() {
+                    if let Some(new_theme) = session.theme_update.take() {
                         if let Some(t) = cade_core::resources::get_theme(&new_theme) {
                             self.theme = t;
                             crate::theme::apply_theme(ui.ctx(), &self.theme);
@@ -493,20 +492,20 @@ impl eframe::App for CadeApp {
 
                     match self.active_page {
                         ActivePage::Overview => {
-                            components::overview::render(ui, &self.theme);
+                            components::overview::render(ui, &session, &self.theme);
                         }
                         ActivePage::Logs => {
                             components::timeline::render(
                                 ui,
                                 &mut self.md_cache,
                                 *selected_agent,
-                                &messages,
-                                has_more_messages,
+                                &[], // No chat messages in logs view
+                                false, // No more messages
                                 is_streaming,
                                 auto_scroll,
                                 error_toast.as_ref(),
-                                last_usage.as_ref(),
-                                last_finish_reason.as_ref(),
+                                None, // No token usage footer
+                                None,
                                 live_outputs,
                                 subagent_cards,
                                 &self.theme,
@@ -572,8 +571,8 @@ impl eframe::App for CadeApp {
                                 error_toast.as_ref(),
                                 last_usage.as_ref(),
                                 last_finish_reason.as_ref(),
-                                live_outputs,
-                                subagent_cards,
+                                &[], // No live outputs in chat view
+                                &[], // No subagent cards in chat view
                                 &self.theme,
                             ) {
                                 action = new_action;
@@ -617,7 +616,7 @@ impl eframe::App for CadeApp {
                             memory_selection,
                             memory_edit_buffer,
                             memory_loading,
-                            memory_saving,
+                            *memory_saving,
                             memory_error.as_deref(),
                             memory_save_notice.as_deref(),
                             dirty,
@@ -647,7 +646,7 @@ impl eframe::App for CadeApp {
                         if let Some(new_action) = render_artifacts_overlay(
                             ui.ctx(),
                             artifacts,
-                            *artifact_selection,
+                            artifact_selection,
                             artifact_detail.as_ref(),
                             artifacts_loading,
                             artifacts_busy,
@@ -1063,10 +1062,10 @@ impl eframe::App for CadeApp {
                 });
                 if let Some(text) = answer {
                     // Inject as next user message via the existing send path.
-                    if let Some(SessionState::Connected { input_buffer, .. }) =
+                    if let Some(SessionState::Connected(session)) =
                         self.session.borrow_mut().as_mut()
                     {
-                        *input_buffer = text;
+                        session.input_buffer = text;
                     }
                     self.spawn_stream_message();
                 }
@@ -1137,7 +1136,7 @@ impl eframe::App for CadeApp {
             AppAction::CloseProvidersOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let providers_open = &session.providers_open;
+                        let providers_open = &mut session.providers_open;
                         *providers_open = false;
                     }
                 }
@@ -1145,7 +1144,7 @@ impl eframe::App for CadeApp {
             AppAction::ClosePermissionsOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let permissions_open = &session.permissions_open;
+                        let permissions_open = &mut session.permissions_open;
                         *permissions_open = false;
                     }
                 }
@@ -1153,8 +1152,8 @@ impl eframe::App for CadeApp {
             AppAction::SetPermissionMode(mode) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let current_permission_mode = &session.current_permission_mode;
-                        let permissions_open = &session.permissions_open;
+                        let current_permission_mode = &mut session.current_permission_mode;
+                        let permissions_open = &mut session.permissions_open;
                         *current_permission_mode = mode;
                         *permissions_open = false;
                     }
@@ -1163,7 +1162,7 @@ impl eframe::App for CadeApp {
             AppAction::CloseThemeOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let theme_picker_open = &session.theme_picker_open;
+                        let theme_picker_open = &mut session.theme_picker_open;
                         *theme_picker_open = false;
                     }
                 }
@@ -1171,8 +1170,8 @@ impl eframe::App for CadeApp {
             AppAction::SetTheme(name) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let current_theme_name = &session.current_theme_name;
-                        let theme_picker_open = &session.theme_picker_open;
+                        let current_theme_name = &mut session.current_theme_name;
+                        let theme_picker_open = &mut session.theme_picker_open;
                         *current_theme_name = name.clone();
                         *theme_picker_open = false;
                     }
@@ -1185,7 +1184,7 @@ impl eframe::App for CadeApp {
             AppAction::CloseHooksOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let hooks_open = &session.hooks_open;
+                        let hooks_open = &mut session.hooks_open;
                         *hooks_open = false;
                     }
                 }
@@ -1193,7 +1192,7 @@ impl eframe::App for CadeApp {
             AppAction::CloseToolsetOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let toolset_open = &session.toolset_open;
+                        let toolset_open = &mut session.toolset_open;
                         *toolset_open = false;
                     }
                 }
@@ -1201,8 +1200,8 @@ impl eframe::App for CadeApp {
             AppAction::SetToolset(ts) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let current_toolset = &session.current_toolset;
-                        let toolset_open = &session.toolset_open;
+                        let current_toolset = &mut session.current_toolset;
+                        let toolset_open = &mut session.toolset_open;
                         *current_toolset = ts;
                         *toolset_open = false;
                     }
@@ -1211,7 +1210,7 @@ impl eframe::App for CadeApp {
             AppAction::ClosePricingOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let pricing_open = &session.pricing_open;
+                        let pricing_open = &mut session.pricing_open;
                         *pricing_open = false;
                     }
                 }
@@ -1219,7 +1218,7 @@ impl eframe::App for CadeApp {
             AppAction::CloseBackendOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let backend_open = &session.backend_open;
+                        let backend_open = &mut session.backend_open;
                         *backend_open = false;
                     }
                 }
@@ -1227,8 +1226,8 @@ impl eframe::App for CadeApp {
             AppAction::SetBackend(be) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let current_backend = &session.current_backend;
-                        let backend_open = &session.backend_open;
+                        let current_backend = &mut session.current_backend;
+                        let backend_open = &mut session.backend_open;
                         *current_backend = be;
                         *backend_open = false;
                     }
@@ -1237,7 +1236,7 @@ impl eframe::App for CadeApp {
             AppAction::CloseReasoningOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let reasoning_open = &session.reasoning_open;
+                        let reasoning_open = &mut session.reasoning_open;
                         *reasoning_open = false;
                     }
                 }
@@ -1246,8 +1245,8 @@ impl eframe::App for CadeApp {
                 let effort_str = level.clone();
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let current_reasoning_effort = &session.current_reasoning_effort;
-                        let reasoning_open = &session.reasoning_open;
+                        let current_reasoning_effort = &mut session.current_reasoning_effort;
+                        let reasoning_open = &mut session.reasoning_open;
                         *current_reasoning_effort = level;
                         *reasoning_open = false;
                     }
@@ -1257,8 +1256,8 @@ impl eframe::App for CadeApp {
             AppAction::CloseSkillsOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let skills_overlay_open = &session.skills_overlay_open;
-                        let skills_filter = &session.skills_filter;
+                        let skills_overlay_open = &mut session.skills_overlay_open;
+                        let skills_filter = &mut session.skills_filter;
                         *skills_overlay_open = false;
                         *skills_filter = String::new();
                     }
@@ -1267,7 +1266,7 @@ impl eframe::App for CadeApp {
             AppAction::SetSkillsFilter(q) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-                        let skills_filter = &session.skills_filter;
+                        let skills_filter = &mut session.skills_filter;
                         *skills_filter = q;
                     }
                 }

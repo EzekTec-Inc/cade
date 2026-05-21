@@ -241,221 +241,221 @@ mod tests;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectedSession {
-        server_url: String,
-        token: String,
-        health: HealthInfo,
-        agents: Vec<AgentInfo>,
+        pub server_url: String,
+        pub token: String,
+        pub health: HealthInfo,
+        pub agents: Vec<AgentInfo>,
         /// Index into `agents` of the currently selected agent, if any.
-        selected_agent: Option<usize>,
+        pub selected_agent: Option<usize>,
         /// Messages for the selected agent (empty until an agent is selected
         /// and the fetch completes).
-        messages: Vec<ChatMessage>,
+        pub messages: Vec<ChatMessage>,
         /// The text the user is currently typing in the input bar.
-        input_buffer: String,
+        pub input_buffer: String,
         /// True while we are streaming an assistant response via SSE.
-        streaming: bool,
+        pub streaming: bool,
         /// Whether the timeline should auto-scroll to the bottom.
         /// Set to `false` when the user scrolls up; restored to `true`
         /// when they click the ↓ button or a new message arrives.
-        auto_scroll: bool,
+        pub auto_scroll: bool,
         /// Transient error message displayed as a toast overlay.
-        error_toast: Option<String>,
+        pub error_toast: Option<String>,
         /// Active conversation ID (set from SSE metadata, cleared on agent switch).
-        conversation_id: Option<String>,
+        pub conversation_id: Option<String>,
         /// Token usage from the last completed turn.
-        last_usage: Option<(u64, u64, Option<String>)>,
+        pub last_usage: Option<(u64, u64, Option<String>)>,
         /// Finish reason from the last completed turn (e.g. "stop", "length").
-        last_finish_reason: Option<String>,
+        pub last_finish_reason: Option<String>,
         /// Conversations for the selected agent.
-        conversations: Vec<crate::api::ConversationInfo>,
+        pub conversations: Vec<crate::api::ConversationInfo>,
         /// Index into `conversations` of the currently selected conversation.
-        selected_conversation: Option<usize>,
+        pub selected_conversation: Option<usize>,
         /// Whether there are more messages to load (pagination).
-        has_more_messages: bool,
+        pub has_more_messages: bool,
         /// Whether the slash-command palette overlay is visible.
-        palette_open: bool,
+        pub palette_open: bool,
         /// Current text in the palette filter input.
-        palette_input: String,
+        pub palette_input: String,
         /// Index of the highlighted entry in the filtered palette list.
-        palette_selection: usize,
+        pub palette_selection: usize,
         /// Whether the full-screen command menu overlay is visible.
-        menu_open: bool,
+        pub menu_open: bool,
         /// Current text in the menu filter input.
-        menu_input: String,
+        pub menu_input: String,
         /// Index of the highlighted entry in the filtered menu list.
-        menu_selection: usize,
+        pub menu_selection: usize,
         /// Whether the memory-viewer overlay is visible.
-        memory_open: bool,
+        pub memory_open: bool,
         /// Memory blocks fetched from `GET /v1/agents/:id/memory`.
-        memory_blocks: Vec<crate::api::MemoryBlock>,
+        pub memory_blocks: Vec<crate::api::MemoryBlock>,
         /// Index into `memory_blocks` of the currently-viewed block.
-        memory_selection: usize,
+        pub memory_selection: usize,
         /// Editable buffer mirrored from the selected block — saved on
         /// "Save" click via `PUT /v1/agents/:id/memory/:label`.
-        memory_edit_buffer: String,
+        pub memory_edit_buffer: String,
         /// True while the GET request is in flight.
-        memory_loading: bool,
+        pub memory_loading: bool,
         /// True while a PUT request is in flight.
-        memory_saving: bool,
+        pub memory_saving: bool,
         /// Per-overlay error message (shown inside the memory window).
-        memory_error: Option<String>,
+        pub memory_error: Option<String>,
         /// Transient success notice shown after a successful save
         /// (e.g. "Saved /project").  Cleared when the selection changes,
         /// the overlay closes, or another save starts.
-        memory_save_notice: Option<String>,
+        pub memory_save_notice: Option<String>,
 
         // ── Checkpoints overlay (M17) ────────────────────────────
         /// Whether the checkpoints overlay is visible.
-        checkpoints_open: bool,
+        pub checkpoints_open: bool,
         /// Rows fetched from `GET /v1/agents/:id/checkpoints`.
-        checkpoints: Vec<crate::api::CheckpointRow>,
+        pub checkpoints: Vec<crate::api::CheckpointRow>,
         /// True while the GET request is in flight.
-        checkpoints_loading: bool,
+        pub checkpoints_loading: bool,
         /// True while a restore/delete/create request is in flight.
-        checkpoints_busy: bool,
+        pub checkpoints_busy: bool,
         /// Per-overlay error message.
-        checkpoints_error: Option<String>,
+        pub checkpoints_error: Option<String>,
         /// Transient success notice (e.g. "Restored cp-1234…").
-        checkpoints_notice: Option<String>,
+        pub checkpoints_notice: Option<String>,
 
         // ── Artifacts overlay (M17) ──────────────────────────────
         /// Whether the artifacts overlay is visible.
-        artifacts_open: bool,
+        pub artifacts_open: bool,
         /// Summary rows fetched from `GET /v1/agents/:id/artifacts`.
-        artifacts: Vec<crate::api::ArtifactInfo>,
+        pub artifacts: Vec<crate::api::ArtifactInfo>,
         /// Index of the currently-selected row; `None` when nothing selected.
-        artifact_selection: Option<usize>,
+        pub artifact_selection: Option<usize>,
         /// Full detail for the selected artifact — lazy-loaded on click.
         /// `None` means not-yet-loaded; a loaded detail whose `id` differs
         /// from the selected row's `id` means stale and will be replaced.
-        artifact_detail: Option<crate::api::ArtifactDetail>,
+        pub artifact_detail: Option<crate::api::ArtifactDetail>,
         /// True while the list GET is in flight.
-        artifacts_loading: bool,
+        pub artifacts_loading: bool,
         /// True while a per-artifact detail fetch or delete is in flight.
-        artifacts_busy: bool,
+        pub artifacts_busy: bool,
         /// Per-overlay error message.
-        artifacts_error: Option<String>,
+        pub artifacts_error: Option<String>,
 
         // ── Tools overlay (M18 — MCP / skills) ──────────────────
         /// Whether the tools/MCP overlay is visible.
-        tools_open: bool,
+        pub tools_open: bool,
         /// Tools fetched from `GET /v1/agents/:id/tools`.
-        tools: Vec<crate::api::AgentTool>,
+        pub tools: Vec<crate::api::AgentTool>,
         /// True while the GET request is in flight.
-        tools_loading: bool,
+        pub tools_loading: bool,
         /// Per-overlay error message.
-        tools_error: Option<String>,
+        pub tools_error: Option<String>,
 
         // ── Inline question widget (M18 — ask_user_question) ────
         /// The currently-active question received via `ask_user_question`
         /// SSE tool call.  `None` when no question is awaiting an answer.
-        active_question: Option<crate::api::Question>,
+        pub active_question: Option<crate::api::Question>,
         /// Index of the currently-highlighted option (single-select) or
         /// the last-moved position (multi-select).
-        question_cursor: usize,
+        pub question_cursor: usize,
         /// Set of selected option indices (multi-select only).
-        question_checked: Vec<bool>,
+        pub question_checked: Vec<bool>,
 
         // ── Server metrics (M19 item 2) ──────────────────────────
         /// Last-fetched server-side consolidation metrics for this agent.
-        agent_metrics: Option<crate::api::AgentMetrics>,
+        pub agent_metrics: Option<crate::api::AgentMetrics>,
 
         // ── Cumulative token usage totals (M19 item 3 /stats) ────
         /// Running total of input tokens across all turns in this session.
-        total_input_tokens: u64,
+        pub total_input_tokens: u64,
         /// Running total of output tokens across all turns in this session.
-        total_output_tokens: u64,
+        pub total_output_tokens: u64,
 
         // ── Context stats overlay (M19 item 3 /context) ──────────
         /// Whether the context-stats overlay is open.
-        context_open: bool,
+        pub context_open: bool,
         /// Last-fetched context window stats.
-        context_stats: Option<crate::api::ContextStats>,
+        pub context_stats: Option<crate::api::ContextStats>,
         /// True while the GET /context request is in flight.
-        context_loading: bool,
+        pub context_loading: bool,
         /// Per-overlay error for context panel.
-        context_error: Option<String>,
+        pub context_error: Option<String>,
 
         // ── Agents overlay (M19 item 3 /agents) ──────────────────
         /// Whether the agents list overlay is open.
-        agents_open: bool,
+        pub agents_open: bool,
 
         // ── Stats overlay (M19 item 3 /stats) ────────────────────
         /// Whether the stats overlay is open.
-        stats_open: bool,
+        pub stats_open: bool,
 
         // ── MCP servers overlay ───────────────────────────────────
         /// Whether the MCP servers overlay is open.
-        mcp_open: bool,
+        pub mcp_open: bool,
         /// Servers fetched from `GET /v1/mcp`.
-        mcp_servers: Vec<crate::api::McpServerInfo>,
+        pub mcp_servers: Vec<crate::api::McpServerInfo>,
         /// True while the GET request is in flight.
-        mcp_loading: bool,
+        pub mcp_loading: bool,
         /// Per-overlay error message.
-        mcp_error: Option<String>,
+        pub mcp_error: Option<String>,
 
         /// A pending theme update from the backend.
-        theme_update: Option<String>,
+        pub theme_update: Option<String>,
 
         // ── Model picker overlay ─────────────────────────────────
         /// Whether the model picker overlay is open.
-        model_picker_open: bool,
+        pub model_picker_open: bool,
         /// Available models fetched from `GET /v1/models`.
-        model_picker_models: Vec<crate::api::ModelInfo>,
+        pub model_picker_models: Vec<crate::api::ModelInfo>,
         /// Custom provider names (no model listing available).
-        model_picker_custom_providers: Vec<String>,
+        pub model_picker_custom_providers: Vec<String>,
         /// Fuzzy filter query typed in the model picker search box.
-        model_picker_query: String,
+        pub model_picker_query: String,
         /// Index of the currently highlighted model in the filtered list.
-        model_picker_selection: usize,
+        pub model_picker_selection: usize,
         /// Whether models are currently being fetched.
-        model_picker_loading: bool,
+        pub model_picker_loading: bool,
         /// Error message from model fetch failure.
-        model_picker_error: Option<String>,
+        pub model_picker_error: Option<String>,
 
         // ── Plan panel (mirrors TUI PlanState) ──────────────────
         /// Active plan steps. `None` when no plan has been set.
-        active_plan: Option<PlanState>,
+        pub active_plan: Option<PlanState>,
 
         // ── Live output (mirrors TUI LiveOutput) ─────────────────
         /// Active live-output blocks keyed by tool call ID.
         /// Each entry is a scrollable block of output lines shown in the
         /// timeline while a long-running tool (e.g. `bash`) is executing.
-        live_outputs: Vec<LiveOutputBlock>,
+        pub live_outputs: Vec<LiveOutputBlock>,
 
         /// Per-category context-window breakdown (fetched on demand).
-        context_breakdown: Option<crate::api::ContextBreakdown>,
+        pub context_breakdown: Option<crate::api::ContextBreakdown>,
         /// Whether a context-breakdown fetch is in progress.
-        context_breakdown_loading: bool,
+        pub context_breakdown_loading: bool,
 
         // ── Settings overlays ────────────────────────────────────
-        providers_open: bool,
-        providers: Vec<crate::api::ProviderInfo>,
-        providers_loading: bool,
-        permissions_open: bool,
-        current_permission_mode: String,
-        theme_picker_open: bool,
-        available_themes: Vec<String>,
-        current_theme_name: String,
-        hooks_open: bool,
-        hooks: Vec<crate::api::HookInfo>,
-        hooks_loading: bool,
-        toolset_open: bool,
-        current_toolset: String,
-        pricing_open: bool,
-        pricing_info: String,
-        backend_open: bool,
-        current_backend: String,
-        reasoning_open: bool,
-        current_reasoning_effort: String,
+        pub providers_open: bool,
+        pub providers: Vec<crate::api::ProviderInfo>,
+        pub providers_loading: bool,
+        pub permissions_open: bool,
+        pub current_permission_mode: String,
+        pub theme_picker_open: bool,
+        pub available_themes: Vec<String>,
+        pub current_theme_name: String,
+        pub hooks_open: bool,
+        pub hooks: Vec<crate::api::HookInfo>,
+        pub hooks_loading: bool,
+        pub toolset_open: bool,
+        pub current_toolset: String,
+        pub pricing_open: bool,
+        pub pricing_info: String,
+        pub backend_open: bool,
+        pub current_backend: String,
+        pub reasoning_open: bool,
+        pub current_reasoning_effort: String,
         // ── Skills overlay ───────────────────────────────────
-        skills_overlay_open: bool,
-        all_skills_list: Vec<crate::api::SkillEntry>,
-        loaded_skill_ids: Vec<String>,
-        skills_loading: bool,
-        skills_filter: String,
+        pub skills_overlay_open: bool,
+        pub all_skills_list: Vec<crate::api::SkillEntry>,
+        pub loaded_skill_ids: Vec<String>,
+        pub skills_loading: bool,
+        pub skills_filter: String,
         // ── Subagent tracking ────────────────────────────────
-        subagent_cards: Vec<SubagentCardState>,
+        pub subagent_cards: Vec<SubagentCardState>,
     }
 
 

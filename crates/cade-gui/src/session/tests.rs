@@ -58,7 +58,9 @@ fn on_agents_transitions_health_ok_to_connected() {
     s.on_health(test_health());
     s.on_agents(test_agents());
     match &s {
-        SessionState::Connected { agents, health, .. } => {
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { agents, health, ..  } = &**session;
+
             assert_eq!(agents.len(), 2);
             assert_eq!(agents[0].id, "agent-1");
             assert_eq!(agents[1].id, "agent-2");
@@ -126,7 +128,7 @@ fn on_health_is_noop_after_connected() {
     });
     // Still connected with original health.
     match &s {
-        SessionState::Connected { health, .. } => assert_eq!(health.status, "ok"),
+        SessionState::Connected(session) => { let crate::session::ConnectedSession { health, .. } = &**session; assert_eq!(health.status, "ok"); },
         other => panic!("expected Connected, got {other:?}"),
     }
 }
@@ -171,7 +173,7 @@ fn connected_with_empty_agents_is_valid() {
     s.on_agents(vec![]);
     assert!(s.is_connected());
     match &s {
-        SessionState::Connected { agents, .. } => assert!(agents.is_empty()),
+        SessionState::Connected(session) => { let crate::session::ConnectedSession { agents, .. } = &**session; assert!(agents.is_empty()); },
         other => panic!("expected Connected, got {other:?}"),
     }
 }
@@ -191,11 +193,12 @@ fn on_select_agent_sets_selection_and_clears_messages() {
     assert!(s.on_select_agent(0));
     assert_eq!(s.selected_agent_id(), Some("agent-1"));
     match &s {
-        SessionState::Connected {
-            selected_agent,
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { selected_agent,
             messages,
             ..
-        } => {
+         } = &**session;
+
             assert_eq!(*selected_agent, Some(0));
             assert!(messages.is_empty());
         }
@@ -236,7 +239,9 @@ fn on_messages_populates_messages() {
     }];
     s.on_messages(msgs.clone());
     match &s {
-        SessionState::Connected { messages, .. } => {
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { messages, ..  } = &**session;
+
             assert_eq!(messages.len(), 1);
             assert_eq!(messages[0].id, "m1");
         }
@@ -248,7 +253,8 @@ fn on_messages_populates_messages() {
 fn on_select_agent_clears_previous_messages() {
     let mut s = make_connected();
     // Add a second agent so we can switch.
-    if let SessionState::Connected { agents, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { agents, ..  } = &mut **session;
         agents.push(AgentInfo {
             id: "agent-2".to_string(),
             name: "Second".to_string(),
@@ -268,7 +274,9 @@ fn on_select_agent_clears_previous_messages() {
     assert!(s.on_select_agent(1));
     assert_eq!(s.selected_agent_id(), Some("agent-2"));
     match &s {
-        SessionState::Connected { messages, .. } => {
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { messages, ..  } = &**session;
+
             assert!(
                 messages.is_empty(),
                 "messages should be cleared on agent switch"
@@ -295,18 +303,18 @@ fn make_connected_with_agent_selected() -> SessionState {
 #[test]
 fn on_send_returns_trimmed_input_and_appends_user_message() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "  hello world  ".to_string();
     }
     let result = s.on_send();
     assert_eq!(result.as_deref(), Some("hello world"));
-    if let SessionState::Connected {
-        messages,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages,
         input_buffer,
         streaming,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
         assert_eq!(
@@ -323,7 +331,8 @@ fn on_send_returns_trimmed_input_and_appends_user_message() {
 #[test]
 fn on_send_noop_when_no_agent_selected() {
     let mut s = make_connected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hello".to_string();
     }
     assert_eq!(s.on_send(), None);
@@ -338,7 +347,8 @@ fn on_send_noop_when_empty_buffer() {
 #[test]
 fn on_send_noop_when_whitespace_only() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "   ".to_string();
     }
     assert_eq!(s.on_send(), None);
@@ -347,12 +357,11 @@ fn on_send_noop_when_whitespace_only() {
 #[test]
 fn on_send_noop_while_streaming() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected {
-        input_buffer,
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer,
         streaming,
         ..
-    } = &mut s
-    {
+     } = &mut **session;
         *input_buffer = "hello".to_string();
         *streaming = true;
     }
@@ -362,13 +371,15 @@ fn on_send_noop_while_streaming() {
 #[test]
 fn on_stream_chunk_creates_then_appends_assistant_message() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { streaming, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { streaming, ..  } = &mut **session;
         *streaming = true;
     }
     s.on_stream_chunk("Hello");
     s.on_stream_chunk(", world!");
 
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "assistant");
         assert_eq!(
@@ -384,7 +395,8 @@ fn on_stream_chunk_creates_then_appends_assistant_message() {
 fn on_stream_chunk_noop_when_not_streaming() {
     let mut s = make_connected_with_agent_selected();
     s.on_stream_chunk("ignored");
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert!(messages.is_empty());
     }
 }
@@ -415,7 +427,8 @@ fn on_stream_chunk_re_enables_auto_scroll() {
     let mut s = make_connected_with_agent_selected();
     s.disable_auto_scroll();
     assert!(!s.auto_scroll());
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hi".into();
     }
     s.on_send().unwrap();
@@ -426,7 +439,8 @@ fn on_stream_chunk_re_enables_auto_scroll() {
 #[test]
 fn on_stream_done_clears_streaming_flag() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { streaming, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { streaming, ..  } = &mut **session;
         *streaming = true;
     }
     assert!(s.is_streaming());
@@ -438,7 +452,8 @@ fn on_stream_done_clears_streaming_flag() {
 fn full_send_stream_cycle() {
     let mut s = make_connected_with_agent_selected();
     // Type and send.
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "What is Rust?".to_string();
     }
     let input = s.on_send().expect("should send");
@@ -451,7 +466,8 @@ fn full_send_stream_cycle() {
     s.on_stream_done();
 
     assert!(!s.is_streaming());
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert_eq!(messages.len(), 2); // user + assistant
         assert_eq!(messages[0].role, "user");
         assert_eq!(messages[1].role, "assistant");
@@ -499,7 +515,8 @@ fn error_toast_none_when_no_error() {
 fn push_error_also_clears_streaming() {
     let mut s = make_connected_with_agent_selected();
     // Start a stream, then an error arrives.
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hello".to_string();
     }
     let _ = s.on_send();
@@ -536,7 +553,8 @@ fn on_conversation_id_replaces_previous() {
 fn select_agent_clears_conversation_id() {
     let mut s = make_connected_with_agent_selected();
     // Add a second agent so we can actually switch.
-    if let SessionState::Connected { agents, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { agents, ..  } = &mut **session;
         agents.push(AgentInfo {
             id: "agent-2".to_string(),
             name: "Second Agent".to_string(),
@@ -555,7 +573,8 @@ fn select_agent_clears_conversation_id() {
 #[test]
 fn on_stream_reasoning_creates_reasoning_message() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "explain".to_string();
     }
     let _ = s.on_send();
@@ -563,7 +582,8 @@ fn on_stream_reasoning_creates_reasoning_message() {
     s.on_stream_reasoning("Let me think");
     s.on_stream_reasoning(" about this.");
 
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         // user + reasoning
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].role, "reasoning");
@@ -579,7 +599,8 @@ fn on_stream_reasoning_creates_reasoning_message() {
 #[test]
 fn reasoning_then_assistant_are_separate_messages() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hello".to_string();
     }
     let _ = s.on_send();
@@ -587,7 +608,8 @@ fn reasoning_then_assistant_are_separate_messages() {
     s.on_stream_reasoning("thinking...");
     s.on_stream_chunk("The answer is 42.");
 
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert_eq!(messages.len(), 3); // user + reasoning + assistant
         assert_eq!(messages[1].role, "reasoning");
         assert_eq!(messages[2].role, "assistant");
@@ -601,14 +623,16 @@ fn reasoning_then_assistant_are_separate_messages() {
 #[test]
 fn on_stream_tool_call_creates_tool_call_message() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "search".to_string();
     }
     let _ = s.on_send();
 
     s.on_stream_tool_call("tc-1", "web_search", r#"{"query":"rust"}"#);
 
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert_eq!(messages.len(), 2); // user + tool_call
         assert_eq!(messages[1].role, "tool_call");
         let tc = &messages[1].content;
@@ -623,7 +647,8 @@ fn on_stream_tool_call_creates_tool_call_message() {
 #[test]
 fn multiple_tool_calls_are_separate_messages() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "do stuff".to_string();
     }
     let _ = s.on_send();
@@ -631,7 +656,8 @@ fn multiple_tool_calls_are_separate_messages() {
     s.on_stream_tool_call("tc-1", "read_file", r#"{"path":"a.rs"}"#);
     s.on_stream_tool_call("tc-2", "write_file", r#"{"path":"b.rs"}"#);
 
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert_eq!(messages.len(), 3); // user + 2 tool_calls
         assert_eq!(messages[1].content["name"], "read_file");
         assert_eq!(messages[2].content["name"], "write_file");
@@ -645,7 +671,8 @@ fn multiple_tool_calls_are_separate_messages() {
 #[test]
 fn on_usage_stores_stats() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hi".to_string();
     }
     let _ = s.on_send();
@@ -656,7 +683,8 @@ fn on_usage_stores_stats() {
 #[test]
 fn on_finish_reason_stores_reason() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hi".to_string();
     }
     let _ = s.on_send();
@@ -674,7 +702,8 @@ fn usage_and_finish_reason_none_initially() {
 #[test]
 fn on_send_clears_usage_and_finish_reason() {
     let mut s = make_connected_with_agent_selected();
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "first".to_string();
     }
     let _ = s.on_send();
@@ -683,7 +712,8 @@ fn on_send_clears_usage_and_finish_reason() {
     s.on_stream_done();
 
     // Send again — usage/finish should reset.
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "second".to_string();
     }
     let _ = s.on_send();
@@ -746,7 +776,8 @@ fn on_select_conversation_clears_messages() {
     }]);
     s.on_conversations(test_conversations());
     s.on_select_conversation(1);
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert!(messages.is_empty());
     } else {
         panic!("not connected");
@@ -784,7 +815,8 @@ fn on_new_conversation_clears_state() {
     s.on_new_conversation();
     assert_eq!(s.conversation_id(), None);
     assert_eq!(s.selected_conversation(), None);
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert!(messages.is_empty());
     }
 }
@@ -822,7 +854,8 @@ fn on_conversation_deleted_clears_state_when_active() {
     s.on_conversation_deleted(0);
     assert_eq!(s.selected_conversation(), None);
     assert_eq!(s.conversation_id(), None);
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert!(messages.is_empty());
     }
 }
@@ -898,7 +931,8 @@ fn on_prepend_messages_adds_to_front() {
     assert_eq!(s.message_count(), 2);
     assert!(!s.has_more_messages());
     // The older message should be first.
-    if let SessionState::Connected { messages, .. } = &s {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages, ..  } = &**session;
         assert_eq!(messages[0].id, "m1");
         assert_eq!(messages[1].id, "m2");
     }
@@ -951,12 +985,11 @@ fn palette_open_and_close() {
 fn palette_open_preserves_initial_input() {
     let mut s = connected_session();
     s.open_palette("hel");
-    if let SessionState::Connected {
-        palette_input,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { palette_input,
         palette_selection,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(palette_input, "hel");
         assert_eq!(*palette_selection, 0);
     } else {
@@ -970,13 +1003,12 @@ fn palette_close_resets_input_and_selection() {
     s.open_palette("mem");
     s.move_palette_selection(1);
     s.close_palette();
-    if let SessionState::Connected {
-        palette_input,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { palette_input,
         palette_selection,
         palette_open,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(!*palette_open);
         assert!(palette_input.is_empty());
         assert_eq!(*palette_selection, 0);
@@ -991,12 +1023,11 @@ fn palette_set_input_resets_selection() {
     s.open_palette("");
     s.move_palette_selection(3);
     s.set_palette_input("hel"); // typing new query — selection back to 0
-    if let SessionState::Connected {
-        palette_input,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { palette_input,
         palette_selection,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(palette_input, "hel");
         assert_eq!(*palette_selection, 0);
     } else {
@@ -1009,10 +1040,9 @@ fn palette_move_selection_clamps_to_bounds() {
     let mut s = connected_session();
     s.open_palette(""); // empty query → all commands
     s.move_palette_selection(-1); // can't go below 0
-    if let SessionState::Connected {
-        palette_selection, ..
-    } = &s
-    {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { palette_selection, ..
+     } = &**session;
         assert_eq!(*palette_selection, 0);
     } else {
         panic!("not connected");
@@ -1023,10 +1053,9 @@ fn palette_move_selection_clamps_to_bounds() {
         s.move_palette_selection(1);
     }
     let filtered_count = crate::palette::fuzzy_filter("").len();
-    if let SessionState::Connected {
-        palette_selection, ..
-    } = &s
-    {
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { palette_selection, ..
+     } = &**session;
         assert_eq!(*palette_selection, filtered_count - 1);
     } else {
         panic!("not connected");
@@ -1091,19 +1120,17 @@ fn clear_timeline_local_clears_messages_only() {
         conversation_id: Some("c1".into()),
     }]);
     // Set a conversation_id to verify it's NOT cleared.
-    if let SessionState::Connected {
-        conversation_id, ..
-    } = &mut s
-    {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { conversation_id, ..
+     } = &mut **session;
         *conversation_id = Some("c1".into());
     }
     s.clear_timeline_local();
-    if let SessionState::Connected {
-        messages,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { messages,
         conversation_id,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(messages.is_empty());
         assert_eq!(conversation_id.as_deref(), Some("c1")); // preserved
     } else {
@@ -1187,12 +1214,11 @@ fn open_memory_sets_flags() {
     let mut s = connected_session();
     s.open_memory_overlay();
     assert!(s.is_memory_open());
-    if let SessionState::Connected {
-        memory_loading,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_loading,
         memory_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(*memory_loading);
         assert!(memory_error.is_none());
     } else {
@@ -1207,19 +1233,18 @@ fn close_memory_resets_transient_flags() {
     s.on_memory_error("boom");
     assert_eq!(
         match &s {
-            SessionState::Connected { memory_error, .. } => memory_error.clone(),
+            SessionState::Connected(session) => session.memory_error.clone(),
             _ => None,
         },
         Some("boom".to_string())
     );
     s.close_memory_overlay();
     assert!(!s.is_memory_open());
-    if let SessionState::Connected {
-        memory_error,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_error,
         memory_saving,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(memory_error.is_none());
         assert!(!*memory_saving);
     } else {
@@ -1232,14 +1257,13 @@ fn memory_loaded_seeds_edit_buffer_with_first_block() {
     let mut s = connected_session();
     s.open_memory_overlay();
     s.on_memory_loaded(test_blocks());
-    if let SessionState::Connected {
-        memory_blocks,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_blocks,
         memory_selection,
         memory_edit_buffer,
         memory_loading,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(memory_blocks.len(), 2);
         assert_eq!(*memory_selection, 0);
         assert_eq!(memory_edit_buffer, "User loves Rust");
@@ -1254,13 +1278,12 @@ fn memory_loaded_with_empty_list_keeps_empty_buffer() {
     let mut s = connected_session();
     s.open_memory_overlay();
     s.on_memory_loaded(Vec::new());
-    if let SessionState::Connected {
-        memory_blocks,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_blocks,
         memory_edit_buffer,
         memory_loading,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(memory_blocks.is_empty());
         assert!(memory_edit_buffer.is_empty());
         assert!(!*memory_loading);
@@ -1275,13 +1298,12 @@ fn memory_error_clears_loading_and_saving() {
     s.open_memory_overlay();
     s.on_memory_save_start();
     s.on_memory_error("nope");
-    if let SessionState::Connected {
-        memory_loading,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_loading,
         memory_saving,
         memory_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(!*memory_loading);
         assert!(!*memory_saving);
         assert_eq!(memory_error.as_deref(), Some("nope"));
@@ -1299,12 +1321,11 @@ fn select_memory_block_updates_buffer() {
     s.set_memory_edit_buffer("unsaved edit");
     let changed = s.select_memory_block(1);
     assert!(changed);
-    if let SessionState::Connected {
-        memory_selection,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_selection,
         memory_edit_buffer,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(*memory_selection, 1);
         // Buffer is reset to the new block's value — unsaved edit is lost.
         assert_eq!(memory_edit_buffer, "CADE project");
@@ -1337,13 +1358,12 @@ fn memory_save_ok_persists_buffer_into_block() {
     s.set_memory_edit_buffer("User loves Rust AND Python");
     s.on_memory_save_start();
     s.on_memory_save_ok();
-    if let SessionState::Connected {
-        memory_blocks,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { memory_blocks,
         memory_saving,
         memory_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(memory_blocks[0].value, "User loves Rust AND Python");
         assert!(!*memory_saving);
         assert!(memory_error.is_none());
@@ -1598,11 +1618,12 @@ fn open_checkpoints_sets_loading_and_clears_error() {
     s.open_checkpoints_overlay();
     assert!(s.is_checkpoints_open());
     match &s {
-        SessionState::Connected {
-            checkpoints_loading,
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { checkpoints_loading,
             checkpoints_error,
             ..
-        } => {
+         } = &**session;
+
             assert!(*checkpoints_loading);
             assert!(checkpoints_error.is_none());
         }
@@ -1617,10 +1638,10 @@ fn checkpoints_loaded_populates_list() {
     s.on_checkpoints_loaded(test_checkpoint_rows());
     assert_eq!(s.checkpoints_snapshot().len(), 2);
     match &s {
-        SessionState::Connected {
+        SessionState::Connected(session) => { let crate::session::ConnectedSession {
             checkpoints_loading,
             ..
-        } => assert!(!*checkpoints_loading),
+        } = &**session; assert!(!*checkpoints_loading); },
         _ => panic!(),
     }
 }
@@ -1632,12 +1653,13 @@ fn checkpoints_error_clears_loading_and_busy() {
     s.on_checkpoints_action_start();
     s.on_checkpoints_error("network down");
     match &s {
-        SessionState::Connected {
-            checkpoints_loading,
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { checkpoints_loading,
             checkpoints_busy,
             checkpoints_error,
             ..
-        } => {
+         } = &**session;
+
             assert!(!*checkpoints_loading);
             assert!(!*checkpoints_busy);
             assert_eq!(checkpoints_error.as_deref(), Some("network down"));
@@ -1757,7 +1779,7 @@ fn select_artifact_returns_id_and_sets_busy() {
     assert_eq!(id.as_deref(), Some("art-2"));
     assert_eq!(s.selected_artifact_id().as_deref(), Some("art-2"));
     match &s {
-        SessionState::Connected { artifacts_busy, .. } => assert!(*artifacts_busy),
+        SessionState::Connected(session) => { let crate::session::ConnectedSession { artifacts_busy, .. } = &**session; assert!(*artifacts_busy); },
         _ => panic!(),
     }
 }
@@ -1779,7 +1801,7 @@ fn artifact_detail_loaded_clears_busy() {
     s.select_artifact(0);
     s.on_artifact_detail_loaded(test_artifact_detail("art-1"));
     match &s {
-        SessionState::Connected { artifacts_busy, .. } => assert!(!*artifacts_busy),
+        SessionState::Connected(session) => { let crate::session::ConnectedSession { artifacts_busy, .. } = &**session; assert!(!*artifacts_busy); },
         _ => panic!(),
     }
     assert_eq!(s.artifact_detail().map(|d| d.id.as_str()), Some("art-1"));
@@ -1792,12 +1814,13 @@ fn artifacts_error_clears_busy_and_loading() {
     s.on_artifacts_action_start();
     s.on_artifacts_error("oops");
     match &s {
-        SessionState::Connected {
-            artifacts_loading,
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { artifacts_loading,
             artifacts_busy,
             artifacts_error,
             ..
-        } => {
+         } = &**session;
+
             assert!(!*artifacts_loading);
             assert!(!*artifacts_busy);
             assert_eq!(artifacts_error.as_deref(), Some("oops"));
@@ -1834,7 +1857,7 @@ fn open_tools_sets_loading() {
     s.open_tools_overlay();
     assert!(s.is_tools_open());
     match &s {
-        SessionState::Connected { tools_loading, .. } => assert!(*tools_loading),
+        SessionState::Connected(session) => { let crate::session::ConnectedSession { tools_loading, .. } = &**session; assert!(*tools_loading); },
         _ => panic!(),
     }
 }
@@ -1862,11 +1885,12 @@ fn tools_error_clears_loading() {
     s.open_tools_overlay();
     s.on_tools_error("net error");
     match &s {
-        SessionState::Connected {
-            tools_loading,
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { tools_loading,
             tools_error,
             ..
-        } => {
+         } = &**session;
+
             assert!(!*tools_loading);
             assert_eq!(tools_error.as_deref(), Some("net error"));
         }
@@ -1921,9 +1945,9 @@ fn set_active_question_initialises_cursor() {
     s.set_active_question(test_question());
     assert!(s.has_active_question());
     match &s {
-        SessionState::Connected {
+        SessionState::Connected(session) => { let crate::session::ConnectedSession {
             question_cursor, ..
-        } => assert_eq!(*question_cursor, 0),
+        } = &**session; assert_eq!(*question_cursor, 0); },
         _ => panic!(),
     }
 }
@@ -1934,16 +1958,16 @@ fn move_question_cursor_wraps() {
     s.set_active_question(test_question());
     s.move_question_cursor(-1); // 0 - 1 wraps to 2 (3 options)
     match &s {
-        SessionState::Connected {
+        SessionState::Connected(session) => { let crate::session::ConnectedSession {
             question_cursor, ..
-        } => assert_eq!(*question_cursor, 2),
+        } = &**session; assert_eq!(*question_cursor, 2); },
         _ => panic!(),
     }
     s.move_question_cursor(1);
     match &s {
-        SessionState::Connected {
+        SessionState::Connected(session) => { let crate::session::ConnectedSession {
             question_cursor, ..
-        } => assert_eq!(*question_cursor, 0),
+        } = &**session; assert_eq!(*question_cursor, 0); },
         _ => panic!(),
     }
 }
@@ -1994,7 +2018,8 @@ fn on_stream_tool_call_sets_question_for_ask_user_question() {
     let mut s = connected_session();
     s.on_select_agent(0);
     // Seed input buffer then send to enter streaming state
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hello".to_string();
     }
     s.on_send().unwrap();
@@ -2012,7 +2037,8 @@ fn on_stream_tool_call_sets_question_for_ask_user_question() {
 fn on_stream_tool_call_non_question_does_not_set_widget() {
     let mut s = connected_session();
     s.on_select_agent(0);
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "hello".to_string();
     }
     s.on_send().unwrap();
@@ -2076,9 +2102,9 @@ fn open_context_sets_loading() {
     s.open_context_overlay();
     assert!(s.is_context_open());
     match &s {
-        SessionState::Connected {
+        SessionState::Connected(session) => { let crate::session::ConnectedSession {
             context_loading, ..
-        } => assert!(*context_loading),
+        } = &**session; assert!(*context_loading); },
         _ => panic!(),
     }
 }
@@ -2100,11 +2126,12 @@ fn context_error_clears_loading() {
     s.open_context_overlay();
     s.on_context_error("timeout");
     match &s {
-        SessionState::Connected {
-            context_loading,
+        SessionState::Connected(session) => {
+            let crate::session::ConnectedSession { context_loading,
             context_error,
             ..
-        } => {
+         } = &**session;
+
             assert!(!*context_loading);
             assert_eq!(context_error.as_deref(), Some("timeout"));
         }
@@ -2174,13 +2201,12 @@ fn model_picker_loads_models() {
     let mut s = connected_session();
     s.open_model_picker();
     s.on_models_loaded(sample_models(), vec!["custom-local".into()]);
-    if let SessionState::Connected {
-        model_picker_models,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { model_picker_models,
         model_picker_custom_providers,
         model_picker_loading,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(model_picker_models.len(), 3);
         assert_eq!(model_picker_custom_providers, &["custom-local"]);
         assert!(!model_picker_loading);
@@ -2194,12 +2220,11 @@ fn model_picker_error_state() {
     let mut s = connected_session();
     s.open_model_picker();
     s.on_models_error("network error".into());
-    if let SessionState::Connected {
-        model_picker_loading,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { model_picker_loading,
         model_picker_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(!model_picker_loading);
         assert_eq!(model_picker_error.as_deref(), Some("network error"));
     } else {
@@ -2214,12 +2239,11 @@ fn model_picker_query_resets_selection() {
     s.on_models_loaded(sample_models(), vec![]);
     s.set_model_picker_selection(2);
     s.set_model_picker_query("gpt".into());
-    if let SessionState::Connected {
-        model_picker_selection,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { model_picker_selection,
         model_picker_query,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(*model_picker_selection, 0);
         assert_eq!(model_picker_query, "gpt");
     } else {
@@ -2276,12 +2300,11 @@ fn mcp_overlay_open_sets_loading() {
     assert!(!s.is_mcp_open());
     s.open_mcp_overlay();
     assert!(s.is_mcp_open());
-    if let SessionState::Connected {
-        mcp_loading,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { mcp_loading,
         mcp_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(mcp_loading);
         assert!(mcp_error.is_none());
     } else {
@@ -2302,13 +2325,12 @@ fn mcp_on_loaded_populates_servers() {
     let mut s = connected_session();
     s.open_mcp_overlay();
     s.on_mcp_loaded(sample_mcp_servers());
-    if let SessionState::Connected {
-        mcp_servers,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { mcp_servers,
         mcp_loading,
         mcp_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert_eq!(mcp_servers.len(), 2);
         assert_eq!(mcp_servers[0].key, "desktop-commander");
         assert_eq!(mcp_servers[0].tools.len(), 2);
@@ -2325,12 +2347,11 @@ fn mcp_on_error_sets_message() {
     let mut s = connected_session();
     s.open_mcp_overlay();
     s.on_mcp_error("connection refused".into());
-    if let SessionState::Connected {
-        mcp_loading,
+    if let SessionState::Connected(session) = &s {
+        let crate::session::ConnectedSession { mcp_loading,
         mcp_error,
         ..
-    } = &s
-    {
+     } = &**session;
         assert!(!mcp_loading);
         assert_eq!(mcp_error.as_deref(), Some("connection refused"));
     } else {
@@ -2389,7 +2410,8 @@ fn update_plan_step_invalid_id_returns_false() {
 fn on_stream_tool_call_intercepts_set_plan() {
     let mut s = connected_session();
     s.on_select_agent(0);
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "go".to_string();
     }
     s.on_send();
@@ -2403,7 +2425,8 @@ fn on_stream_tool_call_intercepts_set_plan() {
 fn on_stream_tool_call_intercepts_update_plan() {
     let mut s = connected_session();
     s.on_select_agent(0);
-    if let SessionState::Connected { input_buffer, .. } = &mut s {
+    if let SessionState::Connected(session) = &mut s {
+        let crate::session::ConnectedSession { input_buffer, ..  } = &mut **session;
         *input_buffer = "go".to_string();
     }
     s.on_send();

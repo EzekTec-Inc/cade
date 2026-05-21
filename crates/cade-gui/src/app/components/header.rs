@@ -1,12 +1,13 @@
 use eframe::egui;
 use crate::app::ActivePage;
+use crate::theme::EguiThemeExt;
 
 pub fn render(
     ui: &mut egui::Ui,
     active_page: &mut ActivePage,
     theme: &crate::theme::ThemeColors,
 ) {
-    egui::TopBottomPanel::top("dashboard_header").show_inside(ui, |ui| {
+    egui::Panel::top("dashboard_header").show_inside(ui, |ui| {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("Serena Dashboard").color(theme.text_primary()));
             ui.add_space(20.0);
