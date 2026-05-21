@@ -27,7 +27,7 @@ async-stream   = "0.3"
 async-trait    = "0.1"
 
 # HTTP
-reqwest        = { version = "0.12", features = ["json", "stream"] }
+reqwest        = { version = "0.13", features = ["json", "stream"] }
 reqwest-eventsource = "0.6"
 
 # Serialisation
@@ -70,10 +70,10 @@ parking_lot    = "0.12"
 
 # Crypto
 aes-gcm        = "0.10"
-pbkdf2         = { version = "0.12", features = ["simple"] }
+pbkdf2         = { version = "0.13" }
 argon2         = "0.5"
-sha2           = "0.10"
-hmac           = "0.12"
+sha2           = "0.11"
+hmac           = "0.13"
 getrandom      = { version = "0.4", features = ["wasm_js"] }
 machine-uid    = "0.6"
 urlencoding    = "2.1"
@@ -101,7 +101,7 @@ sqlite-vec     = "0.1"
 zerocopy       = { version = "0.8", features = ["derive"] }
 
 # MCP
-rmcp           = { version = "1.4", features = [
+rmcp           = { version = "1.7", features = [
     "client",
     "server",
     "macros",
@@ -174,7 +174,7 @@ cade-askpass = { path = "crates/cade-askpass", features = ["server"] }
 ratatui.workspace = true
 indicatif.workspace = true
 rmcp.workspace = true
-lru = "0.16"
+lru = "0.18"
 mlua = "0.11.6"
 dashmap = "6.2.1"
 
