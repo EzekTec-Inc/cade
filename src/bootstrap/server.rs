@@ -34,15 +34,15 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
                     cmd.stderr(log_stderr);
                 }
                 Err(_) => {
-                    eprintln!(
-                        "Warning: Failed to duplicate stderr for cade-server log. Falling back to stdout."
+                    tracing::warn!(
+                        "Failed to duplicate stderr for cade-server log. Falling back to stdout."
                     );
                     cmd.stdout(log);
                 }
             }
         } else {
-            eprintln!(
-                "Warning: Failed to create /tmp/cade-server.log. Server output will go to stderr."
+            tracing::warn!(
+                "Failed to create /tmp/cade-server.log. Server output will go to stderr."
             );
         }
         let mut child = cmd

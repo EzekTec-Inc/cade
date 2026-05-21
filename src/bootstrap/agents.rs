@@ -203,12 +203,12 @@ pub async fn resolve_agent_and_conversation(
                 a
             }
             Err(_) => {
-                eprintln!("Local project agent {local_id} not found — falling back");
+                tracing::warn!("Local project agent {local_id} not found — falling back");
                 if let Some(last_id) = settings.last_agent().map(|s| s.to_string()) {
                     match client.get_agent(&last_id).await {
                         Ok(a) => a,
                         Err(_) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "Previous global agent {last_id} not found — creating new agent"
                             );
                             let a = client
@@ -233,7 +233,7 @@ pub async fn resolve_agent_and_conversation(
                         }
                     }
                 } else {
-                    println!("No previous session — creating new agent…");
+                    tracing::info!("No previous session — creating new agent…");
                     let a = client
                         .create_agent(make_req(
                             default_model.to_string(),
@@ -264,7 +264,7 @@ pub async fn resolve_agent_and_conversation(
                 a
             }
             Err(_) => {
-                eprintln!("Previous agent {last_id} not found — creating new agent");
+                tracing::warn!("Previous agent {last_id} not found — creating new agent");
                 let a = client
                     .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
                     .await
@@ -284,7 +284,7 @@ pub async fn resolve_agent_and_conversation(
             }
         }
     } else {
-        println!("No previous session — creating new agent…");
+        tracing::info!("No previous session — creating new agent…");
         let a = client
             .create_agent(make_req(
                 default_model.to_string(),
@@ -308,7 +308,7 @@ pub async fn resolve_agent_and_conversation(
 
     let loaded_skills = discover_all_skills(cwd, Some(&agent.id), None);
     if !loaded_skills.is_empty() {
-        println!("Loaded {} skill(s)", loaded_skills.len());
+        tracing::info!("Loaded {} skill(s)", loaded_skills.len());
     }
     let updated_skills_block = skills_listing(&loaded_skills);
     let _ = client
@@ -379,7 +379,7 @@ pub async fn resolve_agent_and_conversation(
                 Some(cid)
             }
             Err(e) => {
-                eprintln!("Warning: failed to create conversation: {e}");
+                tracing::warn!("failed to create conversation: {e}");
                 None
             }
         }
@@ -422,7 +422,7 @@ pub async fn resolve_agent_and_conversation(
                             .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
                         Some(cid)
                     } else {
-                        eprintln!("Invalid choice — using default conversation");
+                        tracing::warn!("Invalid choice — using default conversation");
                         None
                     }
                 } else {
@@ -430,7 +430,7 @@ pub async fn resolve_agent_and_conversation(
                 }
             }
             Ok(_) => {
-                println!("No conversations yet — starting new one");
+                tracing::info!("No conversations yet — starting new one");
                 match client.create_conversation(&agent.id, "").await {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
@@ -440,13 +440,13 @@ pub async fn resolve_agent_and_conversation(
                         Some(cid)
                     }
                     Err(e) => {
-                        eprintln!("Warning: {e}");
+                        tracing::warn!("create conversation failed: {e}");
                         None
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Warning: list_conversations: {e}");
+                tracing::warn!("list_conversations failed: {e}");
                 None
             }
         }

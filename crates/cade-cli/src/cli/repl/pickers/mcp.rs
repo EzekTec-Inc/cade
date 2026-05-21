@@ -9,12 +9,7 @@ impl Repl {
     ) -> Result<Option<cade_tui::mcp_picker::McpAction>> {
         use cade_tui::mcp_picker::{McpEntry, show_mcp_manager};
 
-        let mcp_configs = self
-            .settings
-            .lock()
-            .global_settings_mut()
-            .mcp_servers
-            .clone();
+        let mcp_configs = self.settings.lock().merged_mcp_servers();
         let statuses = self.mcp.status().await;
 
         let mut entries = Vec::new();
