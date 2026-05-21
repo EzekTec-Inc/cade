@@ -143,15 +143,13 @@ impl eframe::App for CadeApp {
         components::footer::render(ui, &session_snapshot_for_toolbar, &self.theme);
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            match self.active_page {
-                ActivePage::Chat => {
-                    // ── M5: context-window progress bar ──────────────────────────
-                    if let Some(crate::session::SessionState::Connected {
-                        total_input_tokens,
-                        total_output_tokens,
-                        ..
-                    }) = session_snapshot_for_toolbar
-                    {
+            // ── M5: context-window progress bar ──────────────────────────
+            if let Some(crate::session::SessionState::Connected {
+                total_input_tokens,
+                total_output_tokens,
+                ..
+            }) = session_snapshot_for_toolbar
+            {
                 const DEFAULT_WINDOW: u64 = 128_000;
                 let total = total_input_tokens + total_output_tokens;
                 let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
@@ -509,70 +507,94 @@ impl eframe::App for CadeApp {
                         }
                     }
 
-                    // ── Left sidebar: agent list ────────────────────
-                    if let Some(new_action) = components::sidebar::render(
-                        ui,
-                        &agents,
-                        &selected_agent,
-                        has_agent,
-                        agent_metrics.as_ref(),
-                        &conversations,
-                        &selected_conversation,
-                        is_streaming,
-                        active_plan.as_ref(),
-                        (total_input_tokens, total_output_tokens),
-                        &self.theme,
-                        self.viewport,
-                        &mut self.sidebar_drawer_open,
-                    ) {
-                        action = new_action;
-                    }
-
-                    // ── Plan panel (inside sidebar, shown when plan active) ──
-                    if let Some(plan) = active_plan {
-                        // Plan steps already summarized in sidebar Status section.
-                        // Full checklist rendered inline below sidebar.
-                        if self.viewport.is_desktop() {
-                            egui::Panel::left("plan_panel")
-                                .default_size(200.0)
-                                .resizable(false)
-                                .show_inside(ui, |ui| {
-                                    components::plan::render(ui, plan, &self.theme);
-                                });
+                    match self.active_page {
+                        ActivePage::Overview => {
+                            components::overview::render(ui, &self.theme);
                         }
-                    }
+                        ActivePage::Logs => {
+                            components::timeline::render(
+                                ui,
+                                &mut self.md_cache,
+                                *selected_agent,
+                                &messages,
+                                has_more_messages,
+                                is_streaming,
+                                auto_scroll,
+                                error_toast.as_ref(),
+                                last_usage.as_ref(),
+                                last_finish_reason.as_ref(),
+                                live_outputs,
+                                subagent_cards,
+                                &self.theme,
+                            );
+                        }
+                        ActivePage::Chat => {
+                            // ── Left sidebar: agent list ────────────────────
+                            if let Some(new_action) = components::sidebar::render(
+                                ui,
+                                &agents,
+                                &selected_agent,
+                                has_agent,
+                                agent_metrics.as_ref(),
+                                &conversations,
+                                &selected_conversation,
+                                is_streaming,
+                                active_plan.as_ref(),
+                                (total_input_tokens, total_output_tokens),
+                                &self.theme,
+                                self.viewport,
+                                &mut self.sidebar_drawer_open,
+                            ) {
+                                action = new_action;
+                            }
 
-                    // ── Bottom panel: input bar (TUI-matched) ────────
-                    if let Some(new_action) = components::editor::render(
-                        ui,
-                        input_edit,
-                        has_agent,
-                        is_streaming,
-                        request_focus_input,
-                        self.input_id,
-                        &self.session,
-                        &self.theme,
-                    ) {
-                        action = new_action;
-                    }
+                            // ── Plan panel (inside sidebar, shown when plan active) ──
+                            if let Some(plan) = active_plan {
+                                // Plan steps already summarized in sidebar Status section.
+                                // Full checklist rendered inline below sidebar.
+                                if self.viewport.is_desktop() {
+                                    egui::Panel::left("plan_panel")
+                                        .default_size(200.0)
+                                        .resizable(false)
+                                        .show_inside(ui, |ui| {
+                                            components::plan::render(ui, plan, &self.theme);
+                                        });
+                                }
+                            }
 
-                    // ── Central area: timeline ──────────────────────
-                    if let Some(new_action) = components::timeline::render(
-                        ui,
-                        &mut self.md_cache,
-                        *selected_agent,
-                        &messages,
-                        has_more_messages,
-                        is_streaming,
-                        auto_scroll,
-                        error_toast.as_ref(),
-                        last_usage.as_ref(),
-                        last_finish_reason.as_ref(),
-                        live_outputs,
-                        subagent_cards,
-                        &self.theme,
-                    ) {
-                        action = new_action;
+                            // ── Bottom panel: input bar (TUI-matched) ────────
+                            if let Some(new_action) = components::editor::render(
+                                ui,
+                                input_edit,
+                                has_agent,
+                                is_streaming,
+                                request_focus_input,
+                                self.input_id,
+                                &self.session,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+
+                            // ── Central area: timeline ──────────────────────
+                            if let Some(new_action) = components::timeline::render(
+                                ui,
+                                &mut self.md_cache,
+                                *selected_agent,
+                                &messages,
+                                has_more_messages,
+                                is_streaming,
+                                auto_scroll,
+                                error_toast.as_ref(),
+                                last_usage.as_ref(),
+                                last_finish_reason.as_ref(),
+                                live_outputs,
+                                subagent_cards,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
                     }
 
                     // ── Slash-command palette overlay ─────────────

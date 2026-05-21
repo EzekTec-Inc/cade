@@ -1060,6 +1060,7 @@ dependencies = [
  "eframe",
  "egui 0.34.2",
  "egui_commonmark",
+ "egui_plot",
  "getrandom 0.2.17",
  "gloo-net",
  "log",
@@ -2500,6 +2501,17 @@ dependencies = [
  "log",
  "mime_guess2",
  "profiling",
+]
+
+[[package]]
+name = "egui_plot"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67fc9b427a837264e55381a5cade6e28fe83ac5b165a61b9c888548c732a9c95"
+dependencies = [
+ "ahash",
+ "egui 0.33.3",
+ "emath 0.33.3",
 ]
 
 [[package]]
