@@ -8,19 +8,20 @@ impl SessionState {
     /// Only applies when `Connected` and an agent is selected.  No-op
     /// otherwise.
     pub fn on_messages(&mut self, msgs: Vec<ChatMessage>) {
-        if let Self::Connected { messages, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  messages, ..  } = &mut **session;
             *messages = msgs;
         }
     }
 
     /// Set messages and pagination flag from a paged fetch.
     pub fn on_messages_paged(&mut self, msgs: Vec<ChatMessage>, has_more: bool) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             messages,
             has_more_messages,
             ..
-        } = self
-        {
+         } = &mut **session;
             *messages = msgs;
             *has_more_messages = has_more;
         }
@@ -28,12 +29,12 @@ impl SessionState {
 
     /// Prepend older messages (from "Load more") to the beginning.
     pub fn on_prepend_messages(&mut self, older: Vec<ChatMessage>, has_more: bool) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             messages,
             has_more_messages,
             ..
-        } = self
-        {
+         } = &mut **session;
             let mut combined = older;
             combined.append(messages);
             *messages = combined;
@@ -43,10 +44,10 @@ impl SessionState {
 
     /// Whether there are older messages to load.
     pub fn has_more_messages(&self) -> bool {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             has_more_messages, ..
-        } = self
-        {
+         } = &**session;
             *has_more_messages
         } else {
             false
@@ -55,7 +56,8 @@ impl SessionState {
 
     /// Current message count (used as offset for pagination).
     pub fn message_count(&self) -> usize {
-        if let Self::Connected { messages, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  messages, ..  } = &**session;
             messages.len()
         } else {
             0
@@ -71,7 +73,8 @@ impl SessionState {
     ///   2. Clears the input buffer.
     ///   3. Sets `streaming = true`.
     pub fn on_send(&mut self) -> Option<String> {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             selected_agent: Some(_),
             input_buffer,
             messages,
@@ -79,8 +82,7 @@ impl SessionState {
             last_usage,
             last_finish_reason,
             ..
-        } = self
-        {
+         } = &mut **session;
             if *streaming {
                 return None;
             }
@@ -107,7 +109,8 @@ impl SessionState {
     /// Clear the local timeline display only.  Does NOT touch the
     /// server — reselecting the agent or sending a message will refetch.
     pub fn clear_timeline_local(&mut self) {
-        if let Self::Connected { messages, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  messages, ..  } = &mut **session;
             messages.clear();
         }
     }
@@ -115,7 +118,8 @@ impl SessionState {
     /// Return the content of the most recent assistant message, if any.
     /// Used by the `/copy` palette command.
     pub fn last_assistant_content(&self) -> Option<String> {
-        if let Self::Connected { messages, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  messages, ..  } = &**session;
             messages
                 .iter()
                 .rev()

@@ -103,7 +103,144 @@ pub enum SessionState {
         health: HealthInfo,
     },
     /// Both health and agent list succeeded — session is live.
-    Connected {
+    Connected(Box<ConnectedSession>),
+
+    /// One of the bootstrap requests failed.
+    ConnectionFailed {
+        server_url: String,
+        token: String,
+        error: String,
+    },
+}
+
+impl SessionState {
+    /// Begin a new session after the user submits their token.
+    ///
+    /// `server_url` is the base URL of the cade-server instance (from
+    /// `Config::server_url`).  `token` is the trimmed API key from
+    /// `LoginState::Submitted { key }`.
+    pub fn start(server_url: &str, token: &str) -> Self {
+        Self::Connecting {
+            server_url: server_url.to_string(),
+            token: token.to_string(),
+        }
+    }
+
+    /// The server URL this session targets.
+    pub fn server_url(&self) -> &str {
+        match self {
+            Self::Connecting { server_url, .. }
+            | Self::HealthOk { server_url, .. }
+            | Self::ConnectionFailed { server_url, .. } => server_url,
+            Self::Connected(s) => &s.server_url,
+        }
+    }
+
+    /// The bearer token for this session.
+    pub fn token(&self) -> &str {
+        match self {
+            Self::Connecting { token, .. }
+            | Self::HealthOk { token, .. }
+            | Self::ConnectionFailed { token, .. } => token,
+            Self::Connected(s) => &s.token,
+        }
+    }
+
+    /// Feed a successful health-check result.
+    ///
+    /// Only transitions from `Connecting` → `HealthOk`.
+    /// No-op in any other state (idempotent against duplicate calls).
+    pub fn on_health(&mut self, health: HealthInfo) {
+        if let Self::Connecting {
+            server_url, token, ..
+        } = self
+        {
+            *self = Self::HealthOk {
+                server_url: std::mem::take(server_url),
+                token: std::mem::take(token),
+                health,
+            };
+        }
+    }
+
+    /// Feed an error from either the health or agent-list request.
+    ///
+    /// Transitions from `Connecting` or `HealthOk` → `ConnectionFailed`.
+    /// No-op if already `Connected` or `ConnectionFailed`.
+    pub fn on_error(&mut self, error: String) {
+        match self {
+            Self::Connecting {
+                server_url, token, ..
+            }
+            | Self::HealthOk {
+                server_url, token, ..
+            } => {
+                *self = Self::ConnectionFailed {
+                    server_url: std::mem::take(server_url),
+                    token: std::mem::take(token),
+                    error,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the caller should attempt a retry (re-enter the login flow).
+    /// Only meaningful in `ConnectionFailed`.
+    pub fn is_failed(&self) -> bool {
+        matches!(self, Self::ConnectionFailed { .. })
+    }
+
+    /// Whether the session is fully established.
+    pub fn is_connected(&self) -> bool {
+        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession {  ..  }))
+    }
+}
+
+// ── Model filtering helper ────────────────────────────────────────────
+
+/// Filter models by a fuzzy query.  Matches against `id`, `display_name`,
+/// and `provider` (case-insensitive substring).
+pub fn filter_models<'a>(
+    models: &'a [crate::api::ModelInfo],
+    query: &str,
+) -> Vec<&'a crate::api::ModelInfo> {
+    if query.is_empty() {
+        return models.iter().collect();
+    }
+    let q = query.to_lowercase();
+    models
+        .iter()
+        .filter(|m| {
+            m.id.to_lowercase().contains(&q)
+                || m.display_name.to_lowercase().contains(&q)
+                || m.provider.to_lowercase().contains(&q)
+        })
+        .collect()
+}
+
+mod agents;
+mod artifacts;
+mod checkpoints;
+mod context_breakdown;
+mod conversations;
+mod live_output;
+mod memory_overlay;
+mod messages;
+mod overlays;
+mod plan;
+mod skills;
+mod streaming;
+mod subagents;
+mod theme_update;
+mod toasts;
+mod tools_overlay;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectedSession {
         server_url: String,
         token: String,
         health: HealthInfo,
@@ -319,137 +456,6 @@ pub enum SessionState {
         skills_filter: String,
         // ── Subagent tracking ────────────────────────────────
         subagent_cards: Vec<SubagentCardState>,
-    },
-    /// One of the bootstrap requests failed.
-    ConnectionFailed {
-        server_url: String,
-        token: String,
-        error: String,
-    },
-}
-
-impl SessionState {
-    /// Begin a new session after the user submits their token.
-    ///
-    /// `server_url` is the base URL of the cade-server instance (from
-    /// `Config::server_url`).  `token` is the trimmed API key from
-    /// `LoginState::Submitted { key }`.
-    pub fn start(server_url: &str, token: &str) -> Self {
-        Self::Connecting {
-            server_url: server_url.to_string(),
-            token: token.to_string(),
-        }
     }
 
-    /// The server URL this session targets.
-    pub fn server_url(&self) -> &str {
-        match self {
-            Self::Connecting { server_url, .. }
-            | Self::HealthOk { server_url, .. }
-            | Self::Connected { server_url, .. }
-            | Self::ConnectionFailed { server_url, .. } => server_url,
-        }
-    }
 
-    /// The bearer token for this session.
-    pub fn token(&self) -> &str {
-        match self {
-            Self::Connecting { token, .. }
-            | Self::HealthOk { token, .. }
-            | Self::Connected { token, .. }
-            | Self::ConnectionFailed { token, .. } => token,
-        }
-    }
-
-    /// Feed a successful health-check result.
-    ///
-    /// Only transitions from `Connecting` → `HealthOk`.
-    /// No-op in any other state (idempotent against duplicate calls).
-    pub fn on_health(&mut self, health: HealthInfo) {
-        if let Self::Connecting {
-            server_url, token, ..
-        } = self
-        {
-            *self = Self::HealthOk {
-                server_url: std::mem::take(server_url),
-                token: std::mem::take(token),
-                health,
-            };
-        }
-    }
-
-    /// Feed an error from either the health or agent-list request.
-    ///
-    /// Transitions from `Connecting` or `HealthOk` → `ConnectionFailed`.
-    /// No-op if already `Connected` or `ConnectionFailed`.
-    pub fn on_error(&mut self, error: String) {
-        match self {
-            Self::Connecting {
-                server_url, token, ..
-            }
-            | Self::HealthOk {
-                server_url, token, ..
-            } => {
-                *self = Self::ConnectionFailed {
-                    server_url: std::mem::take(server_url),
-                    token: std::mem::take(token),
-                    error,
-                };
-            }
-            _ => {}
-        }
-    }
-
-    /// Whether the caller should attempt a retry (re-enter the login flow).
-    /// Only meaningful in `ConnectionFailed`.
-    pub fn is_failed(&self) -> bool {
-        matches!(self, Self::ConnectionFailed { .. })
-    }
-
-    /// Whether the session is fully established.
-    pub fn is_connected(&self) -> bool {
-        matches!(self, Self::Connected { .. })
-    }
-}
-
-// ── Model filtering helper ────────────────────────────────────────────
-
-/// Filter models by a fuzzy query.  Matches against `id`, `display_name`,
-/// and `provider` (case-insensitive substring).
-pub fn filter_models<'a>(
-    models: &'a [crate::api::ModelInfo],
-    query: &str,
-) -> Vec<&'a crate::api::ModelInfo> {
-    if query.is_empty() {
-        return models.iter().collect();
-    }
-    let q = query.to_lowercase();
-    models
-        .iter()
-        .filter(|m| {
-            m.id.to_lowercase().contains(&q)
-                || m.display_name.to_lowercase().contains(&q)
-                || m.provider.to_lowercase().contains(&q)
-        })
-        .collect()
-}
-
-mod agents;
-mod artifacts;
-mod checkpoints;
-mod context_breakdown;
-mod conversations;
-mod live_output;
-mod memory_overlay;
-mod messages;
-mod overlays;
-mod plan;
-mod skills;
-mod streaming;
-mod subagents;
-mod theme_update;
-mod toasts;
-mod tools_overlay;
-
-#[cfg(test)]
-mod tests;

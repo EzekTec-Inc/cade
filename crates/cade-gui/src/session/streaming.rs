@@ -9,13 +9,13 @@ impl SessionState {
     /// building), the chunk is appended to its content.  Otherwise a new
     /// assistant message is created.
     pub fn on_stream_chunk(&mut self, text: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             messages,
             streaming: true,
             auto_scroll,
             ..
-        } = self
-        {
+         } = &mut **session;
             // Append to existing assistant message or create one.
             if let Some(last) = messages.last_mut()
                 && last.role == "assistant"
@@ -40,7 +40,8 @@ impl SessionState {
 
     /// Mark the SSE stream as complete.
     pub fn on_stream_done(&mut self) {
-        if let Self::Connected { streaming, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  streaming, ..  } = &mut **session;
             *streaming = false;
         }
     }
@@ -50,12 +51,12 @@ impl SessionState {
     /// Works like `on_stream_chunk` but uses `role = "reasoning"`.
     /// Consecutive reasoning chunks accumulate into the same message.
     pub fn on_stream_reasoning(&mut self, text: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             messages,
             streaming: true,
             ..
-        } = self
-        {
+         } = &mut **session;
             if let Some(last) = messages.last_mut()
                 && last.role == "reasoning"
                 && last.id.is_empty()
@@ -83,7 +84,8 @@ impl SessionState {
     /// also parsed into an [`crate::api::Question`] and set as the active
     /// question so the inline widget can render.
     pub fn on_stream_tool_call(&mut self, id: &str, name: &str, arguments: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             messages,
             streaming: true,
             active_question,
@@ -91,8 +93,7 @@ impl SessionState {
             question_checked,
             active_plan,
             ..
-        } = self
-        {
+         } = &mut **session;
             messages.push(ChatMessage {
                 id: String::new(),
                 role: "tool_call".to_string(),
@@ -162,12 +163,12 @@ impl SessionState {
     ///
     /// Appended as a `role = "tool_result"` message for display in the timeline.
     pub fn on_stream_tool_result(&mut self, id: &str, name: &str, output: &str, is_error: bool) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             messages,
             streaming: true,
             ..
-        } = self
-        {
+         } = &mut **session;
             messages.push(ChatMessage {
                 id: String::new(),
                 role: "tool_result".to_string(),
@@ -184,18 +185,16 @@ impl SessionState {
 
     /// Whether the session is currently streaming an assistant response.
     pub fn is_streaming(&self) -> bool {
-        matches!(
-            self,
-            Self::Connected {
+        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession { 
                 streaming: true,
                 ..
-            }
-        )
+             }))
     }
 
     /// Whether the timeline should auto-scroll to the bottom.
     pub fn auto_scroll(&self) -> bool {
-        if let Self::Connected { auto_scroll, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  auto_scroll, ..  } = &**session;
             *auto_scroll
         } else {
             true
@@ -204,34 +203,36 @@ impl SessionState {
 
     /// Disable auto-scroll (user scrolled up manually).
     pub fn disable_auto_scroll(&mut self) {
-        if let Self::Connected { auto_scroll, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  auto_scroll, ..  } = &mut **session;
             *auto_scroll = false;
         }
     }
 
     /// Re-enable auto-scroll (user clicked ↓ button).
     pub fn enable_auto_scroll(&mut self) {
-        if let Self::Connected { auto_scroll, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  auto_scroll, ..  } = &mut **session;
             *auto_scroll = true;
         }
     }
 
     /// Store a conversation_id received from the server (e.g. SSE metadata).
     pub fn on_conversation_id(&mut self, id: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             conversation_id, ..
-        } = self
-        {
+         } = &mut **session;
             *conversation_id = Some(id.to_string());
         }
     }
 
     /// The active conversation ID, if any.
     pub fn conversation_id(&self) -> Option<&str> {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             conversation_id, ..
-        } = self
-        {
+         } = &**session;
             conversation_id.as_deref()
         } else {
             None
@@ -240,13 +241,13 @@ impl SessionState {
 
     /// Store token usage statistics from a `usage_statistics` SSE event.
     pub fn on_usage(&mut self, input_tokens: u64, output_tokens: u64, model: Option<&str>) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             last_usage,
             total_input_tokens,
             total_output_tokens,
             ..
-        } = self
-        {
+         } = &mut **session;
             *last_usage = Some((input_tokens, output_tokens, model.map(String::from)));
             *total_input_tokens += input_tokens;
             *total_output_tokens += output_tokens;
@@ -255,17 +256,18 @@ impl SessionState {
 
     /// Store the finish reason from a `finish_reason` SSE event.
     pub fn on_finish_reason(&mut self, reason: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             last_finish_reason, ..
-        } = self
-        {
+         } = &mut **session;
             *last_finish_reason = Some(reason.to_string());
         }
     }
 
     /// Last token usage: `(input_tokens, output_tokens, model)`.
     pub fn last_usage(&self) -> Option<(u64, u64, Option<&str>)> {
-        if let Self::Connected { last_usage, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  last_usage, ..  } = &**session;
             last_usage.as_ref().map(|(i, o, m)| (*i, *o, m.as_deref()))
         } else {
             None
@@ -274,10 +276,10 @@ impl SessionState {
 
     /// Last finish reason (e.g. "stop", "length").
     pub fn last_finish_reason(&self) -> Option<&str> {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             last_finish_reason, ..
-        } = self
-        {
+         } = &**session;
             last_finish_reason.as_deref()
         } else {
             None

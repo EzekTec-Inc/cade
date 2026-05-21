@@ -5,7 +5,8 @@ use super::*;
 impl SessionState {
     /// Set the plan from a `set_plan` tool call. Replaces any existing plan.
     pub fn set_plan(&mut self, steps: Vec<String>) {
-        if let Self::Connected { active_plan, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  active_plan, ..  } = &mut **session;
             if steps.is_empty() {
                 *active_plan = None;
             } else {
@@ -27,11 +28,11 @@ impl SessionState {
 
     /// Mark a plan step as done or not done. `step_id` is 1-based.
     pub fn update_plan_step(&mut self, step_id: usize, done: bool) -> bool {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             active_plan: Some(plan),
             ..
-        } = self
-        {
+         } = &mut **session;
             if let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
                 step.is_done = done;
                 return true;
@@ -42,7 +43,8 @@ impl SessionState {
 
     /// Read-only access to the active plan.
     pub fn active_plan(&self) -> Option<&PlanState> {
-        if let Self::Connected { active_plan, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  active_plan, ..  } = &**session;
             active_plan.as_ref()
         } else {
             None

@@ -13,13 +13,13 @@ impl SessionState {
 
     /// Called when GET /v1/skills + GET /v1/agents/:id/skills return.
     pub fn on_skills_loaded(&mut self, all: Vec<crate::api::SkillEntry>, loaded_ids: Vec<String>) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             all_skills_list,
             loaded_skill_ids,
             skills_loading,
             ..
-        } = self
-        {
+         } = &mut **session;
             *all_skills_list = all;
             *loaded_skill_ids = loaded_ids;
             *skills_loading = false;
@@ -28,10 +28,10 @@ impl SessionState {
 
     /// Called after POST /v1/agents/:id/skills/load succeeds.
     pub fn on_skill_loaded(&mut self, id: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             loaded_skill_ids, ..
-        } = self
-        {
+         } = &mut **session;
             if !loaded_skill_ids.contains(&id.to_string()) {
                 loaded_skill_ids.push(id.to_string());
             }
@@ -40,10 +40,10 @@ impl SessionState {
 
     /// Called after POST /v1/agents/:id/skills/unload succeeds.
     pub fn on_skill_unloaded(&mut self, id: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             loaded_skill_ids, ..
-        } = self
-        {
+         } = &mut **session;
             loaded_skill_ids.retain(|x| x != id);
         }
     }

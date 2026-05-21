@@ -15,7 +15,7 @@ impl SessionState {
             ..
         } = self
         {
-            *self = Self::Connected {
+            *self = Self::Connected(Box::new(crate::session::ConnectedSession {
                 server_url: std::mem::take(server_url),
                 token: std::mem::take(token),
                 health: health.clone(),
@@ -134,7 +134,7 @@ impl SessionState {
                 skills_loading: false,
                 skills_filter: String::new(),
                 subagent_cards: Vec::new(),
-            };
+            }));
         }
     }
 
@@ -145,7 +145,8 @@ impl SessionState {
     /// message fetch), `false` if it was a no-op (already selected, or
     /// index out of bounds, or not in `Connected` state).
     pub fn on_select_agent(&mut self, idx: usize) -> bool {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             agents,
             selected_agent,
             messages,
@@ -153,8 +154,7 @@ impl SessionState {
             conversations,
             selected_conversation,
             ..
-        } = self
-        {
+         } = &mut **session;
             if idx >= agents.len() {
                 return false;
             }
@@ -174,13 +174,8 @@ impl SessionState {
 
     /// The currently selected agent's ID, if any.
     pub fn selected_agent_id(&self) -> Option<&str> {
-        if let Self::Connected {
-            agents,
-            selected_agent: Some(idx),
-            ..
-        } = self
-        {
-            agents.get(*idx).map(|a| a.id.as_str())
+        if let Self::Connected(session) = self {
+            session.selected_agent.and_then(|idx| session.agents.get(idx).map(|a| a.id.as_str()))
         } else {
             None
         }
@@ -188,7 +183,8 @@ impl SessionState {
 
     /// Read-only slice of the agents list.
     pub fn agents(&self) -> &[AgentInfo] {
-        if let Self::Connected { agents, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  agents, ..  } = &**session;
             agents
         } else {
             &[]
@@ -199,12 +195,12 @@ impl SessionState {
     /// so the sidebar reflects a model change).  Preserves the current
     /// `selected_agent` index if it still points to an existing row.
     pub fn refresh_agents(&mut self, new_agents: Vec<AgentInfo>) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             agents,
             selected_agent,
             ..
-        } = self
-        {
+         } = &mut **session;
             // Prefer to keep selection by agent id, not by index — the
             // list order could theoretically change.
             let sel_id = selected_agent.and_then(|i| agents.get(i).map(|a| a.id.clone()));
@@ -215,14 +211,16 @@ impl SessionState {
 
     /// Store metrics fetched from `GET /v1/agents/:id/metrics`.
     pub fn on_metrics_loaded(&mut self, m: crate::api::AgentMetrics) {
-        if let Self::Connected { agent_metrics, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  agent_metrics, ..  } = &mut **session;
             *agent_metrics = Some(m);
         }
     }
 
     /// Read-only access to the last-fetched agent metrics.
     pub fn agent_metrics(&self) -> Option<&crate::api::AgentMetrics> {
-        if let Self::Connected { agent_metrics, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  agent_metrics, ..  } = &**session;
             agent_metrics.as_ref()
         } else {
             None
@@ -232,12 +230,12 @@ impl SessionState {
     /// Accumulated input + output tokens for this session.
     /// Returns `(total_in, total_out)`.
     pub fn total_token_usage(&self) -> (u64, u64) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             total_input_tokens,
             total_output_tokens,
             ..
-        } = self
-        {
+         } = &**session;
             (*total_input_tokens, *total_output_tokens)
         } else {
             (0, 0)

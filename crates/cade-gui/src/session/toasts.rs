@@ -8,12 +8,12 @@ impl SessionState {
     /// If a stream is in progress it is marked complete so the UI unblocks.
     /// Replaces any previously stored error.
     pub fn push_error(&mut self, msg: &str) {
-        if let Self::Connected {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
             streaming,
             error_toast,
             ..
-        } = self
-        {
+         } = &mut **session;
             *streaming = false;
             *error_toast = Some(msg.to_string());
         }
@@ -21,7 +21,8 @@ impl SessionState {
 
     /// Clear the current error toast (e.g. after the user dismisses it).
     pub fn dismiss_error(&mut self) {
-        if let Self::Connected { error_toast, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  error_toast, ..  } = &mut **session;
             *error_toast = None;
         }
     }
@@ -33,14 +34,16 @@ impl SessionState {
     /// non-empty `error_toast` as a notice and does not hard-disable
     /// streaming when the message starts with "✓" or "Compacting".
     pub fn push_info(&mut self, msg: &str) {
-        if let Self::Connected { error_toast, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  error_toast, ..  } = &mut **session;
             *error_toast = Some(msg.to_string());
         }
     }
 
     /// The current error message, if any.
     pub fn error_toast(&self) -> Option<&str> {
-        if let Self::Connected { error_toast, .. } = self {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession {  error_toast, ..  } = &**session;
             error_toast.as_deref()
         } else {
             None
