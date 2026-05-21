@@ -109,11 +109,16 @@ The DB key lives at `~/.cade/db.key` (also re-derivable from
 | GET / PUT | `/v1/agents/:id/memory` | Read / write memory blocks |
 | POST | `/v1/agents/:id/run` (SSE) | Agentic loop with streaming |
 | POST | `/v1/agents/:id/messages/stream` (SSE) | Single-completion stream |
+| POST | `/v1/agents/:id/edit` (SSE) | Interactive IDE hover-edits |
+| POST | `/v1/agents/:id/complete` (SSE) | IDE inline ghost-text completions |
 | GET / POST / DELETE | `/v1/agents/:id/conversations` | Conversation management |
 | GET / POST | `/v1/agents/:id/checkpoints` | Checkpoint create / list |
 | GET | `/v1/agents/:id/skills` | Available skills |
 | POST | `/v1/agents/:id/skills/load` `unload` `enable` `disable` | Skill mutation |
 | POST | `/v1/agents/:id/tool_executions` | Log a tool call |
+| POST | `/v1/agents/:id/links` | Sync and re-attach tools to session |
+| GET / POST / DELETE | `/v1/mcp/servers` | Manage MCP servers |
+| GET / POST | `/v1/backends` | Manage execution backends |
 | GET | `/v1/runs/:id` `/v1/runs/:id/stream` | Background run status |
 | GET / POST / DELETE | `/v1/providers` | LLM provider keys |
 | GET | `/v1/health` `/v1/config` | Server health |

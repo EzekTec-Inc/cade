@@ -83,6 +83,7 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 | **Skills** | Drop a Markdown file into `.cade/skills/` to teach CADE new domains |
 | **Hooks** | Wire shell scripts into lifecycle events (before/after tool calls) |
 | **Subagents & Teams** | Dispatch work to specialized agent teams that run in parallel |
+| **IDE Plugins** | Native Neovim plugin with interactive hover-edits and ghost-text |
 
 ---
 
