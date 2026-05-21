@@ -6,39 +6,8 @@ use crate::Result;
 impl Repl {
     pub(crate) async fn cmd_link(&mut self, _pending_input: &mut Option<String>) -> Result<bool> {
         self.tui_dim("  Linking tools…");
-        let client2 = self.client.clone();
-        let mcp2 = std::sync::Arc::clone(&self.mcp);
-        let toolset2 = *self.current_toolset.lock();
-        let agent_id = self.agent_id();
-        use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
-        let allow_agent_mode = self
-            .settings
-            .lock()
-            .permission_settings()
-            .allow_agent_mode_changes;
-        let native_ids: Vec<String> = register_cade_tools(&client2, toolset2, allow_agent_mode)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|t| t.id)
-            .collect();
-        let n_native = native_ids.len();
-        if !native_ids.is_empty() {
-            let _ = client2.attach_agent_tools(&agent_id, &native_ids).await;
-        }
-        let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas().await)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|t| t.id)
-            .collect();
-        let n_mcp = mcp_ids.len();
-        if !mcp_ids.is_empty() {
-            let _ = client2.attach_agent_tools(&agent_id, &mcp_ids).await;
-        }
-        self.tui_ok(format!(
-            "  ✓ Linked {n_native} native + {n_mcp} MCP tool(s)"
-        ));
+        self.spawn_tool_reregister();
+        self.tui_ok("  ✓ Relink scheduled. Tools will be available shortly.".to_string());
         Ok(false)
     }
 

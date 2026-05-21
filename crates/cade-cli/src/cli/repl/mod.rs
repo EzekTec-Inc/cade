@@ -492,6 +492,7 @@ impl Repl {
 
             // Attach all together
             if !all_ids.is_empty() {
+                let _ = client.detach_agent_tools(&agent_id).await;
                 let _ = client.attach_agent_tools(&agent_id, &all_ids).await;
             }
         });

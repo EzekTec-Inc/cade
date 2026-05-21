@@ -1064,6 +1064,7 @@ ui_resource_uri: None,
                         new_ids.push(id);
                     }
                 }
+                let _ = self.client.detach_agent_tools(&agent_id).await;
                 let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
             }
         } else {
@@ -1113,6 +1114,7 @@ ui_resource_uri: None,
 
                 // Now we also need to get MCP tools and ensure they are attached.
                 // MCP tools are fetched via list_tools() too since they are registered on the server.
+                let _ = self.client.detach_agent_tools(&agent_id).await;
                 let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
             }
         }
