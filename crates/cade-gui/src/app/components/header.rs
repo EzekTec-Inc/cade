@@ -6,7 +6,8 @@ pub fn render(
     ui: &mut egui::Ui,
     active_page: &mut ActivePage,
     theme: &crate::theme::ThemeColors,
-) {
+) -> Option<crate::app::AppAction> {
+    let mut action = None;
     egui::Panel::top("dashboard_header").show_inside(ui, |ui| {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("Serena Dashboard").color(theme.text_primary()));
@@ -18,9 +19,10 @@ pub fn render(
             
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Menu").clicked() {
-                    // Menu logic here
+                    action = Some(crate::app::AppAction::OpenMenu(String::new()));
                 }
             });
         });
     });
+    action
 }

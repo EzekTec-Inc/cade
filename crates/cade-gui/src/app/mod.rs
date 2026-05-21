@@ -137,7 +137,9 @@ impl eframe::App for CadeApp {
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
         // ── Top toolbar (M1) ─────────────────────────────────────────────
-        components::header::render(ui, &mut self.active_page, &self.theme);
+        if let Some(new_action) = components::header::render(ui, &mut self.active_page, &self.theme) {
+            action = new_action;
+        }
 
         // ── Bottom status bar (M1) ────────────────────────────────────────
         components::footer::render(ui, &session_snapshot_for_toolbar, &self.theme);
@@ -495,7 +497,7 @@ impl eframe::App for CadeApp {
                             components::overview::render(ui, &session, &self.theme);
                         }
                         ActivePage::Logs => {
-                            components::timeline::render(
+                            if let Some(new_action) = components::timeline::render(
                                 ui,
                                 &mut self.md_cache,
                                 *selected_agent,
@@ -509,7 +511,9 @@ impl eframe::App for CadeApp {
                                 live_outputs,
                                 subagent_cards,
                                 &self.theme,
-                            );
+                            ) {
+                                action = new_action;
+                            }
                         }
                         ActivePage::Chat => {
                             // ── Left sidebar: agent list ────────────────────
