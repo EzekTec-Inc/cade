@@ -137,26 +137,21 @@ impl eframe::App for CadeApp {
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
         // ── Top toolbar (M1) ─────────────────────────────────────────────
-        if components::breadcrumb::render(
-            ui,
-            &session_snapshot_for_toolbar,
-            &self.theme,
-            self.viewport,
-        ) {
-            self.sidebar_drawer_open = !self.sidebar_drawer_open;
-        }
+        components::header::render(ui, &mut self.active_page, &self.theme);
 
         // ── Bottom status bar (M1) ────────────────────────────────────────
         components::footer::render(ui, &session_snapshot_for_toolbar, &self.theme);
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            // ── M5: context-window progress bar ──────────────────────────
-            if let Some(crate::session::SessionState::Connected {
-                total_input_tokens,
-                total_output_tokens,
-                ..
-            }) = session_snapshot_for_toolbar
-            {
+            match self.active_page {
+                ActivePage::Chat => {
+                    // ── M5: context-window progress bar ──────────────────────────
+                    if let Some(crate::session::SessionState::Connected {
+                        total_input_tokens,
+                        total_output_tokens,
+                        ..
+                    }) = session_snapshot_for_toolbar
+                    {
                 const DEFAULT_WINDOW: u64 = 128_000;
                 let total = total_input_tokens + total_output_tokens;
                 let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
