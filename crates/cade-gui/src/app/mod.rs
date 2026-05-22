@@ -273,7 +273,7 @@ impl eframe::App for CadeApp {
                     let current_backend = &session.current_backend;
                     let reasoning_open = session.reasoning_open;
                     let current_reasoning_effort = &session.current_reasoning_effort;
-                    let skills_overlay_open = session.skills_overlay_open;
+                    let _skills_overlay_open = session.skills_overlay_open;
                     let all_skills_list = &session.all_skills_list;
                     let loaded_skill_ids = &session.loaded_skill_ids;
                     let skills_loading = session.skills_loading;
