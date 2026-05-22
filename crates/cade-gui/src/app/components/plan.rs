@@ -21,7 +21,7 @@ pub fn render(ui: &mut egui::Ui, plan: &PlanState, theme: &crate::theme::ThemeCo
 
     ui.add_space(2.0);
     ui.label(
-        egui::RichText::new(" Todos ")
+        egui::RichText::new(format!(" {} ", plan.title))
             .color(theme.text_muted())
             .monospace()
             .strong()

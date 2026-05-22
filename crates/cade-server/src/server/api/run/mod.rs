@@ -765,18 +765,28 @@ async fn run_agent_loop(
                     })
                     .unwrap_or_default();
 
+                let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Tasks").to_string();
+
                 let n = steps.len();
                 let plan_json =
-                    serde_json::json!({ "steps": steps, "is_visible": true }).to_string();
+                    serde_json::json!({ "title": title, "steps": steps, "is_visible": true }).to_string();
                 let _ = sqlite::agents::update_agent_active_plan(
                     &state2.db,
                     &agent_id2,
                     Some(&plan_json),
                 );
+                
+                // Write directly to .cade-todo.md
+                let path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).join(".cade-todo.md");
+                let mut content = format!("# {}\n\n", title);
+                for step in &steps {
+                    content.push_str(&format!("- [ ] {}\n", step["description"].as_str().unwrap_or("")));
+                }
+                let _ = std::fs::write(&path, content);
 
                 send(serde_json::json!({
                     "message_type": "plan_update",
-                    "plan": serde_json::json!({ "steps": steps, "is_visible": true })
+                    "plan": serde_json::json!({ "title": title, "steps": steps, "is_visible": true })
                 }))
                 .await;
 
@@ -817,6 +827,19 @@ async fn run_agent_loop(
                                     &agent_id2,
                                     Some(&plan.to_string()),
                                 );
+                                
+                                // Sync back to .cade-todo.md
+                                let path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).join(".cade-todo.md");
+                                let title = plan.get("title").and_then(|v| v.as_str()).unwrap_or("Tasks");
+                                let mut content = format!("# {}\n\n", title);
+                                if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
+                                    for step in steps {
+                                        let mark = if step.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false) { "x" } else { " " };
+                                        content.push_str(&format!("- [{}] {}\n", mark, step["description"].as_str().unwrap_or("")));
+                                    }
+                                }
+                                let _ = std::fs::write(&path, content);
+
                                 send(serde_json::json!({
                                     "message_type": "plan_update",
                                     "plan": plan

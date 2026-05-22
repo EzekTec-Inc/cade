@@ -180,7 +180,11 @@ fn inner_render(
                     }
                     None => "none".into(),
                 };
-                kv_row(ui, "todos", &plan_summary, theme.text_primary(), theme);
+                let plan_title = match active_plan {
+                    Some(plan) => plan.title.clone(),
+                    None => "todos".to_string(),
+                };
+                kv_row(ui, &plan_title.to_lowercase(), &plan_summary, theme.text_primary(), theme);
                 ui.add_space(4.0);
 
                 // ── Keys section ──────────────────────────────

@@ -4,13 +4,14 @@ use super::*;
 
 impl SessionState {
     /// Set the plan from a `set_plan` tool call. Replaces any existing plan.
-    pub fn set_plan(&mut self, steps: Vec<String>) {
+    pub fn set_plan(&mut self, title: String, steps: Vec<String>) {
         if let Self::Connected(session) = self {
             let crate::session::ConnectedSession {  active_plan, ..  } = &mut **session;
             if steps.is_empty() {
                 *active_plan = None;
             } else {
                 *active_plan = Some(PlanState {
+                    title,
                     steps: steps
                         .into_iter()
                         .enumerate()
@@ -58,8 +59,9 @@ impl SessionState {
                         });
                     }
                 }
+                let title = plan.get("title").and_then(|v| v.as_str()).unwrap_or("Tasks").to_string();
                 let is_visible = plan.get("is_visible").and_then(|v| v.as_bool()).unwrap_or(true);
-                *active_plan = Some(PlanState { steps, is_visible });
+                *active_plan = Some(PlanState { title, steps, is_visible });
             }
         }
     }

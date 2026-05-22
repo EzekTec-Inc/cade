@@ -72,10 +72,14 @@ impl SetPlanTool {
     pub fn schema() -> Value {
         json!({
             "name": "set_plan",
-            "description": "Set the numbered steps shown in the TUI plan panel. Call once at the start of a multi-step task. Each step appears as a checklist item the user can track in real time. CRITICAL: You MUST use the UpdatePlan tool to mark steps as done immediately as you finish them.",
+            "description": "Set the numbered steps shown in the plan panel. Call once at the start of a multi-step task. Each step appears as a checklist item the user can track in real time. CRITICAL: You MUST use the UpdatePlan tool to mark steps as done immediately as you finish them.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Optional title for the plan/checklist (e.g. 'Database Migration'). Defaults to 'Tasks'."
+                    },
                     "steps": {
                         "type": "array",
                         "description": "Ordered list of step descriptions.",

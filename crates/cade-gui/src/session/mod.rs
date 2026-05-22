@@ -51,6 +51,7 @@ pub struct PlanStep {
 /// The full plan state — a list of steps with a visibility toggle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanState {
+    pub title: String,
     pub steps: Vec<PlanStep>,
     pub is_visible: bool,
 }

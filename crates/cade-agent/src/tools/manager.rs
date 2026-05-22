@@ -257,7 +257,6 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             ApplyPatchTool::schema(), // patch-based edit + write
             GrepTool::schema(),
             GlobTool::schema(),
-            TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
             FinishTaskTool::schema(),
@@ -269,7 +268,6 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             rename_schema(EditTool::schema(), "Replace"),
             rename_schema(GrepTool::schema(), "SearchFileContent"),
             rename_schema(GlobTool::schema(), "GlobGemini"),
-            TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
             FinishTaskTool::schema(),
@@ -281,7 +279,6 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             EditTool::schema(), // string-replace
             GrepTool::schema(),
             GlobTool::schema(),
-            TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
             FinishTaskTool::schema(),
