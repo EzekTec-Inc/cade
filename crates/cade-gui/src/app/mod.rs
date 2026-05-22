@@ -623,8 +623,24 @@ impl eframe::App for CadeApp {
                                                     ui.add_space(8.0);
                                                     ui.heading(egui::RichText::new("Subagents").color(self.theme.primary()).size(14.0));
                                                     ui.add_space(8.0);
-                                                    for card in subagent_cards.iter() {
-                                                        crate::app::views::render_subagent_card(ui, card, &self.theme);
+                                                    for card_state in subagent_cards.iter() {
+                                                        let card = crate::app::views::SubagentCard {
+                                                            subagent_id: card_state.subagent_id.clone(),
+                                                            task: card_state.task.clone(),
+                                                            mode: card_state.mode.clone(),
+                                                            model: card_state.model.clone(),
+                                                            status: match card_state.status.as_str() {
+                                                                "complete" => crate::app::views::SubagentStatus::Complete,
+                                                                "error" => crate::app::views::SubagentStatus::Error,
+                                                                _ => crate::app::views::SubagentStatus::Running,
+                                                            },
+                                                            elapsed_secs: card_state.elapsed_secs,
+                                                            tool_calls: card_state.tool_calls.clone(),
+                                                            output_lines: card_state.output_lines.clone(),
+                                                            result_preview: card_state.result_preview.clone(),
+                                                            is_error: card_state.is_error,
+                                                        };
+                                                        crate::app::views::render_subagent_card(ui, &card, &self.theme);
                                                         ui.add_space(8.0);
                                                     }
                                                 }
