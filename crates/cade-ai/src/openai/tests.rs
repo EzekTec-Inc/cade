@@ -354,3 +354,65 @@ fn build_tools_truncates_to_128() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn build_tools_preserves_load_skill_when_truncating() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+    tools.push(json!({
+        "name": "load_skill",
+        "description": "Load a skill",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" }
+            },
+            "required": ["id"]
+        }
+    }));
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
+    assert!(
+        arr.iter().any(|tool| tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|name| name.as_str())
+            == Some("load_skill")),
+        "build_tools should preserve load_skill inside the 128-tool cap"
+    );
+
+    let resp_tools_val = OpenAiProvider::build_responses_tools(&req);
+    let arr2 = resp_tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(
+        arr2.len(),
+        128,
+        "build_responses_tools should still cap at 128"
+    );
+    assert!(
+        arr2.iter()
+            .any(|tool| tool.get("name").and_then(|name| name.as_str()) == Some("load_skill")),
+        "build_responses_tools should preserve load_skill inside the 128-tool cap"
+    );
+
+    Ok(())
+}

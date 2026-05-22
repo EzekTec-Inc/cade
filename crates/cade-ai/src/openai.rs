@@ -147,6 +147,37 @@ pub struct OpenAiProvider {
     base_url: String,
 }
 
+const OPENAI_MAX_TOOLS: usize = 128;
+const PRIORITY_TOOL_NAMES: &[&str] = &[
+    "load_skill",
+    "search_memory",
+    "conversation_search",
+    "archival_memory_search",
+];
+
+fn tool_name(schema: &Value) -> Option<&str> {
+    schema.get("name").and_then(Value::as_str)
+}
+
+fn is_priority_tool(schema: &Value) -> bool {
+    tool_name(schema).is_some_and(|name| PRIORITY_TOOL_NAMES.contains(&name))
+}
+
+fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
+    let mut selected: Vec<&Value> = schemas
+        .iter()
+        .filter(|schema| is_priority_tool(schema))
+        .collect();
+    selected.extend(
+        schemas
+            .iter()
+            .filter(|schema| !is_priority_tool(schema))
+            .take(OPENAI_MAX_TOOLS.saturating_sub(selected.len())),
+    );
+    selected.truncate(OPENAI_MAX_TOOLS);
+    selected
+}
+
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
@@ -281,10 +312,8 @@ impl OpenAiProvider {
     }
 
     fn build_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = req
-            .tools
+        let tools: Vec<Value> = capped_tools(&req.tools)
             .iter()
-            .take(128)
             .map(|s| {
                 let mut params = s
                     .get("parameters")
@@ -308,10 +337,8 @@ impl OpenAiProvider {
     }
 
     fn build_responses_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = req
-            .tools
+        let tools: Vec<Value> = capped_tools(&req.tools)
             .iter()
-            .take(128)
             .map(|s| {
                 let mut params = s
                     .get("parameters")
