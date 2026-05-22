@@ -1193,7 +1193,6 @@ impl CadeApp {
                     id: uuid::Uuid::new_v4().to_string(),
                     role: "assistant".to_string(),
                     content: serde_json::json!({"content": out}),
-                    created_at: chrono::Utc::now(),
                     conversation_id: s.conversation_id().map(String::from),
                 };
                 
