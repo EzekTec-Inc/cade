@@ -41,7 +41,10 @@ pub fn render(
                     let agent_name = sess.agents.get(sess.selected_agent.unwrap_or(0))
                         .map(|a| a.name.as_str())
                         .unwrap_or("No Agent");
-                    ui.label(egui::RichText::new(agent_name).color(theme.text_muted()));
+                    
+                    if ui.button(format!("Env: {}", agent_name)).clicked() {
+                        action = Some(crate::app::AppAction::ToggleProfilesOverlay);
+                    }
                 }
             });
         });

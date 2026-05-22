@@ -15,6 +15,8 @@ pub enum StorageKey {
     ApiToken,
     /// The server URL the token was validated against.
     ServerUrl,
+    /// Saved connection profiles JSON string.
+    Profiles,
 }
 
 impl StorageKey {
@@ -23,12 +25,13 @@ impl StorageKey {
         match self {
             Self::ApiToken => "cade_api_token",
             Self::ServerUrl => "cade_server_url",
+            Self::Profiles => "cade_profiles",
         }
     }
 
     /// All defined keys, for bulk operations (e.g. logout / clear).
     pub fn all() -> &'static [StorageKey] {
-        &[Self::ApiToken, Self::ServerUrl]
+        &[Self::ApiToken, Self::ServerUrl, Self::Profiles]
     }
 }
 
@@ -113,7 +116,8 @@ mod tests {
         let all = StorageKey::all();
         assert!(all.contains(&StorageKey::ApiToken));
         assert!(all.contains(&StorageKey::ServerUrl));
-        assert_eq!(all.len(), 2);
+        assert!(all.contains(&StorageKey::Profiles));
+        assert_eq!(all.len(), 3);
     }
 
     #[test]

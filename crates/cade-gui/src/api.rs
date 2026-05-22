@@ -253,6 +253,13 @@ pub struct MemoryBlock {
     pub tier: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MemoryHistoryRevision {
+    pub id: String,
+    pub value: String,
+    pub updated_at: i64,
+}
+
 #[derive(serde::Deserialize)]
 struct MemoryEnvelope {
     blocks: Vec<MemoryBlock>,
@@ -264,6 +271,10 @@ pub fn parse_memory(status: u16, body: &str) -> Result<Vec<MemoryBlock>, ApiErro
     Ok(env.blocks)
 }
 
+pub fn parse_memory_history(status: u16, body: &str) -> Result<Vec<MemoryHistoryRevision>, ApiError> {
+    decode_or_error(status, body)
+}
+
 /// Build the URL for the memory-collection endpoint.
 pub fn memory_url(server: &str, agent_id: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/memory"))
@@ -272,6 +283,14 @@ pub fn memory_url(server: &str, agent_id: &str) -> String {
 /// Build the URL for a single memory-block upsert/delete endpoint.
 pub fn memory_block_url(server: &str, agent_id: &str, label: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/memory/{label}"))
+}
+
+pub fn memory_history_url(server: &str, agent_id: &str, label: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/memory/{label}/history?limit=10"))
+}
+
+pub fn memory_restore_url(server: &str, agent_id: &str, label: &str, rev_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/memory/{label}/restore/{rev_id}"))
 }
 
 /// Build the request body for `PUT /v1/agents/:id/memory/:label`.

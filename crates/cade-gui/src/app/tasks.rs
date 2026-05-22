@@ -400,6 +400,86 @@ impl CadeApp {
         });
     }
 
+    pub(super) fn spawn_fetch_memory_history(&mut self) {
+        let (server_url, token, agent_id, label) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            let (label, _) = match s.memory_selected_label_value() {
+                Some(pair) => pair,
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id, label)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_memory_history(&server_url, &token, &agent_id, &label).await {
+                Ok(history) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_history_loaded(history);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_history_error(&format!("History fetch failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn spawn_restore_memory_revision(&mut self, rev_id: String) {
+        let (server_url, token, agent_id, label) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            let (label, _) = match s.memory_selected_label_value() {
+                Some(pair) => pair,
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id, label)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        
+        // We capture 'self' async calls via channel or just use another spawn to fetch the memory again
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::restore_memory_revision(&server_url, &token, &agent_id, &label, &rev_id).await {
+                Ok(()) => {
+                    // Refetch memory to reflect restoration
+                    if let Ok(blocks) = crate::http_wasm::get_memory(&server_url, &token, &agent_id).await {
+                        if let Some(s) = session.borrow_mut().as_mut() {
+                            s.on_memory_loaded(blocks);
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_error(&format!("Restore failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Update the current agent's model via `PATCH /v1/agents/:id`.  On
     /// success refreshes the agents list so the sidebar reflects the change.
     /// Fetch available models and populate the model picker overlay.

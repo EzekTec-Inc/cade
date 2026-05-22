@@ -13,6 +13,7 @@ pub mod settings;
 pub mod skills;
 pub mod stats;
 pub mod tools;
+pub mod profiles;
 
 pub use agents::render_agents_overlay;
 pub use artifacts::render_artifacts_overlay;
@@ -25,3 +26,4 @@ pub use models::render_model_picker;
 pub use palette::render_palette_overlay;
 pub use stats::render_stats_overlay;
 pub use tools::{render_question_widget, render_tools_overlay};
+pub use profiles::render_profiles_overlay;

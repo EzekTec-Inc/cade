@@ -15,6 +15,9 @@ pub fn render(
     error: Option<&str>,
     save_notice: Option<&str>,
     dirty: bool,
+    history_open: bool,
+    history: &[crate::api::MemoryHistoryRevision],
+    history_loading: bool,
     theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
@@ -139,66 +142,101 @@ pub fn render(
         ui.vertical(|ui| {
             let selected = blocks.get(selection);
             if let Some(block) = selected {
-                ui.label(
-                    egui::RichText::new(format!("/{}", block.label))
-                        .color(theme.text_primary())
-                        .monospace()
-                        .strong(),
-                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("/{}", block.label))
+                            .color(theme.text_primary())
+                            .monospace()
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn_label = if history_open { "Editor" } else { "History" };
+                        if ui.button(btn_label).clicked() {
+                            result = Some(AppAction::ToggleMemoryHistory);
+                        }
+                    });
+                });
+                
                 if let Some(d) = &block.description {
                     ui.label(egui::RichText::new(d).color(theme.text_muted()).small());
                 }
                 ui.add_space(4.0);
 
-                let mut buf = edit_buffer.to_string();
-                let editor_height = body_height - 70.0;
-                let resp = ui.add(
-                    egui::TextEdit::multiline(&mut buf)
-                        .desired_rows(12)
-                        .desired_width(ui.available_width())
-                        .min_size(egui::vec2(ui.available_width(), editor_height)),
-                );
-                if resp.changed() {
-                    result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));
-                }
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    let save_label = if saving {
-                        "Saving…"
-                    } else if dirty {
-                        "Save"
-                    } else {
-                        "Saved"
-                    };
-                    let save = egui::Button::new(save_label);
-                    // Disabled when a request is in flight or the
-                    // buffer matches the saved value (nothing to
-                    // save).  Avoids spurious PUTs and gives the
-                    // user a clear "everything is persisted" cue.
-                    if ui
-                        .add_enabled(!saving && dirty, save)
-                        .on_hover_text("Ctrl+S")
-                        .clicked()
-                    {
-                        result = Some(AppAction::SaveMemoryBlock);
-                    }
-                    if saving {
+                if history_open {
+                    if history_loading {
                         ui.spinner();
-                    }
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if dirty {
-                                ui.label(
-                                    egui::RichText::new("● unsaved changes")
-                                        .color(theme.warning())
-                                        .small(),
-                                );
+                    } else if history.is_empty() {
+                        ui.label(egui::RichText::new("No history found for this block.").color(theme.text_muted()).italics());
+                    } else {
+                        egui::ScrollArea::vertical().id_salt("mem_history_list").show(ui, |ui| {
+                            for rev in history {
+                                egui::Frame::NONE
+                                    .fill(theme.bg_surface2())
+                                    .corner_radius(egui::CornerRadius::same(4))
+                                    .inner_margin(8.0)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(format!("Revision {}", &rev.id[..8])).strong());
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                if ui.button("Restore").clicked() {
+                                                    result = Some(AppAction::RestoreMemoryRevision(rev.id.clone()));
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(4.0);
+                                        ui.label(egui::RichText::new(&rev.value).monospace());
+                                    });
+                                ui.add_space(4.0);
                             }
-                        },
+                        });
+                    }
+                } else {
+                    let mut buf = edit_buffer.to_string();
+                    let editor_height = body_height - 70.0;
+                    let resp = ui.add(
+                        egui::TextEdit::multiline(&mut buf)
+                            .desired_rows(12)
+                            .desired_width(ui.available_width())
+                            .min_size(egui::vec2(ui.available_width(), editor_height)),
                     );
-                });
+                    if resp.changed() {
+                        result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));
+                    }
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let save_label = if saving {
+                            "Saving…"
+                        } else if dirty {
+                            "Save"
+                        } else {
+                            "Saved"
+                        };
+                        let save = egui::Button::new(save_label);
+                        if ui
+                            .add_enabled(!saving && dirty, save)
+                            .on_hover_text("Ctrl+S")
+                            .clicked()
+                        {
+                            result = Some(AppAction::SaveMemoryBlock);
+                        }
+                        if saving {
+                            ui.spinner();
+                        }
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if dirty {
+                                    ui.label(
+                                        egui::RichText::new("● unsaved changes")
+                                            .color(theme.warning())
+                                            .small(),
+                                    );
+                                }
+                            },
+                        );
+                    });
+                }
             }
         });
     });

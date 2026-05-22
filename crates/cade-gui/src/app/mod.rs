@@ -210,6 +210,9 @@ impl eframe::App for CadeApp {
                     let memory_saving = &session.memory_saving;
                     let memory_error = &session.memory_error;
                     let memory_save_notice = &session.memory_save_notice;
+                    let memory_history_open = session.memory_history_open;
+                    let memory_history = &session.memory_history;
+                    let memory_history_loading = session.memory_history_loading;
                     let checkpoints_open = session.checkpoints_open;
                     let checkpoints = &session.checkpoints;
                     let checkpoints_loading = session.checkpoints_loading;
@@ -279,6 +282,11 @@ impl eframe::App for CadeApp {
                     let skills_loading = session.skills_loading;
                     let skills_filter = &session.skills_filter;
                     let subagent_cards = &session.subagent_cards;
+                    let profiles_open = session.profiles_open;
+                    let profiles = &session.profiles;
+                    let profile_edit_name = &session.profile_edit_name;
+                    let profile_edit_url = &session.profile_edit_url;
+                    let profile_edit_token = &session.profile_edit_token;
                     // ── Connected: 3-panel layout ───────────────────
                     let _version = health.version.as_deref().unwrap_or("unknown");
 
@@ -515,6 +523,9 @@ impl eframe::App for CadeApp {
                                 memory_error.as_deref(),
                                 memory_save_notice.as_deref(),
                                 dirty,
+                                memory_history_open,
+                                memory_history,
+                                memory_history_loading,
                                 &self.theme,
                             ) {
                                 action = new_action;
@@ -901,6 +912,18 @@ impl eframe::App for CadeApp {
                             action = a;
                         }
                     }
+                    if profiles_open {
+                        if let Some(a) = overlays::profiles::render_profiles_overlay(
+                            ui.ctx(),
+                            profiles,
+                            profile_edit_name,
+                            profile_edit_url,
+                            profile_edit_token,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
 
                     // ── Inline question widget (M18) ─────────────
                     if let Some(q) = active_question {
@@ -1091,6 +1114,15 @@ impl eframe::App for CadeApp {
                 }
             }
             AppAction::SaveMemoryBlock => self.spawn_save_memory_block(),
+            AppAction::ToggleMemoryHistory => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.toggle_memory_history();
+                }
+                self.spawn_fetch_memory_history();
+            }
+            AppAction::RestoreMemoryRevision(rev_id) => {
+                self.spawn_restore_memory_revision(rev_id);
+            }
             AppAction::CloseCheckpointsOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     s.close_checkpoints_overlay();
@@ -1354,6 +1386,62 @@ impl eframe::App for CadeApp {
             AppAction::UnloadSkill(id) => {
                 self.spawn_unload_skill(id);
             }
+            AppAction::ToggleProfilesOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected(session) = s {
+                        session.profiles_open = !session.profiles_open;
+                        if session.profiles_open {
+                            if let Some(json) = crate::storage::load(crate::storage::StorageKey::Profiles) {
+                                if let Ok(p) = serde_json::from_str::<Vec<(String, String, String)>>(&json) {
+                                    session.profiles = p;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            AppAction::ConnectProfile(url, token) => {
+                self.server_url = url.clone();
+                self.login.on_input(&token);
+                self.login.on_submit();
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected(session) = s {
+                        session.profiles_open = false;
+                    }
+                }
+                self.retry(); // Disconnect current session
+                self.spawn_connect(&token);
+            }
+            AppAction::DeleteProfile(idx) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected(session) = s {
+                        if idx < session.profiles.len() {
+                            session.profiles.remove(idx);
+                            crate::storage::save(crate::storage::StorageKey::Profiles, &serde_json::to_string(&session.profiles).unwrap());
+                        }
+                    }
+                }
+            }
+            AppAction::SaveProfile(name, url, token) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected(session) = s {
+                        session.profiles.push((name, url, token));
+                        crate::storage::save(crate::storage::StorageKey::Profiles, &serde_json::to_string(&session.profiles).unwrap());
+                        session.profile_edit_name.clear();
+                        session.profile_edit_url.clear();
+                        session.profile_edit_token.clear();
+                    }
+                }
+            }
+            AppAction::SetProfileEdit(name, url, token) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected(session) = s {
+                        session.profile_edit_name = name;
+                        session.profile_edit_url = url;
+                        session.profile_edit_token = token;
+                    }
+                }
+            }
         }
     }
 }
@@ -1412,6 +1500,10 @@ pub enum AppAction {
     SetMemoryEditBuffer(String),
     /// Save the currently-edited memory block to the server.
     SaveMemoryBlock,
+    /// Toggle memory history sidebar.
+    ToggleMemoryHistory,
+    /// Restore a specific memory revision by id.
+    RestoreMemoryRevision(String),
     /// Close the checkpoints overlay.
     CloseCheckpointsOverlay,
     /// Restore a specific checkpoint by id.
@@ -1489,6 +1581,17 @@ pub enum AppAction {
     LoadSkill(String),
     /// Unload a skill by ID.
     UnloadSkill(String),
+    // ── Profiles overlay actions ───────────────────────────────
+    /// Toggle profiles overlay.
+    ToggleProfilesOverlay,
+    /// Connect to a specific profile.
+    ConnectProfile(String, String),
+    /// Delete a profile.
+    DeleteProfile(usize),
+    /// Save a profile.
+    SaveProfile(String, String, String),
+    /// Update profile edit buffer.
+    SetProfileEdit(String, String, String),
 }
 
 // ── M1: toolbar helpers ───────────────────────────────────────────────────────

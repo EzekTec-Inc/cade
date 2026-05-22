@@ -46,6 +46,9 @@ impl SessionState {
                 memory_saving: false,
                 memory_error: None,
                 memory_save_notice: None,
+                memory_history_open: false,
+                memory_history: Vec::new(),
+                memory_history_loading: false,
 
                 checkpoints_open: false,
                 checkpoints: Vec::new(),
@@ -134,6 +137,11 @@ impl SessionState {
                 skills_loading: false,
                 skills_filter: String::new(),
                 subagent_cards: Vec::new(),
+                profiles_open: false,
+                profiles: Vec::new(),
+                profile_edit_name: String::new(),
+                profile_edit_url: String::new(),
+                profile_edit_token: String::new(),
             }));
         }
     }

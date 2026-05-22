@@ -159,6 +159,44 @@ impl SessionState {
         }
     }
 
+    pub fn toggle_memory_history(&mut self) {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
+                memory_history_open,
+                memory_history_loading,
+                ..
+            } = &mut **session;
+            *memory_history_open = !*memory_history_open;
+            if *memory_history_open {
+                *memory_history_loading = true;
+            }
+        }
+    }
+
+    pub fn on_memory_history_loaded(&mut self, history: Vec<crate::api::MemoryHistoryRevision>) {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
+                memory_history,
+                memory_history_loading,
+                ..
+            } = &mut **session;
+            *memory_history = history;
+            *memory_history_loading = false;
+        }
+    }
+
+    pub fn on_memory_history_error(&mut self, err: &str) {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { 
+                memory_error,
+                memory_history_loading,
+                ..
+            } = &mut **session;
+            *memory_error = Some(err.to_string());
+            *memory_history_loading = false;
+        }
+    }
+
     /// Extract the `(label, value)` tuple currently being edited, so the
     /// spawn-helper can issue the PUT.  Returns `None` when the overlay
     /// is closed or no block is selected.

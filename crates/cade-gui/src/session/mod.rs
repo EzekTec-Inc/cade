@@ -303,6 +303,10 @@ pub struct ConnectedSession {
         /// (e.g. "Saved /project").  Cleared when the selection changes,
         /// the overlay closes, or another save starts.
         pub memory_save_notice: Option<String>,
+        
+        pub memory_history_open: bool,
+        pub memory_history: Vec<crate::api::MemoryHistoryRevision>,
+        pub memory_history_loading: bool,
 
         // ── Checkpoints overlay (M17) ────────────────────────────
         /// Whether the checkpoints overlay is visible.
@@ -456,6 +460,13 @@ pub struct ConnectedSession {
         pub skills_filter: String,
         // ── Subagent tracking ────────────────────────────────
         pub subagent_cards: Vec<SubagentCardState>,
+
+        // ── Profiles (Letta parity) ──────────────────────────
+        pub profiles_open: bool,
+        pub profiles: Vec<(String, String, String)>,
+        pub profile_edit_name: String,
+        pub profile_edit_url: String,
+        pub profile_edit_token: String,
     }
 
 

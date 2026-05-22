@@ -451,6 +451,35 @@ pub async fn put_memory_block(
     api::classify_upsert(resp.status())
 }
 
+pub async fn get_memory_history(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    label: &str,
+) -> Result<Vec<api::MemoryHistoryRevision>, ApiError> {
+    let url = api::memory_history_url(base_url, agent_id, label);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_memory_history(status, &body)
+}
+
+pub async fn restore_memory_revision(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    label: &str,
+    rev_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::memory_restore_url(base_url, agent_id, label, rev_id);
+    let resp = Request::put(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
 /// `PATCH /v1/agents/:id` — update the agent's model (only field we
 /// currently expose).  Returns `Ok(())` on 2xx, a typed error otherwise.
 pub async fn patch_agent_model(
