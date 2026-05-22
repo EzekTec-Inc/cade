@@ -720,6 +720,9 @@ impl eframe::App for CadeApp {
                             memory_error.as_deref(),
                             memory_save_notice.as_deref(),
                             dirty,
+                            memory_history_open,
+                            memory_history,
+                            memory_history_loading,
                             &self.theme,
                         ) {
                             action = new_action;

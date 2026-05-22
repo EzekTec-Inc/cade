@@ -13,7 +13,7 @@ pub fn render_profiles_overlay(
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
-    let screen = ctx.content_rect();
+    let _screen = ctx.content_rect();
     let w = 400.0;
     let h = 400.0;
 
