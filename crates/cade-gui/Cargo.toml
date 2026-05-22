@@ -17,6 +17,7 @@ cade-api-types       = { path = "../cade-api-types" }
 cade-core            = { path = "../cade-core", default-features = false }
 serde.workspace      = true
 serde_json.workspace = true
+urlencoding.workspace = true
 
 # egui is not cfg-gated so that `theme.rs` (pure colour constants + tests)
 # compiles and is testable on native targets.

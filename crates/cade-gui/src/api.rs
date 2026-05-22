@@ -440,6 +440,10 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
                 .unwrap_or("")
                 .to_string(),
         }),
+        "plan_update" => {
+            let plan = v.get("plan")?;
+            Some(StreamEvent::PlanUpdate(plan.clone()))
+        }
         _ => None,
     }
 }

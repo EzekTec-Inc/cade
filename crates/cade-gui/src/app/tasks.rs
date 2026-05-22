@@ -1093,8 +1093,8 @@ impl CadeApp {
                                     s.push_info(&message);
                                 }
                             }
-                            StreamEvent::PlanUpdate(_) => {
-                                // Plan UI not fully implemented in GUI yet
+                            StreamEvent::PlanUpdate(plan) => {
+                                s.on_plan_update(&plan);
                             }
                         }
                     }
@@ -1111,6 +1111,97 @@ impl CadeApp {
                 }
             }
 
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn spawn_search(&mut self, query: String) {
+        if query.is_empty() {
+            if let Some(s) = self.session.borrow_mut().as_mut() {
+                s.push_error("Usage: /search <query>");
+            }
+            return;
+        }
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let msg_res = crate::http_wasm::search_messages(&server_url, &token, &agent_id, &query).await;
+            let mem_res = crate::http_wasm::search_memory(&server_url, &token, &agent_id, &query).await;
+            
+            if let Some(s) = session.borrow_mut().as_mut() {
+                let mut out = format!("### Search results for '{query}'\n\n");
+                
+                let msgs_empty = msg_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);
+                let mem_empty = mem_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);
+
+                if msgs_empty && mem_empty && msg_res.is_ok() && mem_res.is_ok() {
+                    out.push_str(&format!("No results for '{query}'\n"));
+                } else {
+                    if let Ok(msgs) = msg_res {
+                        if !msgs.is_empty() {
+                            out.push_str(&format!("**── Messages ({} match(es)) ──**\n", msgs.len()));
+                            for m in msgs.iter().take(8) {
+                                let role = m["role"].as_str().unwrap_or("?");
+                                let snippet = m["snippet"].as_str().unwrap_or("").trim();
+                                let display = if snippet.is_empty() {
+                                    m["content"]["content"]
+                                        .as_str()
+                                        .or_else(|| m["content"].as_str())
+                                        .unwrap_or("")
+                                        .chars()
+                                        .take(100)
+                                        .collect::<String>()
+                                } else {
+                                    snippet.chars().take(120).collect::<String>()
+                                };
+                                let score = m["score"].as_f64().unwrap_or(0.0);
+                                out.push_str(&format!("- **[{role}]** (bm25 {score:.2}): `{display}`\n"));
+                            }
+                            out.push('\n');
+                        }
+                    }
+
+                    if let Ok(blocks) = mem_res {
+                        if !blocks.is_empty() {
+                            out.push_str(&format!("**── Memory ({} match(es)) ──**\n", blocks.len()));
+                            for b in blocks.iter().take(5) {
+                                let label = b["label"].as_str().unwrap_or("?");
+                                let snippet = b["snippet"].as_str().unwrap_or("").trim();
+                                let display: String = snippet.chars().take(120).collect();
+                                out.push_str(&format!("- **[{label}]**: `{display}`\n"));
+                            }
+                            out.push('\n');
+                        }
+                    }
+                }
+
+                let msg = cade_api_types::ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    role: "assistant".to_string(),
+                    content: serde_json::json!({"content": out}),
+                    created_at: chrono::Utc::now(),
+                    conversation_id: s.conversation_id().map(String::from),
+                };
+                
+                if let crate::session::SessionState::Connected(sess) = s {
+                    sess.messages.push(msg);
+                    sess.auto_scroll = true;
+                }
+            }
             ctx.request_repaint();
         });
     }
@@ -1433,11 +1524,20 @@ impl CadeApp {
                     s.open_stats_overlay();
                 }
             }
-            PaletteCmd::Search(_) => {
-                // Client-side message search is not yet implemented.
-                if let Some(s) = self.session.borrow_mut().as_mut() {
-                    s.push_error("/search is not yet implemented in the GUI");
+            PaletteCmd::Search(query) => {
+                let has_agent = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.selected_agent_id().map(|_| ()))
+                    .is_some();
+                if !has_agent {
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.push_error("Select an agent before searching");
+                    }
+                    return;
                 }
+                self.spawn_search(query);
             }
         }
     }

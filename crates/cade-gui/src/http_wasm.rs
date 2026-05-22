@@ -86,6 +86,42 @@ pub async fn get_messages_for_conversation(
     api::parse_messages(status, &body)
 }
 
+pub async fn search_messages(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    query: &str,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let path = format!("/v1/agents/{agent_id}/messages?q={}", urlencoding::encode(query));
+    let url = api::build_url(base_url, &path);
+    let (status, body) = send_text(&url, token).await?;
+    if status != 200 {
+        return Err(ApiError::Server { status });
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
+    Ok(v["messages"].as_array().cloned().unwrap_or_default())
+}
+
+pub async fn search_memory(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    query: &str,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let path = format!("/v1/agents/{agent_id}/memory?q={}", urlencoding::encode(query));
+    let url = api::build_url(base_url, &path);
+    let (status, body) = send_text(&url, token).await?;
+    if status != 200 {
+        return Err(ApiError::Server { status });
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
+    Ok(v["blocks"].as_array().cloned().unwrap_or_default())
+}
+
 /// `GET /v1/agents/:id/conversations` — list conversations for an agent.
 pub async fn get_conversations(
     base_url: &str,

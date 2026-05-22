@@ -39,6 +39,31 @@ impl SessionState {
         false
     }
 
+    pub fn on_plan_update(&mut self, plan: &serde_json::Value) {
+        if let Self::Connected(session) = self {
+            let crate::session::ConnectedSession { active_plan, .. } = &mut **session;
+            if plan.is_null() {
+                *active_plan = None;
+            } else {
+                let mut steps = Vec::new();
+                if let Some(arr) = plan.get("steps").and_then(|v| v.as_array()) {
+                    for s in arr {
+                        let id = s.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let is_done = s.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
+                        steps.push(PlanStep {
+                            id,
+                            description: desc,
+                            is_done,
+                        });
+                    }
+                }
+                let is_visible = plan.get("is_visible").and_then(|v| v.as_bool()).unwrap_or(true);
+                *active_plan = Some(PlanState { steps, is_visible });
+            }
+        }
+    }
+
     /// Read-only access to the active plan.
     pub fn active_plan(&self) -> Option<&PlanState> {
         if let Self::Connected(session) = self {
