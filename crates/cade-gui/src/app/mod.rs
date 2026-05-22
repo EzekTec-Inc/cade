@@ -508,9 +508,9 @@ impl eframe::App for CadeApp {
                             if let Some(new_action) = overlays::memory::render(
                                 ui,
                                 memory_blocks,
-                                *memory_selection,
+                                memory_selection,
                                 memory_edit_buffer,
-                                *memory_loading,
+                                memory_loading,
                                 *memory_saving,
                                 memory_error.as_deref(),
                                 memory_save_notice.as_deref(),
@@ -522,10 +522,10 @@ impl eframe::App for CadeApp {
                         }
                         ActivePage::Skills => {
                             if let Some(new_action) = overlays::skills::render_skills_overlay(
-                                ui.ctx(),
+                                ui,
                                 all_skills_list,
                                 loaded_skill_ids,
-                                *skills_loading,
+                                skills_loading,
                                 skills_filter,
                                 &self.theme,
                             ) {
@@ -602,8 +602,8 @@ impl eframe::App for CadeApp {
                             // ── Right panel (Split View): Live logs / subagents ──
                             let active_live_outputs: Vec<_> = live_outputs.iter().filter(|b| !b.done).collect();
                             if !active_live_outputs.is_empty() || !subagent_cards.is_empty() {
-                                egui::SidePanel::right("live_outputs_panel")
-                                    .default_width(320.0)
+                                egui::Panel::right("live_outputs_panel")
+                                    .default_size(320.0)
                                     .resizable(true)
                                     .show_inside(ui, |ui| {
                                         egui::ScrollArea::vertical()
@@ -700,7 +700,7 @@ impl eframe::App for CadeApp {
                             .get(memory_selection)
                             .is_some_and(|b| b.value != *memory_edit_buffer);
                         if let Some(new_action) = render_memory_overlay(
-                            ui.ctx(),
+                            ui,
                             memory_blocks,
                             memory_selection,
                             memory_edit_buffer,
@@ -896,18 +896,6 @@ impl eframe::App for CadeApp {
                         if let Some(a) = overlays::settings::render_reasoning_overlay(
                             ui.ctx(),
                             current_reasoning_effort,
-                            &self.theme,
-                        ) {
-                            action = a;
-                        }
-                    }
-                    if skills_overlay_open {
-                        if let Some(a) = overlays::skills::render_skills_overlay(
-                            ui.ctx(),
-                            all_skills_list,
-                            loaded_skill_ids,
-                            skills_loading,
-                            skills_filter,
                             &self.theme,
                         ) {
                             action = a;
