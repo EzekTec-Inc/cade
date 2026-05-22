@@ -12,6 +12,7 @@ pub fn render(
                     let last_usage = &session.last_usage;
                     let total_input_tokens = &session.total_input_tokens;
                     let total_output_tokens = &session.total_output_tokens;
+                    let subagent_cards = &session.subagent_cards;
         egui::Panel::bottom("cade_status_bar")
             .exact_size(18.0)
             .frame(egui::Frame::new().fill(theme.bg_surface0()))
@@ -26,6 +27,25 @@ pub fn render(
                                 .strong()
                                 .size(10.0),
                         );
+                    } else if !subagent_cards.is_empty() {
+                        let active_count = subagent_cards.iter().filter(|c| c.status != "completed" && c.status != "failed").count();
+                        if active_count > 0 {
+                            ui.label(
+                                egui::RichText::new(" 💤 DREAMING / CONSOLIDATING ")
+                                    .color(theme.teal())
+                                    .monospace()
+                                    .strong()
+                                    .size(10.0),
+                            );
+                            ui.spinner();
+                        } else {
+                            ui.label(
+                                egui::RichText::new(" ● IDLE ")
+                                    .color(theme.success())
+                                    .monospace()
+                                    .size(10.0),
+                            );
+                        }
                     } else {
                         ui.label(
                             egui::RichText::new(" ● IDLE ")

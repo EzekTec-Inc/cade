@@ -48,6 +48,8 @@ pub enum ActivePage {
     Overview,
     Chat,
     Logs,
+    Memory,
+    Skills,
 }
 
 /// Top-level eframe app for the cade-gui dashboard.
@@ -140,7 +142,7 @@ impl eframe::App for CadeApp {
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
         // ── Top toolbar (M1) ─────────────────────────────────────────────
-        if let Some(new_action) = components::header::render(ui, &mut self.active_page, &self.theme) {
+        if let Some(new_action) = components::header::render(ui, &mut self.active_page, &session_snapshot_for_toolbar, &self.theme) {
             action = new_action;
         }
 
@@ -499,6 +501,37 @@ impl eframe::App for CadeApp {
                         ActivePage::Overview => {
                             components::overview::render(ui, &session, &self.theme);
                         }
+                        ActivePage::Memory => {
+                            let dirty = memory_blocks
+                                .get(memory_selection)
+                                .is_some_and(|b| b.value != *memory_edit_buffer);
+                            if let Some(new_action) = overlays::memory::render(
+                                ui,
+                                memory_blocks,
+                                *memory_selection,
+                                memory_edit_buffer,
+                                *memory_loading,
+                                *memory_saving,
+                                memory_error.as_deref(),
+                                memory_save_notice.as_deref(),
+                                dirty,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
+                        ActivePage::Skills => {
+                            if let Some(new_action) = overlays::skills::render_skills_overlay(
+                                ui.ctx(),
+                                all_skills_list,
+                                loaded_skill_ids,
+                                *skills_loading,
+                                skills_filter,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
                         ActivePage::Logs => {
                             if let Some(new_action) = components::timeline::render(
                                 ui,
@@ -566,6 +599,39 @@ impl eframe::App for CadeApp {
                                 action = new_action;
                             }
 
+                            // ── Right panel (Split View): Live logs / subagents ──
+                            let active_live_outputs: Vec<_> = live_outputs.iter().filter(|b| !b.done).collect();
+                            if !active_live_outputs.is_empty() || !subagent_cards.is_empty() {
+                                egui::SidePanel::right("live_outputs_panel")
+                                    .default_width(320.0)
+                                    .resizable(true)
+                                    .show_inside(ui, |ui| {
+                                        egui::ScrollArea::vertical()
+                                            .id_salt("live_outputs_scroll")
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                ui.add_space(8.0);
+                                                ui.heading(egui::RichText::new("Terminal Logs").color(self.theme.primary()).size(14.0));
+                                                ui.add_space(8.0);
+                                                
+                                                for block in active_live_outputs {
+                                                    crate::app::views::render_live_output(ui, block, &self.theme);
+                                                    ui.add_space(8.0);
+                                                }
+
+                                                if !subagent_cards.is_empty() {
+                                                    ui.add_space(8.0);
+                                                    ui.heading(egui::RichText::new("Subagents").color(self.theme.primary()).size(14.0));
+                                                    ui.add_space(8.0);
+                                                    for card in subagent_cards.iter() {
+                                                        crate::app::views::render_subagent_card(ui, card, &self.theme);
+                                                        ui.add_space(8.0);
+                                                    }
+                                                }
+                                            });
+                                    });
+                            }
+
                             // ── Central area: timeline ──────────────────────
                             if let Some(new_action) = components::timeline::render(
                                 ui,
@@ -578,8 +644,8 @@ impl eframe::App for CadeApp {
                                 error_toast.as_ref(),
                                 last_usage.as_ref(),
                                 last_finish_reason.as_ref(),
-                                &[], // No live outputs in chat view
-                                &[], // No subagent cards in chat view
+                                &[], // Skip rendering live outputs inside timeline
+                                &[], // Skip rendering subagent cards inside timeline
                                 &self.theme,
                             ) {
                                 action = new_action;
