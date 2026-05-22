@@ -19,7 +19,7 @@ pub use artifacts::render_artifacts_overlay;
 pub use checkpoints::render_checkpoints_overlay;
 pub use context::render_context_overlay;
 pub use mcp::render_mcp_overlay;
-pub use memory::render_memory_overlay;
+pub use memory::render as render_memory_overlay;
 pub use menu::render_menu_overlay;
 pub use models::render_model_picker;
 pub use palette::render_palette_overlay;
