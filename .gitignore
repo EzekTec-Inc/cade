@@ -37,3 +37,4 @@ test_empty_system.sh
 *.log
 tmux-*.log
 nohup.out
+larql-workaround.md
