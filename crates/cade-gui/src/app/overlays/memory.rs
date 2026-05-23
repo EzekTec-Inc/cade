@@ -170,7 +170,6 @@ pub fn render(
                                 .desired_rows(12)
                                 .desired_width(ui.available_width())
                                 .min_size(egui::vec2(ui.available_width(), editor_height))
-                                .frame(false)
                         )
                     }).inner;
 
