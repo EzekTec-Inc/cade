@@ -588,8 +588,14 @@ impl LlmProvider for GeminiProvider {
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
                 inline_schema_refs(&mut params);
                 clean_gemini_schema(&mut params);
+                
+                let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
+                if name == "unknown_tool" {
+                    tracing::warn!("Gemini: missing tool name in schema: {}", serde_json::to_string(s).unwrap_or_default());
+                }
+
                 json!({
-                    "name": s["name"],
+                    "name": name,
                     "description": s["description"],
                     "parameters": params
                 })
