@@ -100,6 +100,47 @@ fn parse_response_with_tool_calls() {
 }
 
 #[test]
+fn parse_response_empty_arguments_is_object() {
+    let body = json!({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "empty_tool",
+                        "arguments": ""
+                    }
+                }]
+            }
+        }]
+    });
+    let resp = OpenAiProvider::parse_response(&body);
+    assert_eq!(resp.tool_calls.len(), 1);
+    assert_eq!(resp.tool_calls[0].name, "empty_tool");
+    assert!(resp.tool_calls[0].arguments.is_object());
+}
+
+#[test]
+fn parse_responses_api_empty_arguments_is_object() {
+    let body = json!({
+        "output": [{
+            "type": "function_call",
+            "call_id": "call_456",
+            "name": "empty_tool2",
+            "arguments": ""
+        }],
+        "status": "completed"
+    });
+    let resp = OpenAiProvider::parse_responses_response(&body);
+    assert_eq!(resp.tool_calls.len(), 1);
+    assert_eq!(resp.tool_calls[0].name, "empty_tool2");
+    assert!(resp.tool_calls[0].arguments.is_object());
+}
+
+#[test]
 fn parse_responses_api_text() {
     let body = json!({
         "output": [{
@@ -191,6 +232,49 @@ fn build_tools_wraps_in_function_type() -> Result<()> {
     assert_eq!(arr[0]["type"], "function");
     assert_eq!(arr[0]["function"]["name"], "bash");
 
+    Ok(())
+}
+
+#[test]
+fn build_tools_enables_strict_structured_outputs() -> Result<()> {
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools: vec![json!({
+            "name": "bash",
+            "description": "Run a command",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}
+        })],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+    let tools = OpenAiProvider::build_tools(&req);
+    let arr = tools.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr[0]["function"]["strict"], true);
+    Ok(())
+}
+
+#[test]
+fn build_responses_tools_wraps_correctly_with_strict() -> Result<()> {
+    let req = CompletionRequest {
+        model: "gpt-4.5-preview".into(),
+        messages: vec![],
+        tools: vec![json!({
+            "name": "bash",
+            "description": "Run a command",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}
+        })],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+    let tools = OpenAiProvider::build_responses_tools(&req);
+    let arr = tools.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["type"], "function");
+    assert_eq!(arr[0]["function"]["name"], "bash");
+    assert_eq!(arr[0]["function"]["description"], "Run a command");
+    assert_eq!(arr[0]["function"]["strict"], true);
+    assert!(arr[0]["function"]["parameters"].is_object());
     Ok(())
 }
 
@@ -410,7 +494,7 @@ fn build_tools_preserves_load_skill_when_truncating() -> Result<()> {
     );
     assert!(
         arr2.iter()
-            .any(|tool| tool.get("name").and_then(|name| name.as_str()) == Some("load_skill")),
+            .any(|tool| tool.get("function").and_then(|f| f.get("name")).and_then(|name| name.as_str()) == Some("load_skill")),
         "build_responses_tools should preserve load_skill inside the 128-tool cap"
     );
 

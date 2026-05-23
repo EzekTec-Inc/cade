@@ -297,10 +297,11 @@ impl OpenAiProvider {
             .map(|tc| LlmToolCall {
                 id: tc["id"].as_str().unwrap_or("").to_string(),
                 name: tc["function"]["name"].as_str().unwrap_or("").to_string(),
-                arguments: serde_json::from_str(
-                    tc["function"]["arguments"].as_str().unwrap_or("{}"),
-                )
-                .unwrap_or_default(),
+                arguments: {
+                    let arg_str = tc["function"]["arguments"].as_str().unwrap_or("{}").trim();
+                    let arg_str = if arg_str.is_empty() { "{}" } else { arg_str };
+                    serde_json::from_str(arg_str).unwrap_or_else(|_| json!({}))
+                },
                 thought_signature: None,
             })
             .collect();
@@ -321,6 +322,7 @@ impl OpenAiProvider {
                     .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                crate::utils::inline_schema_refs(&mut params);
                 clean_openai_schema(&mut params);
                 seal_top_level_additional_properties(&mut params);
                 json!({
@@ -328,7 +330,8 @@ impl OpenAiProvider {
                     "function": {
                         "name": s["name"],
                         "description": s["description"],
-                        "parameters": params
+                        "parameters": params,
+                        "strict": true
                     }
                 })
             })
@@ -346,13 +349,17 @@ impl OpenAiProvider {
                     .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                crate::utils::inline_schema_refs(&mut params);
                 clean_openai_schema(&mut params);
                 seal_top_level_additional_properties(&mut params);
                 json!({
                     "type": "function",
-                    "name": s["name"],
-                    "description": s["description"],
-                    "parameters": params
+                    "function": {
+                        "name": s["name"],
+                        "description": s["description"],
+                        "parameters": params,
+                        "strict": true
+                    }
                 })
             })
             .collect();
@@ -423,8 +430,9 @@ impl OpenAiProvider {
                     finish_reason = "tool_calls".to_string();
                     let name = item["name"].as_str().unwrap_or("").to_string();
                     let id = item["call_id"].as_str().unwrap_or("").to_string();
-                    let args_str = item["arguments"].as_str().unwrap_or("{}");
-                    let arguments = serde_json::from_str(args_str).unwrap_or_default();
+                    let args_str = item["arguments"].as_str().unwrap_or("{}").trim();
+                    let args_str = if args_str.is_empty() { "{}" } else { args_str };
+                    let arguments = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
                     tool_calls.push(LlmToolCall {
                         id,
                         name,
