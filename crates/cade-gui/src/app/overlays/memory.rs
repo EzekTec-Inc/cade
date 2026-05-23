@@ -87,59 +87,51 @@ pub fn render(
         return result;
     }
 
-    // ── Split: left list, right editor ─────────────────
-    let body_height = ui.available_height() - 40.0;
-    let list_width = 180.0;
+    // ── Horizontal Layout: Navigation | Editor | History ──
+    let body_height = ui.available_height() - 10.0;
+    let list_width = 220.0;
+    let history_width = 320.0;
 
     ui.horizontal(|ui| {
-        // Left column — block list
+        // 1. Left column — block list grouped by functions/tiers
         ui.allocate_ui(egui::vec2(list_width, body_height), |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("mem_block_list")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for (idx, block) in blocks.iter().enumerate() {
-                        let is_sel = idx == selection;
-                        let bg = if is_sel {
-                            theme.bg_surface2()
-                        } else {
-                            theme.bg_surface0()
-                        };
-                        let resp = egui::Frame::NONE
-                            .fill(bg)
-                            .corner_radius(egui::CornerRadius::same(4))
-                            .inner_margin(egui::Margin::symmetric(8, 6))
-                            .show(ui, |ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(&block.label)
-                                            .color(theme.primary())
-                                            .monospace()
-                                            .strong(),
-                                    );
-                                    if let Some(tier) = &block.tier {
-                                        ui.label(
-                                            egui::RichText::new(tier)
-                                                .color(theme.text_muted())
-                                                .small(),
-                                        );
-                                    }
-                                });
-                            })
-                            .response
-                            .interact(egui::Sense::click());
-                        if resp.clicked() && !is_sel {
-                            result = Some(AppAction::SelectMemoryBlock(idx));
+                    // Group blocks into Active (short) and Archived (long)
+                    let active_blocks: Vec<_> = blocks.iter().enumerate().filter(|(_, b)| b.tier.as_deref() == Some("short") || b.tier.is_none()).collect();
+                    let archived_blocks: Vec<_> = blocks.iter().enumerate().filter(|(_, b)| b.tier.as_deref() == Some("long")).collect();
+
+                    if !active_blocks.is_empty() {
+                        ui.label(egui::RichText::new("Active Memory").color(theme.text_dim()).strong().size(11.0));
+                        ui.add_space(4.0);
+                        for (idx, block) in active_blocks {
+                            render_block_item(ui, idx, block, selection, theme, &mut result);
                         }
-                        ui.add_space(2.0);
+                        ui.add_space(10.0);
+                    }
+
+                    if !archived_blocks.is_empty() {
+                        ui.label(egui::RichText::new("Archived / Long-term").color(theme.text_dim()).strong().size(11.0));
+                        ui.add_space(4.0);
+                        for (idx, block) in archived_blocks {
+                            render_block_item(ui, idx, block, selection, theme, &mut result);
+                        }
                     }
                 });
         });
 
         ui.separator();
 
-        // Right column — editor
-        ui.vertical(|ui| {
+        // 2. Middle column — editor
+        let middle_width = if history_open {
+            ui.available_width() - history_width - 16.0
+        } else {
+            ui.available_width()
+        };
+
+        ui.allocate_ui(egui::vec2(middle_width, body_height), |ui| {
             let selected = blocks.get(selection);
             if let Some(block) = selected {
                 ui.horizontal(|ui| {
@@ -147,11 +139,13 @@ pub fn render(
                         egui::RichText::new(format!("/{}", block.label))
                             .color(theme.text_primary())
                             .monospace()
-                            .strong(),
+                            .strong()
+                            .size(16.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn_label = if history_open { "Editor" } else { "History" };
-                        if ui.button(btn_label).clicked() {
+                        let btn_label = if history_open { "Hide History" } else { "Show History" };
+                        let btn = egui::Button::new(btn_label).fill(theme.bg_surface2());
+                        if ui.add(btn).clicked() {
                             result = Some(AppAction::ToggleMemoryHistory);
                         }
                     });
@@ -160,86 +154,142 @@ pub fn render(
                 if let Some(d) = &block.description {
                     ui.label(egui::RichText::new(d).color(theme.text_muted()).small());
                 }
-                ui.add_space(4.0);
+                ui.add_space(12.0);
 
-                if history_open {
-                    if history_loading {
-                        ui.spinner();
-                    } else if history.is_empty() {
-                        ui.label(egui::RichText::new("No history found for this block.").color(theme.text_muted()).italics());
-                    } else {
-                        egui::ScrollArea::vertical().id_salt("mem_history_list").show(ui, |ui| {
-                            for rev in history {
-                                egui::Frame::NONE
-                                    .fill(theme.bg_surface2())
-                                    .corner_radius(egui::CornerRadius::same(4))
-                                    .inner_margin(8.0)
-                                    .show(ui, |ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new(format!("Revision {}", &rev.id[..8])).strong());
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if ui.button("Restore").clicked() {
-                                                    result = Some(AppAction::RestoreMemoryRevision(rev.id.clone()));
-                                                }
-                                            });
-                                        });
-                                        ui.add_space(4.0);
-                                        ui.label(egui::RichText::new(&rev.value).monospace());
-                                    });
-                                ui.add_space(4.0);
-                            }
-                        });
-                    }
-                } else {
-                    let mut buf = edit_buffer.to_string();
-                    let editor_height = body_height - 70.0;
-                    let resp = ui.add(
-                        egui::TextEdit::multiline(&mut buf)
-                            .desired_rows(12)
-                            .desired_width(ui.available_width())
-                            .min_size(egui::vec2(ui.available_width(), editor_height)),
-                    );
-                    if resp.changed() {
-                        result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));
-                    }
+                let mut buf = edit_buffer.to_string();
+                let editor_height = body_height - 80.0;
+                
+                let resp = egui::Frame::NONE
+                    .fill(theme.bg_input())
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .stroke(egui::Stroke::new(1.0, theme.border_base()))
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut buf)
+                                .desired_rows(12)
+                                .desired_width(ui.available_width())
+                                .min_size(egui::vec2(ui.available_width(), editor_height))
+                                .frame(false)
+                        )
+                    }).inner;
 
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        let save_label = if saving {
-                            "Saving…"
-                        } else if dirty {
-                            "Save"
-                        } else {
-                            "Saved"
-                        };
-                        let save = egui::Button::new(save_label);
-                        if ui
-                            .add_enabled(!saving && dirty, save)
-                            .on_hover_text("Ctrl+S")
-                            .clicked()
-                        {
-                            result = Some(AppAction::SaveMemoryBlock);
-                        }
-                        if saving {
-                            ui.spinner();
-                        }
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if dirty {
-                                    ui.label(
-                                        egui::RichText::new("● unsaved changes")
-                                            .color(theme.warning())
-                                            .small(),
-                                    );
-                                }
-                            },
-                        );
-                    });
+                if resp.changed() {
+                    result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));
                 }
+
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let save_label = if saving {
+                        "Saving…"
+                    } else if dirty {
+                        "Save Changes"
+                    } else {
+                        "Saved"
+                    };
+                    
+                    let save_btn = egui::Button::new(egui::RichText::new(save_label).strong())
+                        .fill(if dirty { theme.success() } else { theme.bg_surface2() });
+                        
+                    if ui.add_enabled(!saving && dirty, save_btn).on_hover_text("Ctrl+S").clicked() {
+                        result = Some(AppAction::SaveMemoryBlock);
+                    }
+                    
+                    if saving {
+                        ui.spinner();
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if dirty {
+                            ui.label(egui::RichText::new("● unsaved changes").color(theme.warning()).small());
+                        }
+                    });
+                });
             }
         });
+
+        // 3. Right column — history
+        if history_open {
+            ui.separator();
+            ui.allocate_ui(egui::vec2(ui.available_width(), body_height), |ui| {
+                ui.label(egui::RichText::new("Versioning & History").color(theme.primary()).strong());
+                ui.add_space(8.0);
+                
+                if history_loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Loading revisions...").color(theme.text_muted()).small());
+                    });
+                } else if history.is_empty() {
+                    ui.label(egui::RichText::new("No history found for this block.").color(theme.text_muted()).italics());
+                } else {
+                    egui::ScrollArea::vertical().id_salt("mem_history_list").auto_shrink([false, false]).show(ui, |ui| {
+                        for rev in history {
+                            egui::Frame::NONE
+                                .fill(theme.bg_surface2())
+                                .corner_radius(egui::CornerRadius::same(6))
+                                .stroke(egui::Stroke::new(1.0, theme.border_base()))
+                                .inner_margin(8.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(format!("Rev {}", &rev.id[..8])).strong().color(theme.text_primary()));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if ui.button("Restore").clicked() {
+                                                result = Some(AppAction::RestoreMemoryRevision(rev.id.clone()));
+                                            }
+                                        });
+                                    });
+                                    ui.add_space(6.0);
+                                    let preview = if rev.value.len() > 150 {
+                                        format!("{}...", &rev.value[..150])
+                                    } else {
+                                        rev.value.clone()
+                                    };
+                                    ui.label(egui::RichText::new(&preview).monospace().color(theme.text_muted()).size(10.0));
+                                });
+                            ui.add_space(6.0);
+                        }
+                    });
+                }
+            });
+        }
     });
 
     result
+}
+
+fn render_block_item(
+    ui: &mut egui::Ui,
+    idx: usize,
+    block: &crate::api::MemoryBlock,
+    selection: usize,
+    theme: &crate::theme::ThemeColors,
+    result: &mut Option<AppAction>,
+) {
+    let is_sel = idx == selection;
+    let bg = if is_sel {
+        theme.bg_surface2()
+    } else {
+        theme.bg_surface0()
+    };
+    let resp = egui::Frame::NONE
+        .fill(bg)
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&block.label)
+                        .color(if is_sel { theme.text_primary() } else { theme.primary() })
+                        .monospace()
+                        .strong(),
+                );
+            });
+        })
+        .response
+        .interact(egui::Sense::click());
+        
+    if resp.clicked() && !is_sel {
+        *result = Some(AppAction::SelectMemoryBlock(idx));
+    }
+    ui.add_space(2.0);
 }
