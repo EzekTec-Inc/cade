@@ -379,9 +379,11 @@ impl GeminiProvider {
                         let mut part = serde_json::Map::new();
                         part.insert("functionCall".to_string(), Value::Object(fc));
                         if let Some(sig) = &tc.thought_signature {
-                            part.insert("thoughtSignature".to_string(), json!(sig));
+                            part.insert("thought_signature".to_string(), json!(sig));
                         } else {
-                            part.insert("thoughtSignature".to_string(), json!(""));
+                            // Gemini 2.5 Pro requires a thought signature for tool calls to work correctly.
+                            // If missing (e.g. injected or from older history), use the bypass value.
+                            part.insert("thought_signature".to_string(), json!("skip_thought_signature_validator"));
                         }
                         all_parts.push(Value::Object(part));
                     }
