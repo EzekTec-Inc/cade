@@ -69,7 +69,8 @@ impl Editor {
 
     pub fn set_text(&mut self, text: String) {
         self.textarea = TextArea::from(text.lines().map(|s| s.to_string()));
-        self.textarea.set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
+        self.textarea
+            .set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
     }
 
     pub fn cursor_pos(&self) -> usize {
@@ -129,7 +130,8 @@ impl Editor {
 
     pub fn clear(&mut self) {
         self.textarea = TextArea::default();
-        self.textarea.set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
+        self.textarea
+            .set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
     }
 
     pub fn snapshot(&mut self) {

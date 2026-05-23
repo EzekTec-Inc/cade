@@ -7,13 +7,13 @@ impl SessionState {
     /// previous error; caller is responsible for spawning the fetch.
     pub fn open_memory_overlay(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_open,
-            memory_loading,
-            memory_error,
-            memory_save_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_open,
+                memory_loading,
+                memory_error,
+                memory_save_notice,
+                ..
+            } = &mut **session;
             *memory_open = true;
             *memory_loading = true;
             *memory_error = None;
@@ -25,13 +25,13 @@ impl SessionState {
     /// instant) but does reset the edit buffer + error.
     pub fn close_memory_overlay(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_open,
-            memory_saving,
-            memory_error,
-            memory_save_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_open,
+                memory_saving,
+                memory_error,
+                memory_save_notice,
+                ..
+            } = &mut **session;
             *memory_open = false;
             *memory_saving = false;
             *memory_error = None;
@@ -41,24 +41,24 @@ impl SessionState {
 
     /// Whether the memory overlay is currently open.
     pub fn is_memory_open(&self) -> bool {
-        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession { 
-                memory_open: true,
-                ..
-             }))
+        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession {
+           memory_open: true,
+           ..
+        }))
     }
 
     /// Feed the result of a successful memory fetch.  Resets selection
     /// to 0 and seeds the edit buffer with the first block.
     pub fn on_memory_loaded(&mut self, blocks: Vec<crate::api::MemoryBlock>) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_blocks,
-            memory_selection,
-            memory_edit_buffer,
-            memory_loading,
-            memory_error,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_blocks,
+                memory_selection,
+                memory_edit_buffer,
+                memory_loading,
+                memory_error,
+                ..
+            } = &mut **session;
             *memory_loading = false;
             *memory_error = None;
             *memory_selection = 0;
@@ -70,13 +70,13 @@ impl SessionState {
     /// Feed an error from the memory fetch.  Clears the loading flag.
     pub fn on_memory_error(&mut self, err: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_loading,
-            memory_saving,
-            memory_error,
-            memory_save_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_loading,
+                memory_saving,
+                memory_error,
+                memory_save_notice,
+                ..
+            } = &mut **session;
             *memory_loading = false;
             *memory_saving = false;
             *memory_error = Some(err.to_string());
@@ -89,13 +89,13 @@ impl SessionState {
     /// Returns `true` if the selection changed, `false` otherwise.
     pub fn select_memory_block(&mut self, idx: usize) -> bool {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_blocks,
-            memory_selection,
-            memory_edit_buffer,
-            memory_save_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_blocks,
+                memory_selection,
+                memory_edit_buffer,
+                memory_save_notice,
+                ..
+            } = &mut **session;
             if idx >= memory_blocks.len() {
                 return false;
             }
@@ -114,9 +114,9 @@ impl SessionState {
     /// Replace the edit-buffer contents — called on every TextEdit change.
     pub fn set_memory_edit_buffer(&mut self, value: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_edit_buffer, ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_edit_buffer, ..
+            } = &mut **session;
             *memory_edit_buffer = value.to_string();
         }
     }
@@ -124,12 +124,12 @@ impl SessionState {
     /// Mark a save request as in-flight.
     pub fn on_memory_save_start(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_saving,
-            memory_error,
-            memory_save_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_saving,
+                memory_error,
+                memory_save_notice,
+                ..
+            } = &mut **session;
             *memory_saving = true;
             *memory_error = None;
             *memory_save_notice = None;
@@ -141,15 +141,15 @@ impl SessionState {
     /// transient success notice for the overlay (e.g. "Saved /project").
     pub fn on_memory_save_ok(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            memory_blocks,
-            memory_selection,
-            memory_edit_buffer,
-            memory_saving,
-            memory_error,
-            memory_save_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                memory_blocks,
+                memory_selection,
+                memory_edit_buffer,
+                memory_saving,
+                memory_error,
+                memory_save_notice,
+                ..
+            } = &mut **session;
             *memory_saving = false;
             *memory_error = None;
             if let Some(b) = memory_blocks.get_mut(*memory_selection) {
@@ -161,7 +161,7 @@ impl SessionState {
 
     pub fn toggle_memory_history(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
+            let crate::session::ConnectedSession {
                 memory_history_open,
                 memory_history_loading,
                 ..
@@ -175,7 +175,7 @@ impl SessionState {
 
     pub fn on_memory_history_loaded(&mut self, history: Vec<crate::api::MemoryHistoryRevision>) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
+            let crate::session::ConnectedSession {
                 memory_history,
                 memory_history_loading,
                 ..
@@ -187,7 +187,7 @@ impl SessionState {
 
     pub fn on_memory_history_error(&mut self, err: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
+            let crate::session::ConnectedSession {
                 memory_error,
                 memory_history_loading,
                 ..
@@ -203,7 +203,8 @@ impl SessionState {
     pub fn memory_selected_label_value(&self) -> Option<(String, String)> {
         if let Self::Connected(session) = self {
             if session.memory_open {
-                session.memory_blocks
+                session
+                    .memory_blocks
                     .get(session.memory_selection)
                     .map(|b| (b.label.clone(), session.memory_edit_buffer.clone()))
             } else {

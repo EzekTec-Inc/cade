@@ -23,7 +23,7 @@ impl Repl {
             .await?
         {
             Some(cade_tui::mcp_picker::McpAction::Toggle(key)) => {
-                                let mut s = self.settings.lock();
+                let mut s = self.settings.lock();
                 if let Some(server) = s.local_settings_mut().mcp_servers.get_mut(&key) {
                     server.disabled = !server.disabled;
                     let _ = s.save_local();
@@ -38,7 +38,7 @@ impl Repl {
                 self.do_settings_reload().await;
             }
             Some(cade_tui::mcp_picker::McpAction::Delete(key)) => {
-                                let mut s = self.settings.lock();
+                let mut s = self.settings.lock();
                 if s.local_settings_mut().mcp_servers.remove(&key).is_some() {
                     let _ = s.save_local();
                 } else if s.project_settings_mut().mcp_servers.remove(&key).is_some() {
@@ -71,7 +71,11 @@ impl Repl {
             }
             Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
                 let s = self.settings.lock();
-                let config = s.merged_mcp_servers().get(&key).cloned().unwrap_or_default();
+                let config = s
+                    .merged_mcp_servers()
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default();
                 drop(s);
                 let tmpl = serde_json::json!({ key: config });
                 let mut app = self.app.lock();

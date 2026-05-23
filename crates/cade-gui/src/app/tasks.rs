@@ -415,14 +415,20 @@ impl CadeApp {
                 Some(pair) => pair,
                 None => return,
             };
-            (s.server_url().to_string(), s.token().to_string(), agent_id, label)
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                label,
+            )
         };
 
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::get_memory_history(&server_url, &token, &agent_id, &label).await {
+            match crate::http_wasm::get_memory_history(&server_url, &token, &agent_id, &label).await
+            {
                 Ok(history) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
                         s.on_memory_history_loaded(history);
@@ -453,18 +459,33 @@ impl CadeApp {
                 Some(pair) => pair,
                 None => return,
             };
-            (s.server_url().to_string(), s.token().to_string(), agent_id, label)
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                label,
+            )
         };
 
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();
-        
+
         // We capture 'self' async calls via channel or just use another spawn to fetch the memory again
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::restore_memory_revision(&server_url, &token, &agent_id, &label, &rev_id).await {
+            match crate::http_wasm::restore_memory_revision(
+                &server_url,
+                &token,
+                &agent_id,
+                &label,
+                &rev_id,
+            )
+            .await
+            {
                 Ok(()) => {
                     // Refetch memory to reflect restoration
-                    if let Ok(blocks) = crate::http_wasm::get_memory(&server_url, &token, &agent_id).await {
+                    if let Ok(blocks) =
+                        crate::http_wasm::get_memory(&server_url, &token, &agent_id).await
+                    {
                         if let Some(s) = session.borrow_mut().as_mut() {
                             s.on_memory_loaded(blocks);
                         }
@@ -1219,12 +1240,14 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            let msg_res = crate::http_wasm::search_messages(&server_url, &token, &agent_id, &query).await;
-            let mem_res = crate::http_wasm::search_memory(&server_url, &token, &agent_id, &query).await;
-            
+            let msg_res =
+                crate::http_wasm::search_messages(&server_url, &token, &agent_id, &query).await;
+            let mem_res =
+                crate::http_wasm::search_memory(&server_url, &token, &agent_id, &query).await;
+
             if let Some(s) = session.borrow_mut().as_mut() {
                 let mut out = format!("### Search results for '{query}'\n\n");
-                
+
                 let msgs_empty = msg_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);
                 let mem_empty = mem_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);
 
@@ -1233,7 +1256,10 @@ impl CadeApp {
                 } else {
                     if let Ok(msgs) = msg_res {
                         if !msgs.is_empty() {
-                            out.push_str(&format!("**── Messages ({} match(es)) ──**\n", msgs.len()));
+                            out.push_str(&format!(
+                                "**── Messages ({} match(es)) ──**\n",
+                                msgs.len()
+                            ));
                             for m in msgs.iter().take(8) {
                                 let role = m["role"].as_str().unwrap_or("?");
                                 let snippet = m["snippet"].as_str().unwrap_or("").trim();
@@ -1249,7 +1275,9 @@ impl CadeApp {
                                     snippet.chars().take(120).collect::<String>()
                                 };
                                 let score = m["score"].as_f64().unwrap_or(0.0);
-                                out.push_str(&format!("- **[{role}]** (bm25 {score:.2}): `{display}`\n"));
+                                out.push_str(&format!(
+                                    "- **[{role}]** (bm25 {score:.2}): `{display}`\n"
+                                ));
                             }
                             out.push('\n');
                         }
@@ -1257,7 +1285,10 @@ impl CadeApp {
 
                     if let Ok(blocks) = mem_res {
                         if !blocks.is_empty() {
-                            out.push_str(&format!("**── Memory ({} match(es)) ──**\n", blocks.len()));
+                            out.push_str(&format!(
+                                "**── Memory ({} match(es)) ──**\n",
+                                blocks.len()
+                            ));
                             for b in blocks.iter().take(5) {
                                 let label = b["label"].as_str().unwrap_or("?");
                                 let snippet = b["snippet"].as_str().unwrap_or("").trim();
@@ -1275,7 +1306,7 @@ impl CadeApp {
                     content: serde_json::json!({"content": out}),
                     conversation_id: s.conversation_id().map(String::from),
                 };
-                
+
                 if let crate::session::SessionState::Connected(sess) = s {
                     sess.messages.push(msg);
                     sess.auto_scroll = true;
@@ -1412,8 +1443,8 @@ impl CadeApp {
             PaletteCmd::Providers => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let providers_open = &mut session.providers_open;
-            let providers_loading = &mut session.providers_loading;
+                        let providers_open = &mut session.providers_open;
+                        let providers_loading = &mut session.providers_loading;
                         *providers_open = true;
                         *providers_loading = true;
                     }
@@ -1423,7 +1454,7 @@ impl CadeApp {
             PaletteCmd::Permissions => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let permissions_open = &mut session.permissions_open;
+                        let permissions_open = &mut session.permissions_open;
                         *permissions_open = true;
                     }
                 }
@@ -1431,7 +1462,7 @@ impl CadeApp {
             PaletteCmd::Theme => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let theme_picker_open = &mut session.theme_picker_open;
+                        let theme_picker_open = &mut session.theme_picker_open;
                         *theme_picker_open = true;
                     }
                 }
@@ -1439,7 +1470,7 @@ impl CadeApp {
             PaletteCmd::Hooks => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let hooks_open = &mut session.hooks_open;
+                        let hooks_open = &mut session.hooks_open;
                         *hooks_open = true;
                     }
                 }
@@ -1447,7 +1478,7 @@ impl CadeApp {
             PaletteCmd::Mode(_mode_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let permissions_open = &mut session.permissions_open;
+                        let permissions_open = &mut session.permissions_open;
                         *permissions_open = true;
                     }
                 }
@@ -1455,7 +1486,7 @@ impl CadeApp {
             PaletteCmd::Toolset(_ts_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let toolset_open = &mut session.toolset_open;
+                        let toolset_open = &mut session.toolset_open;
                         *toolset_open = true;
                     }
                 }
@@ -1463,7 +1494,7 @@ impl CadeApp {
             PaletteCmd::Pricing => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let pricing_open = &mut session.pricing_open;
+                        let pricing_open = &mut session.pricing_open;
                         *pricing_open = true;
                     }
                 }
@@ -1471,7 +1502,7 @@ impl CadeApp {
             PaletteCmd::Backend(_be_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let backend_open = &mut session.backend_open;
+                        let backend_open = &mut session.backend_open;
                         *backend_open = true;
                     }
                 }
@@ -1479,7 +1510,7 @@ impl CadeApp {
             PaletteCmd::Reasoning(_level_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let reasoning_open = &mut session.reasoning_open;
+                        let reasoning_open = &mut session.reasoning_open;
                         *reasoning_open = true;
                     }
                 }
@@ -1527,8 +1558,8 @@ impl CadeApp {
             PaletteCmd::Skills(_) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
-            let skills_overlay_open = &mut session.skills_overlay_open;
-            let skills_loading = &mut session.skills_loading;
+                        let skills_overlay_open = &mut session.skills_overlay_open;
+                        let skills_loading = &mut session.skills_loading;
                         *skills_overlay_open = true;
                         *skills_loading = true;
                     }

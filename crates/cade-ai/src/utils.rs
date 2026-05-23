@@ -93,18 +93,18 @@ pub fn clean_openai_schema(v: &mut Value) {
             {
                 map.insert("properties".to_string(), json!({}));
             }
-            
+
             // Strip keys OpenAI doesn't support in tool schemas
             map.remove("$schema");
             map.remove("title");
             map.remove("x-google-enum-descriptions");
             map.remove("x-google-enum-deprecated");
             map.remove("x-google-identifier");
-            
+
             // Strip JSON schema references and definitions (inline_schema_refs should be called first)
             map.remove("$ref");
             map.remove("$defs");
-            
+
             // OpenAI Structured Outputs strictly reject anyOf, allOf, oneOf
             if map.contains_key("anyOf") || map.contains_key("allOf") || map.contains_key("oneOf") {
                 map.remove("anyOf");

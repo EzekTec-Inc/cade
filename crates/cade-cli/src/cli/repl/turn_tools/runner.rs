@@ -538,7 +538,7 @@ impl Repl {
                         }
                     });
                 }
-                
+
                 let mut join_fut = Box::pin(futures::future::join_all(handles));
                 let join_results = loop {
                     tokio::select! {

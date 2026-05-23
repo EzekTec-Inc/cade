@@ -99,7 +99,8 @@ impl CadeApp {
         if !config.api_key.is_empty() {
             login.on_input(&config.api_key);
             login.on_submit();
-        } else if let Some(saved_token) = crate::storage::load(crate::storage::StorageKey::ApiToken) {
+        } else if let Some(saved_token) = crate::storage::load(crate::storage::StorageKey::ApiToken)
+        {
             if !saved_token.is_empty() {
                 login.on_input(&saved_token);
                 login.on_submit();
@@ -142,7 +143,12 @@ impl eframe::App for CadeApp {
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
         // ── Top toolbar (M1) ─────────────────────────────────────────────
-        if let Some(new_action) = components::header::render(ui, &mut self.active_page, &session_snapshot_for_toolbar, &self.theme) {
+        if let Some(new_action) = components::header::render(
+            ui,
+            &mut self.active_page,
+            &session_snapshot_for_toolbar,
+            &self.theme,
+        ) {
             action = new_action;
         }
 
@@ -624,7 +630,7 @@ impl eframe::App for CadeApp {
                                                 ui.add_space(8.0);
                                                 ui.heading(egui::RichText::new("Terminal Logs").color(self.theme.primary()).size(14.0));
                                                 ui.add_space(8.0);
-                                                
+
                                                 for block in active_live_outputs {
                                                     crate::app::views::render_live_output(ui, block, &self.theme);
                                                     ui.add_space(8.0);
@@ -1394,8 +1400,12 @@ impl eframe::App for CadeApp {
                     if let SessionState::Connected(session) = s {
                         session.profiles_open = !session.profiles_open;
                         if session.profiles_open {
-                            if let Some(json) = crate::storage::load(crate::storage::StorageKey::Profiles) {
-                                if let Ok(p) = serde_json::from_str::<Vec<(String, String, String)>>(&json) {
+                            if let Some(json) =
+                                crate::storage::load(crate::storage::StorageKey::Profiles)
+                            {
+                                if let Ok(p) =
+                                    serde_json::from_str::<Vec<(String, String, String)>>(&json)
+                                {
                                     session.profiles = p;
                                 }
                             }
@@ -1420,7 +1430,10 @@ impl eframe::App for CadeApp {
                     if let SessionState::Connected(session) = s {
                         if idx < session.profiles.len() {
                             session.profiles.remove(idx);
-                            crate::storage::save(crate::storage::StorageKey::Profiles, &serde_json::to_string(&session.profiles).unwrap());
+                            crate::storage::save(
+                                crate::storage::StorageKey::Profiles,
+                                &serde_json::to_string(&session.profiles).unwrap(),
+                            );
                         }
                     }
                 }
@@ -1429,7 +1442,10 @@ impl eframe::App for CadeApp {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected(session) = s {
                         session.profiles.push((name, url, token));
-                        crate::storage::save(crate::storage::StorageKey::Profiles, &serde_json::to_string(&session.profiles).unwrap());
+                        crate::storage::save(
+                            crate::storage::StorageKey::Profiles,
+                            &serde_json::to_string(&session.profiles).unwrap(),
+                        );
                         session.profile_edit_name.clear();
                         session.profile_edit_url.clear();
                         session.profile_edit_token.clear();

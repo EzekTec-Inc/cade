@@ -158,15 +158,18 @@ async fn async_main() -> Result<()> {
     // the LLM context builder can see them without relying on the CLI.
     {
         use cade_agent::agent::tools::build_python_stub_from_schema;
-        use cade_agent::tools::catalog::{meta_schemas_for_capabilities, native_schemas_for_capabilities};
+        use cade_agent::tools::catalog::{
+            meta_schemas_for_capabilities, native_schemas_for_capabilities,
+        };
         use cade_store::sqlite::ToolRow;
-        
+
         let caps = cade_core::capabilities::CapabilitySet::full();
         let meta_schemas = meta_schemas_for_capabilities(&caps);
-        let native_schemas = native_schemas_for_capabilities(cade_core::toolsets::Toolset::Default, &caps);
-        
+        let native_schemas =
+            native_schemas_for_capabilities(cade_core::toolsets::Toolset::Default, &caps);
+
         let mut total_registered = 0;
-        
+
         for schema in meta_schemas {
             let name = schema["name"].as_str().unwrap_or("").to_string();
             let description = schema["description"].as_str().map(String::from);
@@ -184,7 +187,7 @@ async fn async_main() -> Result<()> {
                 total_registered += 1;
             }
         }
-        
+
         for schema in native_schemas {
             let name = schema["name"].as_str().unwrap_or("").to_string();
             let description = schema["description"].as_str().unwrap_or("").to_string();
@@ -203,7 +206,7 @@ async fn async_main() -> Result<()> {
                 total_registered += 1;
             }
         }
-        
+
         let mcp_schemas = mcp.all_tool_schemas().await;
         for mut schema in mcp_schemas {
             let name = schema["name"].as_str().unwrap_or("").to_string();
@@ -212,13 +215,17 @@ async fn async_main() -> Result<()> {
             if let Some(obj) = schema.as_object_mut() {
                 obj.remove("_is_core");
             }
-            
+
             let mut tags = vec!["cade".to_string(), "mcp".to_string()];
             if is_core {
                 tags.push("core_mcp".to_string());
             }
-            
-            let stub = build_python_stub_from_schema(&name, description.as_deref().unwrap_or(""), &schema["parameters"]);
+
+            let stub = build_python_stub_from_schema(
+                &name,
+                description.as_deref().unwrap_or(""),
+                &schema["parameters"],
+            );
             let row = ToolRow {
                 id: format!("tool-{}", uuid::Uuid::new_v4()),
                 name: name.clone(),
@@ -233,8 +240,11 @@ async fn async_main() -> Result<()> {
                 total_registered += 1;
             }
         }
-        
-        tracing::info!("Pre-registered {} total tools into the database at startup", total_registered);
+
+        tracing::info!(
+            "Pre-registered {} total tools into the database at startup",
+            total_registered
+        );
     }
 
     let state = AppState {

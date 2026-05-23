@@ -446,7 +446,7 @@ pub(crate) fn render_frame(
         textarea.set_style(Style::default());
 
         frame.render_widget(&*textarea, input_chunks[1]);
-        
+
         // Calculate visual cursor taking text wrapping into account to prevent hardware shadow cursors.
         let (visual_x, visual_y) = super::layout::cursor::calc_visual_cursor(
             &input,
@@ -459,12 +459,12 @@ pub(crate) fn render_frame(
         // When text overflows MAX_INPUT_ROWS, tui_textarea scrolls internally to keep the cursor visible.
         // Therefore, the visual cursor is effectively clamped to the bottom of the visible chunk.
         let clamped_visual_y = visual_y.min(input_chunks[1].height.saturating_sub(1));
-        
+
         input_cursor_pos = Some((
             input_chunks[1].x + visual_x,
             input_chunks[1].y + clamped_visual_y,
         ));
-        
+
         *last_input_width = input_chunks[1].width;
     }
 

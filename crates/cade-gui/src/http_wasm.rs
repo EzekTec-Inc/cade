@@ -92,7 +92,10 @@ pub async fn search_messages(
     agent_id: &str,
     query: &str,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
-    let path = format!("/v1/agents/{agent_id}/messages?q={}", urlencoding::encode(query));
+    let path = format!(
+        "/v1/agents/{agent_id}/messages?q={}",
+        urlencoding::encode(query)
+    );
     let url = api::build_url(base_url, &path);
     let (status, body) = send_text(&url, token).await?;
     if status != 200 {
@@ -110,7 +113,10 @@ pub async fn search_memory(
     agent_id: &str,
     query: &str,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
-    let path = format!("/v1/agents/{agent_id}/memory?q={}", urlencoding::encode(query));
+    let path = format!(
+        "/v1/agents/{agent_id}/memory?q={}",
+        urlencoding::encode(query)
+    );
     let url = api::build_url(base_url, &path);
     let (status, body) = send_text(&url, token).await?;
     if status != 200 {

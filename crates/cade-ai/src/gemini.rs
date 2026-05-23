@@ -383,7 +383,10 @@ impl GeminiProvider {
                         } else {
                             // Gemini 2.5 Pro requires a thought signature for tool calls to work correctly.
                             // If missing (e.g. injected or from older history), use the bypass value.
-                            part.insert("thought_signature".to_string(), json!("skip_thought_signature_validator"));
+                            part.insert(
+                                "thought_signature".to_string(),
+                                json!("skip_thought_signature_validator"),
+                            );
                         }
                         all_parts.push(Value::Object(part));
                     }
@@ -590,10 +593,13 @@ impl LlmProvider for GeminiProvider {
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
                 inline_schema_refs(&mut params);
                 clean_gemini_schema(&mut params);
-                
+
                 let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
                 if name == "unknown_tool" {
-                    tracing::warn!("Gemini: missing tool name in schema: {}", serde_json::to_string(s).unwrap_or_default());
+                    tracing::warn!(
+                        "Gemini: missing tool name in schema: {}",
+                        serde_json::to_string(s).unwrap_or_default()
+                    );
                 }
 
                 json!({

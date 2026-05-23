@@ -325,10 +325,13 @@ impl OpenAiProvider {
                 crate::utils::inline_schema_refs(&mut params);
                 clean_openai_schema(&mut params);
                 seal_top_level_additional_properties(&mut params);
-                
+
                 let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
                 if name == "unknown_tool" {
-                    tracing::warn!("OpenAI: missing tool name in schema: {}", serde_json::to_string(s).unwrap_or_default());
+                    tracing::warn!(
+                        "OpenAI: missing tool name in schema: {}",
+                        serde_json::to_string(s).unwrap_or_default()
+                    );
                 }
 
                 json!({
@@ -357,10 +360,13 @@ impl OpenAiProvider {
                 crate::utils::inline_schema_refs(&mut params);
                 clean_openai_schema(&mut params);
                 seal_top_level_additional_properties(&mut params);
-                
+
                 let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
                 if name == "unknown_tool" {
-                    tracing::warn!("OpenAI: missing tool name in schema: {}", serde_json::to_string(s).unwrap_or_default());
+                    tracing::warn!(
+                        "OpenAI: missing tool name in schema: {}",
+                        serde_json::to_string(s).unwrap_or_default()
+                    );
                 }
 
                 json!({

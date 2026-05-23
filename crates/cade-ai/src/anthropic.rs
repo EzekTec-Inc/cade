@@ -245,9 +245,10 @@ impl AnthropicProvider {
                             "cache_control": { "type": "ephemeral" }
                         }]);
                     } else if let Some(arr) = msg["content"].as_array_mut()
-                        && let Some(last_block) = arr.last_mut() {
-                            last_block["cache_control"] = json!({ "type": "ephemeral" });
-                        }
+                        && let Some(last_block) = arr.last_mut()
+                    {
+                        last_block["cache_control"] = json!({ "type": "ephemeral" });
+                    }
                     break;
                 }
             }

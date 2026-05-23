@@ -6,7 +6,7 @@ impl SessionState {
     /// Store conversations fetched from the server.
     pub fn on_conversations(&mut self, convs: Vec<crate::api::ConversationInfo>) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  conversations, ..  } = &mut **session;
+            let crate::session::ConnectedSession { conversations, .. } = &mut **session;
             *conversations = convs;
         }
     }
@@ -14,7 +14,7 @@ impl SessionState {
     /// The current list of conversations.
     pub fn conversations(&self) -> &[crate::api::ConversationInfo] {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  conversations, ..  } = &**session;
+            let crate::session::ConnectedSession { conversations, .. } = &**session;
             conversations
         } else {
             &[]
@@ -24,10 +24,10 @@ impl SessionState {
     /// Currently selected conversation index.
     pub fn selected_conversation(&self) -> Option<usize> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            selected_conversation,
-            ..
-         } = &**session;
+            let crate::session::ConnectedSession {
+                selected_conversation,
+                ..
+            } = &**session;
             *selected_conversation
         } else {
             None
@@ -39,13 +39,13 @@ impl SessionState {
     /// so the caller can re-fetch messages for that conversation.
     pub fn on_select_conversation(&mut self, idx: usize) -> bool {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            conversations,
-            selected_conversation,
-            messages,
-            conversation_id,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                conversations,
+                selected_conversation,
+                messages,
+                conversation_id,
+                ..
+            } = &mut **session;
             if idx >= conversations.len() {
                 return false;
             }
@@ -66,12 +66,12 @@ impl SessionState {
     /// the server.
     pub fn on_new_conversation(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            conversation_id,
-            messages,
-            selected_conversation,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                conversation_id,
+                messages,
+                selected_conversation,
+                ..
+            } = &mut **session;
             *conversation_id = None;
             messages.clear();
             *selected_conversation = None;
@@ -84,13 +84,13 @@ impl SessionState {
     /// `messages` / `conversation_id` are reset so the user starts fresh.
     pub fn on_conversation_deleted(&mut self, idx: usize) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            conversations,
-            selected_conversation,
-            messages,
-            conversation_id,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                conversations,
+                selected_conversation,
+                messages,
+                conversation_id,
+                ..
+            } = &mut **session;
             if idx >= conversations.len() {
                 return;
             }

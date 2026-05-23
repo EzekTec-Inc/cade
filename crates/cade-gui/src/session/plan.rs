@@ -6,7 +6,7 @@ impl SessionState {
     /// Set the plan from a `set_plan` tool call. Replaces any existing plan.
     pub fn set_plan(&mut self, title: String, steps: Vec<String>) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  active_plan, ..  } = &mut **session;
+            let crate::session::ConnectedSession { active_plan, .. } = &mut **session;
             if steps.is_empty() {
                 *active_plan = None;
             } else {
@@ -50,7 +50,11 @@ impl SessionState {
                 if let Some(arr) = plan.get("steps").and_then(|v| v.as_array()) {
                     for s in arr {
                         let id = s.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                        let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let desc = s
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         let is_done = s.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
                         steps.push(PlanStep {
                             id,
@@ -59,9 +63,20 @@ impl SessionState {
                         });
                     }
                 }
-                let title = plan.get("title").and_then(|v| v.as_str()).unwrap_or("Tasks").to_string();
-                let is_visible = plan.get("is_visible").and_then(|v| v.as_bool()).unwrap_or(true);
-                *active_plan = Some(PlanState { title, steps, is_visible });
+                let title = plan
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Tasks")
+                    .to_string();
+                let is_visible = plan
+                    .get("is_visible")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                *active_plan = Some(PlanState {
+                    title,
+                    steps,
+                    is_visible,
+                });
             }
         }
     }
@@ -69,7 +84,7 @@ impl SessionState {
     /// Read-only access to the active plan.
     pub fn active_plan(&self) -> Option<&PlanState> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  active_plan, ..  } = &**session;
+            let crate::session::ConnectedSession { active_plan, .. } = &**session;
             active_plan.as_ref()
         } else {
             None

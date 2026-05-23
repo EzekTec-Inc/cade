@@ -3,16 +3,17 @@ use cade_agent::agent::HttpTransport;
 
 pub async fn auto_start_server(base_url: &str) -> Result<()> {
     if cfg!(windows)
-        && let Ok(current_exe) = std::env::current_exe() {
-            let old_server = current_exe.with_file_name("cade-server.exe.old");
-            if old_server.exists() {
-                let _ = std::fs::remove_file(&old_server);
-            }
-            let old_cli = current_exe.with_file_name("cade.exe.old");
-            if old_cli.exists() {
-                let _ = std::fs::remove_file(&old_cli);
-            }
+        && let Ok(current_exe) = std::env::current_exe()
+    {
+        let old_server = current_exe.with_file_name("cade-server.exe.old");
+        if old_server.exists() {
+            let _ = std::fs::remove_file(&old_server);
         }
+        let old_cli = current_exe.with_file_name("cade.exe.old");
+        if old_cli.exists() {
+            let _ = std::fs::remove_file(&old_cli);
+        }
+    }
 
     let server_bin = std::env::current_exe()
         .ok()

@@ -100,11 +100,24 @@ pub fn render(
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     // Group blocks into Active (short) and Archived (long)
-                    let active_blocks: Vec<_> = blocks.iter().enumerate().filter(|(_, b)| b.tier.as_deref() == Some("short") || b.tier.is_none()).collect();
-                    let archived_blocks: Vec<_> = blocks.iter().enumerate().filter(|(_, b)| b.tier.as_deref() == Some("long")).collect();
+                    let active_blocks: Vec<_> = blocks
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| b.tier.as_deref() == Some("short") || b.tier.is_none())
+                        .collect();
+                    let archived_blocks: Vec<_> = blocks
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| b.tier.as_deref() == Some("long"))
+                        .collect();
 
                     if !active_blocks.is_empty() {
-                        ui.label(egui::RichText::new("Active Memory").color(theme.text_dim()).strong().size(11.0));
+                        ui.label(
+                            egui::RichText::new("Active Memory")
+                                .color(theme.text_dim())
+                                .strong()
+                                .size(11.0),
+                        );
                         ui.add_space(4.0);
                         for (idx, block) in active_blocks {
                             render_block_item(ui, idx, block, selection, theme, &mut result);
@@ -113,7 +126,12 @@ pub fn render(
                     }
 
                     if !archived_blocks.is_empty() {
-                        ui.label(egui::RichText::new("Archived / Long-term").color(theme.text_dim()).strong().size(11.0));
+                        ui.label(
+                            egui::RichText::new("Archived / Long-term")
+                                .color(theme.text_dim())
+                                .strong()
+                                .size(11.0),
+                        );
                         ui.add_space(4.0);
                         for (idx, block) in archived_blocks {
                             render_block_item(ui, idx, block, selection, theme, &mut result);
@@ -143,14 +161,18 @@ pub fn render(
                             .size(16.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn_label = if history_open { "Hide History" } else { "Show History" };
+                        let btn_label = if history_open {
+                            "Hide History"
+                        } else {
+                            "Show History"
+                        };
                         let btn = egui::Button::new(btn_label).fill(theme.bg_surface2());
                         if ui.add(btn).clicked() {
                             result = Some(AppAction::ToggleMemoryHistory);
                         }
                     });
                 });
-                
+
                 if let Some(d) = &block.description {
                     ui.label(egui::RichText::new(d).color(theme.text_muted()).small());
                 }
@@ -158,7 +180,7 @@ pub fn render(
 
                 let mut buf = edit_buffer.to_string();
                 let editor_height = body_height - 80.0;
-                
+
                 let resp = egui::Frame::NONE
                     .fill(theme.bg_input())
                     .corner_radius(egui::CornerRadius::same(6))
@@ -169,9 +191,10 @@ pub fn render(
                             egui::TextEdit::multiline(&mut buf)
                                 .desired_rows(12)
                                 .desired_width(ui.available_width())
-                                .min_size(egui::vec2(ui.available_width(), editor_height))
+                                .min_size(egui::vec2(ui.available_width(), editor_height)),
                         )
-                    }).inner;
+                    })
+                    .inner;
 
                 if resp.changed() {
                     result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));
@@ -186,20 +209,32 @@ pub fn render(
                     } else {
                         "Saved"
                     };
-                    
+
                     let save_btn = egui::Button::new(egui::RichText::new(save_label).strong())
-                        .fill(if dirty { theme.success() } else { theme.bg_surface2() });
-                        
-                    if ui.add_enabled(!saving && dirty, save_btn).on_hover_text("Ctrl+S").clicked() {
+                        .fill(if dirty {
+                            theme.success()
+                        } else {
+                            theme.bg_surface2()
+                        });
+
+                    if ui
+                        .add_enabled(!saving && dirty, save_btn)
+                        .on_hover_text("Ctrl+S")
+                        .clicked()
+                    {
                         result = Some(AppAction::SaveMemoryBlock);
                     }
-                    
+
                     if saving {
                         ui.spinner();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if dirty {
-                            ui.label(egui::RichText::new("● unsaved changes").color(theme.warning()).small());
+                            ui.label(
+                                egui::RichText::new("● unsaved changes")
+                                    .color(theme.warning())
+                                    .small(),
+                            );
                         }
                     });
                 });
@@ -210,44 +245,77 @@ pub fn render(
         if history_open {
             ui.separator();
             ui.allocate_ui(egui::vec2(ui.available_width(), body_height), |ui| {
-                ui.label(egui::RichText::new("Versioning & History").color(theme.primary()).strong());
+                ui.label(
+                    egui::RichText::new("Versioning & History")
+                        .color(theme.primary())
+                        .strong(),
+                );
                 ui.add_space(8.0);
-                
+
                 if history_loading {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(egui::RichText::new("Loading revisions...").color(theme.text_muted()).small());
+                        ui.label(
+                            egui::RichText::new("Loading revisions...")
+                                .color(theme.text_muted())
+                                .small(),
+                        );
                     });
                 } else if history.is_empty() {
-                    ui.label(egui::RichText::new("No history found for this block.").color(theme.text_muted()).italics());
+                    ui.label(
+                        egui::RichText::new("No history found for this block.")
+                            .color(theme.text_muted())
+                            .italics(),
+                    );
                 } else {
-                    egui::ScrollArea::vertical().id_salt("mem_history_list").auto_shrink([false, false]).show(ui, |ui| {
-                        for rev in history {
-                            egui::Frame::NONE
-                                .fill(theme.bg_surface2())
-                                .corner_radius(egui::CornerRadius::same(6))
-                                .stroke(egui::Stroke::new(1.0, theme.border_base()))
-                                .inner_margin(8.0)
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(format!("Rev {}", &rev.id[..8])).strong().color(theme.text_primary()));
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui.button("Restore").clicked() {
-                                                result = Some(AppAction::RestoreMemoryRevision(rev.id.clone()));
-                                            }
+                    egui::ScrollArea::vertical()
+                        .id_salt("mem_history_list")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for rev in history {
+                                egui::Frame::NONE
+                                    .fill(theme.bg_surface2())
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .stroke(egui::Stroke::new(1.0, theme.border_base()))
+                                    .inner_margin(8.0)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "Rev {}",
+                                                    &rev.id[..8]
+                                                ))
+                                                .strong()
+                                                .color(theme.text_primary()),
+                                            );
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui.button("Restore").clicked() {
+                                                        result =
+                                                            Some(AppAction::RestoreMemoryRevision(
+                                                                rev.id.clone(),
+                                                            ));
+                                                    }
+                                                },
+                                            );
                                         });
+                                        ui.add_space(6.0);
+                                        let preview = if rev.value.len() > 150 {
+                                            format!("{}...", &rev.value[..150])
+                                        } else {
+                                            rev.value.clone()
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(&preview)
+                                                .monospace()
+                                                .color(theme.text_muted())
+                                                .size(10.0),
+                                        );
                                     });
-                                    ui.add_space(6.0);
-                                    let preview = if rev.value.len() > 150 {
-                                        format!("{}...", &rev.value[..150])
-                                    } else {
-                                        rev.value.clone()
-                                    };
-                                    ui.label(egui::RichText::new(&preview).monospace().color(theme.text_muted()).size(10.0));
-                                });
-                            ui.add_space(6.0);
-                        }
-                    });
+                                ui.add_space(6.0);
+                            }
+                        });
                 }
             });
         }
@@ -278,7 +346,11 @@ fn render_block_item(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&block.label)
-                        .color(if is_sel { theme.text_primary() } else { theme.primary() })
+                        .color(if is_sel {
+                            theme.text_primary()
+                        } else {
+                            theme.primary()
+                        })
                         .monospace()
                         .strong(),
                 );
@@ -286,7 +358,7 @@ fn render_block_item(
         })
         .response
         .interact(egui::Sense::click());
-        
+
     if resp.clicked() && !is_sel {
         *result = Some(AppAction::SelectMemoryBlock(idx));
     }

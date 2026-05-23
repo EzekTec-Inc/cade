@@ -154,15 +154,15 @@ impl SessionState {
     /// index out of bounds, or not in `Connected` state).
     pub fn on_select_agent(&mut self, idx: usize) -> bool {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            agents,
-            selected_agent,
-            messages,
-            conversation_id,
-            conversations,
-            selected_conversation,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                agents,
+                selected_agent,
+                messages,
+                conversation_id,
+                conversations,
+                selected_conversation,
+                ..
+            } = &mut **session;
             if idx >= agents.len() {
                 return false;
             }
@@ -183,7 +183,9 @@ impl SessionState {
     /// The currently selected agent's ID, if any.
     pub fn selected_agent_id(&self) -> Option<&str> {
         if let Self::Connected(session) = self {
-            session.selected_agent.and_then(|idx| session.agents.get(idx).map(|a| a.id.as_str()))
+            session
+                .selected_agent
+                .and_then(|idx| session.agents.get(idx).map(|a| a.id.as_str()))
         } else {
             None
         }
@@ -192,7 +194,7 @@ impl SessionState {
     /// Read-only slice of the agents list.
     pub fn agents(&self) -> &[AgentInfo] {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  agents, ..  } = &**session;
+            let crate::session::ConnectedSession { agents, .. } = &**session;
             agents
         } else {
             &[]
@@ -204,11 +206,11 @@ impl SessionState {
     /// `selected_agent` index if it still points to an existing row.
     pub fn refresh_agents(&mut self, new_agents: Vec<AgentInfo>) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            agents,
-            selected_agent,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                agents,
+                selected_agent,
+                ..
+            } = &mut **session;
             // Prefer to keep selection by agent id, not by index — the
             // list order could theoretically change.
             let sel_id = selected_agent.and_then(|i| agents.get(i).map(|a| a.id.clone()));
@@ -220,7 +222,7 @@ impl SessionState {
     /// Store metrics fetched from `GET /v1/agents/:id/metrics`.
     pub fn on_metrics_loaded(&mut self, m: crate::api::AgentMetrics) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  agent_metrics, ..  } = &mut **session;
+            let crate::session::ConnectedSession { agent_metrics, .. } = &mut **session;
             *agent_metrics = Some(m);
         }
     }
@@ -228,7 +230,7 @@ impl SessionState {
     /// Read-only access to the last-fetched agent metrics.
     pub fn agent_metrics(&self) -> Option<&crate::api::AgentMetrics> {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  agent_metrics, ..  } = &**session;
+            let crate::session::ConnectedSession { agent_metrics, .. } = &**session;
             agent_metrics.as_ref()
         } else {
             None
@@ -239,11 +241,11 @@ impl SessionState {
     /// Returns `(total_in, total_out)`.
     pub fn total_token_usage(&self) -> (u64, u64) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            total_input_tokens,
-            total_output_tokens,
-            ..
-         } = &**session;
+            let crate::session::ConnectedSession {
+                total_input_tokens,
+                total_output_tokens,
+                ..
+            } = &**session;
             (*total_input_tokens, *total_output_tokens)
         } else {
             (0, 0)

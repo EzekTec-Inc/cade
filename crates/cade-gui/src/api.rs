@@ -271,7 +271,10 @@ pub fn parse_memory(status: u16, body: &str) -> Result<Vec<MemoryBlock>, ApiErro
     Ok(env.blocks)
 }
 
-pub fn parse_memory_history(status: u16, body: &str) -> Result<Vec<MemoryHistoryRevision>, ApiError> {
+pub fn parse_memory_history(
+    status: u16,
+    body: &str,
+) -> Result<Vec<MemoryHistoryRevision>, ApiError> {
     decode_or_error(status, body)
 }
 
@@ -286,11 +289,17 @@ pub fn memory_block_url(server: &str, agent_id: &str, label: &str) -> String {
 }
 
 pub fn memory_history_url(server: &str, agent_id: &str, label: &str) -> String {
-    build_url(server, &format!("/v1/agents/{agent_id}/memory/{label}/history?limit=10"))
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/memory/{label}/history?limit=10"),
+    )
 }
 
 pub fn memory_restore_url(server: &str, agent_id: &str, label: &str, rev_id: &str) -> String {
-    build_url(server, &format!("/v1/agents/{agent_id}/memory/{label}/restore/{rev_id}"))
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/memory/{label}/restore/{rev_id}"),
+    )
 }
 
 /// Build the request body for `PUT /v1/agents/:id/memory/:label`.

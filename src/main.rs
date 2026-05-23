@@ -367,7 +367,7 @@ async fn async_main() -> Result<()> {
             // Unconditionally ensure all tools (native, meta, mcp) are attached for this session,
             // so updates to Toolsets or MCP configs apply immediately without needing --new.
             let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
-            
+
             register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities)
                 .await;
             if !mgr.is_empty().await {

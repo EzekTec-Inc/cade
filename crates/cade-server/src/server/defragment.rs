@@ -53,38 +53,40 @@ Memory Blocks:
     drop(router_guard);
 
     if let Ok(resp) = provider.complete(&req).await
-        && let Some(content) = resp.content {
-            let json_str = content
-                .trim()
-                .trim_start_matches("```json")
-                .trim_end_matches("```")
-                .trim();
-            if let Ok(Value::Array(merges)) = serde_json::from_str(json_str) {
-                for merge in merges {
-                    let new_label = merge["new_label"].as_str().unwrap_or("");
-                    let merged_content = merge["merged_content"].as_str().unwrap_or("");
-                    let deletes = merge["blocks_to_delete"].as_array();
+        && let Some(content) = resp.content
+    {
+        let json_str = content
+            .trim()
+            .trim_start_matches("```json")
+            .trim_end_matches("```")
+            .trim();
+        if let Ok(Value::Array(merges)) = serde_json::from_str(json_str) {
+            for merge in merges {
+                let new_label = merge["new_label"].as_str().unwrap_or("");
+                let merged_content = merge["merged_content"].as_str().unwrap_or("");
+                let deletes = merge["blocks_to_delete"].as_array();
 
-                    if !new_label.is_empty() && !merged_content.is_empty() {
-                        if let Some(del_arr) = deletes {
-                            let _ = sqlite::upsert_memory_block(
-                                &state.db,
-                                agent_id,
-                                new_label,
-                                merged_content,
-                                Some("Defragmented merged block"),
-                                None,
-                            );
-                            for del in del_arr {
-                                if let Some(del_label) = del.as_str()
-                                    && del_label != new_label {
-                                        let _ =
-                                            sqlite::delete_memory_block(&state.db, agent_id, del_label);
-                                    }
-                            }
+                if !new_label.is_empty()
+                    && !merged_content.is_empty()
+                    && let Some(del_arr) = deletes
+                {
+                    let _ = sqlite::upsert_memory_block(
+                        &state.db,
+                        agent_id,
+                        new_label,
+                        merged_content,
+                        Some("Defragmented merged block"),
+                        None,
+                    );
+                    for del in del_arr {
+                        if let Some(del_label) = del.as_str()
+                            && del_label != new_label
+                        {
+                            let _ = sqlite::delete_memory_block(&state.db, agent_id, del_label);
                         }
                     }
                 }
             }
         }
+    }
 }

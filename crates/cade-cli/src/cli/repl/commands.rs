@@ -408,9 +408,9 @@ impl Repl {
                 let _ = self.app.lock().suspend();
                 let res = crate::cli::update::run_update(false).await;
                 let _ = self.app.lock().resume();
-                
+
                 res.map_err(|e| crate::error::Error::custom(e.to_string()))?;
-                
+
                 self.tui_ok("Update complete! Please restart CADE.".to_string());
                 return Ok(false);
             }

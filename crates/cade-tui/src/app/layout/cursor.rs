@@ -32,7 +32,7 @@ pub(crate) fn calc_visual_cursor(
     let w = available_width.saturating_sub(prefix_width).max(1);
     let mut visual_y = 0;
     let mut current_row = 0;
-    
+
     let mut visual_x = 0;
 
     for seg in buf.split('\n') {
@@ -45,16 +45,16 @@ pub(crate) fn calc_visual_cursor(
             } else {
                 seg
             };
-            
+
             let mut row_w = 0;
             let mut y_offset = 0;
-            
+
             // To find the exact visual x and y offset for the cursor within this line,
             // we do a simple character-by-character wrap simulation.
             // This is an approximation of word wrap, but since we just need the hardware
             // cursor to not fly off screen, it's sufficient to place it generally correctly.
             // A more exact approach is to use count_wrapped_segment on the substring.
-            
+
             for word in seg_before.split_inclusive([' ', '\t']) {
                 let word_w = unicode_width::UnicodeWidthStr::width(word) as u16;
                 if row_w > 0 && row_w + word_w > w {
@@ -69,19 +69,19 @@ pub(crate) fn calc_visual_cursor(
                     row_w += word_w;
                 }
             }
-            
+
             // If the cursor is right at a boundary where a new line would start,
             // row_w will equal w, and we should wrap it.
             if row_w == w && !seg_before.ends_with(' ') {
-                // It might stay at the edge depending on terminal behavior, 
+                // It might stay at the edge depending on terminal behavior,
                 // but we clamp it below anyway.
             }
-            
+
             visual_y += y_offset;
             visual_x = row_w;
             break;
         }
     }
-    
+
     (visual_x.min(w.saturating_sub(1)), visual_y)
 }

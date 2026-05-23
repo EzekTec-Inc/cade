@@ -6,7 +6,7 @@ impl SessionState {
     /// A subagent started running.
     pub fn on_subagent_started(&mut self, id: &str, task: &str, mode: &str, model: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  subagent_cards, ..  } = &mut **session;
+            let crate::session::ConnectedSession { subagent_cards, .. } = &mut **session;
             subagent_cards.push(SubagentCardState {
                 subagent_id: id.to_string(),
                 task: task.to_string(),
@@ -32,7 +32,7 @@ impl SessionState {
         elapsed: u32,
     ) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  subagent_cards, ..  } = &mut **session;
+            let crate::session::ConnectedSession { subagent_cards, .. } = &mut **session;
             if let Some(card) = subagent_cards.iter_mut().find(|c| c.subagent_id == id) {
                 card.tool_calls = tool_calls;
                 card.output_lines = output_lines;
@@ -51,7 +51,7 @@ impl SessionState {
         is_error: bool,
     ) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  subagent_cards, ..  } = &mut **session;
+            let crate::session::ConnectedSession { subagent_cards, .. } = &mut **session;
             if let Some(card) = subagent_cards.iter_mut().find(|c| c.subagent_id == id) {
                 card.status = if is_error { "error" } else { "complete" }.to_string();
                 card.elapsed_secs = elapsed;

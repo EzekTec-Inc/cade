@@ -57,33 +57,49 @@ pub fn render_profiles_overlay(
             ui.add_space(8.0);
 
             if profiles.is_empty() {
-                ui.label(egui::RichText::new("No saved profiles.").color(theme.text_muted()).italics());
+                ui.label(
+                    egui::RichText::new("No saved profiles.")
+                        .color(theme.text_muted())
+                        .italics(),
+                );
             } else {
-                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                    for (idx, (name, url, token)) in profiles.iter().enumerate() {
-                        egui::Frame::NONE
-                            .fill(theme.bg_surface2())
-                            .corner_radius(egui::CornerRadius::same(4))
-                            .inner_margin(8.0)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(egui::RichText::new(name).strong());
-                                        ui.label(egui::RichText::new(url).small().color(theme.text_muted()));
-                                    });
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.button("Connect").clicked() {
-                                            result = Some(AppAction::ConnectProfile(url.clone(), token.clone()));
-                                        }
-                                        if ui.button("Delete").clicked() {
-                                            result = Some(AppAction::DeleteProfile(idx));
-                                        }
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for (idx, (name, url, token)) in profiles.iter().enumerate() {
+                            egui::Frame::NONE
+                                .fill(theme.bg_surface2())
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(8.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(egui::RichText::new(name).strong());
+                                            ui.label(
+                                                egui::RichText::new(url)
+                                                    .small()
+                                                    .color(theme.text_muted()),
+                                            );
+                                        });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui.button("Connect").clicked() {
+                                                    result = Some(AppAction::ConnectProfile(
+                                                        url.clone(),
+                                                        token.clone(),
+                                                    ));
+                                                }
+                                                if ui.button("Delete").clicked() {
+                                                    result = Some(AppAction::DeleteProfile(idx));
+                                                }
+                                            },
+                                        );
                                     });
                                 });
-                            });
-                        ui.add_space(4.0);
-                    }
-                });
+                            ui.add_space(4.0);
+                        }
+                    });
             }
 
             ui.add_space(8.0);
@@ -99,19 +115,32 @@ pub fn render_profiles_overlay(
 
             ui.horizontal(|ui| {
                 ui.label("Name:  ");
-                if ui.add(egui::TextEdit::singleline(&mut n).desired_width(ui.available_width())).changed() {
+                if ui
+                    .add(egui::TextEdit::singleline(&mut n).desired_width(ui.available_width()))
+                    .changed()
+                {
                     result = Some(AppAction::SetProfileEdit(n.clone(), u.clone(), t.clone()));
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("URL:   ");
-                if ui.add(egui::TextEdit::singleline(&mut u).desired_width(ui.available_width())).changed() {
+                if ui
+                    .add(egui::TextEdit::singleline(&mut u).desired_width(ui.available_width()))
+                    .changed()
+                {
                     result = Some(AppAction::SetProfileEdit(n.clone(), u.clone(), t.clone()));
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Token: ");
-                if ui.add(egui::TextEdit::singleline(&mut t).password(true).desired_width(ui.available_width())).changed() {
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut t)
+                            .password(true)
+                            .desired_width(ui.available_width()),
+                    )
+                    .changed()
+                {
                     result = Some(AppAction::SetProfileEdit(n.clone(), u.clone(), t.clone()));
                 }
             });

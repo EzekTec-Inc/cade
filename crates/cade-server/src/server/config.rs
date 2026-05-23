@@ -161,20 +161,19 @@ impl ServerConfig {
         if let Some(home) = dirs::home_dir() {
             let settings_path = home.join(".cade").join("settings.json");
             if let Ok(content) = std::fs::read_to_string(&settings_path)
-                && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if max_context_budget.is_none()
-                        && let Some(budget) =
-                            json.get("max_context_budget").and_then(|v| v.as_u64())
-                        {
-                            max_context_budget = Some(budget as usize);
-                        }
-                    if max_tokens_per_turn.is_none()
-                        && let Some(tokens) =
-                            json.get("max_tokens_per_turn").and_then(|v| v.as_u64())
-                        {
-                            max_tokens_per_turn = Some(tokens as usize);
-                        }
+                && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
+            {
+                if max_context_budget.is_none()
+                    && let Some(budget) = json.get("max_context_budget").and_then(|v| v.as_u64())
+                {
+                    max_context_budget = Some(budget as usize);
                 }
+                if max_tokens_per_turn.is_none()
+                    && let Some(tokens) = json.get("max_tokens_per_turn").and_then(|v| v.as_u64())
+                {
+                    max_tokens_per_turn = Some(tokens as usize);
+                }
+            }
         }
 
         Ok(Self {

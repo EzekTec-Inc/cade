@@ -110,10 +110,8 @@ pub fn render_skills_overlay(
                     };
 
                     let row_rect = ui.available_rect_before_wrap();
-                    let row_rect = egui::Rect::from_min_size(
-                        row_rect.min,
-                        egui::vec2(row_rect.width(), 36.0),
-                    );
+                    let row_rect =
+                        egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 36.0));
                     ui.painter().rect_filled(row_rect, 0.0, bg);
 
                     ui.horizontal(|ui| {
@@ -124,9 +122,7 @@ pub fn render_skills_overlay(
                         } else {
                             theme.text_dim()
                         };
-                        ui.label(
-                            egui::RichText::new(status).color(status_color).size(14.0),
-                        );
+                        ui.label(egui::RichText::new(status).color(status_color).size(14.0));
 
                         // Skill name + ID
                         ui.vertical(|ui| {
@@ -163,46 +159,41 @@ pub fn render_skills_overlay(
                         });
 
                         // Load/Unload button (right-aligned)
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                let (label, color) = if is_loaded {
-                                    ("unload", theme.error())
-                                } else {
-                                    ("load", theme.success())
-                                };
-                                if ui
-                                    .add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!("[{label}]"))
-                                                .color(color)
-                                                .monospace()
-                                                .strong()
-                                                .size(12.0),
-                                        )
-                                        .sense(egui::Sense::click()),
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (label, color) = if is_loaded {
+                                ("unload", theme.error())
+                            } else {
+                                ("load", theme.success())
+                            };
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!("[{label}]"))
+                                            .color(color)
+                                            .monospace()
+                                            .strong()
+                                            .size(12.0),
                                     )
-                                    .clicked()
-                                {
-                                    if is_loaded {
-                                        result =
-                                            Some(AppAction::UnloadSkill(skill.id.clone()));
-                                    } else {
-                                        result =
-                                            Some(AppAction::LoadSkill(skill.id.clone()));
-                                    }
+                                    .sense(egui::Sense::click()),
+                                )
+                                .clicked()
+                            {
+                                if is_loaded {
+                                    result = Some(AppAction::UnloadSkill(skill.id.clone()));
+                                } else {
+                                    result = Some(AppAction::LoadSkill(skill.id.clone()));
                                 }
+                            }
 
-                                // Token cost hint
-                                let approx_tok = skill.body_chars / 3;
-                                ui.label(
-                                    egui::RichText::new(format!("~{}tok", approx_tok))
-                                        .color(theme.text_dim())
-                                        .monospace()
-                                        .size(11.0),
-                                );
-                            },
-                        );
+                            // Token cost hint
+                            let approx_tok = skill.body_chars / 3;
+                            ui.label(
+                                egui::RichText::new(format!("~{}tok", approx_tok))
+                                    .color(theme.text_dim())
+                                    .monospace()
+                                    .size(11.0),
+                            );
+                        });
                     });
                     ui.add_space(4.0);
                 }

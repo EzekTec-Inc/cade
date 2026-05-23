@@ -7,13 +7,13 @@ impl SessionState {
     /// fetch; this just marks the panel as loading and clears error.
     pub fn open_checkpoints_overlay(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints_open,
-            checkpoints_loading,
-            checkpoints_error,
-            checkpoints_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                checkpoints_open,
+                checkpoints_loading,
+                checkpoints_error,
+                checkpoints_notice,
+                ..
+            } = &mut **session;
             *checkpoints_open = true;
             *checkpoints_loading = true;
             *checkpoints_error = None;
@@ -25,13 +25,13 @@ impl SessionState {
     /// reopen is instant; clears transient flags.
     pub fn close_checkpoints_overlay(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints_open,
-            checkpoints_busy,
-            checkpoints_error,
-            checkpoints_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                checkpoints_open,
+                checkpoints_busy,
+                checkpoints_error,
+                checkpoints_notice,
+                ..
+            } = &mut **session;
             *checkpoints_open = false;
             *checkpoints_busy = false;
             *checkpoints_error = None;
@@ -41,21 +41,21 @@ impl SessionState {
 
     /// Whether the checkpoints overlay is currently visible.
     pub fn is_checkpoints_open(&self) -> bool {
-        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession { 
-                checkpoints_open: true,
-                ..
-             }))
+        matches!(self, Self::Connected(session) if matches!(&**session, crate::session::ConnectedSession {
+           checkpoints_open: true,
+           ..
+        }))
     }
 
     /// Feed the result of a successful checkpoints fetch.
     pub fn on_checkpoints_loaded(&mut self, rows: Vec<crate::api::CheckpointRow>) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints,
-            checkpoints_loading,
-            checkpoints_error,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                checkpoints,
+                checkpoints_loading,
+                checkpoints_error,
+                ..
+            } = &mut **session;
             *checkpoints_loading = false;
             *checkpoints_error = None;
             *checkpoints = rows;
@@ -66,13 +66,13 @@ impl SessionState {
     /// loading + busy flags so the UI becomes interactable again.
     pub fn on_checkpoints_error(&mut self, err: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints_loading,
-            checkpoints_busy,
-            checkpoints_error,
-            checkpoints_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                checkpoints_loading,
+                checkpoints_busy,
+                checkpoints_error,
+                checkpoints_notice,
+                ..
+            } = &mut **session;
             *checkpoints_loading = false;
             *checkpoints_busy = false;
             *checkpoints_error = Some(err.to_string());
@@ -83,12 +83,12 @@ impl SessionState {
     /// Mark a restore/create/delete request as in-flight.
     pub fn on_checkpoints_action_start(&mut self) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints_busy,
-            checkpoints_error,
-            checkpoints_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                checkpoints_busy,
+                checkpoints_error,
+                checkpoints_notice,
+                ..
+            } = &mut **session;
             *checkpoints_busy = true;
             *checkpoints_error = None;
             *checkpoints_notice = None;
@@ -98,12 +98,12 @@ impl SessionState {
     /// Mark an action as completed successfully with a transient notice.
     pub fn on_checkpoints_action_ok(&mut self, notice: &str) {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession { 
-            checkpoints_busy,
-            checkpoints_error,
-            checkpoints_notice,
-            ..
-         } = &mut **session;
+            let crate::session::ConnectedSession {
+                checkpoints_busy,
+                checkpoints_error,
+                checkpoints_notice,
+                ..
+            } = &mut **session;
             *checkpoints_busy = false;
             *checkpoints_error = None;
             *checkpoints_notice = Some(notice.to_string());
@@ -114,7 +114,7 @@ impl SessionState {
     /// the renderer.  Returns `&[]` when not connected.
     pub fn checkpoints_snapshot(&self) -> &[crate::api::CheckpointRow] {
         if let Self::Connected(session) = self {
-            let crate::session::ConnectedSession {  checkpoints, ..  } = &**session;
+            let crate::session::ConnectedSession { checkpoints, .. } = &**session;
             checkpoints
         } else {
             &[]
