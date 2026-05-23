@@ -2370,7 +2370,7 @@ fn no_active_plan_initially() {
 #[test]
 fn set_plan_creates_steps() {
     let mut s = connected_session();
-    s.set_plan(vec!["Step 1".into(), "Step 2".into(), "Step 3".into()]);
+    s.set_plan("Tasks".to_string(), vec!["Step 1".into(), "Step 2".into(), "Step 3".into()]);
     let plan = s.active_plan().unwrap();
     assert_eq!(plan.steps.len(), 3);
     assert!(plan.is_visible);
@@ -2383,16 +2383,16 @@ fn set_plan_creates_steps() {
 #[test]
 fn set_plan_empty_clears() {
     let mut s = connected_session();
-    s.set_plan(vec!["A".into()]);
+    s.set_plan("Tasks".to_string(), vec!["A".into()]);
     assert!(s.active_plan().is_some());
-    s.set_plan(vec![]);
+    s.set_plan("Tasks".to_string(), vec![]);
     assert!(s.active_plan().is_none());
 }
 
 #[test]
 fn update_plan_step_marks_done() {
     let mut s = connected_session();
-    s.set_plan(vec!["A".into(), "B".into()]);
+    s.set_plan("Tasks".to_string(), vec!["A".into(), "B".into()]);
     assert!(s.update_plan_step(1, true));
     let plan = s.active_plan().unwrap();
     assert!(plan.steps[0].is_done);
@@ -2402,7 +2402,7 @@ fn update_plan_step_marks_done() {
 #[test]
 fn update_plan_step_invalid_id_returns_false() {
     let mut s = connected_session();
-    s.set_plan(vec!["A".into()]);
+    s.set_plan("Tasks".to_string(), vec!["A".into()]);
     assert!(!s.update_plan_step(99, true));
 }
 
