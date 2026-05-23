@@ -108,20 +108,21 @@ impl SessionState {
 
             // Intercept plan panel tool calls.
             if name == "set_plan" {
-                let steps: Vec<String> = serde_json::from_str::<serde_json::Value>(arguments)
-                    .ok()
-                    .and_then(|v| {
-                        v["steps"].as_array().map(|arr| {
-                            arr.iter()
-                                .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
+                let args_val = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+                let steps: Vec<String> = args_val["steps"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                            .collect()
                     })
                     .unwrap_or_default();
+                let title = args_val["title"].as_str().unwrap_or("Tasks").to_string();
                 if steps.is_empty() {
                     *active_plan = None;
                 } else {
                     *active_plan = Some(PlanState {
+                        title,
                         steps: steps
                             .into_iter()
                             .enumerate()
