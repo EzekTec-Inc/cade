@@ -7,7 +7,7 @@ AI code completions powered by your local [CADE](https://github.com/EzekTec-Inc/
 - **Inline ghost text** — completions appear as you type, accept with `Tab`
 - **Streaming** — tokens render progressively for fast perceived latency
 - **Stateless** — zero conversation pollution, no DB writes
-- **Any model** — uses whatever provider your CADE agent is configured with (Anthropic, OpenAI, Gemini, Ollama)
+- **Any model** — uses whatever provider your CADE agent is configured with (Anthropic, OpenAI, Gemini, Ollama, OpenRouter)
 - **Status bar toggle** — click to enable/disable, or run `CADE: Toggle Inline Completions`
 
 ## Setup

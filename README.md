@@ -20,7 +20,7 @@ CADE does:  scaffolds → writes code → runs tests → builds Docker image →
 | **A shell that understands you** | Persistent memory across sessions — CADE remembers your project, preferences, and past decisions |
 | **Batteries included** | Ships its own server, TUI, desktop control, MCP support, and 30+ built-in skills — nothing else to install |
 | **Your machine, your rules** | Runs 100% locally. Your code never leaves your filesystem unless you choose to call an LLM API |
-| **Any LLM, one interface** | Anthropic, OpenAI, Google Gemini, Ollama, OpenRouter — switch models mid-conversation with `/model` |
+| **Any LLM, one interface** | Anthropic, OpenAI, Google Gemini, Ollama, OpenRouter — including GPT/o-series and GPT-5-style OpenAI models — switch models mid-conversation with `/model` |
 | **Desktop-aware** | Screenshots, window control, clipboard, notifications — CADE can see what you see |
 
 ---
@@ -249,20 +249,26 @@ cargo build --release
 
 ## Architecture
 
-CADE is a Cargo workspace of 16 crates with a strict downward dependency graph:
+CADE is a Cargo workspace of 16 crates plus the root package that owns the `cade` and `cade-server` binaries:
 
 ```
-src/          → CLI binary + server binary (entry points)
-cade-core     → Shared types, permissions, skills, hooks
-cade-ai       → LLM providers (Anthropic, OpenAI, Gemini, Ollama)
-cade-store    → SQLite persistence, AES-GCM encryption, embeddings
-cade-server   → Axum HTTP API, context building, consolidation
-cade-agent    → Tool implementations, subagents, teams
-cade-cli      → TUI setup, REPL, slash commands
-cade-tui      → Ratatui terminal UI components
-cade-gui      → WASM dashboard (egui/eframe)
-cade-mcp      → Model Context Protocol integration
-cade-desktop  → Screen capture, window control, notifications
+src/             → Root package: CLI + server binary entry points
+cade-core        → Shared types, permissions, settings, skills, hooks
+cade-ai          → LLM providers (Anthropic, OpenAI, Gemini, Ollama, OpenRouter)
+cade-api-types   → Shared API schemas and response/request types
+cade-store       → SQLite persistence, AES-GCM encryption, optional embeddings
+cade-server      → Axum HTTP API, context building, consolidation
+cade-agent       → Tool implementations, subagents, MCP, execution backends
+cade-cli         → TUI setup, REPL, slash commands, headless mode
+cade-tui         → Ratatui terminal UI components
+cade-gui         → WASM dashboard (egui/eframe)
+cade-mcp         → Model Context Protocol integration
+cade-ide-mcp     → IDE MCP bridge exposing editor state as tools
+cade-desktop     → Screen capture, window control, notifications
+cade-web         → Web search and scraping
+cade-plugin      → Plugin loading and manifests
+cade-sdk         → Rust SDK for programmatic control
+cade-askpass     → SSH/GPG password prompt IPC helper
 ```
 
 📖 Full architecture guide → [docs/architecture.md](docs/architecture.md)

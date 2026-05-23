@@ -56,14 +56,16 @@ ANTHROPIC_API_KEY=sk-ant-... ./target/debug/cade-server
 
 ## Project Structure
 
-CADE is a Cargo workspace with sixteen crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
+CADE is a Cargo workspace with sixteen crates plus the root package. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for full details.
 
 ```
+src             Root package: `cade` and `cade-server` binary entry points
 cade-core       Shared types (permissions, settings, skills, hooks, toolsets)
 cade-ai         LLM providers and model catalogue
+cade-api-types  Shared API schemas and response/request types
 cade-desktop    Desktop extensions (screen capture, window control) — cross-platform
-cade-store      SQLite persistence + AES-GCM crypto + embedding search
+cade-store      SQLite persistence + AES-GCM crypto + optional embedding search
 cade-server     HTTP API server + consolidation pipeline
 cade-agent      REST client, tool implementations, MCP, subagents
 cade-cli        Terminal UI (Ratatui) + REPL + headless mode
@@ -80,14 +82,21 @@ cade-gui        WASM dashboard (egui/eframe)
 ### Dependency Graph (acyclic)
 
 ```
-cade-core, cade-ai, cade-desktop    ← leaf crates (no workspace deps)
+cade-core, cade-ai, cade-api-types, cade-ide-mcp, cade-askpass ← leaf crates (zero workspace deps)
+cade-desktop → cade-core
 cade-store   → cade-core, cade-ai
-cade-server  → cade-core, cade-ai, cade-store
-cade-agent   → cade-core, cade-desktop
-cade-cli     → cade-core, cade-agent, cade-ai
-cade-askpass → (standalone — IPC protocol only)
-cade-gui     → (standalone WASM — talks to server via HTTP)
+cade-mcp     → cade-core
+cade-web     → cade-core
+cade-tui     → cade-core
+cade-gui     → cade-core, cade-api-types
+cade-agent   → cade-core, cade-desktop(?), cade-mcp(?), cade-web(?)
+cade-server  → cade-core, cade-ai, cade-store, cade-agent, cade-mcp(?)
+cade-cli     → cade-core, cade-agent, cade-ai, cade-tui, cade-askpass
+cade-plugin  → cade-core, cade-agent
+cade-sdk     → cade-core, cade-agent
 ```
+
+`(?)` = optional feature-gated dependency.
 
 ### Which Files to Edit
 
@@ -101,7 +110,7 @@ All live code is in `crates/`. The root `src/` directory contains only:
 ### Code Style
 
 - Follow standard Rust idioms (`clippy`, `rustfmt`)
-- Error handling: use `anyhow::Result` for application code, `thiserror` for library errors
+- Error handling: use each crate's local `error.rs` pattern (`Error` enum + `Result<T>` alias, usually with `derive_more::{Display, From}`); do not introduce `anyhow` or `thiserror` unless the crate already uses it or the change is explicitly approved
 - Async: Tokio runtime, `async/await` throughout
 - Naming: snake_case for functions/variables, PascalCase for types
 

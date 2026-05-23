@@ -153,18 +153,20 @@ cargo build --release
 The workspace supports compile-time feature gating:
 
 ```bash
-cargo build --features full                          # default — everything
-cargo build --no-default-features --features pro     # no desktop/web/mcp/sdk
-cargo build --no-default-features --features lean    # minimal core only
+cargo build --features full                    # desktop + web + MCP + SDK integration + remote backends
+cargo build --no-default-features              # minimal root package without default MCP feature
+cargo build --features semantic-search         # include local embeddings via cade-store
+cargo build --no-default-features --features mcp
 ```
 
 Feature flags are defined in:
-- `Cargo.toml` (root) — `full`, `pro`, `lean`, `desktop`, `web`, `mcp`, `integration`
-- `crates/cade-agent/Cargo.toml` — `desktop`, `web`, `mcp`
-- `crates/cade-store/Cargo.toml` — `semantic-search` (fastembed + sqlite-vec embeddings, **enabled by default since 2026-04-30**)
+- `Cargo.toml` (root) — `default = ["mcp"]`, `full`, `desktop`, `web`, `mcp`, `integration`, `backend-docker`, `backend-ssh`, `semantic-search`
+- `crates/cade-agent/Cargo.toml` — `desktop`, `web`, `mcp`, `backend-docker`, `backend-ssh`
+- `crates/cade-store/Cargo.toml` — `bundled-sqlite` (default) and `semantic-search` (fastembed + sqlite-vec embeddings, opt-in)
 
 When adding a new optional dependency, place it behind a feature flag in the
-owning crate and wire it through the root Cargo.toml.
+owning crate and wire it through the root Cargo.toml when it must be selectable
+from top-level builds.
 
 ### Root package topology
 

@@ -4,26 +4,30 @@ Welcome to the CADE developer documentation! This guide is intended for contribu
 
 ## 1. Project Architecture
 
-CADE is a Rust Monorepo structured via Cargo Workspaces:
+CADE is a Rust workspace structured via Cargo workspaces. The root package owns the CLI/server binaries, and the `crates/` directory contains the reusable components:
 - **`cade-core`**: Core types, capabilities, settings, and shared definitions.
-- **`cade-store`**: Central SQLite database layer. Manages state, RAG embeddings, typed memory blocks, and provenance.
+- **`cade-ai`**: LLM providers and model catalogue.
+- **`cade-api-types`**: Shared API request/response schemas.
+- **`cade-store`**: Central SQLite database layer. Manages state, optional RAG embeddings, typed memory blocks, and provenance.
 - **`cade-server`**: The Axum HTTP server that powers the LLM agentic loop, tool dispatching, and background consolidation.
-- **`cade-agent`**: Tool execution environment and client SDK.
+- **`cade-agent`**: Tool execution environment, MCP integration, execution backends, and client-side agent loop helpers.
 - **`cade-cli` / `cade-tui`**: The interactive Terminal User Interface (Ratatui + Crossterm).
-- **`cade-gui`**: Experimental Egui-based graphical interface.
-- **`cade-web`**: Web search and fetching capabilities (Brave Search, DuckDuckGo).
-- **`cade-askpass`**: IPC password prompt helper for sudo/ssh.
+- **`cade-gui`**: Egui/eframe WASM dashboard.
+- **`cade-mcp` / `cade-ide-mcp`**: MCP client/server integration and IDE-state bridge.
+- **`cade-web`**: Web search and fetching capabilities.
+- **`cade-plugin` / `cade-sdk`**: Plugin manifests/loading and programmatic Rust SDK.
+- **`cade-desktop` / `cade-askpass`**: Desktop extensions and IPC password prompt helper.
 
 ## 2. Development Standards (rust10x)
 
 CADE strictly adheres to high-performance and safe Rust patterns:
-- **Zero Panic Policy:** `unwrap()` and `expect()` are **strictly forbidden** in production code. Always use `anyhow::Result` and propagate errors with `?`.
+- **Zero Panic Policy:** `unwrap()` and `expect()` are **strictly forbidden** in production code unless an invariant is provably safe and documented. Propagate errors with `?`.
 - **Newtype Pattern:** Use strongly typed wrappers for IDs (e.g., `AgentId`, `ConversationId`) to prevent domain logic bugs.
-- **Error Handling:** Use `anyhow::Context` to attach meaningful context as errors bubble up.
+- **Error Handling:** Follow each crate's local `error.rs` convention: a crate-specific `Error` enum, `Result<T>` type alias, and `derive_more::{Display, From}` for conversions. Attach context by mapping to the local error type instead of introducing a new error crate.
 
 ## 3. The Memory System
 
-CADE uses a sophisticated 3-tier memory system backed by SQLite and vector embeddings (`fastembed` + `sqlite-vec`):
+CADE uses a tiered memory system backed by SQLite and optional vector embeddings (`fastembed` + `sqlite-vec` when built with `--features semantic-search`):
 1. **Short-Term Context:** Recent messages in the active window.
 2. **Archival / Semantic Memory:** Older turns are background-summarized (consolidated). Durable facts are automatically extracted, typed (`decision`, `convention`), and assigned confidence scores.
 3. **Provenance:** Every fact in the database tracks exactly which turn and which tool created it.

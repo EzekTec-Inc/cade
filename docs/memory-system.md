@@ -109,17 +109,18 @@ retrieve them:
 When matched, archived blocks are **auto-promoted** back into active
 memory for the next prompt.
 
-### Semantic Search (default)
+### Semantic Search (optional)
 
-`search_memory(query="...", memory_type="...")` supports filtering by semantic relation types (e.g., searching only for `decision` blocks) and uses a **hybrid ranking** pipeline by default. The
-underlying `semantic-search` feature is enabled in `cade-store`'s default
-feature set (since 2026-04-30); to disable it, build with
-`--no-default-features --features bundled-sqlite` — Phases 1 and 2 still run.
+`search_memory(query="...", memory_type="...")` supports filtering by semantic relation types (e.g., searching only for `decision` blocks) and uses a hybrid ranking pipeline. Keyword and fuzzy matching are always available. Cosine-similarity ranking is enabled when the `cade-store/semantic-search` feature is compiled in via the root `semantic-search` feature:
+
+```bash
+cargo build --release --features semantic-search
+```
 
 1. **Phase 1 — Keyword (LIKE)**: Exact substring matching against block labels and values
 2. **Phase 2 — Fuzzy word-match**: Splits query into words, matches blocks containing any word ≥3 chars
-3. **Phase 3 — Cosine similarity**: Embeds the query via `fastembed` (AllMiniLML6V2, 384-dim) and searches `sqlite-vec` virtual tables for nearest neighbors
+3. **Phase 3 — Cosine similarity**: When enabled, embeds the query via `fastembed` (AllMiniLML6V2, 384-dim) and searches `sqlite-vec` virtual tables for nearest neighbors
 
-Results from all three phases are merged via **Reciprocal Rank Fusion** (k=60), which boosts blocks that appear in multiple result sets.
+Results from all available phases are merged via **Reciprocal Rank Fusion** (k=60), which boosts blocks that appear in multiple result sets.
 
-Embeddings are automatically computed and stored whenever a memory block is written via `update_memory`. The embedding model (~50MB) downloads on first use. With the feature disabled, Phases 1 and 2 still run — semantic ranking is purely additive.
+Embeddings are computed and stored whenever a memory block is written via `update_memory` while semantic search is enabled. The embedding model downloads on first use. Without the feature, Phases 1 and 2 still run — semantic ranking is additive, not required.

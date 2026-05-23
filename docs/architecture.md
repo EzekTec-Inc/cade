@@ -34,7 +34,7 @@ plugins/
 
 ## Process model
 
-CADE runs as **two processes**:
+CADE runs as **two primary processes** for interactive use:
 
 ```
 ┌──────────────┐    HTTP/JSON + SSE    ┌────────────────┐
@@ -43,15 +43,13 @@ CADE runs as **two processes**:
 └──────────────┘                       └────────────────┘
                                                │
                                                ├─ LLM providers (cade-ai)
-                                               ├─ MCP servers (stdio / TCP)
+                                               ├─ MCP servers (stdio / HTTP)
                                                └─ Tool execution backend
                                                    (local / Docker / SSH)
 ```
 
-The CLI is thin — input handling, rendering, settings. All state
-(messages, memory, tool history, pricing) lives in the server's SQLite DB.
-A second consumer, the WASM **dashboard** at `/dashboard`, talks to the
-same REST API.
+Other frontends, including the WASM dashboard at `/dashboard` and IDE
+integrations, talk to the same server/API surface.
 
 ## Data flow — agentic turn
 
@@ -94,7 +92,7 @@ same REST API.
 - `providers` (encrypted API keys via AES-GCM)
 - `runs` (background mode)
 - `observations` (tool call capture with importance scoring)
-- `vec_memory_blocks`, `vec_archival_memory`, `vec_messages` — `sqlite-vec` virtual tables for embedding-based semantic search (Migration 8, populated when the `semantic-search` feature is enabled; on by default since 2026-04-30)
+- `vec_memory_blocks`, `vec_archival_memory`, `vec_messages` — `sqlite-vec` virtual tables for embedding-based semantic search (Migration 8; populated only when the `semantic-search` feature is enabled)
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in

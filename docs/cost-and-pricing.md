@@ -73,7 +73,7 @@ These run for every session, no opt-in needed:
 | P1 | `skills` block moved to `system_static` cache anchor | ≈ 90% input on 10–30 KB skill payload |
 | P2 | Cache-read / cache-write tokens fully accounted in `AgentMetrics` | accurate cost reporting |
 | P3 | Auto-cheapest **compaction model** per provider (Anthropic→Haiku, OpenAI→4o-mini, Gemini→Flash, OpenRouter→GLM-free) | 3.8–19× on consolidation calls |
-| P5 | `compress_tool_schema` strips descriptions / examples from unused non-pinned tools | ≈ 75% byte reduction per stripped schema |
+| P5 | Unused non-pinned tool schemas can be compressed, and OpenAI requests are capped at the provider's 128-tool limit while preserving priority meta tools such as `load_skill` | avoids oversized tool payloads and OpenAI API rejections |
 | P8 | `tool_executions.output_chars` column for per-call cost observability | DB cheap; replaces `LENGTH(output)` scans |
 
 ## Per-agent compaction model
@@ -109,6 +109,11 @@ support the empty-arg clear (no confirmation UI). Use the CLI to clear.
 
 Units are **USD per 1 million tokens**. Reload with `/pricing sync` (pulls
 from CADE's bundled upstream) or `/pricing edit` (opens in `$EDITOR`).
+
+The OpenAI provider also normalizes newer OpenAI model families: GPT-5-style and
+o-series models use the high output-token budget path, and OpenAI tool payloads
+are capped at 128 tools to match provider limits while keeping priority meta
+tools available.
 
 ## Inspecting historical cost
 

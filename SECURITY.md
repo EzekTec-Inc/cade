@@ -20,7 +20,7 @@ CADE is a local-first coding agent that runs on your machine with full filesyste
               │ HTTPS (outbound only)
               ▼
        LLM Provider APIs
-       (Anthropic, OpenAI, Google, Ollama)
+       (Anthropic, OpenAI, Google, Ollama, OpenRouter)
 ```
 
 - **Trusted**: The local machine, CADE server, and SQLite database
