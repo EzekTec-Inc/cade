@@ -153,6 +153,74 @@ async fn async_main() -> Result<()> {
     let all_skills = cade_core::skills::discover_all_skills(&cwd, None, None);
     tracing::info!("Discovered {} skills", all_skills.len());
 
+    // ── Pre-register Tools (Native, Meta, MCP) ──────────────────────────────
+    // The server needs these schemas inserted into SQLite at boot so that
+    // the LLM context builder can see them without relying on the CLI.
+    {
+        use cade_agent::agent::tools::build_python_stub_from_schema;
+        use cade_agent::tools::catalog::{meta_schemas_for_capabilities, native_schemas_for_capabilities};
+        use cade_store::sqlite::ToolRow;
+        
+        let caps = cade_core::capabilities::CapabilitySet::full();
+        let meta_schemas = meta_schemas_for_capabilities(&caps);
+        let native_schemas = native_schemas_for_capabilities(cade_core::toolsets::Toolset::Default, &caps);
+        
+        for schema in meta_schemas {
+            let name = schema["name"].as_str().unwrap_or("").to_string();
+            let description = schema["description"].as_str().map(String::from);
+            let row = ToolRow {
+                id: format!("tool-{}", uuid::Uuid::new_v4()),
+                name,
+                description,
+                source_code: Some(String::new()),
+                json_schema: Some(schema),
+                tags: vec!["cade".to_string(), "meta".to_string()],
+            };
+            let _ = cade_store::sqlite::upsert_tool(&db, &row);
+        }
+        
+        for schema in native_schemas {
+            let name = schema["name"].as_str().unwrap_or("").to_string();
+            let description = schema["description"].as_str().unwrap_or("").to_string();
+            let stub = build_python_stub_from_schema(&name, &description, &schema["parameters"]);
+            let row = ToolRow {
+                id: format!("tool-{}", uuid::Uuid::new_v4()),
+                name: name.clone(),
+                description: Some(description),
+                source_code: Some(stub),
+                json_schema: Some(schema),
+                tags: vec!["cade".to_string()],
+            };
+            let _ = cade_store::sqlite::upsert_tool(&db, &row);
+        }
+        
+        let mcp_schemas = mcp.all_tool_schemas().await;
+        for mut schema in mcp_schemas {
+            let name = schema["name"].as_str().unwrap_or("").to_string();
+            let description = schema["description"].as_str().map(String::from);
+            let is_core = schema["_is_core"].as_bool().unwrap_or(false);
+            if let Some(obj) = schema.as_object_mut() {
+                obj.remove("_is_core");
+            }
+            
+            let mut tags = vec!["cade".to_string(), "mcp".to_string()];
+            if is_core {
+                tags.push("core_mcp".to_string());
+            }
+            
+            let stub = build_python_stub_from_schema(&name, description.as_deref().unwrap_or(""), &schema["parameters"]);
+            let row = ToolRow {
+                id: format!("tool-{}", uuid::Uuid::new_v4()),
+                name,
+                description,
+                source_code: Some(stub),
+                json_schema: Some(schema),
+                tags,
+            };
+            let _ = cade_store::sqlite::upsert_tool(&db, &row);
+        }
+    }
+
     let state = AppState {
         db,
         llm,
