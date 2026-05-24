@@ -1,0 +1,30 @@
+# Modelfile
+FROM /var/tmp/gemma-3-1b-expert.gguf
+
+# Set parameter values
+PARAMETER stop "<end_of_turn>"
+PARAMETER temperature 0.3
+PARAMETER top_p 0.95
+
+# Define System prompt for tool execution
+SYSTEM """You are a highly capable agentic assistant. You have access to a set of local tools which you can call by outputting a valid JSON-RPC 2.0 list of objects matching the tool definitions. Always choose the correct tool and provide precise arguments. Respond only with the tool call when a tool is required."""
+
+# Define the Ollama Tool Template
+TEMPLATE """{{- if .System }}<start_of_turn>system
+{{ .System }}<end_of_turn>
+{{- end }}
+{{- range .Messages }}
+{{- if eq .Role "user" }}<start_of_turn>user
+{{ .Content }}<end_of_turn>
+{{- else if eq .Role "assistant" }}<start_of_turn>model
+{{- if .ToolCalls }}[
+{{- range .ToolCalls }}
+{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{- end }}
+]
+{{- else }}{{ .Content }}{{- end }}<end_of_turn>
+{{- else if eq .Role "tool" }}<start_of_turn>user
+[Tool Output]: {{ .Content }}<end_of_turn>
+{{- end }}
+{{- end }}<start_of_turn>model
+"""
