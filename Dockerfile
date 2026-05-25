@@ -2,7 +2,7 @@
 FROM rust:1.80-slim-bookworm AS builder
 
 # Install build dependencies (required for SQLite, crypto, fastembed, etc.)
-RUN apt-get update && apt-get install -y pkg-config libssl-dev build-essential cmake
+RUN apt-get update && apt-get install -y pkg-config libssl-dev build-essential cmake clang libclang-dev
 
 WORKDIR /app
 COPY . .
