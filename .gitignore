@@ -38,3 +38,12 @@ test_empty_system.sh
 tmux-*.log
 nohup.out
 larql-workaround.md
+
+# Local testing and experimental files
+serena-evaluation.md
+cade-knowledge.vlp
+insert_knowledge.lql
+run_exercise.lql
+Modelfile
+Modelfile_llama
+larql/Modelfile
