@@ -224,6 +224,26 @@ Open PowerShell as an Administrator and run:
 iwr https://raw.githubusercontent.com/EzekTec-Inc/CADE/master/install.ps1 -useb | iex
 ```
 
+### Docker
+CADE can be run fully containerized using Docker and Docker Compose. This runs both the `cade-server` (backend API and memory persistence) and the interactive `cade` TUI in isolated environments.
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/EzekTec-Inc/cade.git && cd cade
+   ```
+
+2. **Start the background server:**
+   ```bash
+   docker-compose up -d --build
+   ```
+   *This starts the server and exposes port 8284. It persists your data to a Docker volume.*
+
+3. **Launch the interactive TUI:**
+   ```bash
+   docker-compose run --rm cade-server cade
+   ```
+   *When you quit the TUI, the temporary container is automatically removed, while the server continues running happily in the background.*
+
 ---
 
 ## Building from Source
