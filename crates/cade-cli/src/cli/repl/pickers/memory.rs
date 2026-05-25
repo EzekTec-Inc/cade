@@ -178,6 +178,14 @@ impl Repl {
                             selected_filtered += 1;
                         }
                     }
+                    (KeyCode::Char('k'), KeyModifiers::NONE) if filter_query.is_empty() => {
+                        selected_filtered = selected_filtered.saturating_sub(1);
+                    }
+                    (KeyCode::Char('j'), KeyModifiers::NONE) if filter_query.is_empty() => {
+                        if selected_filtered + 1 < filtered_indices.len() {
+                            selected_filtered += 1;
+                        }
+                    }
 
                     (KeyCode::Enter, _) => {
                         if !filtered_indices.is_empty() {
