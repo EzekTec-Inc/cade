@@ -1,0 +1,16 @@
+USE "/home/engr-uba/Downloads/02 Rust-project/mcp-servers/larql-mcp-server/larql/gemma-3-1b-all.vindex";
+BEGIN PATCH "cade-knowledge.vlp";
+
+INSERT INTO EDGES (entity, relation, target) VALUES ("strict-project-execution", "is_a", "CADE_skill");
+INSERT INTO EDGES (entity, relation, target) VALUES ("rust", "is_a", "CADE_skill");
+INSERT INTO EDGES (entity, relation, target) VALUES ("grill-me", "is_a", "CADE_skill");
+INSERT INTO EDGES (entity, relation, target) VALUES ("tdd-guide", "is_a", "CADE_skill");
+
+INSERT INTO EDGES (entity, relation, target) VALUES ("cade-rag", "is_a", "MCP_server");
+INSERT INTO EDGES (entity, relation, target) VALUES ("cade-ide-mcp", "is_a", "MCP_server");
+INSERT INTO EDGES (entity, relation, target) VALUES ("context7", "is_a", "MCP_server");
+INSERT INTO EDGES (entity, relation, target) VALUES ("deepwiki", "is_a", "MCP_server");
+INSERT INTO EDGES (entity, relation, target) VALUES ("desktop-commander", "is_a", "MCP_server");
+INSERT INTO EDGES (entity, relation, target) VALUES ("developer", "is_a", "MCP_server");
+
+SAVE PATCH;
