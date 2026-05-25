@@ -873,6 +873,8 @@ pub struct TuiApp {
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
     pub file_ac: FileAutocompleteProvider,
+    /// Agent and Model autocomplete provider (Tab for @ and #).
+    pub agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider,
 
     // -- Dynamic overlay stack (Phase 3)
     /// Heterogeneous stack of modal overlays.  The host dispatches
@@ -1042,6 +1044,10 @@ impl TuiApp {
             token_history: Vec::new(),
             mouse_capture_disabled: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
+            agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider::new(
+                vec![],
+                vec![],
+            ),
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),

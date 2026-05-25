@@ -208,6 +208,125 @@ pub struct SlashCommandProvider {
     commands: Vec<SlashCommandDef>,
 }
 
+// -- AgentModelAutocompleteProvider
+
+/// Provides `@` prefix completion for agents and `#` prefix completion for models.
+pub struct AgentModelAutocompleteProvider {
+    pub agents: Vec<String>,
+    pub models: Vec<String>,
+}
+
+impl AgentModelAutocompleteProvider {
+    pub fn new(agents: Vec<String>, models: Vec<String>) -> Self {
+        Self { agents, models }
+    }
+
+    pub fn set_agents(&mut self, agents: Vec<String>) {
+        self.agents = agents;
+    }
+
+    pub fn set_models(&mut self, models: Vec<String>) {
+        self.models = models;
+    }
+
+    /// Attempt agent/model completion on the token at `cursor`.
+    /// Returns `Some((new_input, new_cursor))` on success.
+    pub fn complete_token(&self, input: &str, cursor: usize) -> Option<(String, usize)> {
+        let cursor = cursor.min(input.len());
+        let before = &input[..cursor];
+
+        let word_start = before
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let partial = &before[word_start..];
+
+        if partial.starts_with('@') && partial.len() > 0 {
+            let prefix = &partial[1..].to_lowercase();
+            let mut matches: Vec<String> = self
+                .agents
+                .iter()
+                .filter(|a| a.to_lowercase().starts_with(prefix))
+                .cloned()
+                .collect();
+
+            if matches.is_empty() {
+                return None;
+            }
+            matches.sort();
+
+            let common = common_prefix(&matches);
+            let new_token = format!("@{}", common);
+            let new_cursor = word_start + new_token.len();
+            let new_input = format!("{}{}{}", &input[..word_start], new_token, &input[cursor..]);
+            return Some((new_input, new_cursor));
+        }
+
+        if partial.starts_with('#') && partial.len() > 0 {
+            let prefix = &partial[1..].to_lowercase();
+            let mut matches: Vec<String> = self
+                .models
+                .iter()
+                .filter(|m| m.to_lowercase().starts_with(prefix))
+                .cloned()
+                .collect();
+
+            if matches.is_empty() {
+                return None;
+            }
+            matches.sort();
+
+            let common = common_prefix(&matches);
+            let new_token = format!("#{}", common);
+            let new_cursor = word_start + new_token.len();
+            let new_input = format!("{}{}{}", &input[..word_start], new_token, &input[cursor..]);
+            return Some((new_input, new_cursor));
+        }
+
+        None
+    }
+}
+
+impl AutocompleteProvider for AgentModelAutocompleteProvider {
+    fn completions(&self, input: &str, cursor: usize) -> Vec<Completion> {
+        let cursor = cursor.min(input.len());
+        let before = &input[..cursor];
+        let word_start = before
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let partial = &before[word_start..];
+
+        if partial.starts_with('@') {
+            let prefix = &partial[1..].to_lowercase();
+            return self
+                .agents
+                .iter()
+                .filter(|a| a.to_lowercase().starts_with(prefix))
+                .map(|a| Completion {
+                    text: format!("@{}", a),
+                    description: Some("Agent".to_string()),
+                })
+                .collect();
+        }
+
+        if partial.starts_with('#') {
+            let prefix = &partial[1..].to_lowercase();
+            return self
+                .models
+                .iter()
+                .filter(|m| m.to_lowercase().starts_with(prefix))
+                .map(|m| Completion {
+                    text: format!("#{}", m),
+                    description: Some("Model".to_string()),
+                })
+                .collect();
+        }
+
+        vec![]
+    }
+}
+
 impl SlashCommandProvider {
     pub fn new(commands: Vec<SlashCommandDef>) -> Self {
         Self { commands }
@@ -285,7 +404,7 @@ fn collect_files_inner(
 }
 
 /// Longest common prefix of a non-empty slice of strings.
-fn common_prefix(words: &[String]) -> String {
+pub fn common_prefix(words: &[String]) -> String {
     if words.is_empty() {
         return String::new();
     }

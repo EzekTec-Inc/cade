@@ -291,6 +291,11 @@ impl Repl {
             reasoning_effort.clone(),
             theme,
         );
+        let models: Vec<String> = cade_ai::catalogue::CATALOGUE
+            .iter()
+            .map(|m| m.0.to_string())
+            .collect();
+        tui_app.agent_model_ac.set_models(models);
         if let Some(engine) = &tui_app.lua_engine {
             if let Some(home) = dirs::home_dir() {
                 engine.load_plugins(&home.join(".cade").join("plugins"));
@@ -621,6 +626,12 @@ impl Repl {
                     app.draw()?;
                 }
             }
+        }
+
+        // Populate agent names for autocomplete
+        if let Ok(agents) = self.client.list_agents().await {
+            let agent_names = agents.into_iter().map(|a| a.name).collect();
+            self.app.lock().agent_model_ac.set_agents(agent_names);
         }
 
         // SessionStart hook

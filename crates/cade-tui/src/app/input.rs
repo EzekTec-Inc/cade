@@ -270,6 +270,54 @@ impl TuiApp {
                 }
             }
 
+            KeyCode::Tab => {
+                let input_text = self.editor.text();
+                let cursor_pos = self.editor.cursor_pos();
+
+                // Trigger agent/model completion (Tab)
+                if let Some((new_input, new_cursor)) =
+                    self.agent_model_ac.complete_token(&input_text, cursor_pos)
+                {
+                    self.editor.set_text(new_input);
+                    self.editor.set_cursor_pos(new_cursor);
+                    self.draw_dirty = true;
+                    return Ok(None);
+                }
+
+                // Trigger file path completion (Tab)
+                if let Some((new_input, new_cursor)) =
+                    self.file_ac.complete_path(&input_text, cursor_pos)
+                {
+                    self.editor.set_text(new_input);
+                    self.editor.set_cursor_pos(new_cursor);
+                    self.draw_dirty = true;
+                    return Ok(None);
+                }
+
+                // Trigger history completion (Tab)
+                if !input_text.trim().is_empty() {
+                    let matches: Vec<String> = history
+                        .iter()
+                        .filter(|h| h.starts_with(&input_text) && *h != &input_text)
+                        .cloned()
+                        .collect();
+                    if !matches.is_empty() {
+                        let suggestion = crate::autocomplete::common_prefix(&matches);
+                        let final_suggestion = if suggestion == input_text {
+                            // If common prefix is already the input, just take the most recent full match to let them cycle
+                            matches.last().unwrap().clone()
+                        } else {
+                            suggestion
+                        };
+
+                        self.editor.set_text(final_suggestion.clone());
+                        self.editor.set_cursor_pos(final_suggestion.len());
+                        self.draw_dirty = true;
+                        return Ok(None);
+                    }
+                }
+            }
+
             // PageUp / PageDown
             KeyCode::PageUp => {
                 let viewport = self.terminal.size()?.height.saturating_sub(6); // Approx prompt height
