@@ -53,19 +53,19 @@ pub fn render(
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
                 
-                ui.add(btn);
+                if ui.add(btn).clicked() { }
 
                 ui.add_space(16.0);
 
                 // Links
                 let link_color = egui::Color32::from_gray(180);
-                ui.add(egui::Label::new(egui::RichText::new("Manage LLM keys").color(link_color).size(13.0)).sense(egui::Sense::click()));
+                if ui.add(egui::Label::new(egui::RichText::new("Manage LLM keys").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
                 ui.add_space(12.0);
-                ui.add(egui::Label::new(egui::RichText::new("API reference").color(link_color).size(13.0)).sense(egui::Sense::click()));
+                if ui.add(egui::Label::new(egui::RichText::new("API reference").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
                 ui.add_space(12.0);
-                ui.add(egui::Label::new(egui::RichText::new("Docs").color(link_color).size(13.0)).sense(egui::Sense::click()));
+                if ui.add(egui::Label::new(egui::RichText::new("Docs").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
                 ui.add_space(12.0);
-                ui.add(egui::Label::new(egui::RichText::new("Support").color(link_color).size(13.0)).sense(egui::Sense::click()));
+                if ui.add(egui::Label::new(egui::RichText::new("Support").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
             });
         });
     });

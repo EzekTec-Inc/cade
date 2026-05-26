@@ -27,11 +27,20 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use eframe::egui;
+use egui_commonmark::CommonMarkCache;
 
 use crate::config::Config;
 use crate::login::LoginState;
 use crate::session::SessionState;
+use crate::shortcuts::{ShortcutAction, poll_shortcut};
 
+// Bring overlay render functions into scope so `ui()` can call them unqualified.
+use overlays::{
+    render_agents_overlay, render_artifacts_overlay, render_checkpoints_overlay,
+    render_context_overlay, render_mcp_overlay, render_memory_overlay, render_menu_overlay,
+    render_model_picker, render_palette_overlay, render_question_widget, render_stats_overlay,
+    render_tools_overlay,
+};
 // Bring view helpers into scope.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,8 +70,12 @@ pub struct CadeApp {
     server_url: String,
     /// Shared cache for egui_commonmark — avoids re-parsing markdown
     /// on every frame.
+    md_cache: CommonMarkCache,
+    /// Stable ID for the chat input field — used by Ctrl+L to request focus.
+    input_id: egui::Id,
     theme: crate::theme::ThemeColors,
     viewport: crate::responsive::Viewport,
+    sidebar_drawer_open: bool,
 }
 
 impl CadeApp {
@@ -101,13 +114,92 @@ impl CadeApp {
             connect_started: false,
             ctx: cc.egui_ctx.clone(),
             server_url: config.server_url,
+            md_cache: CommonMarkCache::default(),
+            input_id: egui::Id::new("chat_input"),
             theme: crate::theme::ThemeColors::default(),
             viewport: crate::responsive::Viewport::Desktop,
+            sidebar_drawer_open: false,
         }
     }
 
 
+    /// Renders the Right Panel (Split View) for subagents and live logs
+    fn draw_right_panel(
+        &self,
+        ui: &mut egui::Ui,
+        session: &crate::session::ConnectedSession,
+    ) {
+        let active_live_outputs: Vec<_> = session.live_outputs.iter().filter(|b| !b.done).collect();
+        let subagent_cards = &session.subagent_cards;
+        if !active_live_outputs.is_empty() || !subagent_cards.is_empty() {
+            egui::Panel::right("live_outputs_panel")
+                .default_size(320.0)
+                .resizable(true)
+                .show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("live_outputs_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.add_space(8.0);
+                            ui.heading(egui::RichText::new("Terminal Logs").color(self.theme.primary()).size(14.0));
+                            ui.add_space(8.0);
 
+                            for block in active_live_outputs {
+                                crate::app::views::render_live_output(ui, block, &self.theme);
+                                ui.add_space(8.0);
+                            }
+
+                            if !subagent_cards.is_empty() {
+                                ui.add_space(8.0);
+                                ui.heading(egui::RichText::new("Subagents").color(self.theme.primary()).size(14.0));
+                                ui.add_space(8.0);
+                                for card_state in subagent_cards.iter() {
+                                    let card = crate::app::views::SubagentCard {
+                                        subagent_id: card_state.subagent_id.clone(),
+                                        task: card_state.task.clone(),
+                                        mode: card_state.mode.clone(),
+                                        model: card_state.model.clone(),
+                                        status: match card_state.status.as_str() {
+                                            "complete" => crate::app::views::SubagentStatus::Complete,
+                                            "error" => crate::app::views::SubagentStatus::Error,
+                                            _ => crate::app::views::SubagentStatus::Running,
+                                        },
+                                        elapsed_secs: card_state.elapsed_secs,
+                                        tool_calls: card_state.tool_calls.clone(),
+                                        output_lines: card_state.output_lines.clone(),
+                                        result_preview: card_state.result_preview.clone(),
+                                        is_error: card_state.is_error,
+                                    };
+                                    crate::app::views::render_subagent_card(ui, &card, &self.theme);
+                                    ui.add_space(8.0);
+                                }
+                            }
+                        });
+                });
+        }
+    }
+
+    /// Renders the Bottom Input Panel with the prompt editor
+    fn draw_input_panel(
+        &self,
+        ui: &mut egui::Ui,
+        session: &crate::session::ConnectedSession,
+        input_edit: String,
+        is_streaming: bool,
+        request_focus_input: bool,
+    ) -> Option<AppAction> {
+        let has_agent = session.selected_agent.is_some();
+        components::editor::render(
+            ui,
+            input_edit,
+            has_agent,
+            is_streaming,
+            request_focus_input,
+            self.input_id,
+            &self.session,
+            &self.theme,
+        )
+    }
 }
 
 impl eframe::App for CadeApp {
@@ -122,17 +214,14 @@ impl eframe::App for CadeApp {
         let mut action = AppAction::None;
 
         // ── Global keyboard shortcuts ────────────────────────────
+        let shortcut = ui.input(poll_shortcut);
+        let mut request_focus_input = false;
 
         // Snapshot session state once so we can read it in the toolbar
         // without holding a borrow into the render closures below.
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
-        // ── Sidebar (Left) ───────────────────────────────────────────────────────────
-        if let Some(new_action) = components::sidebar::render(ui, &self.theme) {
-            action = new_action;
-        }
-
-        // ── Top toolbar (Right of Sidebar) ───────────────────────────────────────────
+        // ── Top toolbar (M1) ─────────────────────────────────────────────
         if let Some(new_action) = components::header::render(
             ui,
             &mut self.active_page,
@@ -142,18 +231,777 @@ impl eframe::App for CadeApp {
             action = new_action;
         }
 
-        // ── Main Content (Central Panel) ─────────────────────────────────────────────
-        if let Some(SessionState::Connected(session)) = &session_snapshot_for_toolbar {
-            components::overview::render(ui, session, &self.theme);
-        } else {
-            // Fallback for unconnected state
-            egui::CentralPanel::default().show_inside(ui, |ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Connecting...");
+        // ── Bottom status bar (M1) ────────────────────────────────────────
+        components::footer::render(ui, &session_snapshot_for_toolbar, &self.theme);
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            // ── M5: context-window progress bar ──────────────────────────
+            if let Some(SessionState::Connected(session)) = session_snapshot_for_toolbar {
+                    let total_input_tokens = session.total_input_tokens;
+                    let total_output_tokens = session.total_output_tokens;
+                const DEFAULT_WINDOW: u64 = 128_000;
+                let total = total_input_tokens + total_output_tokens;
+                let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
+                if total > 0 {
+                    let bar_color = crate::theme::context_fill_color(frac, &self.theme);
+                    let hover_text =
+                        format!("{total} / {DEFAULT_WINDOW} tokens ({:.0}%)", frac * 100.0);
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_height(4.0)
+                            .fill(bar_color),
+                    )
+                    .on_hover_text(hover_text);
+                }
+            }
+
+            // Snapshot session state for this frame's render pass.
+            let session_snapshot = self.session.borrow().clone();
+
+            match session_snapshot {
+                Some(SessionState::Connecting { .. }) => {
+                    ui.label("Connecting to server...");
                     ui.spinner();
-                });
-            });
-        }
+                }
+                Some(SessionState::HealthOk { .. }) => {
+                    ui.label("Server reached — loading agents...");
+                    ui.spinner();
+                }
+                Some(SessionState::Connected(mut session)) => {
+                                        let agents = &session.agents;
+                    let health = &session.health;
+                    let selected_agent = &session.selected_agent;
+                    let messages = &session.messages;
+                    let input_buffer = &session.input_buffer;
+                    let streaming = session.streaming;
+                    let auto_scroll = session.auto_scroll;
+                    let error_toast = &session.error_toast;
+                    let last_usage = &session.last_usage;
+                    let last_finish_reason = &session.last_finish_reason;
+                    let conversations = &session.conversations;
+                    let selected_conversation = &session.selected_conversation;
+                    let has_more_messages = session.has_more_messages;
+                    let palette_open = session.palette_open;
+                    let palette_input = &session.palette_input;
+                    let palette_selection = session.palette_selection;
+                    let menu_open = session.menu_open;
+                    let menu_input = &session.menu_input;
+                    let menu_selection = session.menu_selection;
+                    let memory_open = session.memory_open;
+                    let memory_blocks = &session.memory_blocks;
+                    let memory_selection = session.memory_selection;
+                    let memory_edit_buffer = &session.memory_edit_buffer;
+                    let memory_loading = session.memory_loading;
+                    let memory_saving = &session.memory_saving;
+                    let memory_error = &session.memory_error;
+                    let memory_save_notice = &session.memory_save_notice;
+                    let memory_history_open = session.memory_history_open;
+                    let memory_history = &session.memory_history;
+                    let memory_history_loading = session.memory_history_loading;
+                    let checkpoints_open = session.checkpoints_open;
+                    let checkpoints = &session.checkpoints;
+                    let checkpoints_loading = session.checkpoints_loading;
+                    let checkpoints_busy = session.checkpoints_busy;
+                    let checkpoints_error = &session.checkpoints_error;
+                    let checkpoints_notice = &session.checkpoints_notice;
+                    let artifacts_open = session.artifacts_open;
+                    let artifacts = &session.artifacts;
+                    let artifact_selection = session.artifact_selection;
+                    let artifact_detail = &session.artifact_detail;
+                    let artifacts_loading = session.artifacts_loading;
+                    let artifacts_busy = session.artifacts_busy;
+                    let artifacts_error = &session.artifacts_error;
+                    let tools_open = session.tools_open;
+                    let tools = &session.tools;
+                    let tools_loading = session.tools_loading;
+                    let tools_error = &session.tools_error;
+                    let active_question = &session.active_question;
+                    let question_cursor = session.question_cursor;
+                    let question_checked = &session.question_checked;
+                    let agent_metrics = &session.agent_metrics;
+                    let total_input_tokens = session.total_input_tokens;
+                    let total_output_tokens = session.total_output_tokens;
+                    let context_open = session.context_open;
+                    let context_stats = &session.context_stats;
+                    let context_loading = session.context_loading;
+                    let context_error = &session.context_error;
+                    let agents_open = session.agents_open;
+                    let stats_open = session.stats_open;
+                    let mcp_open = session.mcp_open;
+                    let mcp_servers = &session.mcp_servers;
+                    let mcp_loading = session.mcp_loading;
+                    let mcp_error = &session.mcp_error;
+                    let model_picker_open = session.model_picker_open;
+                    let model_picker_models = &session.model_picker_models;
+                    let model_picker_custom_providers = &session.model_picker_custom_providers;
+                    let model_picker_query = &session.model_picker_query;
+                    let model_picker_selection = session.model_picker_selection;
+                    let model_picker_loading = session.model_picker_loading;
+                    let model_picker_error = &session.model_picker_error;
+                    let active_plan = &session.active_plan;
+                    let live_outputs = &session.live_outputs;
+                    let context_breakdown = &session.context_breakdown;
+                    let context_breakdown_loading = session.context_breakdown_loading;
+                    let providers_open = session.providers_open;
+                    let providers = &session.providers;
+                    let providers_loading = session.providers_loading;
+                    let permissions_open = session.permissions_open;
+                    let current_permission_mode = &session.current_permission_mode;
+                    let theme_picker_open = session.theme_picker_open;
+                    let available_themes = &session.available_themes;
+                    let current_theme_name = &session.current_theme_name;
+                    let hooks_open = session.hooks_open;
+                    let hooks = &session.hooks;
+                    let hooks_loading = session.hooks_loading;
+                    let toolset_open = session.toolset_open;
+                    let current_toolset = &session.current_toolset;
+                    let pricing_open = session.pricing_open;
+                    let pricing_info = &session.pricing_info;
+                    let backend_open = session.backend_open;
+                    let current_backend = &session.current_backend;
+                    let reasoning_open = session.reasoning_open;
+                    let current_reasoning_effort = &session.current_reasoning_effort;
+                    let _skills_overlay_open = session.skills_overlay_open;
+                    let all_skills_list = &session.all_skills_list;
+                    let loaded_skill_ids = &session.loaded_skill_ids;
+                    let skills_loading = session.skills_loading;
+                    let skills_filter = &session.skills_filter;
+                    let subagent_cards = &session.subagent_cards;
+                    let profiles_open = session.profiles_open;
+                    let profiles = &session.profiles;
+                    let profile_edit_name = &session.profile_edit_name;
+                    let profile_edit_url = &session.profile_edit_url;
+                    let profile_edit_token = &session.profile_edit_token;
+                    // ── Connected: 3-panel layout ───────────────────
+                    let _version = health.version.as_deref().unwrap_or("unknown");
+
+                    if let Some(new_theme) = session.theme_update.take() {
+                        if let Some(t) = cade_core::resources::get_theme(&new_theme) {
+                            self.theme = t;
+                            crate::theme::apply_theme(ui.ctx(), &self.theme);
+                        }
+                    }
+
+                    let has_agent = selected_agent.is_some();
+                    let is_streaming = streaming;
+
+                    // Clone input buffer for the editable text field.
+                    let input_edit = input_buffer.clone();
+
+                    // ── Map keyboard shortcuts and gestures to actions ─────────
+                    let gesture = crate::gestures::detect_swipe(ui.ctx());
+                    let mut dismiss_gesture = false;
+                    if let Some(g) = gesture {
+                        match g {
+                            crate::gestures::Gesture::SwipeDown
+                            | crate::gestures::Gesture::SwipeRight => {
+                                dismiss_gesture = true;
+                            }
+                            crate::gestures::Gesture::SwipeLeft => {
+                                // If sidebar drawer is open, close it on swipe left
+                                if self.sidebar_drawer_open {
+                                    self.sidebar_drawer_open = false;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    //
+                    // When an overlay is open, keys are reinterpreted:
+                    //   Palette open:
+                    //     Esc      → ClosePalette (overrides DismissError)
+                    //     Enter    → ExecutePaletteCmd (overrides Send)
+                    //     ArrowUp  → MovePaletteSelection(-1)
+                    //     ArrowDown→ MovePaletteSelection(+1)
+                    //   Menu overlay open:
+                    //     Esc      → CloseMenu
+                    //     Enter    → ExecuteMenuCmd (overrides Send)
+                    //     ArrowUp  → MoveMenuSelection(-1)
+                    //     ArrowDown→ MoveMenuSelection(+1)
+                    //   Memory overlay open:
+                    //     Esc      → CloseMemoryOverlay
+                    //     Ctrl+S   → SaveMemoryBlock (only when dirty)
+                    //   Checkpoints overlay open:
+                    //     Esc      → CloseCheckpointsOverlay
+                    //   Artifacts overlay open:
+                    //     Esc      → CloseArtifactsOverlay
+                    if palette_open {
+                        // Arrow keys aren't in the global SHORTCUTS table,
+                        // sample them directly.
+                        let (up, down) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::ArrowUp),
+                                i.key_pressed(egui::Key::ArrowDown),
+                            )
+                        });
+                        if dismiss_gesture {
+                            action = AppAction::ClosePalette;
+                        } else if up {
+                            action = AppAction::MovePaletteSelection(-1);
+                        } else if down {
+                            action = AppAction::MovePaletteSelection(1);
+                        } else if let Some(sc) = shortcut {
+                            match sc {
+                                ShortcutAction::DismissError => {
+                                    action = AppAction::ClosePalette;
+                                }
+                                ShortcutAction::Send => {
+                                    action = AppAction::ExecutePaletteCmd;
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if menu_open {
+                        let (up, down) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::ArrowUp),
+                                i.key_pressed(egui::Key::ArrowDown),
+                            )
+                        });
+                        if dismiss_gesture {
+                            action = AppAction::CloseMenu;
+                        } else if up {
+                            action = AppAction::MoveMenuSelection(-1);
+                        } else if down {
+                            action = AppAction::MoveMenuSelection(1);
+                        } else if let Some(sc) = shortcut {
+                            match sc {
+                                ShortcutAction::DismissError => {
+                                    action = AppAction::CloseMenu;
+                                }
+                                ShortcutAction::Send => {
+                                    action = AppAction::ExecuteMenuCmd;
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if memory_open {
+                        // Sample Ctrl+S directly — it isn't in the global
+                        // SHORTCUTS table because it is overlay-scoped.
+                        let ctrl_s = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.ctrl);
+                        let dirty_buf = memory_blocks
+                            .get(memory_selection)
+                            .is_some_and(|b| b.value != *memory_edit_buffer);
+                        if dismiss_gesture {
+                            action = AppAction::CloseMemoryOverlay;
+                        } else if ctrl_s && dirty_buf && !memory_saving {
+                            action = AppAction::SaveMemoryBlock;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseMemoryOverlay;
+                        }
+                    } else if checkpoints_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseCheckpointsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseCheckpointsOverlay;
+                        }
+                    } else if artifacts_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseArtifactsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseArtifactsOverlay;
+                        }
+                    } else if tools_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseToolsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseToolsOverlay;
+                        }
+                    } else if agents_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseAgentsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseAgentsOverlay;
+                        }
+                    } else if context_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseContextOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseContextOverlay;
+                        }
+                    } else if stats_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseStatsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseStatsOverlay;
+                        }
+                    } else if mcp_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseMcpOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseMcpOverlay;
+                        }
+                    } else if model_picker_open {
+                        if dismiss_gesture {
+                            action = AppAction::CloseModelPicker;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseModelPicker;
+                        }
+                    } else if active_question.is_some() {
+                        // Inline question widget captures arrow keys + Enter + Esc.
+                        let (up, down) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::ArrowUp),
+                                i.key_pressed(egui::Key::ArrowDown),
+                            )
+                        });
+                        if up {
+                            action = AppAction::MoveQuestionCursor(-1);
+                        } else if down {
+                            action = AppAction::MoveQuestionCursor(1);
+                        } else if let Some(sc) = shortcut {
+                            match sc {
+                                ShortcutAction::Send => {
+                                    action = AppAction::AnswerQuestion;
+                                }
+                                ShortcutAction::DismissError => {
+                                    action = AppAction::DismissQuestion;
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if let Some(sc) = shortcut {
+                        match sc {
+                            ShortcutAction::Send => {
+                                if has_agent && !is_streaming && !input_edit.trim().is_empty() {
+                                    action = AppAction::SendMessage;
+                                }
+                            }
+                            ShortcutAction::InsertNewline => {
+                                // Handled inside TextEdit (multiline future); no-op for singleline.
+                            }
+                            ShortcutAction::DismissError => {
+                                if error_toast.is_some() {
+                                    action = AppAction::DismissError;
+                                }
+                            }
+                            ShortcutAction::FocusInput => {
+                                request_focus_input = true;
+                            }
+                            ShortcutAction::OpenPalette => {
+                                action = AppAction::OpenPalette(String::new());
+                            }
+                            // Palette-scoped actions never fire when closed.
+                            ShortcutAction::ClosePalette
+                            | ShortcutAction::PalettePrev
+                            | ShortcutAction::PaletteNext
+                            | ShortcutAction::PaletteExecute => {}
+                        }
+                    }
+
+                    match self.active_page {
+                        ActivePage::Overview => {
+                            components::overview::render(ui, &session, &self.theme);
+                        }
+                        ActivePage::Memory => {
+                            let dirty = memory_blocks
+                                .get(memory_selection)
+                                .is_some_and(|b| b.value != *memory_edit_buffer);
+                            if let Some(new_action) = overlays::memory::render(
+                                ui,
+                                memory_blocks,
+                                memory_selection,
+                                memory_edit_buffer,
+                                memory_loading,
+                                *memory_saving,
+                                memory_error.as_deref(),
+                                memory_save_notice.as_deref(),
+                                dirty,
+                                memory_history_open,
+                                memory_history,
+                                memory_history_loading,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
+                        ActivePage::Skills => {
+                            if let Some(new_action) = overlays::skills::render_skills_overlay(
+                                ui,
+                                all_skills_list,
+                                loaded_skill_ids,
+                                skills_loading,
+                                skills_filter,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
+                        ActivePage::Logs => {
+                            if let Some(new_action) = components::timeline::render(
+                                ui,
+                                &mut self.md_cache,
+                                *selected_agent,
+                                &[], // No chat messages in logs view
+                                false, // No more messages
+                                is_streaming,
+                                auto_scroll,
+                                error_toast.as_ref(),
+                                None, // No token usage footer
+                                None,
+                                live_outputs,
+                                subagent_cards,
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
+                        ActivePage::Chat => {
+                            // ── Plan panel (inside sidebar, shown when plan active) ──
+                            if let Some(plan) = active_plan {
+                                // Plan steps already summarized in sidebar Status section.
+                                // Full checklist rendered inline below sidebar.
+                                if self.viewport.is_desktop() {
+                                    egui::Panel::left("plan_panel")
+                                        .default_size(200.0)
+                                        .resizable(false)
+                                        .show_inside(ui, |ui| {
+                                            components::plan::render(ui, plan, &self.theme);
+                                        });
+                                }
+                            }
+
+                            // ── Bottom panel: input bar (TUI-matched) ────────
+                            if let Some(new_action) = self.draw_input_panel(
+                                ui,
+                                &session,
+                                input_edit,
+                                is_streaming,
+                                request_focus_input,
+                            ) {
+                                action = new_action;
+                            }
+
+                            // ── Right panel (Split View): Live logs / subagents ──
+                            self.draw_right_panel(ui, &session);
+
+                            // ── Central area: timeline ──────────────────────
+                            if let Some(new_action) = components::timeline::render(
+                                ui,
+                                &mut self.md_cache,
+                                *selected_agent,
+                                &messages,
+                                has_more_messages,
+                                is_streaming,
+                                auto_scroll,
+                                error_toast.as_ref(),
+                                last_usage.as_ref(),
+                                last_finish_reason.as_ref(),
+                                &[], // Skip rendering live outputs inside timeline
+                                &[], // Skip rendering subagent cards inside timeline
+                                &self.theme,
+                            ) {
+                                action = new_action;
+                            }
+                        }
+                    }
+
+                    // ── Slash-command palette overlay ─────────────
+                    if palette_open {
+                        if let Some(new_action) = render_palette_overlay(
+                            ui.ctx(),
+                            palette_input,
+                            palette_selection,
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Full-Screen Command Menu ─────────────
+                    if menu_open {
+                        if let Some(new_action) =
+                            render_menu_overlay(ui.ctx(), menu_input, menu_selection, &self.theme)
+                        {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Memory-viewer overlay (M16) ───────────────
+                    if memory_open {
+                        // Derive `dirty` by comparing edit buffer to the
+                        // currently-selected block's saved value.  Done
+                        // here (not in render fn) so the render fn stays
+                        // presentational and easy to unit test.
+                        let dirty = memory_blocks
+                            .get(memory_selection)
+                            .is_some_and(|b| b.value != *memory_edit_buffer);
+                        if let Some(new_action) = render_memory_overlay(
+                            ui,
+                            memory_blocks,
+                            memory_selection,
+                            memory_edit_buffer,
+                            memory_loading,
+                            *memory_saving,
+                            memory_error.as_deref(),
+                            memory_save_notice.as_deref(),
+                            dirty,
+                            memory_history_open,
+                            memory_history,
+                            memory_history_loading,
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Checkpoints overlay (M17) ─────────────────
+                    if checkpoints_open {
+                        if let Some(new_action) = render_checkpoints_overlay(
+                            ui.ctx(),
+                            checkpoints,
+                            checkpoints_loading,
+                            checkpoints_busy,
+                            checkpoints_error.as_deref(),
+                            checkpoints_notice.as_deref(),
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Artifacts overlay (M17) ───────────────────
+                    if artifacts_open {
+                        if let Some(new_action) = render_artifacts_overlay(
+                            ui.ctx(),
+                            artifacts,
+                            artifact_selection,
+                            artifact_detail.as_ref(),
+                            artifacts_loading,
+                            artifacts_busy,
+                            artifacts_error.as_deref(),
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Tools / MCP overlay (M18) ────────────────
+                    if tools_open {
+                        if let Some(new_action) = render_tools_overlay(
+                            ui.ctx(),
+                            tools,
+                            tools_loading,
+                            tools_error.as_deref(),
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Agents overlay (M19) ──────────────────────
+                    if agents_open {
+                        if let Some(new_action) =
+                            render_agents_overlay(ui.ctx(), agents, *selected_agent, &self.theme)
+                        {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Context-stats overlay (M19) ───────────────
+                    if context_open {
+                        if let Some(new_action) = render_context_overlay(
+                            ui.ctx(),
+                            context_stats.as_ref(),
+                            context_loading,
+                            context_error.as_deref(),
+                            context_breakdown.as_ref(),
+                            context_breakdown_loading,
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Stats overlay (M19) ───────────────────────
+                    if stats_open {
+                        if let Some(new_action) = render_stats_overlay(
+                            ui.ctx(),
+                            total_input_tokens,
+                            total_output_tokens,
+                            last_usage.as_ref(),
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── MCP servers overlay ───────────────────────
+                    if mcp_open {
+                        if let Some(new_action) = render_mcp_overlay(
+                            ui.ctx(),
+                            mcp_servers,
+                            mcp_loading,
+                            mcp_error.as_deref(),
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Model picker overlay ─────────────────────
+                    if model_picker_open {
+                        if let Some(new_action) = render_model_picker(
+                            ui.ctx(),
+                            model_picker_models,
+                            model_picker_custom_providers,
+                            model_picker_query,
+                            model_picker_selection,
+                            model_picker_loading,
+                            model_picker_error.as_deref(),
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
+                    // ── Settings overlays ─────────────────────────
+                    if providers_open {
+                        if let Some(a) = overlays::settings::render_providers_overlay(
+                            ui.ctx(),
+                            providers,
+                            providers_loading,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if permissions_open {
+                        if let Some(a) = overlays::settings::render_permissions_overlay(
+                            ui.ctx(),
+                            current_permission_mode,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if theme_picker_open {
+                        if let Some(a) = overlays::settings::render_theme_overlay(
+                            ui.ctx(),
+                            available_themes,
+                            current_theme_name,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if hooks_open {
+                        if let Some(a) = overlays::settings::render_hooks_overlay(
+                            ui.ctx(),
+                            hooks,
+                            hooks_loading,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if toolset_open {
+                        if let Some(a) = overlays::settings::render_toolset_overlay(
+                            ui.ctx(),
+                            current_toolset,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if pricing_open {
+                        if let Some(a) = overlays::settings::render_pricing_overlay(
+                            ui.ctx(),
+                            pricing_info,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if backend_open {
+                        if let Some(a) = overlays::settings::render_backend_overlay(
+                            ui.ctx(),
+                            current_backend,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if reasoning_open {
+                        if let Some(a) = overlays::settings::render_reasoning_overlay(
+                            ui.ctx(),
+                            current_reasoning_effort,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+                    if profiles_open {
+                        if let Some(a) = overlays::profiles::render_profiles_overlay(
+                            ui.ctx(),
+                            profiles,
+                            profile_edit_name,
+                            profile_edit_url,
+                            profile_edit_token,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
+                    }
+
+                    // ── Inline question widget (M18) ─────────────
+                    if let Some(q) = active_question {
+                        if let Some(new_action) = render_question_widget(
+                            ui.ctx(),
+                            q,
+                            question_cursor,
+                            question_checked,
+                            &self.theme,
+                        ) {
+                            action = new_action;
+                        }
+                    }
+                }
+                Some(SessionState::ConnectionFailed { ref error, .. }) => {
+                    ui.colored_label(self.theme.error(), "Connection failed");
+                    ui.add_space(4.0);
+                    ui.label(error.as_str());
+                    ui.add_space(8.0);
+                    if ui.button("Retry").clicked() {
+                        action = AppAction::Retry;
+                    }
+                }
+                None => {
+                    // Still in login flow.
+                    match &self.login {
+                        LoginState::Entering { buffer } => {
+                            ui.label("Paste your CADE API key:");
+                            let mut editable = buffer.clone();
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut editable)
+                                    .password(true)
+                                    .desired_width(320.0)
+                                    .hint_text("CADE_API_KEY"),
+                            );
+                            resp.request_focus();
+                            if resp.changed() {
+                                self.login.on_input(&editable);
+                            }
+                            ui.add_space(8.0);
+                            let submit_btn = ui.button("Connect");
+                            let enter =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if submit_btn.clicked() || enter {
+                                self.login.on_submit();
+                            }
+                        }
+                        LoginState::Submitted { key } => {
+                            if !self.connect_started {
+                                action = AppAction::Connect(key.clone());
+                            }
+                            ui.label("Initiating connection...");
+                            ui.spinner();
+                        }
+                    }
+                }
+            }
+        });
 
         // Apply deferred actions outside the ui closure.
         match action {

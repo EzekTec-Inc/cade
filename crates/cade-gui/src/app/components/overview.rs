@@ -58,7 +58,7 @@ pub fn render(
             )
             .fill(egui::Color32::TRANSPARENT)
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-            ui.add_sized([100.0, 32.0], save_btn);
+            if ui.add_sized([100.0, 32.0], save_btn).clicked() { }
 
             ui.add_space(32.0);
             ui.separator();
@@ -102,7 +102,7 @@ pub fn render(
             )
             .fill(egui::Color32::TRANSPARENT)
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-            ui.add_sized([110.0, 32.0], upgrade_btn);
+            if ui.add_sized([110.0, 32.0], upgrade_btn).clicked() { }
 
             ui.add_space(32.0);
             ui.separator();
@@ -119,7 +119,7 @@ pub fn render(
             )
             .fill(egui::Color32::TRANSPARENT)
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-            ui.add_sized([130.0, 32.0], retry_btn);
+            if ui.add_sized([130.0, 32.0], retry_btn).clicked() { }
 
             ui.add_space(32.0);
             ui.separator();
@@ -161,7 +161,7 @@ pub fn render(
                             )
                             .fill(egui::Color32::TRANSPARENT)
                             .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-                            ui.add(view_btn);
+                            if ui.add(view_btn).clicked() { }
                         });
                     });
                 });
@@ -173,13 +173,13 @@ pub fn render(
                 let btn_prev = egui::Button::new(egui::RichText::new("Previous").color(egui::Color32::from_gray(220)))
                     .fill(egui::Color32::TRANSPARENT)
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-                ui.add(btn_prev);
+                if ui.add(btn_prev).clicked() { }
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let btn_next = egui::Button::new(egui::RichText::new("Next").color(egui::Color32::from_gray(220)))
                         .fill(egui::Color32::TRANSPARENT)
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-                    ui.add(btn_next);
+                    if ui.add(btn_next).clicked() { }
 
                     ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
                         ui.label(egui::RichText::new("Page 1 of 1").color(egui::Color32::from_gray(140)));

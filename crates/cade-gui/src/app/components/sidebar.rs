@@ -1,11 +1,12 @@
-use crate::app::AppAction;
+use crate::app::{AppAction, ActivePage};
 use eframe::egui;
 
 pub fn render(
     ui: &mut egui::Ui,
+    active_page: &mut ActivePage,
     _theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
-    let action = None;
+    let mut action = None;
 
     let frame = egui::Frame::NONE
         .fill(egui::Color32::from_rgb(23, 23, 23)) // #171717
@@ -19,7 +20,6 @@ pub fn render(
         .show_inside(ui, |ui| {
             // Logo area
             ui.horizontal(|ui| {
-                // Mocking the Letta Beta logo icon
                 let (rect, _resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
                 ui.painter().rect_stroke(rect, egui::CornerRadius::same(4), egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                 ui.painter().circle_filled(rect.center(), 3.0, egui::Color32::WHITE);
@@ -36,7 +36,7 @@ pub fn render(
             ui.add_space(32.0);
 
             // Menu sections
-            let mut render_section = |title: &str, items: &[(&str, bool, &str)]| {
+            let mut render_section = |title: &str, items: &[(&str, ActivePage, &str)]| {
                 ui.label(
                     egui::RichText::new(title)
                         .color(egui::Color32::from_gray(120))
@@ -45,20 +45,21 @@ pub fn render(
                 );
                 ui.add_space(8.0);
                 
-                for (icon, is_active, label) in items {
-                    let text_color = if *is_active {
+                for (icon, target_page, label) in items {
+                    let is_active = *active_page == *target_page;
+                    let text_color = if is_active {
                         egui::Color32::from_rgb(230, 80, 80) // #E55050
                     } else {
                         egui::Color32::from_gray(180)
                     };
 
-                    let bg_color = if *is_active {
+                    let bg_color = if is_active {
                         egui::Color32::from_rgb(40, 28, 28) // Subtle red tint
                     } else {
                         egui::Color32::TRANSPARENT
                     };
 
-                    egui::Frame::NONE
+                    let resp = egui::Frame::NONE
                         .fill(bg_color)
                         .corner_radius(egui::CornerRadius::same(4))
                         .inner_margin(egui::Margin::symmetric(8, 6))
@@ -69,28 +70,31 @@ pub fn render(
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new(*label).color(text_color).size(13.0));
                             });
-                        });
+                        })
+                        .response
+                        .interact(egui::Sense::click());
+
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if resp.clicked() {
+                        *active_page = *target_page;
+                    }
                     ui.add_space(2.0);
                 }
                 ui.add_space(24.0);
             };
 
             render_section("ACCOUNT", &[
-                ("👤", true, "Profile"),
-                ("🗂", false, "Projects"),
+                ("👤", ActivePage::Overview, "Profile"),
+                ("💬", ActivePage::Chat, "Chat / Agents"),
+                ("🗂", ActivePage::Memory, "Memory Palace"),
+                ("🛠", ActivePage::Skills, "Skills Library"),
             ]);
 
             render_section("ORGANIZATION", &[
-                ("👥", false, "Members"),
-                ("📊", false, "Usage"),
-                ("📝", false, "API logs"),
-                ("🔗", false, "Integrations"),
-                ("💳", false, "Billing"),
-                ("⚙", false, "Settings"),
-            ]);
-
-            render_section("REFERENCE", &[
-                ("🔒", false, "Rate limits"),
+                ("👥", ActivePage::Logs, "Members / Logs"),
+                ("📊", ActivePage::Overview, "Usage"),
             ]);
         });
 
