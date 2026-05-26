@@ -6,7 +6,7 @@ use crossterm::event::{
 
 use crate::Result;
 
-use super::{ToastLevel, TuiApp};
+use super::{ToastLevel, TuiApp, ServerBootStatus};
 use crate::autocomplete::AutocompleteProvider;
 
 impl TuiApp {
@@ -31,6 +31,21 @@ impl TuiApp {
 
             // 50 ms poll: allows animation ticks without burning CPU.
             if !event::poll(std::time::Duration::from_millis(50))? {
+                // Trigger redraw if any MCP server is loading (for spinner animation)
+                if let Some(ref progress) = self.mcp_boot_status {
+                    let boot_map = progress.lock();
+                    let mut loading = false;
+                    for status in boot_map.values() {
+                        if matches!(status, ServerBootStatus::Loading) {
+                            loading = true;
+                            break;
+                        }
+                    }
+                    if loading {
+                        self.draw_dirty = true;
+                    }
+                }
+
                 // Background-subagent completion toast (Option 2).
                 // Surface a single toast when pending count changes so the
                 // user knows there are results waiting; the actual drain

@@ -1494,7 +1494,15 @@ impl TuiApp {
                         let mut lines = Vec::new();
                         for (key, status) in sorted_servers {
                             let icon = match status {
-                                ServerBootStatus::Loading => Span::styled("↻", Style::default().cyan()),
+                                ServerBootStatus::Loading => {
+                                    let ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis();
+                                    let frames = ["◜", "◝", "◞", "◟"];
+                                    let idx = ((ms / 100) % 4) as usize;
+                                    Span::styled(frames[idx], Style::default().cyan().bold())
+                                }
                                 ServerBootStatus::Ready { .. } => Span::styled("✔", Style::default().green().bold()),
                                 ServerBootStatus::Failed(_) => Span::styled("✗", Style::default().red().bold()),
                                 ServerBootStatus::Timeout(_) => Span::styled("⚠", Style::default().yellow().bold()),
