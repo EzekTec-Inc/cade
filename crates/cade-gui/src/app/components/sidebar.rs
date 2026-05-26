@@ -1,5 +1,4 @@
 use crate::app::AppAction;
-use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 pub fn render(
@@ -13,7 +12,7 @@ pub fn render(
         .inner_margin(egui::Margin::same(16))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
 
-    egui::SidePanel::left("dashboard_sidebar")
+    egui::Panel::left("dashboard_sidebar")
         .frame(frame)
         .exact_size(240.0)
         .resizable(false)

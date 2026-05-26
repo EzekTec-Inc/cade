@@ -1,4 +1,3 @@
-use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 pub fn render(

@@ -1,12 +1,11 @@
 use crate::app::ActivePage;
-use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 pub fn render(
     ui: &mut egui::Ui,
     _active_page: &mut ActivePage,
     _session: &Option<crate::session::SessionState>,
-    theme: &crate::theme::ThemeColors,
+    _theme: &crate::theme::ThemeColors,
 ) -> Option<crate::app::AppAction> {
     let action = None;
     
@@ -16,7 +15,7 @@ pub fn render(
         .inner_margin(egui::Margin::symmetric(16, 12))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
 
-    egui::TopBottomPanel::top("dashboard_header").frame(frame).show_inside(ui, |ui| {
+    egui::Panel::top("dashboard_header").frame(frame).show_inside(ui, |ui| {
         ui.horizontal(|ui| {
             // Left side
             ui.label(

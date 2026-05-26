@@ -27,20 +27,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use eframe::egui;
-use egui_commonmark::CommonMarkCache;
 
 use crate::config::Config;
 use crate::login::LoginState;
 use crate::session::SessionState;
-use crate::shortcuts::{ShortcutAction, poll_shortcut};
 
-// Bring overlay render functions into scope so `ui()` can call them unqualified.
-use overlays::{
-    render_agents_overlay, render_artifacts_overlay, render_checkpoints_overlay,
-    render_context_overlay, render_mcp_overlay, render_memory_overlay, render_menu_overlay,
-    render_model_picker, render_palette_overlay, render_question_widget, render_stats_overlay,
-    render_tools_overlay,
-};
 // Bring view helpers into scope.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,12 +61,8 @@ pub struct CadeApp {
     server_url: String,
     /// Shared cache for egui_commonmark — avoids re-parsing markdown
     /// on every frame.
-    md_cache: CommonMarkCache,
-    /// Stable ID for the chat input field — used by Ctrl+L to request focus.
-    input_id: egui::Id,
     theme: crate::theme::ThemeColors,
     viewport: crate::responsive::Viewport,
-    sidebar_drawer_open: bool,
 }
 
 impl CadeApp {
@@ -114,94 +101,13 @@ impl CadeApp {
             connect_started: false,
             ctx: cc.egui_ctx.clone(),
             server_url: config.server_url,
-            md_cache: CommonMarkCache::default(),
-            input_id: egui::Id::new("chat_input"),
             theme: crate::theme::ThemeColors::default(),
             viewport: crate::responsive::Viewport::Desktop,
-            sidebar_drawer_open: false,
         }
     }
 
-    /// Renders the Left Sidebar for agent selection and persistent plan checklist
-    fn draw_sidebar(&mut self) -> Option<AppAction> { None }
 
-    /// Renders the Right Panel (Split View) for subagents and live logs
-    fn draw_right_panel(
-        &self,
-        ui: &mut egui::Ui,
-        session: &crate::session::ConnectedSession,
-    ) {
-        let active_live_outputs: Vec<_> = session.live_outputs.iter().filter(|b| !b.done).collect();
-        let subagent_cards = &session.subagent_cards;
-        if !active_live_outputs.is_empty() || !subagent_cards.is_empty() {
-            egui::Panel::right("live_outputs_panel")
-                .default_size(320.0)
-                .resizable(true)
-                .show_inside(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("live_outputs_scroll")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.add_space(8.0);
-                            ui.heading(egui::RichText::new("Terminal Logs").color(self.theme.primary()).size(14.0));
-                            ui.add_space(8.0);
 
-                            for block in active_live_outputs {
-                                crate::app::views::render_live_output(ui, block, &self.theme);
-                                ui.add_space(8.0);
-                            }
-
-                            if !subagent_cards.is_empty() {
-                                ui.add_space(8.0);
-                                ui.heading(egui::RichText::new("Subagents").color(self.theme.primary()).size(14.0));
-                                ui.add_space(8.0);
-                                for card_state in subagent_cards.iter() {
-                                    let card = crate::app::views::SubagentCard {
-                                        subagent_id: card_state.subagent_id.clone(),
-                                        task: card_state.task.clone(),
-                                        mode: card_state.mode.clone(),
-                                        model: card_state.model.clone(),
-                                        status: match card_state.status.as_str() {
-                                            "complete" => crate::app::views::SubagentStatus::Complete,
-                                            "error" => crate::app::views::SubagentStatus::Error,
-                                            _ => crate::app::views::SubagentStatus::Running,
-                                        },
-                                        elapsed_secs: card_state.elapsed_secs,
-                                        tool_calls: card_state.tool_calls.clone(),
-                                        output_lines: card_state.output_lines.clone(),
-                                        result_preview: card_state.result_preview.clone(),
-                                        is_error: card_state.is_error,
-                                    };
-                                    crate::app::views::render_subagent_card(ui, &card, &self.theme);
-                                    ui.add_space(8.0);
-                                }
-                            }
-                        });
-                });
-        }
-    }
-
-    /// Renders the Bottom Input Panel with the prompt editor
-    fn draw_input_panel(
-        &self,
-        ui: &mut egui::Ui,
-        session: &crate::session::ConnectedSession,
-        input_edit: String,
-        is_streaming: bool,
-        request_focus_input: bool,
-    ) -> Option<AppAction> {
-        let has_agent = session.selected_agent.is_some();
-        components::editor::render(
-            ui,
-            input_edit,
-            has_agent,
-            is_streaming,
-            request_focus_input,
-            self.input_id,
-            &self.session,
-            &self.theme,
-        )
-    }
 }
 
 impl eframe::App for CadeApp {
@@ -216,8 +122,6 @@ impl eframe::App for CadeApp {
         let mut action = AppAction::None;
 
         // ── Global keyboard shortcuts ────────────────────────────
-        let shortcut = ui.input(poll_shortcut);
-        let mut request_focus_input = false;
 
         // Snapshot session state once so we can read it in the toolbar
         // without holding a borrow into the render closures below.
