@@ -11,7 +11,7 @@ pub fn render(
     let mut action = None;
     egui::Panel::top("dashboard_header").show_inside(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("Serena Dashboard").color(theme.text_primary()));
+            ui.heading(egui::RichText::new("CADE Dashboard").color(theme.text_primary()));
             ui.add_space(20.0);
 
             ui.selectable_value(active_page, ActivePage::Overview, "Overview");
