@@ -278,8 +278,8 @@ impl eframe::App for CadeApp {
                     let error_toast = &session.error_toast;
                     let last_usage = &session.last_usage;
                     let last_finish_reason = &session.last_finish_reason;
-                    let conversations = &session.conversations;
-                    let selected_conversation = &session.selected_conversation;
+                    let _conversations = &session.conversations;
+                    let _selected_conversation = &session.selected_conversation;
                     let has_more_messages = session.has_more_messages;
                     let palette_open = session.palette_open;
                     let palette_input = &session.palette_input;
@@ -318,7 +318,7 @@ impl eframe::App for CadeApp {
                     let active_question = &session.active_question;
                     let question_cursor = session.question_cursor;
                     let question_checked = &session.question_checked;
-                    let agent_metrics = &session.agent_metrics;
+                    let _agent_metrics = &session.agent_metrics;
                     let total_input_tokens = session.total_input_tokens;
                     let total_output_tokens = session.total_output_tokens;
                     let context_open = session.context_open;

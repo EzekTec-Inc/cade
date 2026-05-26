@@ -6,7 +6,7 @@ pub fn render(
     active_page: &mut ActivePage,
     _theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
-    let mut action = None;
+    let action = None;
 
     let frame = egui::Frame::NONE
         .fill(egui::Color32::from_rgb(23, 23, 23)) // #171717
