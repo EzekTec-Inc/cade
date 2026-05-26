@@ -880,6 +880,7 @@ dependencies = [
  "cade-cli",
  "cade-core",
  "cade-desktop",
+ "cade-mcp",
  "cade-sdk",
  "cade-server",
  "cade-store",

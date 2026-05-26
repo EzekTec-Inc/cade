@@ -158,7 +158,7 @@ impl McpManager {
     /// outcomes so the caller can report individual status to the user.
     pub async fn start(
         configs: &HashMap<String, McpServerConfig>,
-        mut on_progress: Option<&mut dyn FnMut(McpStartResult)>,
+        mut on_progress: Option<&mut (dyn FnMut(McpStartResult) + Send)>,
     ) -> (Self, Vec<McpStartResult>) {
         let mut servers = Vec::new();
         let mut results = Vec::new();

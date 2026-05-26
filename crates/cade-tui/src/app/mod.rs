@@ -40,7 +40,7 @@ use ratatui::{
 };
 
 use crate::autocomplete::FileAutocompleteProvider;
-use crate::colors::ThemeColors;
+use crate::colors::{ThemeColors, ThemeColorsExt};
 use crate::editor::{Editor, ImageEntry};
 // Re-export for child modules that `use super::*`
 pub(crate) use crate::editor::InputMode;
@@ -966,6 +966,8 @@ pub struct TuiApp {
 
     /// Live boot status of all configured MCP servers.
     pub mcp_boot_status: Option<std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, ServerBootStatus>>>>,
+    /// When did all configured MCP servers settle?
+    pub mcp_all_settled_at: Option<std::time::Instant>,
 }
 
 impl TuiApp {
@@ -1077,6 +1079,7 @@ impl TuiApp {
             bg_pending_count: None,
             bg_last_announced: 0,
             mcp_boot_status: None,
+            mcp_all_settled_at: None,
         }
     }
 
@@ -1431,12 +1434,15 @@ impl TuiApp {
                 }
                 
                 // Get all_settled_at timestamp
-                let mut lock = progress.lock();
-                if all_done && lock.all_settled_at.is_none() {
-                    lock.all_settled_at = Some(std::time::Instant::now());
+                if all_done {
+                    if self.mcp_all_settled_at.is_none() {
+                        self.mcp_all_settled_at = Some(std::time::Instant::now());
+                    }
+                } else {
+                    self.mcp_all_settled_at = None;
                 }
                 
-                if let Some(settled) = lock.all_settled_at {
+                if let Some(settled) = self.mcp_all_settled_at {
                     if settled.elapsed() < std::time::Duration::from_secs(3) {
                         show_card = true;
                     }

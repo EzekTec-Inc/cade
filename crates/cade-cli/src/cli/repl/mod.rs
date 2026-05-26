@@ -267,6 +267,7 @@ impl Repl {
         capabilities: cade_core::capabilities::CapabilitySet,
         mcp_rx: Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
         startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        mcp_boot_status: Option<std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, cade_tui::app::ServerBootStatus>>>>,
     ) -> Self {
         let perm_mode = permissions.mode();
         let agent_name_clone = agent_name.clone();
@@ -293,6 +294,7 @@ impl Repl {
             reasoning_effort.clone(),
             theme,
         );
+        tui_app.mcp_boot_status = mcp_boot_status.clone();
         let models: Vec<String> = cade_ai::catalogue::CATALOGUE
             .iter()
             .map(|m| m.0.to_string())
@@ -347,6 +349,7 @@ impl Repl {
             streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             mcp_rx,
             startup_ready,
+            mcp_boot_status,
             session_input_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_stats: std::sync::Arc::new(parking_lot::Mutex::new(SessionStats::new())),
