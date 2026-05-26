@@ -2,6 +2,8 @@ use eframe::egui;
 
 pub fn render(
     ui: &mut egui::Ui,
+    profile_name: &mut String,
+    profile_email: &mut String,
     _session: &crate::session::ConnectedSession,
     _theme: &crate::theme::ThemeColors,
 ) {
@@ -35,20 +37,18 @@ pub fn render(
             // Name
             ui.label(egui::RichText::new("Name").color(label_color).size(12.0));
             ui.add_space(4.0);
-            let mut name = "Stephen Ezekwem".to_string();
             ui.add_sized(
                 [ui.available_width(), 36.0],
-                egui::TextEdit::singleline(&mut name).margin(egui::Margin::symmetric(12, 8))
+                egui::TextEdit::singleline(profile_name).margin(egui::Margin::symmetric(12, 8))
             );
             ui.add_space(16.0);
 
             // Email
             ui.label(egui::RichText::new("Email").color(label_color).size(12.0));
             ui.add_space(4.0);
-            let mut email = "stephen.ezekwem@gmail.com".to_string();
             ui.add_sized(
                 [ui.available_width(), 36.0],
-                egui::TextEdit::singleline(&mut email).margin(egui::Margin::symmetric(12, 8))
+                egui::TextEdit::singleline(profile_email).margin(egui::Margin::symmetric(12, 8))
             );
             ui.add_space(16.0);
 
@@ -58,7 +58,10 @@ pub fn render(
             )
             .fill(egui::Color32::TRANSPARENT)
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
-            if ui.add_sized([100.0, 32.0], save_btn).clicked() { }
+            if ui.add_sized([100.0, 32.0], save_btn).clicked() {
+                crate::storage::save(crate::storage::StorageKey::ProfileName, profile_name);
+                crate::storage::save(crate::storage::StorageKey::ProfileEmail, profile_email);
+            }
 
             ui.add_space(32.0);
             ui.separator();

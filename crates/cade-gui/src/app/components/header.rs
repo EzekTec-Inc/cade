@@ -53,19 +53,29 @@ pub fn render(
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
                 
-                if ui.add(btn).clicked() { }
+                if ui.add(btn).clicked() {
+                    action = Some(crate::app::AppAction::ExecutePaletteCommand(String::from("/pricing")));
+                }
 
                 ui.add_space(16.0);
 
                 // Links
                 let link_color = egui::Color32::from_gray(180);
-                if ui.add(egui::Label::new(egui::RichText::new("Manage LLM keys").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
+                if ui.add(egui::Label::new(egui::RichText::new("Manage LLM keys").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() {
+                    action = Some(crate::app::AppAction::ToggleProfilesOverlay);
+                }
                 ui.add_space(12.0);
-                if ui.add(egui::Label::new(egui::RichText::new("API reference").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
+                if ui.add(egui::Label::new(egui::RichText::new("API reference").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/EzekTec-Inc/CADE/blob/master/docs/api.md"));
+                }
                 ui.add_space(12.0);
-                if ui.add(egui::Label::new(egui::RichText::new("Docs").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
+                if ui.add(egui::Label::new(egui::RichText::new("Docs").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/EzekTec-Inc/CADE/tree/master/docs"));
+                }
                 ui.add_space(12.0);
-                if ui.add(egui::Label::new(egui::RichText::new("Support").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() { }
+                if ui.add(egui::Label::new(egui::RichText::new("Support").color(link_color).size(13.0)).sense(egui::Sense::click())).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/EzekTec-Inc/CADE/issues"));
+                }
             });
         });
     });

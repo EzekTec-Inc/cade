@@ -76,6 +76,10 @@ pub struct CadeApp {
     theme: crate::theme::ThemeColors,
     viewport: crate::responsive::Viewport,
     sidebar_drawer_open: bool,
+    /// User profile name (persistent).
+    profile_name: String,
+    /// User profile email (persistent).
+    profile_email: String,
 }
 
 impl CadeApp {
@@ -107,6 +111,11 @@ impl CadeApp {
             }
         }
 
+        let profile_name = crate::storage::load(crate::storage::StorageKey::ProfileName)
+            .unwrap_or_else(|| "Stephen Ezekwem".to_string());
+        let profile_email = crate::storage::load(crate::storage::StorageKey::ProfileEmail)
+            .unwrap_or_else(|| "stephen.ezekwem@gmail.com".to_string());
+
         Self {
             active_page: ActivePage::Overview,
             login,
@@ -119,6 +128,8 @@ impl CadeApp {
             theme: crate::theme::ThemeColors::default(),
             viewport: crate::responsive::Viewport::Desktop,
             sidebar_drawer_open: false,
+            profile_name,
+            profile_email,
         }
     }
 
