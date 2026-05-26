@@ -34,7 +34,47 @@ struct ServerArgs {
     port: u16,
 }
 
+fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let backtrace = std::backtrace::Backtrace::capture();
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "unknown payload"
+        };
+
+        let log_msg = format!(
+            "=== CADE SERVER CRASH DETECTED ===\nTimestamp: {}\nLocation: {}\nPayload: {}\nBacktrace:\n{}\n",
+            chrono::Utc::now(),
+            location,
+            payload,
+            backtrace
+        );
+
+        eprintln!("{}", log_msg);
+        if let Some(home) = dirs::home_dir() {
+            let log_path = home.join(".cade").join("crash.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)
+            {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", log_msg);
+            }
+        }
+        std::process::abort();
+    }));
+}
+
 fn main() -> Result<()> {
+    setup_panic_hook();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(16 * 1024 * 1024) // 16 MB — prevents stack overflow from deeply-nested async state machines
