@@ -79,7 +79,7 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 ### 🔌 Extensible by Design
 | Feature | What it does |
 |---------|-------------|
-| **MCP Servers** | Connect external tool servers (GitHub, Jira, databases, etc.) |
+| **MCP Servers** | Connect any external tool server dynamically — CADE auto-discovers and registers tools on the fly |
 | **Skills** | Drop a Markdown file into `.cade/skills/` to teach CADE new domains |
 | **Hooks** | Wire shell scripts into lifecycle events (before/after tool calls) |
 | **Subagents & Teams** | Dispatch work to specialized agent teams that run in parallel |
@@ -188,6 +188,7 @@ CADE stores state per-project so you pick up right where you left off:
 ## Advanced Features
 
 - **Intelligent Tool Selection (ITS)** — A local ONNX cross-encoder reranks and filters tools before each LLM call, so the model only sees what's relevant. [Learn more →](docs/intelligent-tool-selection.md)
+- **Dynamic MCP Auto-Discovery** — Connect any third-party Model Context Protocol server, and CADE will automatically discover and register its tools dynamically, featuring prefix-agnostic routing and output budget regulation. [Learn more →](docs/mcp-servers.md)
 - **Semantic Memory Search** — Hybrid keyword + cosine similarity search via local embeddings (`fastembed` + `sqlite-vec`), merged with Reciprocal Rank Fusion.
 - **Cost Guardrails** — Set `CADE_MAX_SESSION_COST_USD=2.00` to auto-stop when spend crosses your threshold. [Learn more →](docs/cost-and-pricing.md)
 - **Execution Backends** — Run tools locally, inside Docker containers, or over SSH. [Learn more →](docs/execution-backends.md)

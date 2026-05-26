@@ -47,11 +47,16 @@ Server entry fields:
 
 Project servers override global ones with the same key.
 
-## Tool naming
+## Tool naming and dynamic auto-discovery
 
 External tools are exposed with a `{server}__` prefix. So if the `git`
 server exposes a `commit` tool, the LLM sees it as `git__commit`. This
 prevents collisions and makes tool provenance unambiguous.
+
+Rather than relying on hardcoded lists of third-party servers (like `desktop-commander` or `developer`) or prefix-specific rules, CADE employs a fully dynamic, prefix-agnostic auto-discovery mechanism:
+1. **Dynamic Tool Discovery**: Any connected MCP server's tools are loaded dynamically at startup and registered directly into CADE's database.
+2. **First-occurrence Prefix Stripping**: At the dispatch and evaluation level, CADE prefix-strips tool names by finding the first occurrence of the `__` namespace separator. This extracts the exact base tool name (e.g., `write_file` from `desktop-commander__write_file` or `shell` from `developer__shell`) dynamically.
+3. **Canonical Mapping**: CADE maps aliases (such as `RunShellCommand` -> `bash`, `ReadFileGemini` -> `read_file`, `Replace` -> `edit_file`, `SearchFileContent` -> `grep`, `GlobGemini` -> `glob`, `edit_block` -> `edit_file`, `ide_propose_edit` -> `edit_file`, `ide_apply_patch` -> `apply_patch`, and `create_file` -> `write_file`) dynamically to canonicalize them before routing to native actions.
 
 ## Inspecting
 

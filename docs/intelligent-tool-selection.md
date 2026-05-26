@@ -45,6 +45,17 @@ This means:
 - **Adding a new MCP server** requires no ITS changes — all MCP tools are auto-tagged `"mcp"` at registration.
 - **No hardcoded tool name lists** exist in the ITS layer.
 
+### Prefix-Agnostic Budget Limits
+
+In addition to schema-level pruning and compression, CADE automatically and dynamically regulates token budgets for tool execution outputs. In `tool_output_limit` (`messages/mod.rs`), CADE strips any MCP server-prefixed namespaces dynamically on the first `__` separator, mapping them to standard action categories (e.g., `bash`, `read_file`, `grep`, `glob`, `git`) to apply precise size-caps:
+- **Stdio & Shell Execution** (`bash`): Capped at 4,096 characters.
+- **File Reading** (`read_file`): Expanded to 12,288 characters to allow parsing full context.
+- **Search & Grep** (`grep`): Capped at 3,072 characters to output compact matches.
+- **Directories & Globs** (`glob`): Capped at 3,072 characters.
+- **Everything Else**: Defaults to the standard tool results limit (8,192 characters).
+
+No hardcoded prefix lists or server names are used in the budget regulation layer.
+
 ### Layer 1: Desktop Tool Pruning
 
 MCP tools with a `desktop_*` name prefix are removed entirely from the tool set
