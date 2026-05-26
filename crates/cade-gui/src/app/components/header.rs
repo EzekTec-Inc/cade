@@ -7,7 +7,7 @@ pub fn render(
     _session: &Option<crate::session::SessionState>,
     _theme: &crate::theme::ThemeColors,
 ) -> Option<crate::app::AppAction> {
-    let action = None;
+    let mut action = None;
     
     // Custom frame for top bar to give it a specific background and bottom border
     let frame = egui::Frame::NONE

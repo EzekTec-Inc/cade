@@ -609,7 +609,7 @@ impl eframe::App for CadeApp {
 
                     match self.active_page {
                         ActivePage::Overview => {
-                            components::overview::render(ui, &session, &self.theme);
+                            components::overview::render(ui, &mut self.profile_name, &mut self.profile_email, &session, &self.theme);
                         }
                         ActivePage::Memory => {
                             let dirty = memory_blocks
