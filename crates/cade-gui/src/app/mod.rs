@@ -126,7 +126,7 @@ impl CadeApp {
     fn draw_sidebar(
         &mut self,
         ui: &mut egui::Ui,
-        session: &mut crate::session::ConnectedSession,
+        session: &crate::session::ConnectedSession,
         total_input_tokens: u64,
         total_output_tokens: u64,
         is_streaming: bool,
@@ -677,7 +677,7 @@ impl eframe::App for CadeApp {
                             // ── Left sidebar: agent list ────────────────────
                             if let Some(new_action) = self.draw_sidebar(
                                 ui,
-                                &mut session,
+                                &session,
                                 total_input_tokens,
                                 total_output_tokens,
                                 is_streaming,
