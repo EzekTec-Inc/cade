@@ -89,6 +89,8 @@ impl AnthropicProvider {
         Self {
             client: Client::builder()
                 .tcp_keepalive(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             api_key,

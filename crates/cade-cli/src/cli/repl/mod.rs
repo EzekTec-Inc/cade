@@ -761,15 +761,23 @@ impl Repl {
 
             // Check for settings file changes — reload MCP servers if signalled
             let mut mcp_changed = false;
-            while self.mcp_reload_rx.try_recv().is_ok() {
+            if self.mcp_reload_rx.try_recv().is_ok() {
                 mcp_changed = true;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                while self.mcp_reload_rx.try_recv().is_ok() {}
             }
             if mcp_changed {
                 self.do_settings_reload().await;
             }
 
             // Check for skill file changes (live watcher) — reload if signalled
-            while self.skill_reload_rx.try_recv().is_ok() {
+            let mut skill_changed = false;
+            if self.skill_reload_rx.try_recv().is_ok() {
+                skill_changed = true;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                while self.skill_reload_rx.try_recv().is_ok() {}
+            }
+            if skill_changed {
                 let new_skills = cade_core::skills::discover_all_skills(&self.cwd, None, None);
                 let new_count = new_skills.len();
                 *self.skills.lock() = new_skills.clone();
@@ -783,8 +791,10 @@ impl Repl {
 
             // Check for plugin file changes (live watcher) — reload if signalled
             let mut plugin_changed = false;
-            while self.plugin_reload_rx.try_recv().is_ok() {
+            if self.plugin_reload_rx.try_recv().is_ok() {
                 plugin_changed = true;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                while self.plugin_reload_rx.try_recv().is_ok() {}
             }
             if plugin_changed {
                 self.tui_ok("  ↺ Lua plugins auto-reloaded".to_string());

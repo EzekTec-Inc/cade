@@ -59,7 +59,7 @@ pub fn open(path: &str) -> Result<Db> {
     }
     .with_init(|c| {
         // Applied to every connection handed out by the pool.
-        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
     });
 
     let max_size = if in_memory { 1 } else { DEFAULT_MAX_POOL_SIZE };
