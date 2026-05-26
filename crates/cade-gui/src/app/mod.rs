@@ -221,6 +221,12 @@ impl eframe::App for CadeApp {
         // without holding a borrow into the render closures below.
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
+
+        // ── Sidebar (Left) ─────────────────────────────────────────────
+        if let Some(new_action) = components::sidebar::render(ui, &mut self.active_page, &self.theme) {
+            action = new_action;
+        }
+
         // ── Top toolbar (M1) ─────────────────────────────────────────────
         if let Some(new_action) = components::header::render(
             ui,

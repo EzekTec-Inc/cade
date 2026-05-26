@@ -26,7 +26,7 @@ pub fn render(
                 
                 ui.add_space(8.0);
                 ui.heading(
-                    egui::RichText::new("CADE Beta")
+                    egui::RichText::new("CADE Betta")
                         .color(egui::Color32::WHITE)
                         .strong()
                         .size(18.0)
@@ -66,6 +66,13 @@ pub fn render(
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
+                                if is_active {
+                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 14.0), egui::Sense::hover());
+                                    ui.painter().rect_filled(rect, egui::CornerRadius::same(1), text_color);
+                                    ui.add_space(6.0);
+                                } else {
+                                    ui.add_space(8.0);
+                                }
                                 ui.label(egui::RichText::new(*icon).color(text_color).size(14.0));
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new(*label).color(text_color).size(13.0));
