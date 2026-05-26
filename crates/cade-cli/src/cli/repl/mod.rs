@@ -204,6 +204,8 @@ pub struct Repl {
         Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
     /// True when background boot completes.
     pub(crate) startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Live boot status of all configured MCP servers.
+    pub(crate) mcp_boot_status: Option<std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, cade_tui::app::ServerBootStatus>>>>,
     /// Cumulative token usage for the session (input, output).
     pub(crate) session_input_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(crate) session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,

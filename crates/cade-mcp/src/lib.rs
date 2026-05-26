@@ -54,7 +54,7 @@ const MCP_SERVER_TIMEOUT_SECS: u64 = 15;
 
 /// Result of a single MCP server startup attempt — used by the progress
 /// reporter in `main.rs` to show per-server status.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum McpStartResult {
     /// Server connected and reported its tools.
     Ok { key: String, tool_count: usize },
@@ -62,6 +62,16 @@ pub enum McpStartResult {
     Failed { key: String, error: String },
     /// Server exceeded the per-server startup timeout.
     Timeout { key: String, timeout_secs: u64 },
+}
+
+impl McpStartResult {
+    pub fn key(&self) -> &str {
+        match self {
+            Self::Ok { key, .. } => key,
+            Self::Failed { key, .. } => key,
+            Self::Timeout { key, .. } => key,
+        }
+    }
 }
 
 /// Public summary of a running MCP server (for `/mcp` command display).
@@ -146,7 +156,10 @@ impl McpManager {
     ///
     /// Returns `(manager, results)` where `results` contains per-server
     /// outcomes so the caller can report individual status to the user.
-    pub async fn start(configs: &HashMap<String, McpServerConfig>) -> (Self, Vec<McpStartResult>) {
+    pub async fn start(
+        configs: &HashMap<String, McpServerConfig>,
+        mut on_progress: Option<&mut dyn FnMut(McpStartResult)>,
+    ) -> (Self, Vec<McpStartResult>) {
         let mut servers = Vec::new();
         let mut results = Vec::new();
 
@@ -167,34 +180,39 @@ impl McpManager {
         }
 
         while let Some(Ok((key, result))) = join_set.join_next().await {
-            match result {
+            let res = match result {
                 Ok(Ok(server)) => {
                     let count = server.tools.len();
                     info!("MCP server '{}' ready — {} tool(s)", key, count);
-                    results.push(McpStartResult::Ok {
+                    let r = McpStartResult::Ok {
                         key: key.clone(),
                         tool_count: count,
-                    });
+                    };
                     servers.push(server);
+                    r
                 }
                 Ok(Err(e)) => {
                     let msg = e.to_string();
                     warn!("MCP server '{}' failed to start: {msg}", key);
-                    results.push(McpStartResult::Failed {
+                    McpStartResult::Failed {
                         key: key.clone(),
                         error: msg,
-                    });
+                    }
                 }
                 Err(_elapsed) => {
                     warn!(
                         "MCP server '{}' timed out after {}s — skipping",
                         key, MCP_SERVER_TIMEOUT_SECS
                     );
-                    results.push(McpStartResult::Timeout {
+                    McpStartResult::Timeout {
                         key: key.clone(),
                         timeout_secs: MCP_SERVER_TIMEOUT_SECS,
-                    });
+                    }
                 }
+            };
+            results.push(res.clone());
+            if let Some(ref mut cb) = on_progress {
+                cb(res);
             }
         }
 
