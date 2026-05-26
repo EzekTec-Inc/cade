@@ -36,580 +36,600 @@ pub fn render_welcome(
     ui.add(egui::Separator::default().horizontal().spacing(0.0));
 }
 
-/// Render one timeline message.
-/// Returns an `AppAction` only when a user interaction requires it.
-///
-/// Visual language mirrors the TUI — all items left-aligned, no bubbles:
-/// User: "You" bold + plain text; Assistant: "▍ CADE" primary bold + markdown;
-/// tool_call: "⚙ name(args…)" collapsible; tool: "│ OK/ERR content";
-/// reasoning: "╭ THINKING N words" collapsible; system: " INFO  text".
 pub fn render_timeline_message(
     ui: &mut egui::Ui,
     md_cache: &mut egui_commonmark::CommonMarkCache,
     msg: &cade_api_types::ChatMessage,
     theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
-    let tool_icon =
-        |name: &str| -> &'static str {
-            match name {
-                // -- Shell / process
-                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-                | "RunShellCommand" => "\u{f120}", //
-
-                // -- File read
-                "read_file" | "ReadFileGemini" | "read_multiple_files" => "\u{f15c}", //
-
-                // -- File write / edit
-                "write_file" | "edit_file" | "create_file" | "edit_block" | "replace_in_file" => {
-                    "\u{f0f6}"
-                } //
-
-                // -- Patch / diff
-                "apply_patch" | "ide_apply_patch" => "\u{f440}", //
-
-                // -- Search / grep
-                "grep" | "grep_search" | "GlobGemini" | "SearchFileContent" | "start_search"
-                | "find_references" | "symbol_search" => "\u{f002}", //
-
-                // -- Directory / glob
-                "list_directory" | "glob" | "get_file_info" => "\u{f07b}", //
-
-                // -- Git
-                "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op" | "stash_op"
-                | "log" | "diff" | "status" | "add" | "reset" | "restore" | "fetch" | "remote"
-                | "tag" | "show" | "blame" | "cherry_pick" | "clean" | "revert" | "config"
-                | "repository" => "\u{e725}", //
-
-                // -- GitHub
-                "create_pull_request"
-                | "create_issue"
-                | "list_issues"
-                | "search_issues"
-                | "search_code"
-                | "get_issue"
-                | "add_issue_comment"
-                | "list_commits"
-                | "get_file_contents"
-                | "get_repository"
-                | "create_branch"
-                | "search_repositories"
-                | "update_issue"
-                | "get_user" => "\u{f09b}", //
-
-                // -- Memory / knowledge
-                "update_memory"
-                | "memory_apply_patch"
-                | "search_memory"
-                | "conversation_search"
-                | "archival_memory_insert"
-                | "archival_memory_search"
-                | "update_memory_typed"
-                | "link_memory_evidence"
-                | "reflect" => "\u{f0eb}", //
-
-                // -- Skills
-                "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
-                | "unload_skill" => "\u{f085}", //
-
-                // -- Subagents
-                "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}", //
-
-                // -- Plan / task
-                "EnterPlanMode" | "ExitPlanMode" | "TodoWrite" | "UpdatePlan" | "WriteTodos"
-                | "set_plan" | "workflow" => "\u{f0ae}", //
-
-                // -- Checkpoints / artifacts
-                "create_checkpoint" | "restore_checkpoint" | "list_checkpoints"
-                | "store_artifact" => "\u{f0c7}", //
-
-                // -- Web / network
-                "web_search" | "fetch_doc" | "browser_screenshot" | "http_request"
-                | "get-library-docs" | "resolve-library-id" => "\u{f0ac}", //
-
-                // -- Desktop
-                "screen_capture"
-                | "desktop_screenshot"
-                | "list_windows"
-                | "desktop_list_windows"
-                | "desktop_control"
-                | "image_processor" => "\u{f108}", //
-
-                // -- Default
-                _ => "\u{f0ad}", //  (wrench — generic tool)
-            }
-        };
-
     match msg.role.as_str() {
-        // ── User ─────────────────────────────────────────────────────
         "user" => {
             let text = msg.content.as_str().unwrap_or("").trim().to_string();
-            // "You" label
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new("You")
-                    .color(theme.text_primary())
-                    .strong()
-                    .monospace()
-                    .size(12.0),
-            );
-            // Plain text — no markdown rendering for user messages (mirrors TUI)
-            ui.label(
-                egui::RichText::new(&text)
-                    .color(theme.text_primary())
-                    .size(12.0),
-            );
+            render_user_message(ui, &text, theme);
             None
         }
-
-        // ── Assistant ─────────────────────────────────────────────────
         "assistant" => {
             let text = msg.content.as_str().unwrap_or("").trim().to_string();
-            ui.add_space(2.0);
-            // "▍ CADE" header
-            ui.label(
-                egui::RichText::new("▍ CADE")
+            render_assistant_message(ui, &text, md_cache, theme);
+            None
+        }
+        "reasoning" => {
+            let text = msg.content.as_str().unwrap_or("");
+            render_reasoning_message(ui, text, &msg.id, theme);
+            None
+        }
+        "tool_call" => {
+            render_tool_call_message(ui, msg, theme)
+        }
+        "tool" => {
+            let text = msg.content.as_str().unwrap_or("").trim();
+            render_tool_result_message(ui, text, &msg.id, theme);
+            None
+        }
+        "system" => {
+            let text = msg.content.as_str().unwrap_or("");
+            render_system_message(ui, text, theme);
+            None
+        }
+        role => {
+            let text = msg.content.as_str().map(|s| s.to_string()).unwrap_or_else(|| msg.content.to_string());
+            render_fallback_message(ui, role, &text, theme);
+            None
+        }
+    }
+}
+
+pub fn get_tool_icon(name: &str) -> &'static str {
+    match name {
+        // -- Shell / process
+        "bash" | "shell" | "run_command" | "execute_command" | "start_process"
+        | "RunShellCommand" => "\u{f120}", // 
+
+        // -- File read
+        "read_file" | "ReadFileGemini" | "read_multiple_files" => "\u{f15c}", // 
+
+        // -- File write / edit
+        "write_file" | "edit_file" | "create_file" | "edit_block" | "replace_in_file" => {
+            "\u{f0f6}"
+        } // 
+
+        // -- Patch / diff
+        "apply_patch" | "ide_apply_patch" => "\u{f440}", // 
+
+        // -- Search / grep
+        "grep" | "grep_search" | "GlobGemini" | "SearchFileContent" | "start_search"
+        | "find_references" | "symbol_search" => "\u{f002}", // 
+
+        // -- Directory / glob
+        "list_directory" | "glob" | "get_file_info" => "\u{f07b}", // 
+
+        // -- Git
+        "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op" | "stash_op"
+        | "log" | "diff" | "status" | "add" | "reset" | "restore" | "fetch" | "remote"
+        | "tag" | "show" | "blame" | "cherry_pick" | "clean" | "revert" | "config"
+        | "repository" => "\u{e725}", // 
+
+        // -- GitHub
+        "create_pull_request"
+        | "create_issue"
+        | "list_issues"
+        | "search_issues"
+        | "search_code"
+        | "get_issue"
+        | "add_issue_comment"
+        | "list_commits"
+        | "get_file_contents"
+        | "get_repository"
+        | "create_branch"
+        | "search_repositories"
+        | "update_issue"
+        | "get_user" => "\u{f09b}", // 
+
+        // -- Memory / knowledge
+        "update_memory"
+        | "memory_apply_patch"
+        | "search_memory"
+        | "conversation_search"
+        | "archival_memory_insert"
+        | "archival_memory_search"
+        | "update_memory_typed"
+        | "link_memory_evidence"
+        | "reflect" => "\u{f0eb}", // 
+
+        // -- Skills
+        "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
+        | "unload_skill" => "\u{f085}", // 
+
+        // -- Subagents
+        "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}", // 
+
+        // -- Plan / task
+        "EnterPlanMode" | "ExitPlanMode" | "TodoWrite" | "UpdatePlan" | "WriteTodos"
+        | "set_plan" | "workflow" => "\u{f0ae}", // 
+
+        // -- Checkpoints / artifacts
+        "create_checkpoint" | "restore_checkpoint" | "list_checkpoints"
+        | "store_artifact" => "\u{f0c7}", // 💾
+
+        // -- Web / network
+        "web_search" | "fetch_doc" | "browser_screenshot" | "http_request"
+        | "get-library-docs" | "resolve-library-id" => "\u{f0ac}", // 
+
+        // -- Desktop
+        "screen_capture"
+        | "desktop_screenshot"
+        | "list_windows"
+        | "desktop_list_windows"
+        | "desktop_control"
+        | "image_processor" => "\u{f108}", // 
+
+        // -- Default
+        _ => "\u{f0ad}", //  (wrench — generic tool)
+    }
+}
+
+pub fn render_user_message(ui: &mut egui::Ui, text: &str, theme: &crate::theme::ThemeColors) {
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new("You")
+            .color(theme.text_primary())
+            .strong()
+            .monospace()
+            .size(12.0),
+    );
+    ui.label(
+        egui::RichText::new(text)
+            .color(theme.text_primary())
+            .size(12.0),
+    );
+}
+
+pub fn render_assistant_message(
+    ui: &mut egui::Ui,
+    text: &str,
+    md_cache: &mut egui_commonmark::CommonMarkCache,
+    theme: &crate::theme::ThemeColors,
+) {
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new("▍ CADE")
+            .color(theme.primary())
+            .strong()
+            .monospace()
+            .size(12.0),
+    );
+    let max_w = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(max_w, 0.0),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.set_max_width(max_w);
+            egui_commonmark::CommonMarkViewer::new()
+                .default_width(Some(max_w as usize))
+                .max_image_width(Some((max_w * 0.9) as usize))
+                .syntax_theme_dark("base16-ocean.dark")
+                .syntax_theme_light("base16-ocean.light")
+                .show(ui, md_cache, text);
+        },
+    );
+}
+
+pub fn render_reasoning_message(
+    ui: &mut egui::Ui,
+    text: &str,
+    msg_id: &str,
+    theme: &crate::theme::ThemeColors,
+) {
+    let word_count = text.split_whitespace().count();
+    let is_streaming = msg_id.is_empty();
+    let header = if is_streaming {
+        format!("╭ THINKING  {} words", word_count)
+    } else {
+        format!("╭ THINKING  {} words · collapsed", word_count)
+    };
+
+    ui.add_space(1.0);
+    egui::CollapsingHeader::new(
+        egui::RichText::new(header)
+            .color(theme.text_muted())
+            .italics()
+            .size(12.0),
+    )
+    .id_salt(format!("reasoning_{}", msg_id))
+    .default_open(false)
+    .show(ui, |ui| {
+        for ln in text.lines() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("│ ")
+                        .color(theme.border_base())
+                        .size(12.0),
+                );
+                ui.label(
+                    egui::RichText::new(ln)
+                        .color(theme.text_muted())
+                        .italics()
+                        .size(12.0),
+                );
+            });
+        }
+    });
+}
+
+pub fn render_tool_call_message(
+    ui: &mut egui::Ui,
+    msg: &cade_api_types::ChatMessage,
+    theme: &crate::theme::ThemeColors,
+) -> Option<AppAction> {
+    let name = msg
+        .content
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let args_raw = msg
+        .content
+        .get("arguments")
+        .and_then(|v| v.as_str())
+        .unwrap_or("{}");
+    let args: serde_json::Value = serde_json::from_str(args_raw).unwrap_or_default();
+
+    ui.add_space(1.0);
+    let icon = get_tool_icon(name);
+
+    match name {
+        // ── Edit / replace: file badge + inline diff ──────
+        "edit_file"
+        | "replace_in_file"
+        | "Replace"
+        | "desktop-commander__edit_block"
+        | "cade-nvim__ide_propose_edit" => {
+            let path = args["path"].as_str().unwrap_or("unknown");
+            let old = args["old_string"]
+                .as_str()
+                .or_else(|| args["old_str"].as_str())
+                .unwrap_or("");
+            let new = args["new_string"]
+                .as_str()
+                .or_else(|| args["new_str"].as_str())
+                .unwrap_or("");
+
+            let header = format!("{icon} edit  {}", short_path(path));
+            egui::CollapsingHeader::new(
+                egui::RichText::new(&header)
                     .color(theme.primary())
                     .strong()
                     .monospace()
                     .size(12.0),
-            );
-            // Width-constrained markdown rendering
-            let max_w = ui.available_width();
-            ui.allocate_ui_with_layout(
-                egui::vec2(max_w, 0.0),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    ui.set_max_width(max_w);
-                    egui_commonmark::CommonMarkViewer::new()
-                        .default_width(Some(max_w as usize))
-                        .max_image_width(Some((max_w * 0.9) as usize))
-                        .syntax_theme_dark("base16-ocean.dark")
-                        .syntax_theme_light("base16-ocean.light")
-                        .show(ui, md_cache, &text);
-                },
-            );
-            None
+            )
+            .id_salt(format!("tc_{}", msg.id))
+            .default_open(true)
+            .show(ui, |ui| {
+                render_inline_diff(ui, old, new, theme);
+            });
         }
 
-        // ── Reasoning ─────────────────────────────────────────────────
-        "reasoning" => {
-            let text = msg.content.as_str().unwrap_or("");
-            let word_count = text.split_whitespace().count();
-            let is_streaming = msg.id.is_empty();
-            let header = if is_streaming {
-                format!("╭ THINKING  {} words", word_count)
-            } else {
-                format!("╭ THINKING  {} words · collapsed", word_count)
-            };
+        // ── Write file: file badge + content preview ──────
+        "write_file"
+        | "WriteFileGemini"
+        | "create_file"
+        | "desktop-commander__write_file"
+        | "developer__write_file" => {
+            let path = args["path"]
+                .as_str()
+                .or_else(|| args["file_path"].as_str())
+                .unwrap_or("unknown");
+            let content = args["content"]
+                .as_str()
+                .or_else(|| args["file_text"].as_str())
+                .unwrap_or("");
+            let line_count = content.lines().count();
 
-            ui.add_space(1.0);
+            let header =
+                format!("{icon} write  {} ({} lines)", short_path(path), line_count);
             egui::CollapsingHeader::new(
-                egui::RichText::new(header)
-                    .color(theme.text_muted())
-                    .italics()
+                egui::RichText::new(&header)
+                    .color(theme.success())
+                    .strong()
+                    .monospace()
                     .size(12.0),
             )
-            .id_salt(format!("reasoning_{}", msg.id))
+            .id_salt(format!("tc_{}", msg.id))
             .default_open(false)
             .show(ui, |ui| {
-                for ln in text.lines() {
+                render_code_preview(ui, content, 30, theme);
+            });
+        }
+
+        // ── Apply patch: rendered diff ────────────────────
+        "apply_patch" | "cade-nvim__ide_apply_patch" => {
+            let patch = args["patch"].as_str().unwrap_or("");
+            let file_count = patch.matches("--- a/").count().max(1);
+
+            let header = format!(
+                "{icon} patch  ({} file{})",
+                file_count,
+                if file_count != 1 { "s" } else { "" }
+            );
+            egui::CollapsingHeader::new(
+                egui::RichText::new(&header)
+                    .color(theme.warning())
+                    .strong()
+                    .monospace()
+                    .size(12.0),
+            )
+            .id_salt(format!("tc_{}", msg.id))
+            .default_open(true)
+            .show(ui, |ui| {
+                render_patch(ui, patch, theme);
+            });
+        }
+
+        // ── Read file: file badge + range ─────────────────
+        "read_file"
+        | "ReadFileGemini"
+        | "developer__read_file"
+        | "desktop-commander__read_file" => {
+            let path = args["path"].as_str().unwrap_or("unknown");
+            let offset = args["offset"]
+                .as_u64()
+                .or_else(|| args["start_line"].as_u64());
+            let limit = args["limit"].as_u64().or_else(|| args["end_line"].as_u64());
+
+            let range_str = match (offset, limit) {
+                (Some(o), Some(l)) => format!(" L{}–{}", o, l),
+                (Some(o), None) => format!(" L{}+", o),
+                _ => String::new(),
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{icon} read  {}{}",
+                        short_path(path),
+                        range_str
+                    ))
+                    .color(theme.text_primary())
+                    .monospace()
+                    .size(12.0),
+                );
+            });
+        }
+
+        // ── Bash / shell: command badge ───────────────────
+        "bash"
+        | "shell"
+        | "run_command"
+        | "execute_command"
+        | "RunShellCommand"
+        | "developer__shell"
+        | "desktop-commander__start_process"
+        | "developer__start_process" => {
+            let cmd = args["command"].as_str().unwrap_or("…");
+            let cmd_preview: String = cmd.chars().take(120).collect();
+            let suffix = if cmd.len() > 120 { "…" } else { "" };
+
+            egui::CollapsingHeader::new(
+                egui::RichText::new(format!("{icon} $ {cmd_preview}{suffix}"))
+                    .color(theme.teal())
+                    .strong()
+                    .monospace()
+                    .size(12.0),
+            )
+            .id_salt(format!("tc_{}", msg.id))
+            .default_open(false)
+            .show(ui, |ui| {
+                if cmd.len() > 120 {
+                    render_code_preview(ui, cmd, 10, theme);
+                }
+            });
+        }
+
+        // ── Glob / grep: search badge ─────────────────────
+        "glob" | "GlobGemini" | "developer__glob" => {
+            let pattern = args["pattern"].as_str().unwrap_or("*");
+            let path = args["path"].as_str().unwrap_or(".");
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{icon} glob  {} in {}",
+                        pattern,
+                        short_path(path)
+                    ))
+                    .color(theme.text_primary())
+                    .monospace()
+                    .size(12.0),
+                );
+            });
+        }
+
+        "grep" | "SearchFileContent" | "developer__grep_search" => {
+            let pattern = args["pattern"].as_str().unwrap_or("…");
+            let path = args["path"].as_str().unwrap_or(".");
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{icon} grep  /{}/  in {}",
+                        pattern,
+                        short_path(path)
+                    ))
+                    .color(theme.text_primary())
+                    .monospace()
+                    .size(12.0),
+                );
+            });
+        }
+
+        // ── Git commands: operation badge ─────────────────
+        "git__commit" | "git__add" | "git__push" | "git__pull" | "git__branch"
+        | "git__diff" | "git__status" | "git__log" | "git__stash_op" | "git__merge"
+        | "git__rebase_op" | "git__reset" | "git__restore" | "git__tag" | "git__show"
+        | "git__fetch" | "git__blame" | "git__cherry_pick" | "git__clean"
+        | "git__revert" | "git__config" | "git__remote" | "git__repository" => {
+            let op = name.strip_prefix("git__").unwrap_or(name);
+            let summary = match op {
+                "commit" => args["message"]
+                    .as_str()
+                    .map(|m| {
+                        let s: String = m.chars().take(72).collect();
+                        format!("\"{}\"", s)
+                    })
+                    .unwrap_or_default(),
+                "add" => args["files"]
+                    .as_array()
+                    .map(|f| format!("{} files", f.len()))
+                    .unwrap_or_else(|| "all".into()),
+                "branch" => args["name"].as_str().unwrap_or("").to_string(),
+                "diff" => {
+                    let staged = args["staged"].as_bool().unwrap_or(false);
+                    if staged {
+                        "staged".into()
+                    } else {
+                        "working tree".into()
+                    }
+                }
+                _ => String::new(),
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{icon} git {op}  {summary}"))
+                        .color(theme.primary())
+                        .monospace()
+                        .size(12.0),
+                );
+            });
+        }
+
+        // ── Default: fallback to compact JSON ─────────────
+        _ => {
+            let preview: String = args_raw.replace('\n', " ").chars().take(60).collect();
+            let suffix = if args_raw.len() > 60 { "…" } else { "" };
+
+            egui::CollapsingHeader::new(
+                egui::RichText::new(format!("{icon} {}({preview}{suffix})", name))
+                    .color(theme.primary())
+                    .strong()
+                    .monospace()
+                    .size(12.0),
+            )
+            .id_salt(format!("tc_{}", msg.id))
+            .default_open(false)
+            .show(ui, |ui| {
+                let pretty = serde_json::to_string_pretty(&args)
+                    .unwrap_or_else(|_| args_raw.to_string());
+                for ln in pretty.lines() {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("│ ")
                                 .color(theme.border_base())
-                                .size(12.0),
+                                .size(11.0),
                         );
                         ui.label(
                             egui::RichText::new(ln)
-                                .color(theme.text_muted())
-                                .italics()
-                                .size(12.0),
-                        );
-                    });
-                }
-            });
-            None
-        }
-
-        // ── Tool call ─────────────────────────────────────────────────
-        "tool_call" => {
-            let name = msg
-                .content
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let args_raw = msg
-                .content
-                .get("arguments")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
-            let args: serde_json::Value = serde_json::from_str(args_raw).unwrap_or_default();
-
-            ui.add_space(1.0);
-            let icon = tool_icon(name);
-
-            match name {
-                // ── Edit / replace: file badge + inline diff ──────
-                "edit_file"
-                | "replace_in_file"
-                | "Replace"
-                | "desktop-commander__edit_block"
-                | "cade-nvim__ide_propose_edit" => {
-                    let path = args["path"].as_str().unwrap_or("unknown");
-                    let old = args["old_string"]
-                        .as_str()
-                        .or_else(|| args["old_str"].as_str())
-                        .unwrap_or("");
-                    let new = args["new_string"]
-                        .as_str()
-                        .or_else(|| args["new_str"].as_str())
-                        .unwrap_or("");
-
-                    let header = format!("{icon} edit  {}", short_path(path));
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new(&header)
-                            .color(theme.primary())
-                            .strong()
-                            .monospace()
-                            .size(12.0),
-                    )
-                    .id_salt(format!("tc_{}", msg.id))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        render_inline_diff(ui, old, new, theme);
-                    });
-                }
-
-                // ── Write file: file badge + content preview ──────
-                "write_file"
-                | "WriteFileGemini"
-                | "create_file"
-                | "desktop-commander__write_file"
-                | "developer__write_file" => {
-                    let path = args["path"]
-                        .as_str()
-                        .or_else(|| args["file_path"].as_str())
-                        .unwrap_or("unknown");
-                    let content = args["content"]
-                        .as_str()
-                        .or_else(|| args["file_text"].as_str())
-                        .unwrap_or("");
-                    let line_count = content.lines().count();
-
-                    let header =
-                        format!("{icon} write  {} ({} lines)", short_path(path), line_count);
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new(&header)
-                            .color(theme.success())
-                            .strong()
-                            .monospace()
-                            .size(12.0),
-                    )
-                    .id_salt(format!("tc_{}", msg.id))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        render_code_preview(ui, content, 30, theme);
-                    });
-                }
-
-                // ── Apply patch: rendered diff ────────────────────
-                "apply_patch" | "cade-nvim__ide_apply_patch" => {
-                    let patch = args["patch"].as_str().unwrap_or("");
-                    let file_count = patch.matches("--- a/").count().max(1);
-
-                    let header = format!(
-                        "{icon} patch  ({} file{})",
-                        file_count,
-                        if file_count != 1 { "s" } else { "" }
-                    );
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new(&header)
-                            .color(theme.warning())
-                            .strong()
-                            .monospace()
-                            .size(12.0),
-                    )
-                    .id_salt(format!("tc_{}", msg.id))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        render_patch(ui, patch, theme);
-                    });
-                }
-
-                // ── Read file: file badge + range ─────────────────
-                "read_file"
-                | "ReadFileGemini"
-                | "developer__read_file"
-                | "desktop-commander__read_file" => {
-                    let path = args["path"].as_str().unwrap_or("unknown");
-                    let offset = args["offset"]
-                        .as_u64()
-                        .or_else(|| args["start_line"].as_u64());
-                    let limit = args["limit"].as_u64().or_else(|| args["end_line"].as_u64());
-
-                    let range_str = match (offset, limit) {
-                        (Some(o), Some(l)) => format!(" L{}–{}", o, l),
-                        (Some(o), None) => format!(" L{}+", o),
-                        _ => String::new(),
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{icon} read  {}{}",
-                                short_path(path),
-                                range_str
-                            ))
-                            .color(theme.text_primary())
-                            .monospace()
-                            .size(12.0),
-                        );
-                    });
-                }
-
-                // ── Bash / shell: command badge ───────────────────
-                "bash"
-                | "shell"
-                | "run_command"
-                | "execute_command"
-                | "RunShellCommand"
-                | "developer__shell"
-                | "desktop-commander__start_process"
-                | "developer__start_process" => {
-                    let cmd = args["command"].as_str().unwrap_or("…");
-                    let cmd_preview: String = cmd.chars().take(120).collect();
-                    let suffix = if cmd.len() > 120 { "…" } else { "" };
-
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new(format!("{icon} $ {cmd_preview}{suffix}"))
-                            .color(theme.teal())
-                            .strong()
-                            .monospace()
-                            .size(12.0),
-                    )
-                    .id_salt(format!("tc_{}", msg.id))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if cmd.len() > 120 {
-                            render_code_preview(ui, cmd, 10, theme);
-                        }
-                    });
-                }
-
-                // ── Glob / grep: search badge ─────────────────────
-                "glob" | "GlobGemini" | "developer__glob" => {
-                    let pattern = args["pattern"].as_str().unwrap_or("*");
-                    let path = args["path"].as_str().unwrap_or(".");
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{icon} glob  {} in {}",
-                                pattern,
-                                short_path(path)
-                            ))
-                            .color(theme.text_primary())
-                            .monospace()
-                            .size(12.0),
-                        );
-                    });
-                }
-
-                "grep" | "SearchFileContent" | "developer__grep_search" => {
-                    let pattern = args["pattern"].as_str().unwrap_or("…");
-                    let path = args["path"].as_str().unwrap_or(".");
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{icon} grep  /{}/  in {}",
-                                pattern,
-                                short_path(path)
-                            ))
-                            .color(theme.text_primary())
-                            .monospace()
-                            .size(12.0),
-                        );
-                    });
-                }
-
-                // ── Git commands: operation badge ─────────────────
-                "git__commit" | "git__add" | "git__push" | "git__pull" | "git__branch"
-                | "git__diff" | "git__status" | "git__log" | "git__stash_op" | "git__merge"
-                | "git__rebase_op" | "git__reset" | "git__restore" | "git__tag" | "git__show"
-                | "git__fetch" | "git__blame" | "git__cherry_pick" | "git__clean"
-                | "git__revert" | "git__config" | "git__remote" | "git__repository" => {
-                    let op = name.strip_prefix("git__").unwrap_or(name);
-                    let summary = match op {
-                        "commit" => args["message"]
-                            .as_str()
-                            .map(|m| {
-                                let s: String = m.chars().take(72).collect();
-                                format!("\"{}\"", s)
-                            })
-                            .unwrap_or_default(),
-                        "add" => args["files"]
-                            .as_array()
-                            .map(|f| format!("{} files", f.len()))
-                            .unwrap_or_else(|| "all".into()),
-                        "branch" => args["name"].as_str().unwrap_or("").to_string(),
-                        "diff" => {
-                            let staged = args["staged"].as_bool().unwrap_or(false);
-                            if staged {
-                                "staged".into()
-                            } else {
-                                "working tree".into()
-                            }
-                        }
-                        _ => String::new(),
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("{icon} git {op}  {summary}"))
-                                .color(theme.primary())
-                                .monospace()
-                                .size(12.0),
-                        );
-                    });
-                }
-
-                // ── Default: fallback to compact JSON ─────────────
-                _ => {
-                    let preview: String = args_raw.replace('\n', " ").chars().take(60).collect();
-                    let suffix = if args_raw.len() > 60 { "…" } else { "" };
-
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new(format!("{icon} {}({preview}{suffix})", name))
-                            .color(theme.primary())
-                            .strong()
-                            .monospace()
-                            .size(12.0),
-                    )
-                    .id_salt(format!("tc_{}", msg.id))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        let pretty = serde_json::to_string_pretty(&args)
-                            .unwrap_or_else(|_| args_raw.to_string());
-                        for ln in pretty.lines() {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("│ ")
-                                        .color(theme.border_base())
-                                        .size(11.0),
-                                );
-                                ui.label(
-                                    egui::RichText::new(ln)
-                                        .color(theme.text_dim())
-                                        .monospace()
-                                        .size(11.0),
-                                );
-                            });
-                        }
-                    });
-                }
-            }
-            None
-        }
-
-        // ── Tool result ───────────────────────────────────────────────
-        "tool" => {
-            let content = msg.content.as_str().unwrap_or("").trim();
-
-            // Detect error by checking if content starts with known error prefixes
-            let is_error = content.starts_with("Error")
-                || content.starts_with("error")
-                || content.starts_with("ERR");
-
-            let (status_label, status_color) = if is_error {
-                ("\u{f057}", theme.error()) // 
-            } else {
-                ("\u{f058}", theme.success()) // 
-            };
-
-            let lines: Vec<&str> = content.lines().collect();
-            let show_limit = 3usize;
-
-            ui.add_space(1.0);
-            egui::CollapsingHeader::new({
-                // Header: "│ ✓ <first line>"
-                let first = lines.first().copied().unwrap_or("(no output)");
-                let first_trunc: String = first.chars().take(72).collect();
-                let suffix = if first.len() > 72 { "…" } else { "" };
-                egui::RichText::new(format!("│ {status_label} {first_trunc}{suffix}"))
-                    .color(status_color)
-                    .monospace()
-                    .size(12.0)
-            })
-            .id_salt(format!("tr_{}", msg.id))
-            .default_open(false)
-            .show(ui, |ui| {
-                let to_show = lines.len();
-                for (i, ln) in lines.iter().take(to_show).enumerate() {
-                    if i == 0 {
-                        continue;
-                    } // already shown in header
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("│      ")
-                                .color(theme.border_base())
-                                .monospace()
-                                .size(11.0),
-                        );
-                        ui.label(
-                            egui::RichText::new(*ln)
-                                .color(status_color)
+                                .color(theme.text_dim())
                                 .monospace()
                                 .size(11.0),
                         );
                     });
                 }
-                let _ = show_limit; // suppress unused warning
             });
-            None
         }
+    }
+    None
+}
 
-        // ── System ────────────────────────────────────────────────────
-        "system" => {
-            let text = msg.content.as_str().unwrap_or("");
-            ui.add_space(1.0);
-            for (i, ln) in text.lines().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(if i == 0 { " INFO " } else { "      " })
-                            .color(theme.primary())
-                            .background_color(theme.bg_base())
-                            .strong()
-                            .size(11.0),
-                    );
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(ln).color(theme.text_muted()).size(12.0));
-                });
-            }
-            None
-        }
+pub fn render_tool_result_message(
+    ui: &mut egui::Ui,
+    content: &str,
+    msg_id: &str,
+    theme: &crate::theme::ThemeColors,
+) {
+    // Detect error by checking if content starts with known error prefixes
+    let is_error = content.starts_with("Error")
+        || content.starts_with("error")
+        || content.starts_with("ERR");
 
-        // ── Fallback ─────────────────────────────────────────────────
-        role => {
-            let text = msg
-                .content
-                .as_str()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| msg.content.to_string());
-            ui.add_space(2.0);
+    let (status_label, status_color) = if is_error {
+        ("\u{f057}", theme.error()) // 
+    } else {
+        ("\u{f058}", theme.success()) // 
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+
+    ui.add_space(1.0);
+    egui::CollapsingHeader::new({
+        // Header: "│ ✓ <first line>"
+        let first = lines.first().copied().unwrap_or("(no output)");
+        let first_trunc: String = first.chars().take(72).collect();
+        let suffix = if first.len() > 72 { "…" } else { "" };
+        egui::RichText::new(format!("│ {status_label} {first_trunc}{suffix}"))
+            .color(status_color)
+            .monospace()
+            .size(12.0)
+    })
+    .id_salt(format!("tr_{}", msg_id))
+    .default_open(false)
+    .show(ui, |ui| {
+        let to_show = lines.len();
+        for (i, ln) in lines.iter().take(to_show).enumerate() {
+            if i == 0 {
+                continue;
+            } // already shown in header
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!(" {role} "))
-                        .color(theme.text_dim())
+                    egui::RichText::new("│      ")
+                        .color(theme.border_base())
                         .monospace()
                         .size(11.0),
                 );
-                ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(&text)
-                        .color(theme.text_muted())
-                        .size(12.0),
+                    egui::RichText::new(*ln)
+                        .color(status_color)
+                        .monospace()
+                        .size(11.0),
                 );
             });
-            None
         }
+    });
+}
+
+pub fn render_system_message(ui: &mut egui::Ui, text: &str, theme: &crate::theme::ThemeColors) {
+    ui.add_space(1.0);
+    for (i, ln) in text.lines().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(if i == 0 { " INFO " } else { "      " })
+                    .color(theme.primary())
+                    .background_color(theme.bg_base())
+                    .strong()
+                    .size(11.0),
+            );
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(ln).color(theme.text_muted()).size(12.0));
+        });
     }
+}
+
+pub fn render_fallback_message(
+    ui: &mut egui::Ui,
+    role: &str,
+    text: &str,
+    theme: &crate::theme::ThemeColors,
+) {
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(" {role} "))
+                .color(theme.text_dim())
+                .monospace()
+                .size(11.0),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(text)
+                .color(theme.text_muted())
+                .size(12.0),
+        );
+    });
 }
 
 /// Render a live-output block in the timeline.
