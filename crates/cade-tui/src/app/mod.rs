@@ -1451,7 +1451,7 @@ impl TuiApp {
                 if show_card && !boot_map.is_empty() {
                     use ratatui::widgets::{Block, Borders, Paragraph, Clear};
                     use ratatui::layout::Rect;
-                    use ratatui::style::{Style, Stylize};
+                    use ratatui::style::Style;
                     use ratatui::text::{Line, Span};
 
                     // Draw floating panel in the top-right corner
