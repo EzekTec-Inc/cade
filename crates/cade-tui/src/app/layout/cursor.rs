@@ -32,7 +32,6 @@ pub(crate) fn calc_visual_cursor(
     let w = available_width.saturating_sub(prefix_width).max(1);
     let mut visual_y = 0;
     let mut current_row = 0;
-
     let mut visual_x = 0;
 
     for seg in buf.split('\n') {
@@ -42,11 +41,11 @@ pub(crate) fn calc_visual_cursor(
         } else if current_row == cursor_row {
             let mut row_w = 0;
             let mut y_offset = 0;
-            let mut byte_offset = 0;
+            let mut char_offset = 0;
 
             for word in seg.split_inclusive([' ', '\t']) {
                 let word_w = unicode_width::UnicodeWidthStr::width(word) as u16;
-                let word_len = word.len();
+                let word_char_len = word.chars().count();
                 
                 if row_w > 0 && row_w + word_w > w {
                     y_offset += 1;
@@ -54,10 +53,11 @@ pub(crate) fn calc_visual_cursor(
                 }
 
                 // If cursor is inside this word
-                if cursor_col >= byte_offset && cursor_col <= byte_offset + word_len {
-                    // Calculate exactly how far into the word the cursor is
-                    let prefix = &word[..(cursor_col - byte_offset)];
-                    let prefix_w = unicode_width::UnicodeWidthStr::width(prefix) as u16;
+                if cursor_col >= char_offset && cursor_col <= char_offset + word_char_len {
+                    // Calculate exactly how far into the word the cursor is in chars
+                    let prefix_chars = cursor_col - char_offset;
+                    let prefix: String = word.chars().take(prefix_chars).collect();
+                    let prefix_w = unicode_width::UnicodeWidthStr::width(prefix.as_str()) as u16;
                     
                     if word_w > w {
                         // Word itself wraps across multiple lines
@@ -91,20 +91,34 @@ pub(crate) fn calc_visual_cursor(
                     row_w += word_w;
                 }
                 
-                byte_offset += word_len;
+                char_offset += word_char_len;
             }
 
-            // If cursor_col was exactly at the end of the segment (or beyond),
-            // the loop will handle it because split_inclusive includes the end.
-            // But if segment is empty and cursor is 0, we still need to break.
             if seg.is_empty() {
                 visual_y += y_offset;
                 visual_x = row_w;
             }
-
             break;
         }
     }
 
-    (visual_x.min(w.saturating_sub(1)), visual_y)
+    (visual_x, visual_y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calc_visual_cursor_with_multibyte_characters() {
+        let buf = "🔄 prefix test";
+        // cursor is right after the emoji '🔄'
+        // '🔄' is 1 character, but 4 bytes in UTF-8
+        let cursor_col = 1;
+        let (x, y) = calc_visual_cursor(buf, 0, cursor_col, 80, 0);
+        
+        // Should compile and run without panicking on char boundaries!
+        assert_eq!(y, 0);
+        assert!(x > 0);
+    }
 }
