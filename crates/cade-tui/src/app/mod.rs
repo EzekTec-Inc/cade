@@ -883,6 +883,12 @@ pub struct TuiApp {
     pub file_ac: FileAutocompleteProvider,
     /// Agent and Model autocomplete provider (Tab for @ and #).
     pub agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider,
+    /// Slash command autocomplete provider.
+    pub slash_ac: crate::autocomplete::SlashCommandProvider,
+    /// Connected MCP servers and tool names provider.
+    pub tool_ac: crate::autocomplete::ToolAutocompleteProvider,
+    /// Next step suggestion provider.
+    pub next_step_ac: crate::autocomplete::NextStepAutocompleteProvider,
 
     // -- Dynamic overlay stack (Phase 3)
     /// Heterogeneous stack of modal overlays.  The host dispatches
@@ -1061,6 +1067,9 @@ impl TuiApp {
                 vec![],
                 vec![],
             ),
+            slash_ac: crate::autocomplete::SlashCommandProvider::new(vec![]),
+            tool_ac: crate::autocomplete::ToolAutocompleteProvider::new(vec![], vec![]),
+            next_step_ac: crate::autocomplete::NextStepAutocompleteProvider::new(vec![]),
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),

@@ -370,8 +370,75 @@ impl Repl {
         }
     }
 
-    pub fn set_mcp(&mut self, mcp: std::sync::Arc<cade_agent::mcp::McpManager>) {
+    pub async fn set_mcp(&mut self, mcp: std::sync::Arc<cade_agent::mcp::McpManager>) {
         self.mcp = mcp;
+        self.populate_autocomplete().await;
+    }
+
+    pub async fn populate_autocomplete(&self) {
+        let mcp_servers: Vec<String> = self.settings.lock().merged_mcp_servers().keys().cloned().collect();
+        
+        let mut tools = Vec::new();
+        let mcp_statuses = self.mcp.status().await;
+        for status in mcp_statuses {
+            if !status.disabled {
+                tools.extend(status.tools.clone());
+            }
+        }
+        if let Ok(agent_tools) = self.client.get_agent_tools(&self.agent_id()).await {
+            for (_, name) in agent_tools {
+                if !tools.contains(&name) {
+                    tools.push(name);
+                }
+            }
+        }
+
+        let mut app = self.app.lock();
+        app.tool_ac.set_mcp_servers(mcp_servers);
+        app.tool_ac.set_tools(tools);
+
+        // Populate slash commands
+        use crate::ui::autocomplete::SlashCommandDef;
+        let slash_cmds = vec![
+            SlashCommandDef { name: "init".to_string(), description: "Analyse project + populate memory".to_string() },
+            SlashCommandDef { name: "remember".to_string(), description: "/remember [text]  — ask agent to update memory".to_string() },
+            SlashCommandDef { name: "backend".to_string(), description: "/backend [local|docker|ssh|readonly]  — show or switch backend".to_string() },
+            SlashCommandDef { name: "link".to_string(), description: "Register + attach all tools to current agent".to_string() },
+            SlashCommandDef { name: "unlink".to_string(), description: "Detach all tools from current agent".to_string() },
+            SlashCommandDef { name: "mcp".to_string(), description: "Show MCP server status + tools".to_string() },
+            SlashCommandDef { name: "connect".to_string(), description: "Connect a new AI provider interactively".to_string() },
+            SlashCommandDef { name: "disconnect".to_string(), description: "/disconnect <name>  — remove a provider".to_string() },
+            SlashCommandDef { name: "providers".to_string(), description: "Show all configured AI providers".to_string() },
+            SlashCommandDef { name: "model".to_string(), description: "/model [name]  — show or switch active LLM".to_string() },
+            SlashCommandDef { name: "reasoning".to_string(), description: "/reasoning [low|medium|high]  — set reasoning effort".to_string() },
+            SlashCommandDef { name: "memory".to_string(), description: "/memory [label]  — view or manage memory blocks".to_string() },
+            SlashCommandDef { name: "stream".to_string(), description: "Toggle token streaming".to_string() },
+            SlashCommandDef { name: "help".to_string(), description: "Show help screen".to_string() },
+            SlashCommandDef { name: "exit".to_string(), description: "Exit CADE".to_string() },
+        ];
+        app.slash_ac.set_commands(slash_cmds);
+
+        // Populate helpful next step prompt based on active plan/task state
+        let mut next_steps = vec![
+            "? What are the next steps for my current task?".to_string(),
+            "? What files have been modified recently?".to_string(),
+            "? Let's run a cargo check to verify".to_string(),
+            "? Please generate a summary of what we've done so far".to_string(),
+        ];
+        if let Ok(memory) = self.client.get_memory(&self.agent_id()).await {
+            if let Some(goal) = memory.iter().find(|m| m.label == "active_goal") {
+                for line in goal.value.lines() {
+                    let cleaned = line.trim();
+                    if cleaned.starts_with('-') || cleaned.starts_with('*') {
+                        let step = cleaned[1..].trim();
+                        if !step.is_empty() {
+                            next_steps.push(format!("? {}: {}", goal.label, step));
+                        }
+                    }
+                }
+            }
+        }
+        app.next_step_ac.set_next_steps(next_steps);
     }
 
     pub fn set_tools_ready(&mut self) {
@@ -639,6 +706,7 @@ impl Repl {
             let agent_names = agents.into_iter().map(|a| a.name).collect();
             self.app.lock().agent_model_ac.set_agents(agent_names);
         }
+        self.populate_autocomplete().await;
 
         // SessionStart hook
         let mut session_hook_ctx = self.hooks.session_start(&self.agent_id()).await;
@@ -652,7 +720,7 @@ impl Repl {
             if let Some(mut rx) = self.mcp_rx.take() {
                 match rx.try_recv() {
                     Ok(mgr) => {
-                        self.set_mcp(mgr);
+                        self.set_mcp(mgr).await;
                         self.set_tools_ready();
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
@@ -962,7 +1030,7 @@ impl Repl {
                 if let Some(rx) = self.mcp_rx.take()
                     && let Ok(mgr) = rx.await
                 {
-                    self.set_mcp(mgr);
+                    self.set_mcp(mgr).await;
                     self.set_tools_ready();
                 }
             }

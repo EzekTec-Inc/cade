@@ -7,6 +7,7 @@ use crossterm::event::{
 use crate::Result;
 
 use super::{ToastLevel, TuiApp};
+use crate::autocomplete::AutocompleteProvider;
 
 impl TuiApp {
     // -- Input loop
@@ -274,6 +275,54 @@ impl TuiApp {
                 let input_text = self.editor.text();
                 let cursor_pos = self.editor.cursor_pos();
 
+                let word_start = input_text[..cursor_pos]
+                    .rfind(|c: char| c.is_whitespace())
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                let partial = &input_text[word_start..cursor_pos];
+
+                // Trigger Slash Command completion (Tab on '/')
+                if partial.starts_with('/') {
+                    let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
+                    if !suggestions.is_empty() {
+                        self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
+                            suggestions,
+                            word_start,
+                            cursor_pos,
+                        )));
+                        self.draw_dirty = true;
+                        return Ok(None);
+                    }
+                }
+
+                // Trigger Tool/MCP completion (Tab on ':')
+                if partial.starts_with(':') {
+                    let suggestions = self.tool_ac.completions(&input_text, cursor_pos);
+                    if !suggestions.is_empty() {
+                        self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
+                            suggestions,
+                            word_start,
+                            cursor_pos,
+                        )));
+                        self.draw_dirty = true;
+                        return Ok(None);
+                    }
+                }
+
+                // Trigger Next Step completion (Tab on '?')
+                if partial.starts_with('?') {
+                    let suggestions = self.next_step_ac.completions(&input_text, cursor_pos);
+                    if !suggestions.is_empty() {
+                        self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
+                            suggestions,
+                            word_start,
+                            cursor_pos,
+                        )));
+                        self.draw_dirty = true;
+                        return Ok(None);
+                    }
+                }
+
                 // Trigger agent/model completion (Tab)
                 if let Some((new_input, new_cursor)) =
                     self.agent_model_ac.complete_token(&input_text, cursor_pos)
@@ -426,6 +475,27 @@ impl TuiApp {
         &mut self,
         action: Box<dyn std::any::Any>,
     ) -> Result<Option<Option<String>>> {
+        let action = match action.downcast::<crate::autocomplete::AutocompleteAction>() {
+            Ok(ac_action) => {
+                let input = self.editor.text();
+                let before = &input[..ac_action.word_start];
+                let after = &input[ac_action.cursor_pos..];
+                
+                let mut completed = ac_action.text;
+                if !completed.ends_with(' ') {
+                    completed.push(' ');
+                }
+                
+                let new_input = format!("{}{}{}", before, completed, after);
+                let new_cursor = ac_action.word_start + completed.len();
+                self.editor.set_text(new_input);
+                self.editor.set_cursor_pos(new_cursor);
+                self.draw_dirty = true;
+                return Ok(None);
+            }
+            Err(action) => action,
+        };
+
         let action = match action.downcast::<crate::app::copy_overlay::CopyAction>() {
             Ok(copy_action) => {
                 let text = copy_action.0;
