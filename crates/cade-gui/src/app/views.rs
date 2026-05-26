@@ -276,13 +276,34 @@ pub fn render_tool_call_message(
     ui.add_space(1.0);
     let icon = get_tool_icon(name);
 
-    match name {
+    let base = {
+        let mut b = name;
+        if let Some(pos) = b.find("__") {
+            b = &b[pos + 2..];
+        }
+        match b {
+            "RunShellCommand" => "bash",
+            "ReadFileGemini" => "read_file",
+            "WriteFileGemini" => "write_file",
+            "Replace" => "edit_file",
+            "SearchFileContent" => "grep",
+            "GlobGemini" => "glob",
+            "edit_block" => "edit_file",
+            "ide_propose_edit" => "edit_file",
+            "ide_apply_patch" => "apply_patch",
+            "create_file" => "write_file",
+            "shell" | "run_command" | "execute_command" | "start_process" | "run_process" => "bash",
+            "commit" | "add" | "push" | "pull" | "branch" | "diff" | "status" | "log"
+            | "stash_op" | "merge" | "rebase_op" | "reset" | "restore" | "tag" | "show"
+            | "fetch" | "blame" | "cherry_pick" | "clean" | "revert" | "config" | "remote"
+            | "repository" if name.starts_with("git__") => "git",
+            _ => b,
+        }
+    };
+
+    match base {
         // ── Edit / replace: file badge + inline diff ──────
-        "edit_file"
-        | "replace_in_file"
-        | "Replace"
-        | "desktop-commander__edit_block"
-        | "cade-nvim__ide_propose_edit" => {
+        "edit_file" | "replace_in_file" => {
             let path = args["path"].as_str().unwrap_or("unknown");
             let old = args["old_string"]
                 .as_str()
@@ -309,11 +330,7 @@ pub fn render_tool_call_message(
         }
 
         // ── Write file: file badge + content preview ──────
-        "write_file"
-        | "WriteFileGemini"
-        | "create_file"
-        | "desktop-commander__write_file"
-        | "developer__write_file" => {
+        "write_file" => {
             let path = args["path"]
                 .as_str()
                 .or_else(|| args["file_path"].as_str())
@@ -341,7 +358,7 @@ pub fn render_tool_call_message(
         }
 
         // ── Apply patch: rendered diff ────────────────────
-        "apply_patch" | "cade-nvim__ide_apply_patch" => {
+        "apply_patch" => {
             let patch = args["patch"].as_str().unwrap_or("");
             let file_count = patch.matches("--- a/").count().max(1);
 
@@ -365,10 +382,7 @@ pub fn render_tool_call_message(
         }
 
         // ── Read file: file badge + range ─────────────────
-        "read_file"
-        | "ReadFileGemini"
-        | "developer__read_file"
-        | "desktop-commander__read_file" => {
+        "read_file" => {
             let path = args["path"].as_str().unwrap_or("unknown");
             let offset = args["offset"]
                 .as_u64()
@@ -395,14 +409,7 @@ pub fn render_tool_call_message(
         }
 
         // ── Bash / shell: command badge ───────────────────
-        "bash"
-        | "shell"
-        | "run_command"
-        | "execute_command"
-        | "RunShellCommand"
-        | "developer__shell"
-        | "desktop-commander__start_process"
-        | "developer__start_process" => {
+        "bash" => {
             let cmd = args["command"].as_str().unwrap_or("…");
             let cmd_preview: String = cmd.chars().take(120).collect();
             let suffix = if cmd.len() > 120 { "…" } else { "" };
@@ -424,7 +431,7 @@ pub fn render_tool_call_message(
         }
 
         // ── Glob / grep: search badge ─────────────────────
-        "glob" | "GlobGemini" | "developer__glob" => {
+        "glob" => {
             let pattern = args["pattern"].as_str().unwrap_or("*");
             let path = args["path"].as_str().unwrap_or(".");
             ui.horizontal(|ui| {
@@ -441,7 +448,7 @@ pub fn render_tool_call_message(
             });
         }
 
-        "grep" | "SearchFileContent" | "developer__grep_search" => {
+        "grep" => {
             let pattern = args["pattern"].as_str().unwrap_or("…");
             let path = args["path"].as_str().unwrap_or(".");
             ui.horizontal(|ui| {
@@ -459,11 +466,7 @@ pub fn render_tool_call_message(
         }
 
         // ── Git commands: operation badge ─────────────────
-        "git__commit" | "git__add" | "git__push" | "git__pull" | "git__branch"
-        | "git__diff" | "git__status" | "git__log" | "git__stash_op" | "git__merge"
-        | "git__rebase_op" | "git__reset" | "git__restore" | "git__tag" | "git__show"
-        | "git__fetch" | "git__blame" | "git__cherry_pick" | "git__clean"
-        | "git__revert" | "git__config" | "git__remote" | "git__repository" => {
+        "git" => {
             let op = name.strip_prefix("git__").unwrap_or(name);
             let summary = match op {
                 "commit" => args["message"]

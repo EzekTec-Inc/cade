@@ -150,25 +150,35 @@ impl Repl {
 
             // Update turn statistics
             for (_, name, _) in &tool_calls {
-                match name.as_str() {
-                    "bash" | "RunShellCommand" | "desktop-commander__start_process" => {
+                let base = {
+                    let mut b = name.as_str();
+                    if let Some(pos) = b.find("__") {
+                        b = &b[pos + 2..];
+                    }
+                    match b {
+                        "RunShellCommand" => "bash",
+                        "ReadFileGemini" => "read_file",
+                        "WriteFileGemini" => "write_file",
+                        "Replace" => "edit_file",
+                        "SearchFileContent" => "grep",
+                        "GlobGemini" => "glob",
+                        _ => b,
+                    }
+                };
+                match base {
+                    "bash" | "start_process" => {
                         turn_stats.cmds += 1
                     }
                     "write_file"
                     | "edit_file"
                     | "apply_patch"
-                    | "WriteFileGemini"
-                    | "Replace"
-                    | "desktop-commander__write_file"
-                    | "desktop-commander__edit_block" => turn_stats.edits += 1,
+                    | "edit_block"
+                    | "apply_edit"
+                    | "replace_in_file" => turn_stats.edits += 1,
                     "read_file"
-                    | "ReadFileGemini"
                     | "glob"
-                    | "GlobGemini"
                     | "grep"
-                    | "SearchFileContent"
-                    | "desktop-commander__read_file"
-                    | "desktop-commander__read_multiple_files" => turn_stats.reads += 1,
+                    | "read_multiple_files" => turn_stats.reads += 1,
                     _ => {
                         // Fallback heuristics
                         if name.contains("read")

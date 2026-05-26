@@ -115,27 +115,37 @@ const TOOL_RESULT_MAX_CHARS: usize = 8_192;
 /// NOTE: wired into `db_row_to_llm` via the `tool_name` field stored in tool
 /// result content. Older DB rows without `tool_name` fall back to the default.
 pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
-    match tool_name {
+    let base = {
+        let mut b = tool_name;
+        if let Some(pos) = b.find("__") {
+            b = &b[pos + 2..];
+        }
+        match b {
+            "RunShellCommand" => "bash",
+            "ReadFileGemini" => "read_file",
+            "WriteFileGemini" => "write_file",
+            "Replace" => "edit_file",
+            "SearchFileContent" => "grep",
+            "GlobGemini" => "glob",
+            _ => b,
+        }
+    };
+    match base {
         // Shell / command execution
         "bash"
-        | "developer__shell"
-        | "RunShellCommand"
-        | "desktop-commander__start_process"
-        | "desktop-commander__read_process_output" => 4_096,
+        | "shell"
+        | "start_process"
+        | "read_process_output" => 4_096,
 
         // File reading tools — need more room
         "read_file"
-        | "ReadFileGemini"
-        | "developer__read_file"
-        | "desktop-commander__read_file"
-        | "desktop-commander__read_multiple_files" => 12_288,
+        | "read_multiple_files" => 12_288,
 
         // Search / grep — compact results
         "grep"
-        | "SearchFileContent"
-        | "developer__grep_search"
-        | "desktop-commander__start_search"
-        | "desktop-commander__get_more_search_results" => 3_072,
+        | "grep_search"
+        | "start_search"
+        | "get_more_search_results" => 3_072,
 
         // Memory retrieval — excerpts only
         "archival_memory_search" | "conversation_search" | "search_memory" | "query_event_log" => {
@@ -144,9 +154,7 @@ pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
 
         // Glob / list — compact
         "glob"
-        | "GlobGemini"
-        | "developer__list_directory"
-        | "desktop-commander__list_directory" => 3_072,
+        | "list_directory" => 3_072,
 
         // Everything else: default
         _ => TOOL_RESULT_MAX_CHARS,
