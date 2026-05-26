@@ -153,58 +153,58 @@ pub fn context_fill_color(fraction: f32, theme: &CoreThemeColors) -> Color32 {
 pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
     use egui::{CornerRadius, Stroke, Visuals, style::WidgetVisuals};
 
-    // TUI-fication: zero rounding for sharp, terminal-like edges.
-    let rounding_none = CornerRadius::ZERO;
+    // Dashboard UI: slight rounding for modern web feel.
+    let rounding = CornerRadius::same(4);
 
     let widget_base = WidgetVisuals {
         bg_fill: theme.bg_surface1(),
         weak_bg_fill: theme.bg_surface0(),
-        bg_stroke: Stroke::new(1.0, theme.border_base()),
-        corner_radius: rounding_none,
+        bg_stroke: Stroke::new(1.0, Color32::from_gray(60)),
+        corner_radius: rounding,
         fg_stroke: Stroke::new(1.0, theme.text_primary()),
         expansion: 0.0,
     };
 
     let visuals = Visuals {
         dark_mode: matches!(theme.meta.variant, opaline::ThemeVariant::Dark),
-        override_text_color: Some(theme.text_primary()),
-        panel_fill: theme.bg_base(),
-        window_fill: theme.bg_surface0(),
-        window_stroke: Stroke::new(1.0, theme.border_base()),
-        window_corner_radius: rounding_none,
+        override_text_color: Some(Color32::from_rgb(230, 230, 230)),
+        panel_fill: Color32::from_rgb(23, 23, 23), // #171717 Sidebar/TopBar
+        window_fill: Color32::from_rgb(28, 28, 28), // #1C1C1C
+        window_stroke: Stroke::new(1.0, Color32::from_gray(60)),
+        window_corner_radius: rounding,
 
         widgets: egui::style::Widgets {
             noninteractive: WidgetVisuals {
-                bg_fill: theme.bg_surface0(),
-                weak_bg_fill: theme.bg_base(),
-                bg_stroke: Stroke::new(1.0, theme.border_base()),
-                corner_radius: rounding_none,
-                fg_stroke: Stroke::new(1.0, theme.text_muted()),
+                bg_fill: Color32::from_rgb(28, 28, 28),
+                weak_bg_fill: Color32::from_rgb(23, 23, 23),
+                bg_stroke: Stroke::new(1.0, Color32::from_gray(60)),
+                corner_radius: rounding,
+                fg_stroke: Stroke::new(1.0, Color32::from_gray(150)),
                 expansion: 0.0,
             },
             inactive: widget_base,
             hovered: WidgetVisuals {
-                bg_fill: theme.bg_surface2(),
-                weak_bg_fill: theme.bg_surface1(),
-                bg_stroke: Stroke::new(1.0, theme.primary()),
-                corner_radius: rounding_none,
-                fg_stroke: Stroke::new(1.0, theme.text_primary()),
-                expansion: 0.0, // no hover expansion — keeps it tight like TUI
+                bg_fill: Color32::from_rgb(40, 40, 40),
+                weak_bg_fill: Color32::from_rgb(35, 35, 35),
+                bg_stroke: Stroke::new(1.0, Color32::from_gray(100)),
+                corner_radius: rounding,
+                fg_stroke: Stroke::new(1.0, Color32::from_rgb(255, 255, 255)),
+                expansion: 0.0,
             },
             active: WidgetVisuals {
-                bg_fill: theme.accent_dim(),
-                weak_bg_fill: theme.bg_surface2(),
-                bg_stroke: Stroke::new(1.0, theme.primary()),
-                corner_radius: rounding_none,
-                fg_stroke: Stroke::new(1.0, theme.text_primary()),
+                bg_fill: Color32::from_rgb(50, 50, 50),
+                weak_bg_fill: Color32::from_rgb(45, 45, 45),
+                bg_stroke: Stroke::new(1.0, Color32::from_gray(120)),
+                corner_radius: rounding,
+                fg_stroke: Stroke::new(1.0, Color32::from_rgb(255, 255, 255)),
                 expansion: 0.0,
             },
             open: WidgetVisuals {
-                bg_fill: theme.bg_surface1(),
-                weak_bg_fill: theme.bg_surface0(),
-                bg_stroke: Stroke::new(1.0, theme.border_focus()),
-                corner_radius: rounding_none,
-                fg_stroke: Stroke::new(1.0, theme.text_primary()),
+                bg_fill: Color32::from_rgb(35, 35, 35),
+                weak_bg_fill: Color32::from_rgb(30, 30, 30),
+                bg_stroke: Stroke::new(1.0, Color32::from_gray(80)),
+                corner_radius: rounding,
+                fg_stroke: Stroke::new(1.0, Color32::from_rgb(255, 255, 255)),
                 expansion: 0.0,
             },
         },
@@ -222,9 +222,15 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
         warn_fg_color: theme.warning(),
         error_fg_color: theme.error(),
 
-        // TUI-fication: no shadows — flat, terminal-like appearance.
-        window_shadow: egui::Shadow::NONE,
-        popup_shadow: egui::Shadow::NONE,
+        // Dashboard shadows
+        window_shadow: egui::Shadow {
+            offset: [0, 8], blur: 16, spread: 0,
+            color: Color32::from_black_alpha(96),
+        },
+        popup_shadow: egui::Shadow {
+            offset: [0, 4], blur: 8, spread: 0,
+            color: Color32::from_black_alpha(96),
+        },
 
         ..if matches!(theme.meta.variant, opaline::ThemeVariant::Dark) {
             Visuals::dark()
@@ -235,11 +241,11 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
 
     ctx.set_visuals(visuals);
 
-    // TUI-fication: tighten spacing to match character-cell density.
+    // Modern dashboard spacing
     let mut style = (*ctx.global_style()).clone();
-    style.spacing.item_spacing = egui::vec2(4.0, 2.0);
-    style.spacing.button_padding = egui::vec2(4.0, 2.0);
-    style.spacing.window_margin = egui::Margin::same(4);
-    style.spacing.indent = 12.0;
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.window_margin = egui::Margin::same(8);
+    style.spacing.indent = 16.0;
     ctx.set_global_style(style);
 }

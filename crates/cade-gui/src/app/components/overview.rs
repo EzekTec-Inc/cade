@@ -3,249 +3,192 @@ use eframe::egui;
 
 pub fn render(
     ui: &mut egui::Ui,
-    session: &crate::session::ConnectedSession,
-    theme: &crate::theme::ThemeColors,
+    _session: &crate::session::ConnectedSession,
+    _theme: &crate::theme::ThemeColors,
 ) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.add_space(20.0);
+    let frame = egui::Frame::NONE
+        .fill(egui::Color32::from_rgb(28, 28, 28)) // #1C1C1C
+        .inner_margin(egui::Margin::symmetric(40, 32));
 
-        ui.heading(
-            egui::RichText::new("Dashboard Overview")
-                .color(theme.text_primary())
-                .size(24.0),
-        );
-        ui.add_space(20.0);
+    egui::CentralPanel::default().frame(frame).show_inside(ui, |ui| {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.set_max_width(800.0); // Constrain width like a web dashboard
 
-        ui.columns(2, |columns| {
-            // Left Column
-            columns[0].vertical(|ui| {
-                // What's New Section
+            // Header
+            ui.heading(
+                egui::RichText::new("Account overview")
+                    .color(egui::Color32::from_gray(230))
+                    .size(16.0)
+                    .strong()
+            );
+            ui.add_space(16.0);
+
+            // Profile Section
+            ui.label(
+                egui::RichText::new("Profile")
+                    .color(egui::Color32::from_gray(230))
+                    .size(20.0)
+            );
+            ui.add_space(16.0);
+
+            let label_color = egui::Color32::from_gray(160);
+
+            // Name
+            ui.label(egui::RichText::new("Name").color(label_color).size(12.0));
+            ui.add_space(4.0);
+            let mut name = "Stephen Ezekwem".to_string();
+            ui.add_sized(
+                [ui.available_width(), 36.0],
+                egui::TextEdit::singleline(&mut name).margin(egui::Margin::symmetric(12, 8))
+            );
+            ui.add_space(16.0);
+
+            // Email
+            ui.label(egui::RichText::new("Email").color(label_color).size(12.0));
+            ui.add_space(4.0);
+            let mut email = "stephen.ezekwem@gmail.com".to_string();
+            ui.add_sized(
+                [ui.available_width(), 36.0],
+                egui::TextEdit::singleline(&mut email).margin(egui::Margin::symmetric(12, 8))
+            );
+            ui.add_space(16.0);
+
+            // Save Profile Button
+            let save_btn = egui::Button::new(
+                egui::RichText::new("Save profile").color(egui::Color32::from_gray(220))
+            )
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
+            ui.add_sized([100.0, 32.0], save_btn);
+
+            ui.add_space(32.0);
+            ui.separator();
+            ui.add_space(32.0);
+
+            // Current Plan Section
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Current plan").color(egui::Color32::from_gray(230)).size(16.0));
+                
                 egui::Frame::NONE
-                    .inner_margin(8.0)
-                    .fill(theme.bg_surface0())
-                    .corner_radius(8.0)
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(100)))
+                    .corner_radius(egui::CornerRadius::same(2))
+                    .inner_margin(egui::Margin::symmetric(6, 2))
                     .show(ui, |ui| {
-                        ui.heading(egui::RichText::new("What's New").color(theme.primary()));
-                        ui.add_space(8.0);
-                        ui.label(
-                            "CADE has been updated to support hybrid tab-based dashboard views.",
-                        );
-                    });
-
-                ui.add_space(20.0);
-
-                // Current Configuration
-                egui::Frame::NONE
-                    .inner_margin(8.0)
-                    .fill(theme.bg_surface0())
-                    .corner_radius(8.0)
-                    .show(ui, |ui| {
-                        ui.heading(
-                            egui::RichText::new("Current Configuration").color(theme.primary()),
-                        );
-                        ui.add_space(8.0);
-
-                        egui::Grid::new("config_grid")
-                            .num_columns(2)
-                            .spacing([40.0, 8.0])
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Model:").color(theme.text_muted()));
-                                let model = session
-                                    .context_stats
-                                    .as_ref()
-                                    .and_then(|c| c.model.clone())
-                                    .unwrap_or_else(|| "Auto-detect".into());
-                                ui.label(model);
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("Available Tools:")
-                                        .color(theme.text_muted()),
-                                );
-                                ui.label(session.tools.len().to_string());
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("MCP Servers:").color(theme.text_muted()),
-                                );
-                                ui.label(session.mcp_servers.len().to_string());
-                                ui.end_row();
-                            });
-                    });
-
-                ui.add_space(20.0);
-
-                // Token Usage Summary
-                egui::Frame::NONE
-                    .inner_margin(8.0)
-                    .fill(theme.bg_surface0())
-                    .corner_radius(8.0)
-                    .show(ui, |ui| {
-                        ui.heading(egui::RichText::new("Session Usage").color(theme.primary()));
-                        ui.add_space(8.0);
-
-                        let total_input = session.total_input_tokens;
-                        let total_output = session.total_output_tokens;
-                        let total = total_input + total_output;
-
-                        egui::Grid::new("usage_grid")
-                            .num_columns(2)
-                            .spacing([40.0, 8.0])
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Total Input Tokens:")
-                                        .color(theme.text_muted()),
-                                );
-                                ui.label(total_input.to_string());
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("Total Output Tokens:")
-                                        .color(theme.text_muted()),
-                                );
-                                ui.label(total_output.to_string());
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("Combined Total:")
-                                        .color(theme.text_muted()),
-                                );
-                                ui.label(total.to_string());
-                                ui.end_row();
-                            });
-
-                        ui.add_space(12.0);
-                        ui.label("Context Window Fill:");
-                        const DEFAULT_WINDOW: u64 = 128_000;
-                        let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
-                        let bar_color = crate::theme::context_fill_color(frac, theme);
-
-                        ui.add(
-                            egui::ProgressBar::new(frac)
-                                .desired_height(14.0)
-                                .fill(bar_color)
-                                .text(format!("{:.1}%", frac * 100.0)),
-                        );
+                        ui.label(egui::RichText::new("Free").color(egui::Color32::from_gray(180)).size(11.0));
                     });
             });
+            ui.add_space(16.0);
 
-            // Right Column
-            columns[1].vertical(|ui| {
-                // Agent Metrics
-                egui::Frame::NONE
-                    .inner_margin(8.0)
-                    .fill(theme.bg_surface0())
-                    .corner_radius(8.0)
-                    .show(ui, |ui| {
-                        ui.heading(egui::RichText::new("Agent Metrics").color(theme.primary()));
-                        ui.add_space(8.0);
+            let check_color = egui::Color32::from_rgb(60, 180, 100);
+            let features = [
+                "3 stateful agents",
+                "Connect your own LLM API keys (BYOK)",
+                "Chat with agents in the ADE",
+                "Run your agents locally with Letta Code",
+                "OAuth only",
+            ];
 
-                        let metrics = &session.agent_metrics;
-                        let compacted = metrics
-                            .as_ref()
-                            .map(|m| m.tool_outputs_compacted as f64)
-                            .unwrap_or(0.0);
-                        let runs = metrics
-                            .as_ref()
-                            .map(|m| m.consolidation_runs as f64)
-                            .unwrap_or(0.0);
-                        let guard_hits = metrics
-                            .as_ref()
-                            .map(|m| m.inflation_guard_hits as f64)
-                            .unwrap_or(0.0);
+            for feature in features {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("✔").color(check_color));
+                    ui.label(egui::RichText::new(feature).color(egui::Color32::from_gray(200)));
+                });
+                ui.add_space(8.0);
+            }
+            ui.add_space(8.0);
 
-                        egui::Grid::new("metrics_grid")
-                            .num_columns(2)
-                            .spacing([40.0, 8.0])
+            let upgrade_btn = egui::Button::new(
+                egui::RichText::new("Upgrade plan").color(egui::Color32::from_gray(220))
+            )
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
+            ui.add_sized([110.0, 32.0], upgrade_btn);
+
+            ui.add_space(32.0);
+            ui.separator();
+            ui.add_space(32.0);
+
+            // Onboarding Status Section
+            ui.label(egui::RichText::new("Onboarding status").color(egui::Color32::from_gray(230)).size(16.0));
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Press the button below to do onboarding again!").color(egui::Color32::from_gray(180)));
+            ui.add_space(16.0);
+            
+            let retry_btn = egui::Button::new(
+                egui::RichText::new("Retry onboarding").color(egui::Color32::from_gray(220))
+            )
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
+            ui.add_sized([130.0, 32.0], retry_btn);
+
+            ui.add_space(32.0);
+            ui.separator();
+            ui.add_space(32.0);
+
+            // Connected Applications Section
+            ui.label(egui::RichText::new("Connected Applications").color(egui::Color32::from_gray(230)).size(16.0));
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Manage any external connections and their access to your account.").color(egui::Color32::from_gray(180)));
+            ui.add_space(16.0);
+
+            // App Card
+            egui::Frame::NONE
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(60)))
+                .corner_radius(egui::CornerRadius::same(4))
+                .inner_margin(egui::Margin::same(16))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new("CADE Desktop App").color(egui::Color32::from_gray(230)).size(16.0));
+                    ui.add_space(16.0);
+                    
+                    ui.horizontal(|ui| {
+                        // Connection badge
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgb(30, 80, 50))
+                            .corner_radius(egui::CornerRadius::same(2))
+                            .inner_margin(egui::Margin::symmetric(6, 2))
                             .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Compacted Data:")
-                                        .color(theme.text_muted()),
-                                );
-                                ui.label(compacted.to_string());
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("Consolidations:")
-                                        .color(theme.text_muted()),
-                                );
-                                ui.label(runs.to_string());
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("Guard Hits:").color(theme.text_muted()),
-                                );
-                                ui.label(guard_hits.to_string());
-                                ui.end_row();
+                                ui.label(egui::RichText::new("1 connection").color(egui::Color32::from_rgb(100, 200, 120)).size(10.0));
                             });
-                    });
-
-                ui.add_space(20.0);
-
-                // Last Execution
-                egui::Frame::NONE
-                    .inner_margin(8.0)
-                    .fill(theme.bg_surface0())
-                    .corner_radius(8.0)
-                    .show(ui, |ui| {
-                        ui.heading(egui::RichText::new("Last Execution").color(theme.primary()));
+                        
                         ui.add_space(8.0);
-
-                        egui::Grid::new("last_exec_grid")
-                            .num_columns(2)
-                            .spacing([40.0, 8.0])
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Status:").color(theme.text_muted()));
-                                if let Some(reason) = &session.last_finish_reason {
-                                    ui.label(reason);
-                                } else {
-                                    ui.label("N/A");
-                                }
-                                ui.end_row();
-
-                                ui.label(
-                                    egui::RichText::new("Turn Tokens:").color(theme.text_muted()),
-                                );
-                                if let Some((input, output, _)) = &session.last_usage {
-                                    ui.label(format!("{} in, {} out", input, output));
-                                } else {
-                                    ui.label("N/A");
-                                }
-                                ui.end_row();
-                            });
+                        ui.label(egui::RichText::new("Last connected: 5/22/2026").color(egui::Color32::from_gray(140)).size(12.0));
+                        
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let view_btn = egui::Button::new(
+                                egui::RichText::new("View connections").color(egui::Color32::from_gray(220))
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
+                            ui.add(view_btn);
+                        });
                     });
+                });
 
-                ui.add_space(20.0);
+            ui.add_space(16.0);
 
-                // Execution Queue
-                egui::Frame::NONE
-                    .inner_margin(8.0)
-                    .fill(theme.bg_surface0())
-                    .corner_radius(8.0)
-                    .show(ui, |ui| {
-                        ui.heading(egui::RichText::new("Executions Queue").color(theme.primary()));
-                        ui.add_space(8.0);
+            // Pagination
+            ui.horizontal(|ui| {
+                let btn_prev = egui::Button::new(egui::RichText::new("Previous").color(egui::Color32::from_gray(220)))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
+                ui.add(btn_prev);
+                
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn_next = egui::Button::new(egui::RichText::new("Next").color(egui::Color32::from_gray(220)))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(80)));
+                    ui.add(btn_next);
 
-                        let cards = &session.subagent_cards;
-                        if cards.is_empty() {
-                            ui.label(
-                                egui::RichText::new("No active background executions.")
-                                    .color(theme.text_muted())
-                                    .italics(),
-                            );
-                        } else {
-                            for card in cards {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("•").color(theme.primary()));
-                                    ui.label(format!("{} - ", card.task));
-                                    ui.label(
-                                        egui::RichText::new(&card.status).color(theme.text_muted()),
-                                    );
-                                });
-                            }
-                        }
+                    ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                        ui.label(egui::RichText::new("Page 1 of 1").color(egui::Color32::from_gray(140)));
                     });
+                });
             });
+
+            ui.add_space(32.0);
         });
     });
 }
