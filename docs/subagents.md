@@ -115,9 +115,12 @@ All six are tunable via env vars; see [configuration.md](configuration.md).
 
 ## Memory & state
 
-A subagent runs securely via the `SubagentExecutor`:
+A subagent runs securely via the `SubagentExecutor` leveraging a stateful Letta-style design:
 
 - **Sandboxed Ephemeral Environment:** An ephemeral agent row is created in `agents` so that all meta-tool calls (like `update_memory`) are isolated to the subagent's namespace.
+- **Hierarchical Memory Mounting:** During subagent initialization, CADE automatically copies/mounts the parent agent's core memory blocks (`project`, `persona`, and `active_goal`) directly into the subagent's sandboxed namespace. This guarantees the subagent inherits the exact same constitutions, grounding, and constraints as the parent.
+- **Context Inheritance:** CADE fetches the parent agent's recent conversation history (the last 8 messages) and injects them inside a `<parent_context>` XML block in the subagent's system prompt. This gives the subagent immediate context of the parent's current progress and recently viewed files.
+- **Active Memory Self-Correction:** When CADE's rolling fingerprint watchdog detects tool stagnation (loops), the system intervention explicitly instructs the subagent to use `update_memory(label='active_goal', value=...)` to rewrite its strategy and establish a new task approach in its Core memory before running any further tools.
 - **Smart Memory Merge:** When the subagent completes, the `EphemeralEnvironment` Drop guard triggers `write_back_subagent_memory`. Any typed facts the subagent discovered are intelligently merged back into the parent agent's context using an LLM pass, preserving the memory taxonomy and confidence levels.
 - **No** messages are persisted into the parent's conversation stream.
 - The parent's full tool list (minus `run_subagent` and `run_parallel_subagents`) is dispatched via

@@ -88,6 +88,12 @@ You can trigger this manually with `/compact` (or `/consolidate`).
   pins a cheap summariser. Default resolver picks the cheapest model in
   the same provider family as the agent's main model.
 
+## Centralized Knowledge Graph (PI-Style)
+
+Rather than storing isolated, separate text memory blocks that must be constantly synchronized or merged, CADE implements a centralized, durable **Unified Knowledge Graph** stored in the SQLite database (`knowledge_edges` table):
+- **Durable Grounding**: All agents and active subagents read and write structured knowledge edges (e.g., `["main.rs", "calls", "setup_panic_hook"]`) directly to and from the centralized graph store. This acts as a single, concurrent, non-ephemeral source of truth.
+- **Semantic Vector Search**: When a knowledge edge is inserted, CADE calculates its semantic vector embedding and packs it as a binary f32 BLOB. CADE can then perform high-performance semantic vector searches using local cosine-similarity checks, retrieving relevant facts instantly.
+
 ## Memory-related env vars
 
 | Variable | Effect |

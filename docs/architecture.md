@@ -93,6 +93,15 @@ integrations, talk to the same server/API surface.
 - `runs` (background mode)
 - `observations` (tool call capture with importance scoring)
 - `vec_memory_blocks`, `vec_archival_memory`, `vec_messages` — `sqlite-vec` virtual tables for embedding-based semantic search (Migration 8; populated only when the `semantic-search` feature is enabled)
+- `knowledge_edges` — centralized knowledge graph triples (`entity`, `relation`, `target`) with binary vector embeddings (Migration 16)
+
+## Diagnostics, Concurrency & Safety
+
+CADE utilizes robust, production-grade systems to ensure zero-panic stability, smooth rendering, and concurrent execution safety:
+1. **Global Panic Hooks**: Register custom hooks on both client TUI and backend server to write detailed backtraces and context to `~/.cade/crash.log` before aborting, preventing silent exits.
+2. **Concurrent Database Safety**: Connection pools configure `PRAGMA busy_timeout = 5000;` so SQLite can safely queue concurrent read/write queries for up to 5 seconds during parallel executions.
+3. **Outgoing HTTP Timeouts**: Establishes strict connection (15s) and stream (120s) timeouts on OpenAI, Anthropic, and Gemini clients to avoid hangs on slow/unreachable endpoints.
+4. **File-Watcher Debouncing**: Applies a `150ms` debouncer on live reloads (settings, skills, plugins) to prevent thrashing and infinite loops during fast development/compile cycles.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in
