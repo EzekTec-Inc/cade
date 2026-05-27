@@ -26,7 +26,7 @@ pub fn render(
                 
                 ui.add_space(8.0);
                 ui.heading(
-                    egui::RichText::new("CADE Betta")
+                    egui::RichText::new("CADE Beta")
                         .color(egui::Color32::WHITE)
                         .strong()
                         .size(18.0)
