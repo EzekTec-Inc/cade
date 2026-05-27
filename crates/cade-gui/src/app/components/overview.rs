@@ -1,6 +1,13 @@
 use eframe::egui;
 
-let background_frame = egui::Frame::NONE
+pub fn render(
+    ui: &mut egui::Ui,
+    _profile_name: &mut String,
+    _profile_email: &mut String,
+    _session: &crate::session::ConnectedSession,
+    _theme: &crate::theme::ThemeColors,
+) {
+    let background_frame = egui::Frame::NONE
         .fill(egui::Color32::from_rgb(23, 23, 23)) // #171717
         .inner_margin(egui::Margin::symmetric(24, 24));
 
@@ -209,3 +216,4 @@ let background_frame = egui::Frame::NONE
             });
         });
     });
+}
