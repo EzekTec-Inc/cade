@@ -222,7 +222,7 @@ pub fn backfill_embeddings(db: &super::Db, embedder: &dyn Embedder) -> Result<us
 
 /// Decode a packed little-endian f32 BLOB back into a `Vec<f32>`.
 /// Returns `None` if the byte slice is not a multiple of 4 bytes long.
-fn decode_embedding_blob(bytes: &[u8]) -> Option<Vec<f32>> {
+pub(crate) fn decode_embedding_blob(bytes: &[u8]) -> Option<Vec<f32>> {
     if !bytes.len().is_multiple_of(4) {
         return None;
     }

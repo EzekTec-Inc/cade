@@ -771,6 +771,28 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 15", [])?;
     }
 
+    if current_version < 16 {
+        let r1 = conn.execute(
+            "CREATE TABLE IF NOT EXISTS knowledge_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                target TEXT NOT NULL,
+                embedding BLOB,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        );
+        let r2 = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_edges_entity ON knowledge_edges(entity)",
+            [],
+        );
+        if let Err(e) = r1.and(r2) {
+            tracing::warn!("Migration 16 CREATE TABLE knowledge_edges failed: {e}");
+        }
+        conn.execute("PRAGMA user_version = 16", [])?;
+    }
+
     Ok(())
 }
 
@@ -819,8 +841,10 @@ pub mod providers;
 pub mod runs;
 pub mod skills;
 pub mod tools;
+pub mod knowledge;
 
 pub use agents::*;
+pub use knowledge::*;
 pub use conversations::*;
 pub use evidence::*;
 pub use memory::*;
