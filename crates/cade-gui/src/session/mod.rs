@@ -462,7 +462,7 @@ pub struct ConnectedSession {
     // ── Subagent tracking ────────────────────────────────
     pub subagent_cards: Vec<SubagentCardState>,
 
-    // ── Profiles (Letta parity) ──────────────────────────
+    // ── Profiles (Environment parity) ──────────────────────────
     pub profiles_open: bool,
     pub profiles: Vec<(String, String, String)>,
     pub profile_edit_name: String,

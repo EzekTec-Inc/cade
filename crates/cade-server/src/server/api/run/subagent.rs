@@ -621,7 +621,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         },
     );
 
-    // Letta-style hierarchical memory mounting: Copy parent agent's core memory blocks
+    // Hierarchical memory mounting: Copy parent agent's core memory blocks
     // (project, persona, active_goal) into subagent's sandboxed namespace for grounding.
     if let Ok(parent_blocks) = cade_store::sqlite::get_memory_blocks(&state.db, parent_agent_id) {
         for (label, value, description) in parent_blocks {

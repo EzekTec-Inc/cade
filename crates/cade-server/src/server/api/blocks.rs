@@ -1,7 +1,7 @@
 //! Standalone shared-memory-block endpoints.
 //!
 //! These routes operate on blocks independently of any agent, enabling
-//! Letta-style cross-agent memory sharing.
+//! Cross-agent memory sharing.
 
 use axum::{
     Json,

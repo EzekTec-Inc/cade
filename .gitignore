@@ -9,7 +9,6 @@ PLAN.md
 .abacusai/
 .scripts/
 conductor/
-.letta/
 CHANGELOG.md
 CLAUDE.md
 test-genai.mjs

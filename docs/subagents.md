@@ -115,7 +115,7 @@ All six are tunable via env vars; see [configuration.md](configuration.md).
 
 ## Memory & state
 
-A subagent runs securely via the `SubagentExecutor` leveraging a stateful Letta-style design:
+A subagent runs securely via the `SubagentExecutor` leveraging a stateful design:
 
 - **Sandboxed Ephemeral Environment:** An ephemeral agent row is created in `agents` so that all meta-tool calls (like `update_memory`) are isolated to the subagent's namespace.
 - **Hierarchical Memory Mounting:** During subagent initialization, CADE automatically copies/mounts the parent agent's core memory blocks (`project`, `persona`, and `active_goal`) directly into the subagent's sandboxed namespace. This guarantees the subagent inherits the exact same constitutions, grounding, and constraints as the parent.

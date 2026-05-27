@@ -87,7 +87,7 @@ pub fn render(
                 "3 stateful agents",
                 "Connect your own LLM API keys (BYOK)",
                 "Chat with agents in the ADE",
-                "Run your agents locally with Letta Code",
+                "Run your agents locally with CADE Code",
                 "OAuth only",
             ];
 
