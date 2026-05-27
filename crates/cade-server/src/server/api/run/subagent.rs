@@ -464,7 +464,35 @@ pub(super) async fn handle_run_subagent_tool_inner(
         let filtered = SubagentConfig::build_seed_memory(seed);
         SubagentConfig::format_seed_section(&filtered)
     };
-    let system_prompt_full = format!("{system_prompt}{seed_section}");
+
+    let parent_context = {
+        let mut context_str = String::new();
+        let parent_conv_id = {
+            if let Ok(convs) = cade_store::sqlite::list_conversations(&state.db, parent_agent_id) {
+                convs.first().map(|c| c.id.clone())
+            } else {
+                None
+            }
+        };
+        if let Ok(msgs) = cade_store::sqlite::list_messages(&state.db, parent_agent_id, parent_conv_id.as_deref(), 8) {
+            context_str.push_str("\n\n<parent_context>\n");
+            context_str.push_str("Below is the recent chat history from your parent session. Use this to understand the current work context, recently viewed files, and goals:\n");
+            for m in msgs {
+                let role = m.role.to_uppercase();
+                let text = match &m.content {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let trunc_text: String = text.lines().take(5).collect::<Vec<_>>().join("\n");
+                let suffix = if text.lines().count() > 5 { " ... [truncated]" } else { "" };
+                context_str.push_str(&format!("[{role}]: {trunc_text}{suffix}\n"));
+            }
+            context_str.push_str("</parent_context>\n");
+        }
+        context_str
+    };
+
+    let system_prompt_full = format!("{system_prompt}{seed_section}{parent_context}");
 
     let messages_init = vec![
         LlmMessage {
@@ -592,6 +620,23 @@ pub(super) async fn handle_run_subagent_tool_inner(
             active_plan_json: None,
         },
     );
+
+    // Letta-style hierarchical memory mounting: Copy parent agent's core memory blocks
+    // (project, persona, active_goal) into subagent's sandboxed namespace for grounding.
+    if let Ok(parent_blocks) = cade_store::sqlite::get_memory_blocks(&state.db, parent_agent_id) {
+        for (label, value, description) in parent_blocks {
+            if matches!(label.as_str(), "project" | "persona" | "active_goal") {
+                let _ = cade_store::sqlite::upsert_memory_block(
+                    &state.db,
+                    &subagent_id,
+                    &label,
+                    &value,
+                    Some(&description),
+                    None,
+                );
+            }
+        }
+    }
 
     // REC-2: Drop guard ensures write-back + row deletion even on panic.
     let mut ephemeral_guard = EphemeralEnvironment::new(
@@ -877,7 +922,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 for tc in &resp.tool_calls {
                     messages.push(LlmMessage {
                         role: "tool".to_string(),
-                        content: format!("SYSTEM INTERVENTION: Stagnation detected. You have called '{}' with identical arguments {} times in the last 4 iterations. You are stuck in a doom-loop. Do NOT repeat this call. You MUST re-evaluate your approach, try a completely different strategy, or call the `finish` tool with status='blocked' if you cannot proceed.", stagnated_tool, stagnated_repeat_count),
+                        content: format!("SYSTEM INTERVENTION: Stagnation detected. You have called '{}' with identical arguments {} times in the last 4 iterations. You are stuck in a doom-loop. Do NOT repeat this call. You MUST immediately call `update_memory(label='active_goal', value=...)` to explicitly rewrite your strategy and outline a new approach in your Core memory, or call the `finish` tool with status='blocked' if you are unable to proceed.", stagnated_tool, stagnated_repeat_count),
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                         images: None,
