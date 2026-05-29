@@ -793,6 +793,24 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 16", [])?;
     }
 
+    if current_version < 17 {
+        let r = conn.execute(
+            "CREATE TABLE IF NOT EXISTS run_checkpoints (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                conversation_id TEXT,
+                current_iteration INTEGER NOT NULL,
+                serialized_state TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        );
+        if let Err(e) = r {
+            tracing::warn!("Migration 17 CREATE TABLE run_checkpoints failed: {e}");
+        }
+        conn.execute("PRAGMA user_version = 17", [])?;
+    }
+
     Ok(())
 }
 
@@ -842,9 +860,11 @@ pub mod runs;
 pub mod skills;
 pub mod tools;
 pub mod knowledge;
+pub mod run_checkpoints;
 
 pub use agents::*;
 pub use knowledge::*;
+pub use run_checkpoints::*;
 pub use conversations::*;
 pub use evidence::*;
 pub use memory::*;
