@@ -602,6 +602,7 @@ pub(crate) fn render_frame(
             thinking_elapsed,
             active_plan,
             mouse_capture_disabled,
+            session_tokens,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }

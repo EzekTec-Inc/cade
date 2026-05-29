@@ -22,6 +22,7 @@ pub(crate) struct SidebarState<'a> {
     pub thinking_elapsed: Option<std::time::Duration>,
     pub active_plan: Option<&'a PlanState>,
     pub mouse_capture_disabled: bool,
+    pub session_tokens: (u64, u64),
 }
 
 impl<'a> SidebarState<'a> {
@@ -96,6 +97,31 @@ pub(crate) fn render_sidebar(
     // value column gets the rest.
     let val_w = (inner.width as usize).saturating_sub(10);
 
+    // Calculate cost and budget gauge
+    let (prompt_tok, comp_tok) = state.session_tokens;
+    // Standard blended rate ($5/M prompt, $15/M completion)
+    let cost = (prompt_tok as f64 * 5.0 / 1_000_000.0) + (comp_tok as f64 * 15.0 / 1_000_000.0);
+    let cost_limit: f64 = std::env::var("CADE_MAX_SESSION_COST_USD")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(2.0); // default $2.00
+    let cost_pct = if cost_limit > 0.0 {
+        ((cost / cost_limit) * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+
+    let bar_width = val_w.min(16).max(8);
+    let filled_chars = ((cost_pct / 100.0) * bar_width as f64).round() as usize;
+    let empty_chars = bar_width.saturating_sub(filled_chars);
+    let bar_color = if cost_pct < 50.0 {
+        colors.c_success()
+    } else if cost_pct < 85.0 {
+        colors.c_warning()
+    } else {
+        colors.c_error()
+    };
+
     let lines = vec![
         Line::from(Span::styled(
             " Session ",
@@ -114,6 +140,18 @@ pub(crate) fn render_sidebar(
         Line::from(vec![
             Span::styled(" cwd     ", colors.text_muted()),
             Span::styled(truncate_str(state.cwd, val_w), colors.text_primary()),
+        ]),
+        Line::from(vec![
+            Span::styled(" cost    ", colors.text_muted()),
+            Span::styled(format!("${:.4}", cost), colors.text_primary()),
+        ]),
+        Line::from(vec![
+            Span::styled(" budget  ", colors.text_muted()),
+            Span::styled("[", colors.text_muted()),
+            Span::styled("█".repeat(filled_chars), Style::default().fg(bar_color)),
+            Span::styled("░".repeat(empty_chars), colors.text_dim()),
+            Span::styled("]", colors.text_muted()),
+            Span::styled(format!(" {:.0}%", cost_pct), colors.text_muted()),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -272,6 +310,7 @@ mod tests {
             thinking_elapsed: None,
             active_plan: None,
             mouse_capture_disabled: true,
+            session_tokens: (1000, 200),
         }
     }
 
