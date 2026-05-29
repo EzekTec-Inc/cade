@@ -263,6 +263,11 @@ impl TuiApp {
                 self.draw_dirty = true;
             }
 
+            KeyCode::Char('o') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.expand_all = !self.expand_all;
+                self.draw_dirty = true;
+            }
+
             KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.lines.clear();
                 self.pending_submit_images.clear();

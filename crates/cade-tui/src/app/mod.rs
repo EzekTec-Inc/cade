@@ -1583,7 +1583,66 @@ impl TuiApp {
         }
         // Keep term_width in sync so Up/Down cursor navigation is accurate.
         if let Ok(sz) = crossterm::terminal::size() {
-            self.term_width = sz.0;
+            if sz.0 != self.term_width {
+                let old_width = self.term_width;
+                self.term_width = sz.0;
+
+                if !self.follow && self.scroll > 0 {
+                    let timeline_entries = crate::app::timeline::build_timeline_entries(&lines);
+                    let old_timeline_w = (old_width as usize).saturating_sub(4).max(1);
+                    let prepared_old = crate::app::timeline::prepare_timeline_entries(
+                        &timeline_entries,
+                        old_timeline_w,
+                        self.expand_all,
+                        &self.expanded_items,
+                        &self.colors,
+                        self.use_nerd_fonts,
+                    );
+
+                    let total_visual_old: u16 = prepared_old.iter().map(|p| p.rows).sum();
+                    let visible_h = sz.1.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS + CONTENT_PAD_TOP + CONTENT_PAD_BOT);
+                    let max_skip_old = total_visual_old.saturating_sub(visible_h);
+                    let visible_start = max_skip_old.saturating_sub(self.scroll as u16);
+
+                    let mut item_start = 0u16;
+                    let mut anchor_index = 0;
+                    let mut anchor_offset = 0u16;
+                    for (idx, item) in prepared_old.iter().enumerate() {
+                        let item_end = item_start.saturating_add(item.rows);
+                        if item_start <= visible_start && visible_start < item_end {
+                            anchor_index = idx;
+                            anchor_offset = visible_start.saturating_sub(item_start);
+                            break;
+                        }
+                        item_start = item_end;
+                    }
+
+                    let new_timeline_w = (sz.0 as usize).saturating_sub(4).max(1);
+                    let prepared_new = crate::app::timeline::prepare_timeline_entries(
+                        &timeline_entries,
+                        new_timeline_w,
+                        self.expand_all,
+                        &self.expanded_items,
+                        &self.colors,
+                        self.use_nerd_fonts,
+                    );
+                    let total_visual_new: u16 = prepared_new.iter().map(|p| p.rows).sum();
+                    let mut new_item_start = 0u16;
+                    for (idx, item) in prepared_new.iter().enumerate() {
+                        if idx == anchor_index {
+                            break;
+                        }
+                        new_item_start = new_item_start.saturating_add(item.rows);
+                    }
+
+                    let new_visible_start = new_item_start.saturating_add(anchor_offset);
+                    let max_skip_new = total_visual_new.saturating_sub(visible_h);
+                    let new_scroll = max_skip_new.saturating_sub(new_visible_start);
+
+                    self.scroll = new_scroll as usize;
+                    self.scroll_target = new_scroll as usize;
+                }
+            }
         }
         Ok(())
     }
