@@ -571,7 +571,7 @@ impl TuiApp {
             Err(action) => action,
         };
 
-        let _action = match action.downcast::<crate::app::ThemePickerAction>() {
+        let action = match action.downcast::<crate::app::ThemePickerAction>() {
             Ok(tp_action) => {
                 match *tp_action {
                     crate::app::ThemePickerAction::Preview(colors) => {
@@ -585,6 +585,42 @@ impl TuiApp {
                         self.show_toast("Theme picker cancelled", crate::app::ToastLevel::Info);
                     }
                 }
+                return Ok(None);
+            }
+            Err(action) => action,
+        };
+
+        let _action = match action.downcast::<crate::app::FilePickerAction>() {
+            Ok(fp_action) => {
+                match *fp_action {
+                    crate::app::FilePickerAction::Select {
+                        at_pos,
+                        query_len,
+                        selected,
+                    } => {
+                        let mut completed = selected;
+                        if !completed.ends_with(' ') {
+                            completed.push(' ');
+                        }
+                        for _ in 0..(1 + query_len) {
+                            self.editor.remove_char_at(at_pos);
+                        }
+                        self.editor.insert_str_at(at_pos, &completed);
+                    }
+                    crate::app::FilePickerAction::BackspaceChar {
+                        at_pos,
+                        query_len_before,
+                    } => {
+                        self.editor.remove_char_at(at_pos + query_len_before);
+                    }
+                    crate::app::FilePickerAction::DeleteAt { at_pos } => {
+                        self.editor.remove_char_at(at_pos);
+                    }
+                    crate::app::FilePickerAction::InsertChar { position, ch } => {
+                        self.editor.insert_char_at(position, ch);
+                    }
+                }
+                self.draw_dirty = true;
                 return Ok(None);
             }
             Err(action) => action,
