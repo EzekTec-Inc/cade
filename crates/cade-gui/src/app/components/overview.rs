@@ -340,3 +340,18 @@ pub fn render(
             });
         });
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overview_layout_spec_matches_reference_structure() {
+        let spec = reference_layout_spec();
+        assert_eq!(spec.title, "CADE Command Center");
+        assert_eq!(spec.columns, ["metrics", "network", "operations"]);
+        assert_eq!(spec.metric_cards, ["Agents", "Tools", "Memory", "Tokens"]);
+        assert_eq!(spec.center_sections, ["Activity", "Network Node Graph"]);
+        assert_eq!(spec.operation_panels, ["Session", "MCP Servers", "Recent Tools"]);
+    }
+}
+
