@@ -469,3 +469,172 @@ pub struct ConnectedSession {
     pub profile_edit_url: String,
     pub profile_edit_token: String,
 }
+
+// ── GUI-1 network graph topology ───────────────────────────────────────
+
+/// Visual node categories for the overview network graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkNodeKind {
+    Agent,
+    Model,
+    Tool,
+    Memory,
+    McpServer,
+    Context,
+}
+
+/// One node in the high-fidelity overview topology graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkNode {
+    pub id: String,
+    pub label: String,
+    pub kind: NetworkNodeKind,
+    pub meta: String,
+}
+
+/// Directed relationship between two topology graph nodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkEdge {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+}
+
+/// Deterministic topology snapshot rendered by GUI-1.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NetworkGraphTopology {
+    pub nodes: Vec<NetworkNode>,
+    pub edges: Vec<NetworkEdge>,
+}
+
+impl ConnectedSession {
+    /// Build a deterministic, bounded topology for the overview network graph.
+    pub fn network_graph_topology(&self) -> NetworkGraphTopology {
+        const TOOL_LIMIT: usize = 8;
+        const MEMORY_LIMIT: usize = 6;
+        let mut graph = NetworkGraphTopology::default();
+
+        let Some(agent) = self
+            .selected_agent
+            .and_then(|idx| self.agents.get(idx))
+            .or_else(|| self.agents.first())
+        else {
+            return graph;
+        };
+
+        let agent_id = format!("agent:{}", agent.id);
+        graph.nodes.push(NetworkNode {
+            id: agent_id.clone(),
+            label: agent.name.clone(),
+            kind: NetworkNodeKind::Agent,
+            meta: agent
+                .model
+                .clone()
+                .unwrap_or_else(|| "no model selected".to_string()),
+        });
+
+        let model = self
+            .context_stats
+            .as_ref()
+            .and_then(|stats| stats.model.clone())
+            .or_else(|| agent.model.clone())
+            .or_else(|| {
+                self.last_usage
+                    .as_ref()
+                    .and_then(|(_, _, model)| model.clone())
+            });
+        if let Some(model) = model.filter(|m| !m.is_empty()) {
+            let model_id = format!("model:{model}");
+            graph.nodes.push(NetworkNode {
+                id: model_id.clone(),
+                label: model.clone(),
+                kind: NetworkNodeKind::Model,
+                meta: "active model".to_string(),
+            });
+            graph.edges.push(NetworkEdge {
+                from: agent_id.clone(),
+                to: model_id,
+                label: "uses".to_string(),
+            });
+        }
+
+        if let Some(stats) = &self.context_stats {
+            if stats.window_tokens > 0 || stats.chars_used > 0 {
+                let pct = if stats.window_tokens > 0 {
+                    ((stats.chars_used.saturating_mul(100)) / stats.window_tokens).min(100)
+                } else {
+                    0
+                };
+                let context_id = "context:window".to_string();
+                graph.nodes.push(NetworkNode {
+                    id: context_id.clone(),
+                    label: "Context Window".to_string(),
+                    kind: NetworkNodeKind::Context,
+                    meta: format!("{pct}% used"),
+                });
+                graph.edges.push(NetworkEdge {
+                    from: agent_id.clone(),
+                    to: context_id,
+                    label: "packs".to_string(),
+                });
+            }
+        }
+
+        for block in self.memory_blocks.iter().take(MEMORY_LIMIT) {
+            let node_id = format!("memory:{}", block.label);
+            graph.nodes.push(NetworkNode {
+                id: node_id.clone(),
+                label: block.label.clone(),
+                kind: NetworkNodeKind::Memory,
+                meta: block.tier.clone().unwrap_or_else(|| "memory".to_string()),
+            });
+            graph.edges.push(NetworkEdge {
+                from: node_id,
+                to: agent_id.clone(),
+                label: "grounds".to_string(),
+            });
+        }
+
+        for server in self.mcp_servers.iter().filter(|s| !s.disabled) {
+            let node_id = format!("mcp:{}", server.key);
+            graph.nodes.push(NetworkNode {
+                id: node_id.clone(),
+                label: server.key.clone(),
+                kind: NetworkNodeKind::McpServer,
+                meta: format!("{} tools", server.tools.len()),
+            });
+            graph.edges.push(NetworkEdge {
+                from: agent_id.clone(),
+                to: node_id,
+                label: "connects".to_string(),
+            });
+        }
+
+        for tool in self.tools.iter().take(TOOL_LIMIT) {
+            let node_id = format!("tool:{}", tool.name);
+            graph.nodes.push(NetworkNode {
+                id: node_id.clone(),
+                label: tool.name.clone(),
+                kind: NetworkNodeKind::Tool,
+                meta: tool.id.clone(),
+            });
+            graph.edges.push(NetworkEdge {
+                from: agent_id.clone(),
+                to: node_id.clone(),
+                label: "can call".to_string(),
+            });
+            if let Some((server_key, _)) = tool.name.split_once("__") {
+                let server_id = format!("mcp:{server_key}");
+                if graph.nodes.iter().any(|node| node.id == server_id) {
+                    graph.edges.push(NetworkEdge {
+                        from: server_id,
+                        to: node_id,
+                        label: "exposes".to_string(),
+                    });
+                }
+            }
+        }
+
+        graph
+    }
+}

@@ -2540,3 +2540,144 @@ fn append_to_unknown_call_id_is_noop() {
     s.append_live_output("tc-99", "orphan".into());
     assert!(s.live_outputs()[0].lines.is_empty());
 }
+
+// ── GUI-1 network topology ─────────────────────────────────────────────
+
+#[test]
+fn network_graph_topology_includes_core_agent_model_tool_memory_and_mcp_nodes() {
+    let mut s = connected_session();
+    if let SessionState::Connected(session) = &mut s {
+        session.selected_agent = Some(0);
+        session.tools = vec![
+            crate::api::AgentTool {
+                id: "tool-1".into(),
+                name: "desktop-commander__read_file".into(),
+            },
+            crate::api::AgentTool {
+                id: "tool-2".into(),
+                name: "bash".into(),
+            },
+        ];
+        session.memory_blocks = vec![crate::api::MemoryBlock {
+            label: "project".into(),
+            value: "synthetic project context".into(),
+            description: None,
+            tier: Some("pinned".into()),
+        }];
+        session.mcp_servers = vec![crate::api::McpServerInfo {
+            key: "desktop-commander".into(),
+            command: "npx @desktop-commander/mcp-server".into(),
+            tools: vec!["desktop-commander__read_file".into()],
+            disabled: false,
+        }];
+        session.context_stats = Some(crate::api::ContextStats {
+            model: Some("gpt-4o".into()),
+            window_tokens: 128000,
+            chars_used: 1280,
+            ..Default::default()
+        });
+
+        let graph = session.network_graph_topology();
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NetworkNodeKind::Agent)
+                .count(),
+            1
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "agent:agent-1" && n.label == "Test Agent")
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "model:gpt-4o" && n.kind == NetworkNodeKind::Model)
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "tool:desktop-commander__read_file")
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "memory:project" && n.kind == NetworkNodeKind::Memory)
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "mcp:desktop-commander" && n.kind == NetworkNodeKind::McpServer)
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "context:window" && n.meta == "1% used")
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.from == "agent:agent-1" && e.to == "model:gpt-4o")
+        );
+        assert!(
+            graph.edges.iter().any(|e| e.from == "mcp:desktop-commander"
+                && e.to == "tool:desktop-commander__read_file")
+        );
+    } else {
+        panic!("expected connected session");
+    }
+}
+
+#[test]
+fn network_graph_topology_is_bounded_and_deterministic() {
+    let mut s = connected_session();
+    if let SessionState::Connected(session) = &mut s {
+        session.selected_agent = Some(0);
+        session.tools = (0..16)
+            .map(|i| crate::api::AgentTool {
+                id: format!("tool-{i}"),
+                name: format!("server__tool_{i}"),
+            })
+            .collect();
+        session.memory_blocks = (0..12)
+            .map(|i| crate::api::MemoryBlock {
+                label: format!("memory_{i}"),
+                value: "synthetic".into(),
+                description: None,
+                tier: None,
+            })
+            .collect();
+
+        let first = session.network_graph_topology();
+        let second = session.network_graph_topology();
+        assert_eq!(first, second);
+        assert_eq!(
+            first
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NetworkNodeKind::Tool)
+                .count(),
+            8
+        );
+        assert_eq!(
+            first
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NetworkNodeKind::Memory)
+                .count(),
+            6
+        );
+        assert!(first.nodes.len() <= 18);
+    } else {
+        panic!("expected connected session");
+    }
+}

@@ -139,6 +139,10 @@ pub fn render(
 
                 ui.add_space(24.0);
 
+                crate::app::components::network_graph::render(ui, _session, _theme);
+
+                ui.add_space(24.0);
+
                 // ── MIDDLE SECTION: TOKEN USAGE TREND CHART ──────────────────────
                 let chart_frame = egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(30, 30, 30))

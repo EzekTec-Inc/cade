@@ -14,7 +14,7 @@ This document outlines the detailed architectural design, target files, implemen
 | **TUI-4** | Live Budget & Cost Gauge | `crates/cade-tui/src/app/layout/sidebar.rs` | ✅ Complete |
 | **TUI-5** | Toast Decay Progress Bars | `crates/cade-tui/src/app/layout/toast.rs` | ✅ Complete |
 | **TUI-6** | @ File Picker Trigger & Action Handlers | `crates/cade-tui/src/app/input.rs` | ✅ Complete |
-| **GUI-1** | High-Fidelity Network Node Graphs | `crates/cade-gui/src/app/` | 🟢 Planned |
+| **GUI-1** | High-Fidelity Network Node Graphs | `crates/cade-gui/src/app/` | ✅ Complete |
 
 *Status Indicators: 🟢 Planned | 🟡 In Progress | ✅ Complete*
 
@@ -86,4 +86,4 @@ This document outlines the detailed architectural design, target files, implemen
 1.  **Review & Signoff**: Share this implementation and tracking plan with the team.
 2.  **Modular Development**: Tackle each feature sequentially following strict Test-Driven Development (TDD) principles.
 3.  **Verification**: Conduct real-world user interface validation on each implemented item and update the tracking status above.
-4.  **Future GUI Work**: Implement `GUI-1` only after a concrete dashboard topology design and test plan are approved.
+4.  **GUI-1 Complete**: The overview dashboard now renders a deterministic network topology graph covering the selected agent, model, context window, memory blocks, MCP servers, and callable tools.
