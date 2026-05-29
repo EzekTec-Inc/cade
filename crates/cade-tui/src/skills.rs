@@ -1,7 +1,7 @@
 use crate::colors::ThemeColorsExt;
 use crate::{Result, colors::ThemeColors, overlay};
 use cade_core::skills::Skill;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -146,46 +146,60 @@ pub fn show_skills_manager(
         if !event::poll(std::time::Duration::from_millis(200))? {
             continue;
         }
-        if let Ok(Event::Key(key)) = event::read() {
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-            match (key.code, key.modifiers) {
-                (KeyCode::Esc, _)
-                | (KeyCode::Char('q'), KeyModifiers::NONE)
-                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
+        if let Ok(ev) = event::read() {
+            match ev {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Esc, _)
+                        | (KeyCode::Char('q'), KeyModifiers::NONE)
+                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
 
-                (KeyCode::Up, _) | (KeyCode::Char('k'), _) | (KeyCode::BackTab, _) => {
-                    selected_idx = selected_idx.saturating_sub(1);
-                    preview_scroll = 0;
-                }
-                (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _) => {
-                    if selected_idx + 1 < skills.len() {
-                        selected_idx += 1;
-                        preview_scroll = 0;
+                        (KeyCode::Up, _) | (KeyCode::Char('k'), _) | (KeyCode::BackTab, _) => {
+                            selected_idx = selected_idx.saturating_sub(1);
+                            preview_scroll = 0;
+                        }
+                        (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _) => {
+                            if selected_idx + 1 < skills.len() {
+                                selected_idx += 1;
+                                preview_scroll = 0;
+                            }
+                        }
+
+                        (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                            preview_scroll = preview_scroll.saturating_add(5);
+                        }
+                        (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                            preview_scroll = preview_scroll.saturating_sub(5);
+                        }
+
+                        (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                            result = Some(SkillsAction::Reload);
+                            break;
+                        }
+
+                        (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE) => {
+                            if let Some(skill) = skills.get(selected_idx) {
+                                launch_editor(terminal, &skill.path)?;
+                                result = Some(SkillsAction::Reload);
+                                break;
+                            }
+                        }
+
+                        _ => {}
                     }
                 }
-
-                (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                    preview_scroll = preview_scroll.saturating_add(5);
-                }
-                (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                    preview_scroll = preview_scroll.saturating_sub(5);
-                }
-
-                (KeyCode::Char('r'), KeyModifiers::NONE) => {
-                    result = Some(SkillsAction::Reload);
-                    break;
-                }
-
-                (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE) => {
-                    if let Some(skill) = skills.get(selected_idx) {
-                        launch_editor(terminal, &skill.path)?;
-                        result = Some(SkillsAction::Reload);
-                        break;
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        preview_scroll = preview_scroll.saturating_sub(2);
                     }
-                }
-
+                    MouseEventKind::ScrollDown => {
+                        preview_scroll = preview_scroll.saturating_add(2);
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
