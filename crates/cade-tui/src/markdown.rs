@@ -535,7 +535,27 @@ pub fn parse_markdown_lines_with_theme(
                     }
                 }
                 TagEnd::Item => {
-                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                    if max_width > 0 && !current_spans.is_empty() {
+                        let pad = "  ".repeat(list_depth.saturating_sub(1));
+                        let cont_prefix = Some(Span::raw(format!("{INDENT}    {pad}")));
+                        let spans = std::mem::take(&mut current_spans);
+                        let prefixed = if in_blockquote {
+                            let mut v = vec![Span::styled(
+                                format!("{INDENT}▎ "),
+                                colors.md_quote_border(),
+                            )];
+                            v.extend(spans);
+                            v
+                        } else {
+                            spans
+                        };
+                        let wrapped = wrap_spans_to_width(prefixed, max_width, cont_prefix);
+                        for l in wrapped {
+                            lines.push(l);
+                        }
+                    } else {
+                        push_line(&mut lines, &mut current_spans, in_blockquote);
+                    }
                 }
                 TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                     style_stack.pop();
