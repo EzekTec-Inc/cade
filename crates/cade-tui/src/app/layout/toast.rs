@@ -20,7 +20,23 @@ pub(crate) fn render_toast(
         ToastLevel::Warning => (colors.c_text_primary(), colors.c_warning()),
         ToastLevel::Error => (colors.c_text_primary(), colors.c_error()),
     };
+
+    let text_area = Rect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: 2,
+    };
+    let progress_area = Rect {
+        x: rect.x,
+        y: rect.y + 2,
+        width: rect.width,
+        height: 1,
+    };
+
     frame.render_widget(ratatui::widgets::Clear, rect);
+
+    // Render top, left, and right borders of the toast card
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw(" "),
@@ -31,12 +47,46 @@ pub(crate) fn render_toast(
         ]))
         .block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                 .border_type(colors.c_border_style())
                 .border_style(Style::default().fg(border))
                 .style(Style::default().bg(colors.c_bg_surface2())),
         ),
-        rect,
+        text_area,
+    );
+
+    // Calculate time-decay remaining percentage
+    let elapsed = toast.created_at.elapsed();
+    let total = toast.ttl;
+    let pct_remaining = if total.as_secs_f64() > 0.0 {
+        ((total.as_secs_f64() - elapsed.as_secs_f64()) / total.as_secs_f64()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let border_type = colors.c_border_style();
+    let (bl, br) = match border_type {
+        ratatui::widgets::BorderType::Rounded => ("╰", "╯"),
+        ratatui::widgets::BorderType::Double => ("╚", "╝"),
+        ratatui::widgets::BorderType::Thick => ("┗", "┛"),
+        _ => ("└", "┘"),
+    };
+
+    let width_inner = rect.width.saturating_sub(2) as usize;
+    let filled_w = (pct_remaining * width_inner as f64).round() as usize;
+    let empty_w = width_inner.saturating_sub(filled_w);
+
+    let progress_line = Line::from(vec![
+        Span::styled(bl, Style::default().fg(border)),
+        Span::styled("█".repeat(filled_w), Style::default().fg(border)),
+        Span::styled("─".repeat(empty_w), Style::default().fg(colors.c_text_dim())),
+        Span::styled(br, Style::default().fg(border)),
+    ]);
+
+    // Draw the bottom border as a decaying progress bar
+    frame.render_widget(
+        Paragraph::new(progress_line).style(Style::default().bg(colors.c_bg_surface2())),
+        progress_area,
     );
 }
 

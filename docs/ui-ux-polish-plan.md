@@ -12,7 +12,7 @@ This document outlines the detailed architectural design, target files, implemen
 | **TUI-2** | Relative Anchor-Retaining Resize | `crates/cade-tui/src/app/mod.rs`, `render.rs` | 🟢 Planned |
 | **TUI-3** | Floating Slash-Command Autocomplete | `crates/cade-tui/src/app/command_palette.rs`, `autocomplete.rs` | 🟢 Planned |
 | **TUI-4** | Live Budget & Cost Gauge | `crates/cade-tui/src/app/layout/sidebar.rs` | 🟢 Planned |
-| **TUI-5** | Toast Decay Progress Bars | `crates/cade-tui/src/app/layout/toast.rs` | 🟢 Planned |
+| **TUI-5** | Toast Decay Progress Bars | `crates/cade-tui/src/app/layout/toast.rs` | ✅ Complete |
 | **GUI-1** | High-Fidelity Network Node Graphs | `crates/cade-gui/src/app/` | 🟢 Planned |
 
 *Status Indicators: 🟢 Planned | 🟡 In Progress | ✅ Complete*
