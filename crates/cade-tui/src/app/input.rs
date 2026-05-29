@@ -461,6 +461,18 @@ impl TuiApp {
                 match action {
                     EditorAction::Consumed => {
                         self.draw_dirty = true;
+                        if let KeyCode::Char('/') = k.code {
+                            let input_text = self.editor.text();
+                            let cursor_pos = self.editor.cursor_pos();
+                            let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
+                            if !suggestions.is_empty() {
+                                self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
+                                    suggestions,
+                                    cursor_pos.saturating_sub(1),
+                                    cursor_pos,
+                                )));
+                            }
+                        }
                         return Ok(None);
                     }
                     EditorAction::Submit(text) => {
