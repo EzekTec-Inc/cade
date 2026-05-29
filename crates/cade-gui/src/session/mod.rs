@@ -500,6 +500,25 @@ pub struct NetworkEdge {
     pub label: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverviewLayoutSpec {
+    pub title: &'static str,
+    pub columns: Vec<&'static str>,
+    pub metric_cards: Vec<&'static str>,
+    pub center_sections: Vec<&'static str>,
+    pub operation_panels: Vec<&'static str>,
+}
+
+pub fn reference_layout_spec() -> OverviewLayoutSpec {
+    OverviewLayoutSpec {
+        title: "CADE Command Center",
+        columns: vec!["metrics", "network", "operations"],
+        metric_cards: vec!["Agents", "Tools", "Memory", "Tokens"],
+        center_sections: vec!["Activity", "Network Node Graph"],
+        operation_panels: vec!["Session", "MCP Servers", "Recent Tools"],
+    }
+}
+
 /// Deterministic topology snapshot rendered by GUI-1.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NetworkGraphTopology {
