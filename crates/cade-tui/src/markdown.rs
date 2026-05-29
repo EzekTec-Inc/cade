@@ -355,6 +355,35 @@ pub fn parse_markdown_lines_with_theme(
                     lines.push(Line::from(Span::styled(label, code_border_style(colors))));
                 }
                 Tag::List(start) => {
+                    // Pre-wrap any accumulated parent list item spans before starting nested list
+                    if !current_spans.is_empty() {
+                        if max_width > 0 {
+                            let pad = "  ".repeat(list_depth.saturating_sub(1));
+                            let cont_prefix = if list_depth == 0 {
+                                Some(Span::raw(INDENT.to_string()))
+                            } else {
+                                Some(Span::raw(format!("{INDENT}    {pad}")))
+                            };
+                            let spans = std::mem::take(&mut current_spans);
+                            let prefixed = if in_blockquote {
+                                let mut v = vec![Span::styled(
+                                    format!("{INDENT}▎ "),
+                                    colors.md_quote_border(),
+                                )];
+                                v.extend(spans);
+                                v
+                            } else {
+                                spans
+                            };
+                            let wrapped = wrap_spans_to_width(prefixed, max_width, cont_prefix);
+                            for l in wrapped {
+                                lines.push(l);
+                            }
+                        } else {
+                            push_line(&mut lines, &mut current_spans, in_blockquote);
+                        }
+                    }
+
                     // Blank line before a top-level list.
                     if list_depth == 0 && last_was_block_end && !lines.is_empty() {
                         lines.push(Line::from(""));
