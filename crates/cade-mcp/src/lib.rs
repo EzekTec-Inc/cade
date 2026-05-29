@@ -719,12 +719,16 @@ impl McpManager {
                 // Convert MCP input_schema (JsonObject) to OpenAI parameters Value
                 let mut parameters = Value::Object((*tool.input_schema).clone());
 
-                // Bug 1 fix: OpenAI requires "properties" even if empty for "type": "object"
-                if let Some(obj) = parameters.as_object_mut()
-                    && obj.get("type").and_then(|t| t.as_str()) == Some("object")
-                    && !obj.contains_key("properties")
-                {
-                    obj.insert("properties".to_string(), json!({}));
+                // OpenAI strictly requires parameters to have "type": "object" and "properties" even if empty.
+                if let Some(obj) = parameters.as_object_mut() {
+                    if !obj.contains_key("type") {
+                        obj.insert("type".to_string(), json!("object"));
+                    }
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("object")
+                        && !obj.contains_key("properties")
+                    {
+                        obj.insert("properties".to_string(), json!({}));
+                    }
                 }
 
                 // Infer write tool:

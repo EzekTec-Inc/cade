@@ -342,7 +342,8 @@ impl OpenAiProvider {
                     "function": {
                         "name": name,
                         "description": s["description"],
-                        "parameters": params
+                        "parameters": params,
+                        "strict": true
                     }
                 })
             })
@@ -374,9 +375,12 @@ impl OpenAiProvider {
 
                 json!({
                     "type": "function",
-                    "name": name,
-                    "description": s["description"],
-                    "parameters": params
+                    "function": {
+                        "name": name,
+                        "description": s["description"],
+                        "parameters": params,
+                        "strict": true
+                    }
                 })
             })
             .collect();
