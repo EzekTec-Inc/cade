@@ -8,13 +8,13 @@ This document outlines the detailed architectural design, target files, implemen
 
 | Phase | Feature | Target Files | Status |
 | :--- | :--- | :--- | :--- |
-| **TUI-1** | Interactive Code-Block Folding | `crates/cade-tui/src/app/timeline/mod.rs`, `markdown.rs` | ✅ Complete |
+| **TUI-1** | Global Timeline Expansion Toggle | `crates/cade-tui/src/app/input.rs`, `crates/cade-tui/src/app/timeline/` | ✅ Complete |
 | **TUI-2** | Relative Anchor-Retaining Resize | `crates/cade-tui/src/app/mod.rs`, `render.rs` | ✅ Complete |
-| **TUI-3** | Floating Slash-Command Autocomplete | `crates/cade-tui/src/app/command_palette.rs`, `autocomplete.rs` | ✅ Complete |
+| **TUI-3** | Floating Slash-Command Autocomplete | `crates/cade-tui/src/app/input.rs`, `autocomplete.rs` | ✅ Complete |
 | **TUI-4** | Live Budget & Cost Gauge | `crates/cade-tui/src/app/layout/sidebar.rs` | ✅ Complete |
 | **TUI-5** | Toast Decay Progress Bars | `crates/cade-tui/src/app/layout/toast.rs` | ✅ Complete |
 | **TUI-6** | @ File Picker Trigger & Action Handlers | `crates/cade-tui/src/app/input.rs` | ✅ Complete |
-| **GUI-1** | High-Fidelity Network Node Graphs | `crates/cade-gui/src/app/` | ✅ Complete |
+| **GUI-1** | High-Fidelity Network Node Graphs | `crates/cade-gui/src/app/` | 🟢 Planned |
 
 *Status Indicators: 🟢 Planned | 🟡 In Progress | ✅ Complete*
 
@@ -22,15 +22,15 @@ This document outlines the detailed architectural design, target files, implemen
 
 ## 2. Detailed Feature Designs
 
-### TUI-1: Interactive Code-Block Folding
-*   **Problem**: Heavy log files or 500-line JSON blocks flood the conversation history.
-*   **Design**:
-    *   Introduce `folded_blocks: HashSet<String>` inside `TuiApp` or `TimelineState` representing unique identifiers for code block regions (derived from block hash/location).
-    *   In `parse_markdown_lines_with_theme`, append dynamic fold/unfold text badges to code blocks (e.g. `[f] Expand / Collapse`).
-    *   When the cursor is focused, hitting `f` toggles the identifier's membership in `folded_blocks`, prompting an immediate layout recount and viewport redraw.
+### TUI-1: Global Timeline Expansion Toggle
+*   **Problem**: Heavy tool logs and long assistant/tool outputs flood the conversation history.
+*   **Implemented Design**:
+    *   `Ctrl+O` toggles `TuiApp::expand_all` from the editor input handler.
+    *   Timeline preparation uses this state to expand or compact long timeline items consistently.
+    *   This is a global expansion toggle, not per-code-block cursor folding.
 *   **Target Files**:
-    *   `crates/cade-tui/src/markdown.rs`
-    *   `crates/cade-tui/src/app/timeline/mod.rs`
+    *   `crates/cade-tui/src/app/input.rs`
+    *   `crates/cade-tui/src/app/timeline/`
 
 ### TUI-2: Relative Anchor-Retaining Resize
 *   **Problem**: Terminal window resizes recalculate wrapping offsets, causing the scroll position to "jump" or lose the user's active reading context.
@@ -86,3 +86,4 @@ This document outlines the detailed architectural design, target files, implemen
 1.  **Review & Signoff**: Share this implementation and tracking plan with the team.
 2.  **Modular Development**: Tackle each feature sequentially following strict Test-Driven Development (TDD) principles.
 3.  **Verification**: Conduct real-world user interface validation on each implemented item and update the tracking status above.
+4.  **Future GUI Work**: Implement `GUI-1` only after a concrete dashboard topology design and test plan are approved.

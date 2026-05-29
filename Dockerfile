@@ -13,8 +13,11 @@ RUN cargo build --release --bin cade-server --bin cade
 # Stage 2: Runtime
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies and create a non-root runtime user.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home --home-dir /home/cade cade
 
 WORKDIR /workspace
 
@@ -26,6 +29,8 @@ COPY --from=builder /app/target/release/cade /usr/local/bin/cade
 EXPOSE 8284
 
 ENV RUST_LOG=info
+
+USER cade
 
 # Default command runs the server
 CMD ["cade-server"]
