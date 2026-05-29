@@ -13,6 +13,7 @@ This document outlines the detailed architectural design, target files, implemen
 | **TUI-3** | Floating Slash-Command Autocomplete | `crates/cade-tui/src/app/command_palette.rs`, `autocomplete.rs` | ✅ Complete |
 | **TUI-4** | Live Budget & Cost Gauge | `crates/cade-tui/src/app/layout/sidebar.rs` | ✅ Complete |
 | **TUI-5** | Toast Decay Progress Bars | `crates/cade-tui/src/app/layout/toast.rs` | ✅ Complete |
+| **TUI-6** | @ File Picker Trigger & Action Handlers | `crates/cade-tui/src/app/input.rs` | ✅ Complete |
 | **GUI-1** | High-Fidelity Network Node Graphs | `crates/cade-gui/src/app/` | ✅ Complete |
 
 *Status Indicators: 🟢 Planned | 🟡 In Progress | ✅ Complete*
@@ -69,6 +70,14 @@ This document outlines the detailed architectural design, target files, implemen
     *   Draw a thin progress sub-border or horizontal fill line on the bottom edge of the toast box matching `pct_remaining`.
 *   **Target Files**:
     *   `crates/cade-tui/src/app/layout/toast.rs`
+
+### TUI-6: @ File Picker Trigger & Action Handlers
+*   **Problem**: Typing `@` inserted the character but never triggered the PickerState overlay. Additionally, any file picker actions produced by the overlay were silently ignored by the host.
+*   **Design**:
+    *   Bind `KeyCode::Char('@')` in the editor key handler to automatically spawn and overlay `PickerState`.
+    *   Implement handling of `FilePickerAction` (e.g. `Select`, `DeleteAt`, `BackspaceChar`, `InsertChar`) inside `process_overlay_action`, linking them directly to the editor's core coordinate-independent buffer operations (`remove_char_at`, `insert_str_at`, `insert_char_at`).
+*   **Target Files**:
+    *   `crates/cade-tui/src/app/input.rs`
 
 ---
 
