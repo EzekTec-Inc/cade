@@ -473,6 +473,15 @@ impl TuiApp {
                                 )));
                             }
                         }
+                        if let KeyCode::Char('@') = k.code {
+                            let cursor_pos = self.editor.cursor_pos();
+                            let at_pos = cursor_pos.saturating_sub(1);
+                            self.overlays.push(Box::new(crate::app::PickerState::new(
+                                at_pos,
+                                String::new(),
+                                &self.file_ac,
+                            )));
+                        }
                         return Ok(None);
                     }
                     EditorAction::Submit(text) => {
