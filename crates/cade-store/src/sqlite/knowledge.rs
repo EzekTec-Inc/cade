@@ -58,8 +58,9 @@ pub fn list_knowledge_edges(
     relation_filter: Option<&str>,
 ) -> Result<Vec<KnowledgeEdge>> {
     let conn = db.get()?;
-    
-    let mut sql = "SELECT id, entity, relation, target, created_at FROM knowledge_edges".to_string();
+
+    let mut sql =
+        "SELECT id, entity, relation, target, created_at FROM knowledge_edges".to_string();
     let mut conditions = Vec::new();
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -79,9 +80,12 @@ pub fn list_knowledge_edges(
     sql.push_str(" ORDER BY id DESC");
 
     let mut stmt = conn.prepare(&sql)?;
-    
+
     // Convert Vec<Box<dyn ToSql>> to a slice of references for rusqlite
-    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref() as &dyn rusqlite::ToSql).collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec
+        .iter()
+        .map(|p| p.as_ref() as &dyn rusqlite::ToSql)
+        .collect();
 
     let rows = stmt.query_map(&params_refs[..], |row| {
         Ok(KnowledgeEdge {
@@ -182,13 +186,13 @@ mod tests {
     #[test]
     fn test_knowledge_graph_roundtrip() -> Result<()> {
         let db = open(":memory:")?;
-        
+
         insert_knowledge_edge(&db, "main.rs", "calls", "setup_panic_hook", None)?;
         insert_knowledge_edge(&db, "mod.rs", "declares", "knowledge", None)?;
-        
+
         let edges = list_knowledge_edges(&db, None, None)?;
         assert_eq!(edges.len(), 2);
-        
+
         assert_eq!(edges[0].entity, "mod.rs");
         assert_eq!(edges[0].relation, "declares");
         assert_eq!(edges[0].target, "knowledge");

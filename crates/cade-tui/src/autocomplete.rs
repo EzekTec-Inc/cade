@@ -8,8 +8,8 @@
 //! Both are consumed by `TuiApp::handle_key_input` via the [`AutocompleteProvider`]
 //! trait, decoupling the filesystem walk and command catalogue from the UI rendering.
 
-use std::path::{Path, PathBuf};
 use crate::colors::ThemeColorsExt;
+use std::path::{Path, PathBuf};
 
 // -- Trait
 
@@ -574,19 +574,26 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
         self.id
     }
 
-    fn render_overlay(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, colors: &crate::colors::ThemeColors) {
-        use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Clear};
+    fn render_overlay(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        colors: &crate::colors::ThemeColors,
+    ) {
         use ratatui::layout::Rect;
         use ratatui::style::Style;
         use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 
         if self.suggestions.is_empty() {
             return;
         }
 
-        let card_h = (self.suggestions.len() as u16 + 2).min(8).min(area.height.saturating_sub(4));
+        let card_h = (self.suggestions.len() as u16 + 2)
+            .min(8)
+            .min(area.height.saturating_sub(4));
         let card_w = 65u16.min(area.width.saturating_sub(4));
-        
+
         let card_area = Rect::new(
             area.x + 2,
             area.y + area.height.saturating_sub(card_h).saturating_sub(2),
@@ -597,7 +604,10 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
         frame.render_widget(Clear, card_area);
 
         let block = Block::default()
-            .title(Span::styled(" Suggestions (Enter/Tab to select) ", Style::default().bold().fg(colors.c_primary())))
+            .title(Span::styled(
+                " Suggestions (Enter/Tab to select) ",
+                Style::default().bold().fg(colors.c_primary()),
+            ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(colors.c_text_muted()));
 
@@ -613,7 +623,10 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
 
             if let Some(ref desc) = comp.description {
                 spans.push(Span::raw("  ·  "));
-                spans.push(Span::styled(desc, Style::default().fg(colors.c_text_muted()).dim()));
+                spans.push(Span::styled(
+                    desc,
+                    Style::default().fg(colors.c_text_muted()).dim(),
+                ));
             }
 
             items.push(ListItem::new(Line::from(spans)));
@@ -629,9 +642,12 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
         frame.render_stateful_widget(list, card_area, &mut state);
     }
 
-    fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> crate::overlay_component::OverlayInputResult {
-        use crossterm::event::KeyCode;
+    fn handle_input(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> crate::overlay_component::OverlayInputResult {
         use crate::overlay_component::OverlayInputResult;
+        use crossterm::event::KeyCode;
 
         match key.code {
             KeyCode::Up => {

@@ -132,20 +132,13 @@ pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
     };
     match base {
         // Shell / command execution
-        "bash"
-        | "shell"
-        | "start_process"
-        | "read_process_output" => 4_096,
+        "bash" | "shell" | "start_process" | "read_process_output" => 4_096,
 
         // File reading tools — need more room
-        "read_file"
-        | "read_multiple_files" => 12_288,
+        "read_file" | "read_multiple_files" => 12_288,
 
         // Search / grep — compact results
-        "grep"
-        | "grep_search"
-        | "start_search"
-        | "get_more_search_results" => 3_072,
+        "grep" | "grep_search" | "start_search" | "get_more_search_results" => 3_072,
 
         // Memory retrieval — excerpts only
         "archival_memory_search" | "conversation_search" | "search_memory" | "query_event_log" => {
@@ -153,8 +146,7 @@ pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
         }
 
         // Glob / list — compact
-        "glob"
-        | "list_directory" => 3_072,
+        "glob" | "list_directory" => 3_072,
 
         // Everything else: default
         _ => TOOL_RESULT_MAX_CHARS,

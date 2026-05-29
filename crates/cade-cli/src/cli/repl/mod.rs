@@ -206,7 +206,11 @@ pub struct Repl {
     pub(crate) startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Live boot status of all configured MCP servers.
     #[allow(dead_code)]
-    pub(crate) mcp_boot_status: Option<std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, cade_tui::app::ServerBootStatus>>>>,
+    pub(crate) mcp_boot_status: Option<
+        std::sync::Arc<
+            parking_lot::Mutex<std::collections::HashMap<String, cade_tui::app::ServerBootStatus>>,
+        >,
+    >,
     /// Cumulative token usage for the session (input, output).
     pub(crate) session_input_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(crate) session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -268,7 +272,13 @@ impl Repl {
         capabilities: cade_core::capabilities::CapabilitySet,
         mcp_rx: Option<tokio::sync::oneshot::Receiver<std::sync::Arc<cade_agent::mcp::McpManager>>>,
         startup_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        mcp_boot_status: Option<std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, cade_tui::app::ServerBootStatus>>>>,
+        mcp_boot_status: Option<
+            std::sync::Arc<
+                parking_lot::Mutex<
+                    std::collections::HashMap<String, cade_tui::app::ServerBootStatus>,
+                >,
+            >,
+        >,
     ) -> Self {
         let perm_mode = permissions.mode();
         let agent_name_clone = agent_name.clone();
@@ -376,8 +386,14 @@ impl Repl {
     }
 
     pub async fn populate_autocomplete(&self) {
-        let mcp_servers: Vec<String> = self.settings.lock().merged_mcp_servers().keys().cloned().collect();
-        
+        let mcp_servers: Vec<String> = self
+            .settings
+            .lock()
+            .merged_mcp_servers()
+            .keys()
+            .cloned()
+            .collect();
+
         let mut tools = Vec::new();
         let mcp_statuses = self.mcp.status().await;
         for status in mcp_statuses {
@@ -400,21 +416,67 @@ impl Repl {
         // Populate slash commands
         use crate::ui::autocomplete::SlashCommandDef;
         let slash_cmds = vec![
-            SlashCommandDef { name: "init".to_string(), description: "Analyse project + populate memory".to_string() },
-            SlashCommandDef { name: "remember".to_string(), description: "/remember [text]  — ask agent to update memory".to_string() },
-            SlashCommandDef { name: "backend".to_string(), description: "/backend [local|docker|ssh|readonly]  — show or switch backend".to_string() },
-            SlashCommandDef { name: "link".to_string(), description: "Register + attach all tools to current agent".to_string() },
-            SlashCommandDef { name: "unlink".to_string(), description: "Detach all tools from current agent".to_string() },
-            SlashCommandDef { name: "mcp".to_string(), description: "Show MCP server status + tools".to_string() },
-            SlashCommandDef { name: "connect".to_string(), description: "Connect a new AI provider interactively".to_string() },
-            SlashCommandDef { name: "disconnect".to_string(), description: "/disconnect <name>  — remove a provider".to_string() },
-            SlashCommandDef { name: "providers".to_string(), description: "Show all configured AI providers".to_string() },
-            SlashCommandDef { name: "model".to_string(), description: "/model [name]  — show or switch active LLM".to_string() },
-            SlashCommandDef { name: "reasoning".to_string(), description: "/reasoning [low|medium|high]  — set reasoning effort".to_string() },
-            SlashCommandDef { name: "memory".to_string(), description: "/memory [label]  — view or manage memory blocks".to_string() },
-            SlashCommandDef { name: "stream".to_string(), description: "Toggle token streaming".to_string() },
-            SlashCommandDef { name: "help".to_string(), description: "Show help screen".to_string() },
-            SlashCommandDef { name: "exit".to_string(), description: "Exit CADE".to_string() },
+            SlashCommandDef {
+                name: "init".to_string(),
+                description: "Analyse project + populate memory".to_string(),
+            },
+            SlashCommandDef {
+                name: "remember".to_string(),
+                description: "/remember [text]  — ask agent to update memory".to_string(),
+            },
+            SlashCommandDef {
+                name: "backend".to_string(),
+                description: "/backend [local|docker|ssh|readonly]  — show or switch backend"
+                    .to_string(),
+            },
+            SlashCommandDef {
+                name: "link".to_string(),
+                description: "Register + attach all tools to current agent".to_string(),
+            },
+            SlashCommandDef {
+                name: "unlink".to_string(),
+                description: "Detach all tools from current agent".to_string(),
+            },
+            SlashCommandDef {
+                name: "mcp".to_string(),
+                description: "Show MCP server status + tools".to_string(),
+            },
+            SlashCommandDef {
+                name: "connect".to_string(),
+                description: "Connect a new AI provider interactively".to_string(),
+            },
+            SlashCommandDef {
+                name: "disconnect".to_string(),
+                description: "/disconnect <name>  — remove a provider".to_string(),
+            },
+            SlashCommandDef {
+                name: "providers".to_string(),
+                description: "Show all configured AI providers".to_string(),
+            },
+            SlashCommandDef {
+                name: "model".to_string(),
+                description: "/model [name]  — show or switch active LLM".to_string(),
+            },
+            SlashCommandDef {
+                name: "reasoning".to_string(),
+                description: "/reasoning [low|medium|high]  — set reasoning effort".to_string(),
+            },
+            SlashCommandDef {
+                name: "memory".to_string(),
+                description: "/memory [label]  — view or manage memory blocks".to_string(),
+            },
+            SlashCommandDef {
+                name: "stream".to_string(),
+                description: "Toggle token streaming".to_string(),
+            },
+            SlashCommandDef {
+                name: "help".to_string(),
+                description: "Show help screen".to_string(),
+            },
+            SlashCommandDef {
+                name: "exit".to_string(),
+                description: "Exit CADE".to_string(),
+            },
         ];
         app.slash_ac.set_commands(slash_cmds);
 

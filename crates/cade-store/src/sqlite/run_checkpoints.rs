@@ -77,9 +77,16 @@ mod tests {
     #[test]
     fn test_run_checkpoints_roundtrip() -> Result<()> {
         let db = open(":memory:")?;
-        
-        upsert_run_checkpoint(&db, "run-1", "agent-1", Some("conv-1"), 2, "{\"state\": \"data\"}")?;
-        
+
+        upsert_run_checkpoint(
+            &db,
+            "run-1",
+            "agent-1",
+            Some("conv-1"),
+            2,
+            "{\"state\": \"data\"}",
+        )?;
+
         let cp_opt = get_run_checkpoint(&db, "run-1")?;
         assert!(cp_opt.is_some());
         let cp = cp_opt.unwrap();
@@ -89,7 +96,14 @@ mod tests {
         assert_eq!(cp.serialized_state, "{\"state\": \"data\"}");
 
         // Update it
-        upsert_run_checkpoint(&db, "run-1", "agent-1", Some("conv-1"), 3, "{\"state\": \"updated\"}")?;
+        upsert_run_checkpoint(
+            &db,
+            "run-1",
+            "agent-1",
+            Some("conv-1"),
+            3,
+            "{\"state\": \"updated\"}",
+        )?;
         let cp = get_run_checkpoint(&db, "run-1")?.unwrap();
         assert_eq!(cp.current_iteration, 3);
         assert_eq!(cp.serialized_state, "{\"state\": \"updated\"}");

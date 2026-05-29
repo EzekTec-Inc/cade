@@ -474,7 +474,12 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 None
             }
         };
-        if let Ok(msgs) = cade_store::sqlite::list_messages(&state.db, parent_agent_id, parent_conv_id.as_deref(), 8) {
+        if let Ok(msgs) = cade_store::sqlite::list_messages(
+            &state.db,
+            parent_agent_id,
+            parent_conv_id.as_deref(),
+            8,
+        ) {
             context_str.push_str("\n\n<parent_context>\n");
             context_str.push_str("Below is the recent chat history from your parent session. Use this to understand the current work context, recently viewed files, and goals:\n");
             for m in msgs {
@@ -484,7 +489,11 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     other => other.to_string(),
                 };
                 let trunc_text: String = text.lines().take(5).collect::<Vec<_>>().join("\n");
-                let suffix = if text.lines().count() > 5 { " ... [truncated]" } else { "" };
+                let suffix = if text.lines().count() > 5 {
+                    " ... [truncated]"
+                } else {
+                    ""
+                };
                 context_str.push_str(&format!("[{role}]: {trunc_text}{suffix}\n"));
             }
             context_str.push_str("</parent_context>\n");

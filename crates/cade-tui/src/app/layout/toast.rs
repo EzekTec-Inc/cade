@@ -79,7 +79,10 @@ pub(crate) fn render_toast(
     let progress_line = Line::from(vec![
         Span::styled(bl, Style::default().fg(border)),
         Span::styled("█".repeat(filled_w), Style::default().fg(border)),
-        Span::styled("─".repeat(empty_w), Style::default().fg(colors.c_text_dim())),
+        Span::styled(
+            "─".repeat(empty_w),
+            Style::default().fg(colors.c_text_dim()),
+        ),
         Span::styled(br, Style::default().fg(border)),
     ]);
 

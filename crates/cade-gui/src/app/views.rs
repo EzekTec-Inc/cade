@@ -58,9 +58,7 @@ pub fn render_timeline_message(
             render_reasoning_message(ui, text, &msg.id, theme);
             None
         }
-        "tool_call" => {
-            render_tool_call_message(ui, msg, theme)
-        }
+        "tool_call" => render_tool_call_message(ui, msg, theme),
         "tool" => {
             let text = msg.content.as_str().unwrap_or("").trim();
             render_tool_result_message(ui, text, &msg.id, theme);
@@ -72,7 +70,11 @@ pub fn render_timeline_message(
             None
         }
         role => {
-            let text = msg.content.as_str().map(|s| s.to_string()).unwrap_or_else(|| msg.content.to_string());
+            let text = msg
+                .content
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| msg.content.to_string());
             render_fallback_message(ui, role, &text, theme);
             None
         }
@@ -89,9 +91,7 @@ pub fn get_tool_icon(name: &str) -> &'static str {
         "read_file" | "ReadFileGemini" | "read_multiple_files" => "\u{f15c}", // 
 
         // -- File write / edit
-        "write_file" | "edit_file" | "create_file" | "edit_block" | "replace_in_file" => {
-            "\u{f0f6}"
-        } // 
+        "write_file" | "edit_file" | "create_file" | "edit_block" | "replace_in_file" => "\u{f0f6}", // 
 
         // -- Patch / diff
         "apply_patch" | "ide_apply_patch" => "\u{f440}", // 
@@ -104,10 +104,9 @@ pub fn get_tool_icon(name: &str) -> &'static str {
         "list_directory" | "glob" | "get_file_info" => "\u{f07b}", // 
 
         // -- Git
-        "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op" | "stash_op"
-        | "log" | "diff" | "status" | "add" | "reset" | "restore" | "fetch" | "remote"
-        | "tag" | "show" | "blame" | "cherry_pick" | "clean" | "revert" | "config"
-        | "repository" => "\u{e725}", // 
+        "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op" | "stash_op" | "log"
+        | "diff" | "status" | "add" | "reset" | "restore" | "fetch" | "remote" | "tag" | "show"
+        | "blame" | "cherry_pick" | "clean" | "revert" | "config" | "repository" => "\u{e725}", // 
 
         // -- GitHub
         "create_pull_request"
@@ -137,8 +136,9 @@ pub fn get_tool_icon(name: &str) -> &'static str {
         | "reflect" => "\u{f0eb}", // 
 
         // -- Skills
-        "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
-        | "unload_skill" => "\u{f085}", // 
+        "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref" | "unload_skill" => {
+            "\u{f085}"
+        } // 
 
         // -- Subagents
         "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}", // 
@@ -148,12 +148,13 @@ pub fn get_tool_icon(name: &str) -> &'static str {
         | "set_plan" | "workflow" => "\u{f0ae}", // 
 
         // -- Checkpoints / artifacts
-        "create_checkpoint" | "restore_checkpoint" | "list_checkpoints"
-        | "store_artifact" => "\u{f0c7}", // 💾
+        "create_checkpoint" | "restore_checkpoint" | "list_checkpoints" | "store_artifact" => {
+            "\u{f0c7}"
+        } // 💾
 
         // -- Web / network
-        "web_search" | "fetch_doc" | "browser_screenshot" | "http_request"
-        | "get-library-docs" | "resolve-library-id" => "\u{f0ac}", // 
+        "web_search" | "fetch_doc" | "browser_screenshot" | "http_request" | "get-library-docs"
+        | "resolve-library-id" => "\u{f0ac}", // 
 
         // -- Desktop
         "screen_capture"
@@ -296,7 +297,11 @@ pub fn render_tool_call_message(
             "commit" | "add" | "push" | "pull" | "branch" | "diff" | "status" | "log"
             | "stash_op" | "merge" | "rebase_op" | "reset" | "restore" | "tag" | "show"
             | "fetch" | "blame" | "cherry_pick" | "clean" | "revert" | "config" | "remote"
-            | "repository" if name.starts_with("git__") => "git",
+            | "repository"
+                if name.starts_with("git__") =>
+            {
+                "git"
+            }
             _ => b,
         }
     };
@@ -341,8 +346,7 @@ pub fn render_tool_call_message(
                 .unwrap_or("");
             let line_count = content.lines().count();
 
-            let header =
-                format!("{icon} write  {} ({} lines)", short_path(path), line_count);
+            let header = format!("{icon} write  {} ({} lines)", short_path(path), line_count);
             egui::CollapsingHeader::new(
                 egui::RichText::new(&header)
                     .color(theme.success())
@@ -396,14 +400,10 @@ pub fn render_tool_call_message(
             };
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{icon} read  {}{}",
-                        short_path(path),
-                        range_str
-                    ))
-                    .color(theme.text_primary())
-                    .monospace()
-                    .size(12.0),
+                    egui::RichText::new(format!("{icon} read  {}{}", short_path(path), range_str))
+                        .color(theme.text_primary())
+                        .monospace()
+                        .size(12.0),
                 );
             });
         }
@@ -516,8 +516,8 @@ pub fn render_tool_call_message(
             .id_salt(format!("tc_{}", msg.id))
             .default_open(false)
             .show(ui, |ui| {
-                let pretty = serde_json::to_string_pretty(&args)
-                    .unwrap_or_else(|_| args_raw.to_string());
+                let pretty =
+                    serde_json::to_string_pretty(&args).unwrap_or_else(|_| args_raw.to_string());
                 for ln in pretty.lines() {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -546,9 +546,8 @@ pub fn render_tool_result_message(
     theme: &crate::theme::ThemeColors,
 ) {
     // Detect error by checking if content starts with known error prefixes
-    let is_error = content.starts_with("Error")
-        || content.starts_with("error")
-        || content.starts_with("ERR");
+    let is_error =
+        content.starts_with("Error") || content.starts_with("error") || content.starts_with("ERR");
 
     let (status_label, status_color) = if is_error {
         ("\u{f057}", theme.error()) // 

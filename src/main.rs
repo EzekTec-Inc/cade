@@ -350,10 +350,13 @@ async fn async_main() -> Result<()> {
     let (mcp_tx, mcp_rx) = tokio::sync::oneshot::channel();
     let startup_ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    let mcp_boot_status = std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
+    let mcp_boot_status =
+        std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
     if capabilities.is_enabled(cade_core::capabilities::Capability::Mcp) {
         for key in settings.merged_mcp_servers().keys() {
-            mcp_boot_status.lock().insert(key.clone(), cade_tui::app::ServerBootStatus::Loading);
+            mcp_boot_status
+                .lock()
+                .insert(key.clone(), cade_tui::app::ServerBootStatus::Loading);
         }
     }
 
@@ -372,14 +375,28 @@ async fn async_main() -> Result<()> {
         let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled {
             std::sync::Arc::new(McpManager::empty())
         } else {
-            let (mgr, _) = McpManager::start(&bg_mcp_configs, Some(&mut |res| {
-                let status = match &res {
-                    cade_mcp::McpStartResult::Ok { tool_count, .. } => cade_tui::app::ServerBootStatus::Ready { tool_count: *tool_count },
-                    cade_mcp::McpStartResult::Failed { error, .. } => cade_tui::app::ServerBootStatus::Failed(error.clone()),
-                    cade_mcp::McpStartResult::Timeout { timeout_secs, .. } => cade_tui::app::ServerBootStatus::Timeout(*timeout_secs),
-                };
-                bg_mcp_boot_status.lock().insert(res.key().to_string(), status);
-            })).await;
+            let (mgr, _) = McpManager::start(
+                &bg_mcp_configs,
+                Some(&mut |res| {
+                    let status = match &res {
+                        cade_mcp::McpStartResult::Ok { tool_count, .. } => {
+                            cade_tui::app::ServerBootStatus::Ready {
+                                tool_count: *tool_count,
+                            }
+                        }
+                        cade_mcp::McpStartResult::Failed { error, .. } => {
+                            cade_tui::app::ServerBootStatus::Failed(error.clone())
+                        }
+                        cade_mcp::McpStartResult::Timeout { timeout_secs, .. } => {
+                            cade_tui::app::ServerBootStatus::Timeout(*timeout_secs)
+                        }
+                    };
+                    bg_mcp_boot_status
+                        .lock()
+                        .insert(res.key().to_string(), status);
+                }),
+            )
+            .await;
             std::sync::Arc::new(mgr)
         };
 

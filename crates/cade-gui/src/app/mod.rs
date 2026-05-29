@@ -133,13 +133,8 @@ impl CadeApp {
         }
     }
 
-
     /// Renders the Right Panel (Split View) for subagents and live logs
-    fn draw_right_panel(
-        &self,
-        ui: &mut egui::Ui,
-        session: &crate::session::ConnectedSession,
-    ) {
+    fn draw_right_panel(&self, ui: &mut egui::Ui, session: &crate::session::ConnectedSession) {
         let active_live_outputs: Vec<_> = session.live_outputs.iter().filter(|b| !b.done).collect();
         let subagent_cards = &session.subagent_cards;
         if !active_live_outputs.is_empty() || !subagent_cards.is_empty() {
@@ -152,7 +147,11 @@ impl CadeApp {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.add_space(8.0);
-                            ui.heading(egui::RichText::new("Terminal Logs").color(self.theme.primary()).size(14.0));
+                            ui.heading(
+                                egui::RichText::new("Terminal Logs")
+                                    .color(self.theme.primary())
+                                    .size(14.0),
+                            );
                             ui.add_space(8.0);
 
                             for block in active_live_outputs {
@@ -162,7 +161,11 @@ impl CadeApp {
 
                             if !subagent_cards.is_empty() {
                                 ui.add_space(8.0);
-                                ui.heading(egui::RichText::new("Subagents").color(self.theme.primary()).size(14.0));
+                                ui.heading(
+                                    egui::RichText::new("Subagents")
+                                        .color(self.theme.primary())
+                                        .size(14.0),
+                                );
                                 ui.add_space(8.0);
                                 for card_state in subagent_cards.iter() {
                                     let card = crate::app::views::SubagentCard {
@@ -171,7 +174,9 @@ impl CadeApp {
                                         mode: card_state.mode.clone(),
                                         model: card_state.model.clone(),
                                         status: match card_state.status.as_str() {
-                                            "complete" => crate::app::views::SubagentStatus::Complete,
+                                            "complete" => {
+                                                crate::app::views::SubagentStatus::Complete
+                                            }
                                             "error" => crate::app::views::SubagentStatus::Error,
                                             _ => crate::app::views::SubagentStatus::Running,
                                         },
@@ -232,9 +237,10 @@ impl eframe::App for CadeApp {
         // without holding a borrow into the render closures below.
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
-
         // ── Sidebar (Left) ─────────────────────────────────────────────
-        if let Some(new_action) = components::sidebar::render(ui, &mut self.active_page, &self.theme) {
+        if let Some(new_action) =
+            components::sidebar::render(ui, &mut self.active_page, &self.theme)
+        {
             action = new_action;
         }
 
@@ -254,8 +260,8 @@ impl eframe::App for CadeApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             // ── M5: context-window progress bar ──────────────────────────
             if let Some(SessionState::Connected(session)) = session_snapshot_for_toolbar {
-                    let total_input_tokens = session.total_input_tokens;
-                    let total_output_tokens = session.total_output_tokens;
+                let total_input_tokens = session.total_input_tokens;
+                let total_output_tokens = session.total_output_tokens;
                 const DEFAULT_WINDOW: u64 = 128_000;
                 let total = total_input_tokens + total_output_tokens;
                 let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
@@ -285,7 +291,7 @@ impl eframe::App for CadeApp {
                     ui.spinner();
                 }
                 Some(SessionState::Connected(mut session)) => {
-                                        let agents = &session.agents;
+                    let agents = &session.agents;
                     let health = &session.health;
                     let selected_agent = &session.selected_agent;
                     let messages = &session.messages;
@@ -609,7 +615,13 @@ impl eframe::App for CadeApp {
 
                     match self.active_page {
                         ActivePage::Overview => {
-                            components::overview::render(ui, &mut self.profile_name, &mut self.profile_email, &session, &self.theme);
+                            components::overview::render(
+                                ui,
+                                &mut self.profile_name,
+                                &mut self.profile_email,
+                                &session,
+                                &self.theme,
+                            );
                         }
                         ActivePage::Memory => {
                             let dirty = memory_blocks
@@ -650,7 +662,7 @@ impl eframe::App for CadeApp {
                                 ui,
                                 &mut self.md_cache,
                                 *selected_agent,
-                                &[], // No chat messages in logs view
+                                &[],   // No chat messages in logs view
                                 false, // No more messages
                                 is_streaming,
                                 auto_scroll,

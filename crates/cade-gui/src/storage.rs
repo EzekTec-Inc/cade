@@ -37,7 +37,13 @@ impl StorageKey {
 
     /// All defined keys, for bulk operations (e.g. logout / clear).
     pub fn all() -> &'static [StorageKey] {
-        &[Self::ApiToken, Self::ServerUrl, Self::Profiles, Self::ProfileName, Self::ProfileEmail]
+        &[
+            Self::ApiToken,
+            Self::ServerUrl,
+            Self::Profiles,
+            Self::ProfileName,
+            Self::ProfileEmail,
+        ]
     }
 }
 

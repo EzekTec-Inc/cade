@@ -973,7 +973,9 @@ pub struct TuiApp {
     pub bg_last_announced: usize,
 
     /// Live boot status of all configured MCP servers.
-    pub mcp_boot_status: Option<std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, ServerBootStatus>>>>,
+    pub mcp_boot_status: Option<
+        std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<String, ServerBootStatus>>>,
+    >,
     /// When did all configured MCP servers settle?
     pub mcp_all_settled_at: Option<std::time::Instant>,
 }
@@ -1434,7 +1436,7 @@ impl TuiApp {
             // Render MCP boot status card floating in the top right
             if let Some(ref progress) = self.mcp_boot_status {
                 let boot_map = progress.lock().clone();
-                
+
                 // Determine if we should show the card.
                 // We show it if any server is Loading, OR if it's been less than 3 seconds since all settled.
                 let mut show_card = false;
@@ -1445,7 +1447,7 @@ impl TuiApp {
                         all_done = false;
                     }
                 }
-                
+
                 // Get all_settled_at timestamp
                 if all_done {
                     if self.mcp_all_settled_at.is_none() {
@@ -1454,7 +1456,7 @@ impl TuiApp {
                 } else {
                     self.mcp_all_settled_at = None;
                 }
-                
+
                 if let Some(settled) = self.mcp_all_settled_at {
                     if settled.elapsed() < std::time::Duration::from_secs(3) {
                         show_card = true;
@@ -1462,18 +1464,18 @@ impl TuiApp {
                 }
 
                 if show_card && !boot_map.is_empty() {
-                    use ratatui::widgets::{Block, Borders, Paragraph, Clear};
                     use ratatui::layout::Rect;
                     use ratatui::style::Style;
                     use ratatui::text::{Line, Span};
+                    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
                     // Draw floating panel in the top-right corner
                     let full = frame.area();
-                    
+
                     // We need a height based on the number of servers + 2 for borders
                     let card_h = (boot_map.len() as u16 + 2).min(full.height.saturating_sub(2));
                     let card_w = 46u16; // fixed width for a neat look
-                    
+
                     // Avoid overlapping or casting outside the screen
                     if full.width > card_w && full.height > card_h {
                         let card_area = Rect::new(
@@ -1482,17 +1484,21 @@ impl TuiApp {
                             card_w,
                             card_h,
                         );
-                        
+
                         // Clear the area first so there's no bleed-through
                         frame.render_widget(Clear, card_area);
-                        
+
                         let block = Block::default()
-                            .title(Span::styled(" MCP Engine Status ", Style::default().bold().fg(colors.c_primary())))
+                            .title(Span::styled(
+                                " MCP Engine Status ",
+                                Style::default().bold().fg(colors.c_primary()),
+                            ))
                             .borders(Borders::ALL)
                             .border_style(Style::default().fg(colors.c_text_muted()));
-                        
+
                         // Sort server list for stable, deterministic display
-                        let mut sorted_servers: Vec<(&String, &ServerBootStatus)> = boot_map.iter().collect();
+                        let mut sorted_servers: Vec<(&String, &ServerBootStatus)> =
+                            boot_map.iter().collect();
                         sorted_servers.sort_by_key(|(k, _)| k.as_str());
 
                         let mut lines = Vec::new();
@@ -1507,41 +1513,57 @@ impl TuiApp {
                                     let idx = ((ms / 100) % 4) as usize;
                                     Span::styled(frames[idx], Style::default().cyan().bold())
                                 }
-                                ServerBootStatus::Ready { .. } => Span::styled("✔", Style::default().green().bold()),
-                                ServerBootStatus::Failed(_) => Span::styled("✗", Style::default().red().bold()),
-                                ServerBootStatus::Timeout(_) => Span::styled("⚠", Style::default().yellow().bold()),
+                                ServerBootStatus::Ready { .. } => {
+                                    Span::styled("✔", Style::default().green().bold())
+                                }
+                                ServerBootStatus::Failed(_) => {
+                                    Span::styled("✗", Style::default().red().bold())
+                                }
+                                ServerBootStatus::Timeout(_) => {
+                                    Span::styled("⚠", Style::default().yellow().bold())
+                                }
                             };
                             let status_text = match status {
-                                ServerBootStatus::Loading => Span::styled("connecting...", Style::default().dim()),
-                                ServerBootStatus::Ready { tool_count } => {
-                                    Span::styled(format!("{tool_count} tools ready"), Style::default().green())
+                                ServerBootStatus::Loading => {
+                                    Span::styled("connecting...", Style::default().dim())
                                 }
+                                ServerBootStatus::Ready { tool_count } => Span::styled(
+                                    format!("{tool_count} tools ready"),
+                                    Style::default().green(),
+                                ),
                                 ServerBootStatus::Failed(err) => {
                                     let trunc_err: String = err.chars().take(22).collect();
                                     let suffix = if err.len() > 22 { ".." } else { "" };
-                                    Span::styled(format!("{trunc_err}{suffix}"), Style::default().red())
+                                    Span::styled(
+                                        format!("{trunc_err}{suffix}"),
+                                        Style::default().red(),
+                                    )
                                 }
-                                ServerBootStatus::Timeout(secs) => {
-                                    Span::styled(format!("timeout ({secs}s)"), Style::default().yellow())
-                                }
+                                ServerBootStatus::Timeout(secs) => Span::styled(
+                                    format!("timeout ({secs}s)"),
+                                    Style::default().yellow(),
+                                ),
                             };
-                            
+
                             // Align nicely: server name on the left, status on the right.
                             // Width is card_w - 2 (borders) - 4 (spacing/icon). Let's pad dynamically.
                             let max_key_len = 16;
                             let trunc_key: String = key.chars().take(max_key_len).collect();
                             let formatted_key = format!("{:<max_key_len$}", trunc_key);
-                            
+
                             lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 icon,
                                 Span::raw("  "),
-                                Span::styled(formatted_key, Style::default().fg(colors.c_text_primary())),
+                                Span::styled(
+                                    formatted_key,
+                                    Style::default().fg(colors.c_text_primary()),
+                                ),
                                 Span::raw("   "),
                                 status_text,
                             ]));
                         }
-                        
+
                         let paragraph = Paragraph::new(lines).block(block);
                         frame.render_widget(paragraph, card_area);
                     }
@@ -1604,7 +1626,9 @@ impl TuiApp {
                     );
 
                     let total_visual_old: u16 = prepared_old.iter().map(|p| p.rows).sum();
-                    let visible_h = sz.1.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS + CONTENT_PAD_TOP + CONTENT_PAD_BOT);
+                    let visible_h = sz.1.saturating_sub(
+                        FIXED_ROWS + MAX_INPUT_ROWS + CONTENT_PAD_TOP + CONTENT_PAD_BOT,
+                    );
                     let max_skip_old = total_visual_old.saturating_sub(visible_h);
                     let visible_start = max_skip_old.saturating_sub(self.scroll as u16);
 

@@ -166,19 +166,10 @@ impl Repl {
                     }
                 };
                 match base {
-                    "bash" | "start_process" => {
-                        turn_stats.cmds += 1
-                    }
-                    "write_file"
-                    | "edit_file"
-                    | "apply_patch"
-                    | "edit_block"
-                    | "apply_edit"
+                    "bash" | "start_process" => turn_stats.cmds += 1,
+                    "write_file" | "edit_file" | "apply_patch" | "edit_block" | "apply_edit"
                     | "replace_in_file" => turn_stats.edits += 1,
-                    "read_file"
-                    | "glob"
-                    | "grep"
-                    | "read_multiple_files" => turn_stats.reads += 1,
+                    "read_file" | "glob" | "grep" | "read_multiple_files" => turn_stats.reads += 1,
                     _ => {
                         // Fallback heuristics
                         if name.contains("read")

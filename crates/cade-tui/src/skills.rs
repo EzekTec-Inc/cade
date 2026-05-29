@@ -180,7 +180,8 @@ pub fn show_skills_manager(
                             break;
                         }
 
-                        (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE) => {
+                        (KeyCode::Char('e'), KeyModifiers::NONE)
+                        | (KeyCode::Enter, KeyModifiers::NONE) => {
                             if let Some(skill) = skills.get(selected_idx) {
                                 launch_editor(terminal, &skill.path)?;
                                 result = Some(SkillsAction::Reload);

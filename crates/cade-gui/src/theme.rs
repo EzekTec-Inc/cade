@@ -224,11 +224,15 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
 
         // Dashboard shadows
         window_shadow: egui::Shadow {
-            offset: [0, 8], blur: 16, spread: 0,
+            offset: [0, 8],
+            blur: 16,
+            spread: 0,
             color: Color32::from_black_alpha(96),
         },
         popup_shadow: egui::Shadow {
-            offset: [0, 4], blur: 8, spread: 0,
+            offset: [0, 4],
+            blur: 8,
+            spread: 0,
             color: Color32::from_black_alpha(96),
         },
 

@@ -46,7 +46,7 @@ pub(crate) fn calc_visual_cursor(
             for word in seg.split_inclusive([' ', '\t']) {
                 let word_w = unicode_width::UnicodeWidthStr::width(word) as u16;
                 let word_char_len = word.chars().count();
-                
+
                 if row_w > 0 && row_w + word_w > w {
                     y_offset += 1;
                     row_w = 0;
@@ -58,7 +58,7 @@ pub(crate) fn calc_visual_cursor(
                     let prefix_chars = cursor_col - char_offset;
                     let prefix: String = word.chars().take(prefix_chars).collect();
                     let prefix_w = unicode_width::UnicodeWidthStr::width(prefix.as_str()) as u16;
-                    
+
                     if word_w > w {
                         // Word itself wraps across multiple lines
                         let total_w = row_w + prefix_w;
@@ -90,7 +90,7 @@ pub(crate) fn calc_visual_cursor(
                 } else {
                     row_w += word_w;
                 }
-                
+
                 char_offset += word_char_len;
             }
 
@@ -116,7 +116,7 @@ mod tests {
         // '🔄' is 1 character, but 4 bytes in UTF-8
         let cursor_col = 1;
         let (x, y) = calc_visual_cursor(buf, 0, cursor_col, 80, 0);
-        
+
         // Should compile and run without panicking on char boundaries!
         assert_eq!(y, 0);
         assert!(x > 0);

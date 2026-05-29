@@ -6,7 +6,7 @@ use crossterm::event::{
 
 use crate::Result;
 
-use super::{ToastLevel, TuiApp, ServerBootStatus};
+use super::{ServerBootStatus, ToastLevel, TuiApp};
 use crate::autocomplete::AutocompleteProvider;
 
 impl TuiApp {
@@ -305,11 +305,13 @@ impl TuiApp {
                 if partial.starts_with('/') {
                     let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
                     if !suggestions.is_empty() {
-                        self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
-                            suggestions,
-                            word_start,
-                            cursor_pos,
-                        )));
+                        self.overlays.push(Box::new(
+                            crate::autocomplete::AutocompleteOverlay::new(
+                                suggestions,
+                                word_start,
+                                cursor_pos,
+                            ),
+                        ));
                         self.draw_dirty = true;
                         return Ok(None);
                     }
@@ -319,11 +321,13 @@ impl TuiApp {
                 if partial.starts_with(':') {
                     let suggestions = self.tool_ac.completions(&input_text, cursor_pos);
                     if !suggestions.is_empty() {
-                        self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
-                            suggestions,
-                            word_start,
-                            cursor_pos,
-                        )));
+                        self.overlays.push(Box::new(
+                            crate::autocomplete::AutocompleteOverlay::new(
+                                suggestions,
+                                word_start,
+                                cursor_pos,
+                            ),
+                        ));
                         self.draw_dirty = true;
                         return Ok(None);
                     }
@@ -333,11 +337,13 @@ impl TuiApp {
                 if partial.starts_with('?') {
                     let suggestions = self.next_step_ac.completions(&input_text, cursor_pos);
                     if !suggestions.is_empty() {
-                        self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
-                            suggestions,
-                            word_start,
-                            cursor_pos,
-                        )));
+                        self.overlays.push(Box::new(
+                            crate::autocomplete::AutocompleteOverlay::new(
+                                suggestions,
+                                word_start,
+                                cursor_pos,
+                            ),
+                        ));
                         self.draw_dirty = true;
                         return Ok(None);
                     }
@@ -466,11 +472,13 @@ impl TuiApp {
                             let cursor_pos = self.editor.cursor_pos();
                             let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
                             if !suggestions.is_empty() {
-                                self.overlays.push(Box::new(crate::autocomplete::AutocompleteOverlay::new(
-                                    suggestions,
-                                    cursor_pos.saturating_sub(1),
-                                    cursor_pos,
-                                )));
+                                self.overlays.push(Box::new(
+                                    crate::autocomplete::AutocompleteOverlay::new(
+                                        suggestions,
+                                        cursor_pos.saturating_sub(1),
+                                        cursor_pos,
+                                    ),
+                                ));
                             }
                         }
                         if let KeyCode::Char('@') = k.code {
@@ -521,12 +529,12 @@ impl TuiApp {
                 let input = self.editor.text();
                 let before = &input[..ac_action.word_start];
                 let after = &input[ac_action.cursor_pos..];
-                
+
                 let mut completed = ac_action.text;
                 if !completed.ends_with(' ') {
                     completed.push(' ');
                 }
-                
+
                 let new_input = format!("{}{}{}", before, completed, after);
                 let new_cursor = ac_action.word_start + completed.len();
                 self.editor.set_text(new_input);

@@ -1,4 +1,4 @@
-use crate::app::{AppAction, ActivePage};
+use crate::app::{ActivePage, AppAction};
 use eframe::egui;
 
 pub fn render(
@@ -20,19 +20,26 @@ pub fn render(
         .show_inside(ui, |ui| {
             // Logo area
             ui.horizontal(|ui| {
-                let (rect, _resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-                ui.painter().rect_stroke(rect, egui::CornerRadius::same(4), egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
-                ui.painter().circle_filled(rect.center(), 3.0, egui::Color32::WHITE);
-                
+                let (rect, _resp) =
+                    ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                ui.painter().rect_stroke(
+                    rect,
+                    egui::CornerRadius::same(4),
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+                ui.painter()
+                    .circle_filled(rect.center(), 3.0, egui::Color32::WHITE);
+
                 ui.add_space(8.0);
                 ui.heading(
                     egui::RichText::new("CADE Beta")
                         .color(egui::Color32::WHITE)
                         .strong()
-                        .size(18.0)
+                        .size(18.0),
                 );
             });
-            
+
             ui.add_space(32.0);
 
             // Menu sections
@@ -41,10 +48,10 @@ pub fn render(
                     egui::RichText::new(title)
                         .color(egui::Color32::from_gray(120))
                         .size(10.0)
-                        .strong()
+                        .strong(),
                 );
                 ui.add_space(8.0);
-                
+
                 for (icon, target_page, label) in items {
                     let is_active = *active_page == *target_page;
                     let text_color = if is_active {
@@ -67,8 +74,15 @@ pub fn render(
                             ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
                                 if is_active {
-                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 14.0), egui::Sense::hover());
-                                    ui.painter().rect_filled(rect, egui::CornerRadius::same(1), text_color);
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(2.0, 14.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        egui::CornerRadius::same(1),
+                                        text_color,
+                                    );
                                     ui.add_space(6.0);
                                 } else {
                                     ui.add_space(8.0);
@@ -92,17 +106,23 @@ pub fn render(
                 ui.add_space(24.0);
             };
 
-            render_section("ACCOUNT", &[
-                ("👤", ActivePage::Overview, "Profile"),
-                ("💬", ActivePage::Chat, "Chat / Agents"),
-                ("🗂", ActivePage::Memory, "Memory Palace"),
-                ("🛠", ActivePage::Skills, "Skills Library"),
-            ]);
+            render_section(
+                "ACCOUNT",
+                &[
+                    ("👤", ActivePage::Overview, "Profile"),
+                    ("💬", ActivePage::Chat, "Chat / Agents"),
+                    ("🗂", ActivePage::Memory, "Memory Palace"),
+                    ("🛠", ActivePage::Skills, "Skills Library"),
+                ],
+            );
 
-            render_section("ORGANIZATION", &[
-                ("👥", ActivePage::Logs, "Members / Logs"),
-                ("📊", ActivePage::Overview, "Usage"),
-            ]);
+            render_section(
+                "ORGANIZATION",
+                &[
+                    ("👥", ActivePage::Logs, "Members / Logs"),
+                    ("📊", ActivePage::Overview, "Usage"),
+                ],
+            );
         });
 
     action
