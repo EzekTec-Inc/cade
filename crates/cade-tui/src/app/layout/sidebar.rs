@@ -102,7 +102,7 @@ pub(crate) fn render_sidebar(
     let cost_limit: f64 = std::env::var("CADE_MAX_SESSION_COST_USD")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(2.0); // default $2.00
+        .unwrap_or(120.00); // default $120.00
     let cost_pct = if cost_limit > 0.0 {
         ((cost / cost_limit) * 100.0).clamp(0.0, 100.0)
     } else {
