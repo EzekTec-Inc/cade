@@ -869,6 +869,8 @@ pub struct TuiApp {
     pub context_pct: Option<u8>,
     /// Cumulative session token usage (input, output) for footer display.
     pub session_tokens: (u64, u64),
+    /// Cumulative session cost in USD for sidebar budget gauge.
+    pub session_cost_usd: f64,
     /// Number of completed user→assistant turn pairs.
     pub turn_count: u32,
     /// Rolling history of context-window percentages (one per turn).
@@ -1059,6 +1061,7 @@ impl TuiApp {
             cwd: abbreviate_cwd(&std::env::current_dir().unwrap_or_default()),
             context_pct: None,
             session_tokens: (0, 0),
+            session_cost_usd: 0.0,
             turn_count: 0,
             token_history: Vec::new(),
             mouse_capture_disabled: false,
@@ -1368,6 +1371,7 @@ impl TuiApp {
                 &cwd,
                 context_pct,
                 self.session_tokens,
+                self.session_cost_usd,
                 turn_count,
                 &token_history,
                 &header_lines,

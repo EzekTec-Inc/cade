@@ -861,6 +861,8 @@ impl Repl {
                     self.session_output_tokens
                         .load(std::sync::atomic::Ordering::SeqCst),
                 );
+                let cost = self.session_stats.lock().compute_cost().0;
+                app.session_cost_usd = cost;
             }
 
             // Read input — either from pending (menu dispatch) or from the user.

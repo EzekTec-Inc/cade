@@ -126,6 +126,7 @@ pub(crate) fn render_frame(
     cwd: &str,
     context_pct: Option<u8>,
     session_tokens: (u64, u64),
+    session_cost_usd: f64,
     turn_count: u32,
     token_history: &[u8],
     header_lines: &[RenderLine],
@@ -602,7 +603,7 @@ pub(crate) fn render_frame(
             thinking_elapsed,
             active_plan,
             mouse_capture_disabled,
-            session_tokens,
+            session_cost_usd,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }
