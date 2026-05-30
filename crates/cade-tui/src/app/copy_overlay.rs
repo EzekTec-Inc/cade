@@ -169,15 +169,11 @@ impl OverlayComponent for CopyOverlay {
                 self.dismissed = true;
                 return OverlayInputResult::Dismiss;
             }
-            KeyCode::Up => {
-                if selected > 0 {
-                    self.state.select(Some(selected - 1));
-                }
+            KeyCode::Up if selected > 0 => {
+                self.state.select(Some(selected - 1));
             }
-            KeyCode::Down => {
-                if selected < self.items.len() - 1 {
-                    self.state.select(Some(selected + 1));
-                }
+            KeyCode::Down if selected < self.items.len() - 1 => {
+                self.state.select(Some(selected + 1));
             }
             KeyCode::PageUp => {
                 self.state.select(Some(selected.saturating_sub(10)));

@@ -579,11 +579,10 @@ impl ConnectedSession {
 
         if let Some(stats) = &self.context_stats {
             if stats.window_tokens > 0 || stats.chars_used > 0 {
-                let pct = if stats.window_tokens > 0 {
-                    ((stats.chars_used.saturating_mul(100)) / stats.window_tokens).min(100)
-                } else {
-                    0
-                };
+                let pct = (stats.chars_used.saturating_mul(100))
+                    .checked_div(stats.window_tokens)
+                    .unwrap_or(0)
+                    .min(100);
                 let context_id = "context:window".to_string();
                 graph.nodes.push(NetworkNode {
                     id: context_id.clone(),

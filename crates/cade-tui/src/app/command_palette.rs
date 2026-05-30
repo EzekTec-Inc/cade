@@ -65,7 +65,7 @@ impl CommandPaletteState {
                     fuzzy_score(&q, cmd.trigger, cmd.description, section).map(|score| (i, score))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|a| std::cmp::Reverse(a.1));
             self.filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
         // Clamp cursor

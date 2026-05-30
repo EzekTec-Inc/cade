@@ -720,12 +720,8 @@ impl OverlayComponent for ActiveQuestionState {
             (KeyCode::Char('u'), KeyModifiers::CONTROL) if st.cursor_pos == st.other_idx => {
                 st.custom_text.clear();
             }
-            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                if st.cursor_pos == st.other_idx {
-                    st.custom_text.push(c);
-                } else {
-                    return OverlayInputResult::NotHandled;
-                }
+            (KeyCode::Char(c), m) if (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) && st.cursor_pos == st.other_idx => {
+                st.custom_text.push(c);
             }
             _ => return OverlayInputResult::NotHandled,
         }
@@ -1457,10 +1453,10 @@ impl TuiApp {
                     self.mcp_all_settled_at = None;
                 }
 
-                if let Some(settled) = self.mcp_all_settled_at {
-                    if settled.elapsed() < std::time::Duration::from_secs(3) {
-                        show_card = true;
-                    }
+                if let Some(settled) = self.mcp_all_settled_at
+                    && settled.elapsed() < std::time::Duration::from_secs(3)
+                {
+                    show_card = true;
                 }
 
                 if show_card && !boot_map.is_empty() {
@@ -1608,9 +1604,10 @@ impl TuiApp {
             self.scroll_target = max_skip as usize;
         }
         // Keep term_width in sync so Up/Down cursor navigation is accurate.
-        if let Ok(sz) = crossterm::terminal::size() {
-            if sz.0 != self.term_width {
-                let old_width = self.term_width;
+        if let Ok(sz) = crossterm::terminal::size()
+            && sz.0 != self.term_width
+        {
+            let old_width = self.term_width;
                 self.term_width = sz.0;
 
                 if !self.follow && self.scroll > 0 {

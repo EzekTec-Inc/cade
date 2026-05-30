@@ -108,14 +108,14 @@ pub fn clean_openai_schema(v: &mut Value) {
             // Clean/simplify oneOf, anyOf, allOf for OpenAI Structured Outputs
             let sub_schemas = ["anyOf", "allOf", "oneOf"];
             for key in sub_schemas {
-                if let Some(val) = map.remove(key) {
-                    if let Some(arr) = val.as_array() && !arr.is_empty() {
-                        // Extract and merge fields of the first nested schema
-                        if let Some(obj) = arr[0].as_object() {
-                            for (k, v) in obj {
-                                if k != "type" || !map.contains_key("type") {
-                                    map.insert(k.clone(), v.clone());
-                                }
+                if let Some(val) = map.remove(key)
+                    && let Some(arr) = val.as_array() && !arr.is_empty()
+                {
+                    // Extract and merge fields of the first nested schema
+                    if let Some(obj) = arr[0].as_object() {
+                        for (k, v) in obj {
+                            if k != "type" || !map.contains_key("type") {
+                                map.insert(k.clone(), v.clone());
                             }
                         }
                     }
