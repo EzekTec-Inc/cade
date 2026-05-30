@@ -87,10 +87,8 @@ impl Repl {
                     (KeyCode::Up | KeyCode::Char('k'), _) => {
                         sel = sel.saturating_sub(1);
                     }
-                    (KeyCode::Down | KeyCode::Char('j'), _) => {
-                        if sel + 1 < convs.len() {
-                            sel += 1;
-                        }
+                    (KeyCode::Down | KeyCode::Char('j'), _) if sel + 1 < convs.len() => {
+                        sel += 1;
                     }
                     (KeyCode::Enter, _) => {
                         result = convs.get(sel).cloned();

@@ -286,32 +286,26 @@ pub fn show_mcp_manager(
                 (KeyCode::Up, _) | (KeyCode::Char('k'), _) | (KeyCode::BackTab, _) => {
                     selected_idx = selected_idx.saturating_sub(1);
                 }
-                (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _) => {
-                    if selected_idx + 1 < servers.len() {
-                        selected_idx += 1;
-                    }
+                (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _)
+                    if selected_idx + 1 < servers.len() =>
+                {
+                    selected_idx += 1;
                 }
 
-                (KeyCode::Char('e'), KeyModifiers::NONE) => {
-                    if !servers.is_empty() {
-                        let idx = selected_idx;
-                        return Ok(Some(McpAction::Edit(servers[idx].key.clone())));
-                    }
+                (KeyCode::Char('e'), KeyModifiers::NONE) if !servers.is_empty() => {
+                    let idx = selected_idx;
+                    return Ok(Some(McpAction::Edit(servers[idx].key.clone())));
                 }
-                (KeyCode::Char('d'), KeyModifiers::NONE) => {
-                    if !servers.is_empty() {
-                        let idx = selected_idx;
-                        return Ok(Some(McpAction::Delete(servers[idx].key.clone())));
-                    }
+                (KeyCode::Char('d'), KeyModifiers::NONE) if !servers.is_empty() => {
+                    let idx = selected_idx;
+                    return Ok(Some(McpAction::Delete(servers[idx].key.clone())));
                 }
                 (KeyCode::Char('n'), KeyModifiers::NONE) => {
                     return Ok(Some(McpAction::New));
                 }
-                (KeyCode::Char(' '), KeyModifiers::NONE) => {
-                    if !servers.is_empty() {
-                        let idx = selected_idx;
-                        return Ok(Some(McpAction::Toggle(servers[idx].key.clone())));
-                    }
+                (KeyCode::Char(' '), KeyModifiers::NONE) if !servers.is_empty() => {
+                    let idx = selected_idx;
+                    return Ok(Some(McpAction::Toggle(servers[idx].key.clone())));
                 }
                 _ => {}
             }

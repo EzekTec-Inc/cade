@@ -161,11 +161,11 @@ pub fn show_skills_manager(
                             selected_idx = selected_idx.saturating_sub(1);
                             preview_scroll = 0;
                         }
-                        (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _) => {
-                            if selected_idx + 1 < skills.len() {
-                                selected_idx += 1;
-                                preview_scroll = 0;
-                            }
+                        (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _)
+                            if selected_idx + 1 < skills.len() =>
+                        {
+                            selected_idx += 1;
+                            preview_scroll = 0;
                         }
 
                         (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {

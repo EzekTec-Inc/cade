@@ -244,7 +244,7 @@ impl SessionStats {
             out.push(RenderLine::InfoHeader("  Model Usage".to_string()));
 
             let mut models: Vec<_> = self.per_model.iter().collect();
-            models.sort_by(|a, b| b.1.reqs.cmp(&a.1.reqs));
+            models.sort_by_key(|a| std::cmp::Reverse(a.1.reqs));
 
             let headers = vec![
                 "Model".to_string(),
@@ -322,7 +322,7 @@ impl SessionStats {
 
         // Sort models by total requests descending
         let mut models: Vec<(&String, &ModelStats)> = self.per_model.iter().collect();
-        models.sort_by(|a, b| b.1.reqs.cmp(&a.1.reqs));
+        models.sort_by_key(|a| std::cmp::Reverse(a.1.reqs));
 
         // Column headers: blank label col + one col per model (strip provider prefix)
         let mut headers = vec!["Metric".to_string()];

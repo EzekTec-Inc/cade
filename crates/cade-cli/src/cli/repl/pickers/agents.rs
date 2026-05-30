@@ -148,28 +148,24 @@ impl Repl {
                     (KeyCode::Up, _) | (KeyCode::BackTab, _) | (KeyCode::Char('k'), _) => {
                         selected_idx = selected_idx.saturating_sub(1);
                     }
-                    (KeyCode::Down, _) | (KeyCode::Tab, _) | (KeyCode::Char('j'), _) => {
-                        if selected_idx + 1 < agents.len() {
-                            selected_idx += 1;
+                    (KeyCode::Down, _) | (KeyCode::Tab, _) | (KeyCode::Char('j'), _)
+                        if selected_idx + 1 < agents.len() =>
+                    {
+                        selected_idx += 1;
+                    }
+
+                    (KeyCode::Enter, _) if marked.is_empty() && !agents.is_empty() => {
+                        let a = agents[selected_idx].clone();
+                        if a.id != current {
+                            break Some(AgentPickerResult::Switch(a));
                         }
                     }
 
-                    (KeyCode::Enter, _) => {
-                        if marked.is_empty() && !agents.is_empty() {
-                            let a = agents[selected_idx].clone();
-                            if a.id != current {
-                                break Some(AgentPickerResult::Switch(a));
-                            }
-                        }
-                    }
-
-                    (KeyCode::Char(' '), _) => {
-                        if !agents.is_empty() {
-                            if marked.contains(&selected_idx) {
-                                marked.remove(&selected_idx);
-                            } else {
-                                marked.insert(selected_idx);
-                            }
+                    (KeyCode::Char(' '), _) if !agents.is_empty() => {
+                        if marked.contains(&selected_idx) {
+                            marked.remove(&selected_idx);
+                        } else {
+                            marked.insert(selected_idx);
                         }
                     }
 
@@ -245,38 +241,37 @@ impl Repl {
                         }
                     }
 
-                    (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                    (KeyCode::Char('r'), KeyModifiers::NONE) if !agents.is_empty() => {
                         // rename
-                        if !agents.is_empty() {
-                            let orig_idx = selected_idx;
-                            let a = agents[orig_idx].clone();
-                            use crate::ui::question::{Question, QuestionOption};
-                            let q = Question {
-                                header: "Rename".to_string(),
-                                text: format!("Rename '{}':", a.name),
-                                options: vec![QuestionOption {
-                                    label: "Cancel".to_string(),
-                                    description: String::new(),
-                                }],
-                                multi_select: false,
-                                allow_other: true,
-                                progress: None,
-                            };
-                            let name = {
-                                let mut app = app_arc.lock();
-                                let ans = app.ask_question(&q)?;
-                                app.scroll = 0;
-                                let _ = app.draw();
-                                match ans {
-                                    Some(n) if n.as_str() != "Cancel" && !n.as_str().is_empty() => {
-                                        n.as_str().to_string()
-                                    }
-                                    _ => String::new(),
+                        let orig_idx = selected_idx;
+                        let a = agents[orig_idx].clone();
+                        use crate::ui::question::{Question, QuestionOption};
+                        let q = Question {
+                            header: "Rename".to_string(),
+                            text: format!("Rename '{}':", a.name),
+                            options: vec![QuestionOption {
+                                label: "Cancel".to_string(),
+                                description: String::new(),
+                            }],
+                            multi_select: false,
+                            allow_other: true,
+                            progress: None,
+                        };
+                        let name = {
+                            let mut app = app_arc.lock();
+                            let ans = app.ask_question(&q)?;
+                            app.scroll = 0;
+                            let _ = app.draw();
+                            match ans {
+                                Some(n) if n.as_str() != "Cancel" && !n.as_str().is_empty() => {
+                                    n.as_str().to_string()
                                 }
-                            };
-                            if !name.is_empty() {
-                                match self.client.rename_agent(&a.id, &name).await {
-                                    Ok(_) => {
+                                _ => String::new(),
+                            }
+                        };
+                        if !name.is_empty() {
+                            match self.client.rename_agent(&a.id, &name).await {
+                                Ok(_) => {
                                         agents[orig_idx].name = name.clone();
                                         if a.id == current {
                                             break Some(AgentPickerResult::Rename {
@@ -285,12 +280,11 @@ impl Repl {
                                             });
                                         }
                                     }
-                                    Err(e) => {
-                                        app_arc.lock().show_toast(
-                                            e.to_string(),
-                                            crate::ui::ToastLevel::Error,
-                                        );
-                                    }
+                                Err(e) => {
+                                    app_arc.lock().show_toast(
+                                        e.to_string(),
+                                        crate::ui::ToastLevel::Error,
+                                    );
                                 }
                             }
                         }

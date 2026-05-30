@@ -200,22 +200,21 @@ impl Repl {
                         selected_filtered = selected_filtered.saturating_sub(1);
                     }
                     KeyCode::Down | KeyCode::Char('j')
-                        if key.modifiers.is_empty() && filter_query.is_empty() =>
+                        if key.modifiers.is_empty()
+                            && filter_query.is_empty()
+                            && selected_filtered + 1 < filtered_indices.len() =>
                     {
-                        if selected_filtered + 1 < filtered_indices.len() {
-                            selected_filtered += 1;
-                        }
+                        selected_filtered += 1;
                     }
-                    KeyCode::Enter => {
+                    KeyCode::Enter
                         if !filtered_indices.is_empty()
-                            && selected_filtered < filtered_indices.len()
-                        {
-                            let p = &plugins[filtered_indices[selected_filtered]];
-                            break Some(MarketplaceActionResult::Install(
-                                p.url.clone(),
-                                p.id.clone(),
-                            ));
-                        }
+                            && selected_filtered < filtered_indices.len() =>
+                    {
+                        let p = &plugins[filtered_indices[selected_filtered]];
+                        break Some(MarketplaceActionResult::Install(
+                            p.url.clone(),
+                            p.id.clone(),
+                        ));
                     }
                     KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
                         if let Some(pos) = filter_query.rfind(' ') {

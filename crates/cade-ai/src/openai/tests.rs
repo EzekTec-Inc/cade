@@ -494,8 +494,7 @@ fn build_tools_preserves_load_skill_when_truncating() -> Result<()> {
     );
     assert!(
         arr2.iter().any(|tool| tool
-            .get("function")
-            .and_then(|f| f.get("name"))
+            .get("name")
             .and_then(|name| name.as_str())
             == Some("load_skill")),
         "build_responses_tools should preserve load_skill inside the 128-tool cap"

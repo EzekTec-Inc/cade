@@ -296,10 +296,8 @@ impl QuestionWidget {
                     (KeyCode::Up, _) => {
                         cursor_pos = cursor_pos.saturating_sub(1);
                     }
-                    (KeyCode::Down, _) => {
-                        if cursor_pos + 1 < total_items {
-                            cursor_pos += 1;
-                        }
+                    (KeyCode::Down, _) if cursor_pos + 1 < total_items => {
+                        cursor_pos += 1;
                     }
                     (KeyCode::Tab, _) => {
                         cursor_pos = (cursor_pos + 1) % total_items;

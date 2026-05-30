@@ -173,39 +173,38 @@ impl Repl {
                     (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
                         selected_filtered = selected_filtered.saturating_sub(1);
                     }
-                    (KeyCode::Down, _) | (KeyCode::Tab, _) => {
-                        if selected_filtered + 1 < filtered_indices.len() {
-                            selected_filtered += 1;
-                        }
+                    (KeyCode::Down, _) | (KeyCode::Tab, _)
+                        if selected_filtered + 1 < filtered_indices.len() =>
+                    {
+                        selected_filtered += 1;
                     }
                     (KeyCode::Char('k'), KeyModifiers::NONE) if filter_query.is_empty() => {
                         selected_filtered = selected_filtered.saturating_sub(1);
                     }
-                    (KeyCode::Char('j'), KeyModifiers::NONE) if filter_query.is_empty() => {
-                        if selected_filtered + 1 < filtered_indices.len() {
-                            selected_filtered += 1;
-                        }
+                    (KeyCode::Char('j'), KeyModifiers::NONE)
+                        if filter_query.is_empty()
+                            && selected_filtered + 1 < filtered_indices.len() =>
+                    {
+                        selected_filtered += 1;
                     }
 
-                    (KeyCode::Enter, _) => {
-                        if !filtered_indices.is_empty() {
-                            let orig_idx = filtered_indices[selected_filtered];
-                            break Some(MemoryPickerResult::Edit(blocks[orig_idx].clone()));
-                        }
+                    (KeyCode::Enter, _) if !filtered_indices.is_empty() => {
+                        let orig_idx = filtered_indices[selected_filtered];
+                        break Some(MemoryPickerResult::Edit(blocks[orig_idx].clone()));
                     }
 
-                    (KeyCode::Char('e'), KeyModifiers::NONE) if filter_query.is_empty() => {
-                        if !filtered_indices.is_empty() {
-                            let orig_idx = filtered_indices[selected_filtered];
-                            break Some(MemoryPickerResult::Edit(blocks[orig_idx].clone()));
-                        }
+                    (KeyCode::Char('e'), KeyModifiers::NONE)
+                        if filter_query.is_empty() && !filtered_indices.is_empty() =>
+                    {
+                        let orig_idx = filtered_indices[selected_filtered];
+                        break Some(MemoryPickerResult::Edit(blocks[orig_idx].clone()));
                     }
 
-                    (KeyCode::Char('p'), KeyModifiers::NONE) if filter_query.is_empty() => {
-                        if !filtered_indices.is_empty() {
-                            let orig_idx = filtered_indices[selected_filtered];
-                            break Some(MemoryPickerResult::TogglePin(blocks[orig_idx].clone()));
-                        }
+                    (KeyCode::Char('p'), KeyModifiers::NONE)
+                        if filter_query.is_empty() && !filtered_indices.is_empty() =>
+                    {
+                        let orig_idx = filtered_indices[selected_filtered];
+                        break Some(MemoryPickerResult::TogglePin(blocks[orig_idx].clone()));
                     }
 
                     (KeyCode::Delete, _) | (KeyCode::Char('d'), KeyModifiers::NONE) => {
