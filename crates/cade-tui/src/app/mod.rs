@@ -1668,7 +1668,6 @@ impl TuiApp {
                     self.scroll_target = new_scroll as usize;
                 }
             }
-        }
         Ok(())
     }
 }

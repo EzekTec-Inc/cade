@@ -406,7 +406,7 @@ pub fn search_memory(
                 }
             }
 
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored.sort_by_key(|b| std::cmp::Reverse(b.0));
             results = scored
                 .into_iter()
                 .take(10)

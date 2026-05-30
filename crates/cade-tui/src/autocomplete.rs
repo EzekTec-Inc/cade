@@ -242,7 +242,7 @@ impl AgentModelAutocompleteProvider {
             .unwrap_or(0);
         let partial = &before[word_start..];
 
-        if partial.starts_with('@') && partial.len() > 0 {
+        if partial.starts_with('@') && !partial.is_empty() {
             let prefix = &partial[1..].to_lowercase();
             let mut matches: Vec<String> = self
                 .agents
@@ -263,7 +263,7 @@ impl AgentModelAutocompleteProvider {
             return Some((new_input, new_cursor));
         }
 
-        if partial.starts_with('#') && partial.len() > 0 {
+        if partial.starts_with('#') && !partial.is_empty() {
             let prefix = &partial[1..].to_lowercase();
             let mut matches: Vec<String> = self
                 .models
@@ -298,8 +298,8 @@ impl AutocompleteProvider for AgentModelAutocompleteProvider {
             .unwrap_or(0);
         let partial = &before[word_start..];
 
-        if partial.starts_with('@') {
-            let prefix = &partial[1..].to_lowercase();
+        if let Some(stripped) = partial.strip_prefix('@') {
+            let prefix = &stripped.to_lowercase();
             return self
                 .agents
                 .iter()
@@ -311,8 +311,8 @@ impl AutocompleteProvider for AgentModelAutocompleteProvider {
                 .collect();
         }
 
-        if partial.starts_with('#') {
-            let prefix = &partial[1..].to_lowercase();
+        if let Some(stripped) = partial.strip_prefix('#') {
+            let prefix = &stripped.to_lowercase();
             return self
                 .models
                 .iter()

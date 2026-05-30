@@ -220,7 +220,7 @@ fn extract_keywords(text: &str, max: usize) -> Vec<String> {
         .map(|(word, freq)| (word.clone(), word.len() * freq))
         .collect();
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by score desc
+    scored.sort_by_key(|b| std::cmp::Reverse(b.1)); // Sort by score desc
     scored.into_iter().take(max).map(|(word, _)| word).collect()
 }
 

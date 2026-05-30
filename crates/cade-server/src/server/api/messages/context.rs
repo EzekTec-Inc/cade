@@ -1786,11 +1786,10 @@ async fn compute_context_breakdown(
     let total_used = known_excl_tools + tools_tok;
     let buffer_tok = window_tokens * 3 / 100;
     let free_tok = window_tokens.saturating_sub(total_used + buffer_tok);
-    let pct = if window_tokens > 0 {
-        (total_used * 100 / window_tokens).min(100) as u8
-    } else {
-        0
-    };
+    let pct = (total_used * 100)
+        .checked_div(window_tokens)
+        .unwrap_or(0)
+        .min(100) as u8;
 
     let model_short = agent
         .model

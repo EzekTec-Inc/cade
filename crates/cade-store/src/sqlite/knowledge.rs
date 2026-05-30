@@ -136,19 +136,19 @@ pub fn search_knowledge_graph_semantic(
     let mut candidates = Vec::new();
     for r in rows {
         let (id, entity, relation, target, blob, created_at) = r?;
-        if let Some(emb) = decode_embedding_blob(&blob) {
-            if let Some(sim) = cosine_similarity(&query_vec, &emb) {
-                candidates.push((
-                    KnowledgeEdge {
-                        id,
-                        entity,
-                        relation,
-                        target,
-                        created_at,
-                    },
-                    sim,
-                ));
-            }
+        if let Some(emb) = decode_embedding_blob(&blob)
+            && let Some(sim) = cosine_similarity(&query_vec, &emb)
+        {
+            candidates.push((
+                KnowledgeEdge {
+                    id,
+                    entity,
+                    relation,
+                    target,
+                    created_at,
+                },
+                sim,
+            ));
         }
     }
 
