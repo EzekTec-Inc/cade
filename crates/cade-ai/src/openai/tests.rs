@@ -271,10 +271,10 @@ fn build_responses_tools_wraps_correctly_without_strict() -> Result<()> {
     let arr = tools.as_array().ok_or("Should be an array")?;
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["type"], "function");
-    assert_eq!(arr[0]["function"]["name"], "bash");
-    assert_eq!(arr[0]["function"]["description"], "Run a command");
-    assert_eq!(arr[0]["function"]["strict"], false);
-    assert!(arr[0]["function"]["parameters"].is_object());
+    assert_eq!(arr[0]["name"], "bash");
+    assert_eq!(arr[0]["description"], "Run a command");
+    assert_eq!(arr[0]["strict"], false);
+    assert!(arr[0]["parameters"].is_object());
     Ok(())
 }
 

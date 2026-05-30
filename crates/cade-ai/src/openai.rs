@@ -375,12 +375,10 @@ impl OpenAiProvider {
 
                 json!({
                     "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": s["description"],
-                        "parameters": params,
-                        "strict": false
-                    }
+                    "name": name,
+                    "description": s["description"],
+                    "parameters": params,
+                    "strict": false
                 })
             })
             .collect();
