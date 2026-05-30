@@ -569,6 +569,29 @@ fn inline_schema_refs_depth_guard() {
     assert_eq!(schema["properties"]["root"]["type"], "object");
 }
 
+// -- VCR Integration Tests
+
+#[test]
+fn test_vcr_integration() -> Result<()> {
+    use crate::vcr::{VcrCassette, VcrMode};
+    use std::path::PathBuf;
+
+    let path = PathBuf::from("tests/fixtures/cassettes/openai_completions.json");
+    let cassette = VcrCassette::new(path, VcrMode::Replay)?;
+
+    let matched = cassette.match_response(
+        "https://api.openai.com/v1/chat/completions",
+        "POST",
+        "{\"messages\":[{\"content\":\"Hello\",\"role\":\"user\"}],\"model\":\"gpt-4o\",\"tools\":[]}",
+    );
+
+    assert!(matched.is_some());
+    let interaction = matched.unwrap();
+    assert!(interaction.response_body.contains("How can I assist you today?"));
+
+    Ok(())
+}
+
 // -- clean_gemini_schema
 
 #[test]

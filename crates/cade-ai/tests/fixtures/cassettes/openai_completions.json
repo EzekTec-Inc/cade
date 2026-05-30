@@ -1,0 +1,9 @@
+[
+  {
+    "url": "https://api.openai.com/v1/chat/completions",
+    "method": "POST",
+    "request_body": "{\"messages\":[{\"content\":\"Hello\",\"role\":\"user\"}],\"model\":\"gpt-4o\",\"tools\":[]}",
+    "response_status": 200,
+    "response_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello there! How can I assist you today?\",\"role\":\"assistant\"}}]}"
+  }
+]
