@@ -1,165 +1,164 @@
-# CADE LLM Provider Architecture vs. genai-rs
+# CADE LLM & Provider Architecture: Custom vs. genai-rs vs. Rig
 
-This document provides a detailed architectural review and comparative analysis of CADE's current LLM & provider implementation compared to the **genai-rs** library ([github.com/evansenter/genai-rs](https://github.com/evansenter/genai-rs)), authored by Jeremy Chone (`genai` on crates.io).
+This document provides an exhaustive, production-grade architectural review comparing CADE's native provider engine (`crates/cade-ai` and `crates/cade-agent`) with two prominent open-source Rust AI ecosystems:
+1. **`genai-rs`** ([github.com/evansenter/genai-rs](https://github.com/evansenter/genai-rs)): A unified, stateless low-level chat completion client.
+2. **`Rig`** ([github.com/0xPlaygrounds/rig](https://github.com/0xPlaygrounds/rig)): An all-in-one, highly modular, agentic and RAG application framework.
 
 ---
 
 ## 1. Executive Summary
 
-CADE's LLM engine (`crates/cade-ai`) is currently built around a custom `LlmProvider` trait with self-contained, independent implementation files for each major provider (`openai`, `anthropic`, `gemini`, `ollama`).
+CADE's current LLM integration represents a **bespoke, stateful agentic system** built specifically for full-scale terminal and GUI development. To evaluate its long-term scalability, we compare CADE against the two prevailing paradigms in the Rust LLM space:
 
-`genai` is an increasingly popular, production-grade Rust client library that unifies generative AI interactions through a decoupled, stateless **Adapter** pattern where HTTP orchestration is centralized in a single `Client` and providers implement pure request/response data mappings.
+* **`genai`** represents the **Stateless Completion Paradigm**. It standardizes API calls to multiple model providers but remains unopinionated about agent states, memory, or databases.
+* **`Rig`** represents the **Stateful Agent & RAG Paradigm**. It unifies LLM providers, vector databases, tool-calling pipelines, and agent preambles into a cohesive, high-level declarative framework.
 
-### High-Level Comparison Matrix
+### Three-Way Architectural Matrix
 
-| Architectural Dimension | CADE Custom Implementation | `genai-rs` Library |
-| :--- | :--- | :--- |
-| **Code Splitting & Design** | Isolated monolithic providers. Each provider manages its own HTTP clients, auth, serialization, and stream processing. | Highly decoupled and stateless. Core `Client` handles HTTP lifecycle; `Adapter` trait manages data transformations. |
-| **API Code Duplication** | High. Significant duplicate boilerplate for client building, headers, backoff retry logic, and JSON parsing. | Zero. Standard HTTP orchestration is written once in the core client. Adapters are thin translation layers. |
-| **Agentic Core Features** | First-class support for CADE-specific multi-part payloads, precise token caching, Gemini thinking signatures, and GPT-5 Responses API. | General-purpose chat focus. Embedding support included out-of-the-box, but advanced multi-modal or proprietary features require customized wrappers. |
-| **Hot-Reloading Capabilities** | Built natively for runtime hot-swaps via thread-safe `HashMap` in `LlmRouter`, supporting concurrent live API model listings. | Primarily designed for static Client building. Runtime adjustments require configuring custom runtime mapping functions. |
-| **Maintenance Overhead** | High. CADE must manually update request/response types for every minor upstream provider API change. | Low. Upstream API updates and new provider adapters are offloaded to library maintainers. |
+| Dimension | CADE Custom Implementation | `genai-rs` Library | `Rig` Agentic Framework |
+| :--- | :--- | :--- | :--- |
+| **Abstaction Tier** | **Mid-to-High Hybrid**<br>Decouples provider traits (`cade-ai`) from agent loops and turn compaction (`cade-agent`). | **Low-Level Completion Client**<br>Standardizes basic completions, streaming, and embeddings across APIs. | **High-Level Agent Framework**<br>Declarative builder APIs for stateful `Agent`, `VectorStore`, and RAG pipelines. |
+| **Design Philosophy** | Built specifically for dynamic agentic loops, MCP-driven tool dispatch, and state recovery. | Centralized HTTP engine calling stateless, translation-only `Adapter` traits. | Modular, compile-time typed primitives designed for modular AI architectures. |
+| **Tool Calling / Functions** | **Dynamic & Runtime-Driven**<br>MCP schemas loaded over stdio/SSE are dispatched dynamically in the server event loop. | **Absent (Low-level focus)**<br>Requires the caller to manually parse tool calls and formats returned by the model. | **Static & Compile-Time Typed**<br>Tools defined via Rust traits and macros, validated at compile-time using `schemars`. |
+| **Vector DB & RAG** | **Tightly Coupled**<br>Deeply integrates local SQLite + `fastembed`/`sqlite-vec` directly for memory persistence. | **Supported (Low-level)**<br>Provides basic embedding endpoints but does not connect to vector indices. | **Decoupled & Comprehensive**<br>10+ native vector store integrations (Qdrant, LanceDB, PGVector, Neo4j, etc.). |
+| **Hot-Reloading** | **Native**<br>Mutable, thread-safe `LlmRouter` updates keys and providers at runtime via CLI/API. | **Limited**<br>Primarily designed for static initialization on startup via immutable client builders. | **Limited**<br>Configured programmatically. Adding/removing models on-the-fly is not its primary idiom. |
+| **Maintenance Cost** | **High**<br>Manual updates needed for every upstream API schema change (e.g. GPT-5 Responses API). | **Low**<br>Boilerplate and model catalog additions are offloaded to library maintainers. | **Medium**<br>We rely on active open-source support to track upstream API changes across providers and DBs. |
 
 ---
 
-## 2. Core Interface & Trait System Deep Dive
+## 2. Core Abstractions & Architectural Philosophies
 
-### 2.1 CADE's Custom `LlmProvider`
+### 2.1 CADE: The Stateful Agentic Workspace
+CADE divides its AI stack into two clear, cooperative layers:
+1. **`crates/cade-ai` (Low-to-Mid):** Implements the `LlmProvider` trait, which defines raw `complete` and `stream` async structures.
+2. **`crates/cade-agent` (High):** Orchestrates the full stateful agent lifecycle, including system prompt packing, context window compaction, automatic fact extraction, and SQLite conversation persistence.
 
-CADE utilizes a single, high-level asynchronous trait representing a stateful, fully-capable client provider:
+This architecture treats the LLM as an active, stateless compute engine, while CADE serves as the compiler/runtime that preserves state across context limits.
+
+### 2.2 `genai-rs`: The Stateless Connection Pool
+`genai` focuses exclusively on reducing HTTP boilerplate. It implements the stateless **Adapter Pattern**:
+* The core `Client` owns the unified `reqwest::Client` connection pool and manages request middleware.
+* The `Adapter` trait exposes transformation functions that compile standard library requests (e.g., `ChatRequest`) into provider-specific HTTP bodies, and map JSON responses back.
+
+```rust
+// genai-rs stateless transformation
+let web_request_data = adapter::to_web_request_data(model, service, req, options)?;
+let raw_response = self.web_client.execute(web_request_data).await?;
+let chat_response = adapter::to_chat_response(raw_response)?;
+```
+
+This is a brilliant approach for general-purpose chat clients, but it places the entire burden of tool execution, memory, state management, and orchestration on CADE.
+
+### 2.3 `Rig`: The High-Level Declarative Pipeline
+`Rig` provides a complete, production-grade agentic framework that unifies models, tools, and embeddings under a declarative, builder-centric interface:
+
+```rust
+// Declarative Agent Builder in Rig
+let agent = client
+    .agent(openai::GPT_4O)
+    .preamble("You are a specialized engineering assistant.")
+    .tool(MyCustomTool)
+    .build();
+
+let response = agent.prompt("Analyze this codebase.").await?;
+```
+
+Rig abstracts providers and databases, allowing developers to swap both underlying LLM engines and vector databases with minimal code changes.
+
+---
+
+## 3. Deep Dive: Tool Calling & Dynamic Extensibility
+
+A major architectural divergence between Rig and CADE lies in how tools (functions) are defined, verified, and executed.
+
+### 3.1 Rig's Compile-Time Type Safety
+Rig leverages Rust's strong type system and macros to define tools at compile-time:
+
+```rust
+// Rig tool definition pattern
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct AddArgs {
+    x: i32,
+    y: i32,
+}
+
+#[rig::tool]
+fn add(args: AddArgs) -> i32 {
+    args.x + args.y
+}
+```
+
+* **Advantages:** Unmatched type-safety, automatic JSON schema generation via `schemars`, and zero runtime serialization errors.
+* **Limitations:** Highly static. Tools must be compiled directly into the binary. Adding tools dynamically at runtime is extremely difficult.
+
+### 3.2 CADE's Runtime MCP-Driven Orchestration
+Because CADE is built to work with **Model Context Protocol (MCP)** servers, its tool registry is inherently **dynamic**:
+* Tools are queried at runtime from external processes over stdio or SSE.
+* Tool definitions are stored and mapped dynamically as raw JSON values (`serde_json::Value`).
+* CADE's server event loop intercepts, validates, and dispatches these tool executions dynamically.
+
+Therefore, Rig's static, compile-time tool-definition pattern is **incompatible with CADE's runtime-driven MCP tool architecture**.
+
+---
+
+## 4. Deep Dive: Vector Databases and Retrieval-Augmented Generation (RAG)
+
+### 4.1 CADE's Integrated SQLite Engine
+CADE implements an optimized, self-contained storage layer (`crates/cade-store`) built specifically for local workspace state:
+* Direct integration of `fastembed` for local embedding generation.
+* Uses SQLite with the `sqlite-vec` extension for FTS5 (Full-Text Search) and vector search.
+* **Tight Coupling:** The database manages conversational history, credentials encryption, and active memories, keeping the entire runtime in a single, local `.db` file.
+
+### 4.2 Rig's Decoupled Vector Connectors
+Rig provides a plug-and-play vector store abstraction:
+* Exposes the `VectorStoreIndex` trait.
+* Native connectors for over 10 vector databases (LanceDB, Qdrant, PGVector, Chroma, MongoDB, etc.).
+* Swapping vector backends is as simple as switching features in `Cargo.toml`.
+
+For enterprise deployments where memory needs to scale to distributed indices (like Qdrant or MongoDB), Rig's decoupled abstraction is significantly superior to CADE's tight SQLite coupling.
+
+---
+
+## 5. Strategic Synthesis & Recommendations
+
+### 5.1 CADE vs. genai-rs vs. Rig
+
+| Feature | CADE Custom | `genai-rs` | `Rig` |
+| :--- | :--- | :--- | :--- |
+| **Completions** | Custom, tailored to agentic state | Comprehensive, stateless | Comprehensive, integrated |
+| **Embeddings** | Handled in `cade-store` | Supported (raw endpoints) | Supported, integrated with Index |
+| **RAG / Vector Stores** | Tied to SQLite | None | Modular, multi-DB support |
+| **Agentic Loop** | Custom (compacting, stateful) | None | Standard (declarative preambles) |
+| **Tool Execution** | Dynamic (MCP compat) | None | Static (compile-time Rust) |
+
+---
+
+## 6. Evolutionary Path: Recommendation for CADE
+
+### Recommendation: Do Not Adopt `genai-rs` or `Rig` as Core Dependencies; instead, adopt their Architectural Patterns
+
+**Justification:**
+1. **The MCP Disconnect:** `Rig`'s compile-time tool-definition paradigm directly conflicts with CADE's runtime-driven, dynamic MCP server integration.
+2. **Proprietary Agent State Guardrails:** Standardizing on a general-purpose library like `genai` or `Rig` would block CADE from implementing highly customized reasoning handlers, such as **Gemini's thought signatures** and **GPT-5's Responses API**, which require bespoke serialization control.
+3. **Local Self-Containment:** CADE's unique value proposition is its highly localized, zero-dependency SQLite-backed workspace persistence, making Rig's extensive distributed database connectors overkill for the primary CLI/TUI use-case.
+
+### How CADE Should Evolve (The Hybrid Refactoring Strategy)
+
+While CADE should remain independent of these libraries to maintain its specialized agentic control, it should aggressively refactor its internal code to implement their **best architectural features**:
+
+#### 1. Decouple HTTP Orchestration from Serializers (Adopt `genai`'s Stateless Adapters)
+Refactor `crates/cade-ai` to separate the shared web request engine from individual provider formatting. 
+Create an internal `Adapter` trait in CADE to define pure, stateless payload maps, reducing duplicated client-building and retry code.
+
+#### 2. Decouple the Vector Store Interface (Adopt `Rig`'s Vector Abstractions)
+Refactor `crates/cade-store` to abstract the embedding generator and vector database behind a `VectorIndex` trait:
 
 ```rust
 #[async_trait]
-pub trait LlmProvider: Send + Sync {
-    async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse>;
-    async fn stream(
-        &self,
-        req: &CompletionRequest,
-    ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
+pub trait VectorIndex: Send + Sync {
+    async fn insert(&self, id: &str, vector: Vec<f32>, payload: serde_json::Value) -> Result<()>;
+    async fn search(&self, query_vector: Vec<f32>, limit: usize) -> Result<Vec<SearchResult>>;
 }
 ```
 
-* **Linear Flow:** Both standard completions and streaming completions are fully-integrated async methods. Calling `stream` yields a pinned box of `StreamChunk` items.
-* **Encapsulation:** The implementing struct (e.g., `OpenAiProvider`) owns its API keys, customized endpoints, and private HTTP client.
-
-### 2.2 `genai-rs`'s Adapter-Based Architecture
-
-Instead of having each provider own its request loop, `genai` decouples *HTTP orchestration* from *API payload serialization*:
-
-```rust
-pub trait Adapter {
-    fn default_auth() -> AuthData;
-    fn default_endpoint() -> Endpoint;
-    fn all_model_names(kind: AdapterKind) -> Result<Vec<String>>;
-    fn get_service_url(model: &ModelIden, service_type: ServiceType, endpoint: Endpoint) -> Result<String>;
-    fn to_web_request_data(
-        model: &ModelIden,
-        service_type: ServiceType,
-        req: &ChatRequest,
-        options: &ChatOptionsSet,
-    ) -> Result<WebRequestData>;
-    fn to_chat_response(web_res: WebResponse) -> Result<ChatResponse>;
-    fn to_chat_stream(
-        model_iden: ModelIden,
-        reqwest_builder: RequestBuilder,
-        options_set: ChatOptionsSet,
-    ) -> Result<ChatStreamResponse>;
-    // ...
-}
-```
-
-* **Stateless Adapters:** Implementing structs do not own an HTTP client or execute async calls themselves. Instead, they translate a generic library request into `WebRequestData` (base URL, headers, and request body) or translate raw HTTP response text back into structured results.
-* **Unified Client Execution:** The core `Client` owns the `reqwest::Client` connection pool, and executes requests:
-
-```rust
-// Unified client execution loop inside genai-rs
-let web_request_data = adapter::to_web_request_data(model, service_type, req, options)?;
-let response = self.web_client.execute(web_request_data).await?;
-let chat_response = adapter::to_chat_response(response)?;
-```
-
----
-
-## 3. Detailed Tradeoff & Structural Analysis
-
-### 3.1 Code Reusability & DRY Principles
-
-* **CADE Custom:** Code duplicate is high. Every provider duplicate-implements standard HTTP response parsing, error status mapping, custom headers, and token counting logic.
-* **`genai-rs`:** Adapters are extremely lightweight and pure. Adding a new OpenAI-compatible preset (e.g., DeepSeek, Groq, Together) is as simple as defining endpoint mapping and relying on the existing base `OpenAIAdapter`.
-
-### 3.2 Feature-Specific Flexibility & Special Cases
-
-CADE's custom architecture shines when accommodating complex, proprietary platform behaviors:
-
-1. **Gemini Thinking Signatures:** CADE's `LlmToolCall` includes a `thought_signature` field which must be held in the message state and sent back verbatim during reasoning turns.
-2. **GPT-5 / Responses API:** For newer reasoning/computer-use models, CADE handles structural routing changes seamlessly (switching endpoints from `/v1/chat/completions` to `/v1/responses` on-the-fly).
-3. **Advanced Token Caching:** CADE's `TokenUsage` specifically handles Anthropic's prompt-caching headers (`cache_read_tokens`, `cache_write_tokens`) to ensure precise billing and cost tracking.
-
-Integrating these proprietary edge-cases into `genai`'s rigid payload structs can be difficult without upstream library contributions or subclassing custom properties, introducing friction to the agent's core capabilities.
-
-### 3.3 State Management & Hot-Reloading
-
-CADE's `LlmRouter` acts as an active, mutable registry:
-
-* **Dynamic Insertion/Removal:** Supports runtime modification of registered providers (`add_provider_with_key`, `remove_provider`) which allows the terminal repl (`/connect`) or DB config loads to hot-reload connected engines instantly.
-* **Concurrent Model Probing:** Dynamically crawls active provider endpoints concurrently (e.g., querying local Ollama instance tags and OpenRouter /v1/models simultaneously) to build live model lists on-the-fly.
-
-In `genai`, the client builder pattern is primarily intended for static initialization on app startup. While you can supply custom `AuthResolver` and `ServiceTargetResolver` callback functions to fetch keys dynamically from a datastore, hot-reloading whole providers and mapping them on-the-fly is less idiomatic.
-
----
-
-## 4. Strategic Recommendations for CADE
-
-Based on this deep architectural analysis, here are the strategic recommendations for the CADE project:
-
-### Recommendation 1: Maintain the Custom `crates/cade-ai` Engine (Do Not Replace with `genai-rs`)
-
-**Justification:** CADE is not a simple chat client; it is an autonomous agentic workspace. CADE's architecture is highly dependent on first-class, deep integrations of reasoning models (GPT-4.5/5, o-series, Gemini 2.5) with strict compliance requirements:
-* CADE must handle **thought signature tracking** to ensure correct state loops during multi-turn tool execution.
-* CADE's cost-and-pricing engine relies on **precise prompt caching token metrics** directly reported by Anthropic.
-* CADE requires **unconditional, safe runtime provider-switching and hot-reloading** to support connection management seamlessly across different SSH/Local backends.
-
-Replacing CADE's tailored types with `genai`'s generalized models would risk breaking these advanced agentic pipelines.
-
-### Recommendation 2: Refactor CADE's Internal Engine to Adopt `genai-rs`'s Transform Decoupling
-
-While CADE should keep its custom provider engine, it should refactor its internal structure to adopt the **best lessons of the `genai-rs` decoupled adapter pattern**:
-
-1. **Centralize the HTTP Client:** Avoid initializing a new `reqwest::Client` in every single provider. Refactor `AiConfig` or `LlmRouter` to hold a single `Arc<reqwest::Client>` connection pool and pass it down.
-2. **Standardize Request-Builder Utilities:** Extract shared request logic (such as retry-with-backoff, JSON error response parsing, and standard streaming chunk extraction) into a common `crates/cade-ai/src/utils.rs` module.
-3. **OpenAI Compatibility Base Adapter:** Create a generic `OpenAiCompatProvider` struct that takes custom endpoints as arguments. This allows mapping and registering any OpenAI-compatible provider (Groq, Together, DeepSeek, OpenRouter) with zero code duplication, exactly like `genai`'s adapter reuse pattern.
-
----
-
-## 5. Architectural Implementation Roadmap (Refactoring Guide)
-
-### Refactoring Step 1: Centralized Connection Pooling
-
-```rust
-// Proposed LlmRouter structure for shared HTTP client
-pub struct LlmRouter {
-    providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
-    provider_keys: std::collections::HashMap<String, String>,
-    default_provider: String,
-    // Unified reqwest Client shared across all provider backends
-    pub http_client: reqwest::Client,
-    pub ollama_base_url: String,
-}
-```
-
-### Refactoring Step 2: Unifying the OpenAI-Compatible Preset Providers
-
-Currently, CADE constructs a custom provider for preset/OpenAI-compatible endpoints:
-
-```rust
-// Current Approach in router.rs
-providers.insert(
-    preset.name.clone(),
-    Arc::new(openai::OpenAiProvider::new(
-        key.clone(),
-        Some(preset.chat_url.to_string()),
-    )),
-);
-```
-
-By standardizing a single `OpenAiCompatProvider` which supports dynamic overrides, we can encapsulate all OpenAI variations under a single, highly-optimized adapter class, allowing the base `OpenAiProvider` to stay focused on genuine first-party OpenAI endpoints.
+Implement the current local SQLite+`sqlite-vec` engine as the default implementation of this trait. This keeps CADE's local self-containment intact while opening the door for enterprise adapters (like Qdrant or PGVector) in the future.
