@@ -30,6 +30,28 @@ pub trait Embedder: Send + Sync {
     fn dimension(&self) -> usize;
 }
 
+/// A single item returned from a semantic vector search.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SearchResult {
+    pub id: String,
+    pub score: f32,
+    pub payload: serde_json::Value,
+}
+
+/// Abstract, decoupled storage interface for vector indices.
+/// Enables swapping the underlying vector database (e.g. SQLite, PGVector, Qdrant).
+#[allow(async_fn_in_trait)]
+pub trait VectorIndex: Send + Sync {
+    /// Insert a vector and payload into the index.
+    async fn insert(&self, id: &str, vector: &[f32], payload: serde_json::Value) -> Result<()>;
+
+    /// Search the index for items nearest to the query vector.
+    async fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SearchResult>>;
+
+    /// Delete an item from the index by its unique ID.
+    async fn delete(&self, id: &str) -> Result<()>;
+}
+
 /// Always-available no-op embedder. Returns empty vectors and dimension `0`.
 ///
 /// Used in default builds (no `semantic-search` feature) so the rest of the
@@ -425,6 +447,30 @@ mod tests {
     fn is_available_reflects_feature_flag() {
         // `cfg!(feature = "semantic-search")` is the source of truth.
         assert_eq!(is_available(), cfg!(feature = "semantic-search"));
+    }
+
+    // -- VectorIndex Tests
+
+    #[tokio::test]
+    async fn test_noop_vector_index() -> crate::error::Result<()> {
+        struct NoopVectorIndex;
+
+        impl VectorIndex for NoopVectorIndex {
+            async fn insert(&self, _id: &str, _vector: &[f32], _payload: serde_json::Value) -> crate::error::Result<()> {
+                Ok(())
+            }
+            async fn search(&self, _query_vector: &[f32], _limit: usize) -> crate::error::Result<Vec<SearchResult>> {
+                Ok(vec![])
+            }
+            async fn delete(&self, _id: &str) -> crate::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let index = NoopVectorIndex;
+        let res = index.search(&[0.1, 0.2], 5).await?;
+        assert!(res.is_empty());
+        Ok(())
     }
 
     /// Smoke test for the real ONNX-runtime backed embedder.
