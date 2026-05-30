@@ -33,7 +33,7 @@ CADE uses a tiered memory system backed by SQLite and optional vector embeddings
 3. **Provenance:** Every fact in the database tracks exactly which turn and which tool created it.
 4. **Decay:** Unused semantic memories slowly decay in confidence over time.
 
-When developing features that touch state, always interact via `cade-store` methods, never raw SQL queries in the application layer.
+When developing features that touch state, always interact via `cade-store` methods (which abstract the backend database behind decoupled `VectorIndex` and `Embedder` trait layers), never raw SQL queries in the application layer.
 
 ## 4. Subagent Execution
 
@@ -48,6 +48,7 @@ CADE mandates a strict Test-Driven Development (TDD) loop.
 - Write a failing test first.
 - Make the minimal change required.
 - Refactor.
+- **VCR Integration Mocking:** For integration tests involving outgoing LLM provider API requests, always use the `VcrCassette` recorder/player middleware to record real requests to static cassette files under `crates/cade-ai/tests/fixtures/cassettes/` and replay them offline in CI/CD.
 
 **Before submitting a PR, you MUST pass all workspace checks:**
 ```bash
@@ -63,3 +64,18 @@ CADE enforces a zero-compiler-warning policy.
 CADE integrates with external Model Context Protocol (MCP) servers. If you are adding new tool capabilities, consider whether they should be natively integrated into CADE's codebase or built as an external MCP server (e.g., `cade-desktop`, `serena`). 
 
 To test MCP servers, configure them in your local `.cade/settings.local.json`.
+
+## 7. Extending with Core Tools (Hybrid Pipeline)
+
+CADE uses a hybrid tool pipeline that separates local built-in operations from external dynamically-loaded tools:
+- **Compile-Time Tools (Strongly-Typed):** Core local commands (e.g. file writing, workspace search, memory manipulation) implement the `BuiltInTool` trait in `crates/cade-agent`. This enforces strict type checking at compile-time and runs with zero-copy JSON erasure via the `CoreToolAdapter`.
+- **Runtime Tools (Dynamic):** Extensible tools loaded from Model Context Protocol (MCP) servers dynamically over stdio or SSE.
+
+When adding a new core developer capability, implement the `BuiltInTool` trait and register it in `crates/cade-agent/src/tools/mod.rs`.
+
+## 8. TUI Autocomplete Controller
+
+The autocomplete mechanism in `crates/cade-tui` operates as a stateful, reactive controller:
+- Outlays like the `AutocompleteOverlay` implement `as_any_mut` for type-safe downcasting on the `OverlayComponent` stack.
+- Input handlers dynamically intercept and delegate raw character keystrokes and backspaces to the underlying editor first, and then call `.update_suggestions()` in real-time.
+- This live-filters the active suggestion box on-the-fly, completely resolving any static completion freezing.

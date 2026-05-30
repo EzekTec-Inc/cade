@@ -100,8 +100,12 @@ integrations, talk to the same server/API surface.
 CADE utilizes robust, production-grade systems to ensure zero-panic stability, smooth rendering, and concurrent execution safety:
 1. **Global Panic Hooks**: Register custom hooks on both client TUI and backend server to write detailed backtraces and context to `~/.cade/crash.log` before aborting, preventing silent exits.
 2. **Concurrent Database Safety**: Connection pools configure `PRAGMA busy_timeout = 5000;` so SQLite can safely queue concurrent read/write queries for up to 5 seconds during parallel executions.
-3. **Outgoing HTTP Timeouts**: Establishes strict connection (15s) and stream (120s) timeouts on OpenAI, Anthropic, and Gemini clients to avoid hangs on slow/unreachable endpoints.
+3. **Centralized HTTP Connection Pooling**: Standardizes and pools outgoing connections across all first-party providers (`OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`), utilizing a unified HTTP client built with standard keepalive (60s), connection timeout (15s), and stream timeout (120s) configurations to optimize connection reuse.
 4. **File-Watcher Debouncing**: Applies a `150ms` debouncer on live reloads (settings, skills, plugins) to prevent thrashing and infinite loops during fast development/compile cycles.
+5. **Cassette-Based (VCR) Mock Testing**: Integrates the `VcrCassette` recorder/player middleware to record actual LLM HTTP requests and replay them offline deterministically, keeping CADE's integration test suite isolated, offline, and cost-free.
+6. **Decoupled Embedding & Vector Indexes**: Exposes abstract `Embedder` and `VectorIndex` traits to decouple embedding generation and vector search from tight local SQLite coupling, providing an easy path for future enterprise-grade, distributed vector backends (e.g. Qdrant, PGVector).
+7. **Hybrid Compile-Time Tools**: Leverages strongly-typed `BuiltInTool` and `CoreToolAdapter` traits to compile-time wrap CADE's own high-performance local tools, running them with zero-copy serialization alongside CADE's dynamic Model Context Protocol (MCP) server dispatch loop.
+8. **Stateful TUI Autocomplete Controller**: Extends the `OverlayComponent` trait with the type-safe `as_any_mut` upcasting pattern, enabling the TUI's active `AutocompleteOverlay` to intercept editor keystrokes and dynamically re-filter suggestion lists on-the-fly as the user types.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in
