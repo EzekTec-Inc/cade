@@ -235,6 +235,16 @@ fn test_vcr_cassette_replay() -> Result<()> {
     Ok(())
 }
 
+// -- build_standard_http_client Tests
+
+#[test]
+fn test_build_standard_http_client_is_configured() {
+    let client = build_standard_http_client();
+    // Verify client builds and can be used
+    let req = client.get("https://httpbin.org/get").build();
+    assert!(req.is_ok());
+}
+
 #[test]
 fn router_resolve_unknown_falls_back_to_default() {
     let config = AiConfig {

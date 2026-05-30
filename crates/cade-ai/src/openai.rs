@@ -181,22 +181,28 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
-        let mut builder = Client::builder()
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .timeout(std::time::Duration::from_secs(120));
-
-        if base.contains("openrouter.ai") {
+        
+        let client = if base.contains("openrouter.ai") {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
                 "HTTP-Referer",
                 reqwest::header::HeaderValue::from_static("https://github.com/EzekTec-Inc/CADE"),
             );
             headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
-            builder = builder.default_headers(headers);
-        }
+            
+            Client::builder()
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .timeout(std::time::Duration::from_secs(120))
+                .default_headers(headers)
+                .build()
+                .unwrap_or_else(|_| Client::new())
+        } else {
+            crate::utils::build_standard_http_client()
+        };
+
         Self {
-            client: builder.build().unwrap_or_else(|_| Client::new()),
+            client,
             api_key,
             base_url: base,
         }

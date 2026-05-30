@@ -255,3 +255,14 @@ pub fn clean_gemini_schema(v: &mut Value) {
         _ => {}
     }
 }
+
+/// Builds a standardized, pre-configured `reqwest::Client` with robust defaults
+/// for timeouts, connection pools, and TCP keepalives.
+pub fn build_standard_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
