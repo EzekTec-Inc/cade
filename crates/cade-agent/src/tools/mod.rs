@@ -2,6 +2,7 @@
 
 pub mod ask;
 pub mod bash;
+pub mod traits;
 pub mod catalog;
 #[cfg(feature = "desktop")]
 pub mod desktop;

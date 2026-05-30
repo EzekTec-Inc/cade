@@ -449,6 +449,54 @@ mod tests {
         assert_eq!(schemas[0]["name"].as_str(), Some("bash"));
     }
 
+    // -- Hybrid Tool Traits Tests
+
+    #[tokio::test]
+    async fn test_built_in_tool_dispatch() -> Result<()> {
+        use crate::tools::traits::{BuiltInTool, CoreToolAdapter};
+        
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct AddArgs {
+            x: i32,
+            y: i32,
+        }
+
+        struct AddTool;
+
+        impl BuiltInTool for AddTool {
+            type Args = AddArgs;
+            type Output = i32;
+
+            fn name(&self) -> &'static str { "add" }
+            fn description(&self) -> &'static str { "Add two numbers" }
+            fn schema(&self) -> Value {
+                json!({
+                    "name": "add",
+                    "description": "Add two numbers",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "integer" },
+                            "y": { "type": "integer" }
+                        }
+                    }
+                })
+            }
+            fn execute(&self, args: Self::Args) -> crate::Result<Self::Output> {
+                Ok(args.x + args.y)
+            }
+        }
+
+        let adapter = CoreToolAdapter::new(AddTool);
+        assert_eq!(adapter.name(), "add");
+        
+        let args = json!({ "x": 10, "y": 20 });
+        let result = adapter.execute_erased(args)?;
+        assert_eq!(result.as_i64(), Some(30));
+
+        Ok(())
+    }
+
     #[test]
     fn schemas_for_names_empty() {
         let schemas = schemas_for_names(Toolset::Default, &[], false);
