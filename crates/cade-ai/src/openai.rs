@@ -17,7 +17,7 @@ const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
 fn needs_max_completion_tokens(model: &str) -> bool {
-    let bare = model.to_lowercase();
+    let bare = bare_model(model).to_lowercase();
     bare.starts_with("gpt-4.5")
         || bare.starts_with("gpt-5")
         || bare.starts_with("o1")
@@ -343,7 +343,7 @@ impl OpenAiProvider {
                         "name": name,
                         "description": s["description"],
                         "parameters": params,
-                        "strict": true
+                        "strict": false
                     }
                 })
             })
@@ -379,7 +379,7 @@ impl OpenAiProvider {
                         "name": name,
                         "description": s["description"],
                         "parameters": params,
-                        "strict": true
+                        "strict": false
                     }
                 })
             })

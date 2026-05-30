@@ -236,7 +236,7 @@ fn build_tools_wraps_in_function_type() -> Result<()> {
 }
 
 #[test]
-fn build_tools_enables_strict_structured_outputs() -> Result<()> {
+fn build_tools_disables_strict_structured_outputs() -> Result<()> {
     let req = CompletionRequest {
         model: "gpt-4o".into(),
         messages: vec![],
@@ -250,12 +250,12 @@ fn build_tools_enables_strict_structured_outputs() -> Result<()> {
     };
     let tools = OpenAiProvider::build_tools(&req);
     let arr = tools.as_array().ok_or("Should be an array")?;
-    assert_eq!(arr[0]["function"]["strict"], true);
+    assert_eq!(arr[0]["function"]["strict"], false);
     Ok(())
 }
 
 #[test]
-fn build_responses_tools_wraps_correctly_with_strict() -> Result<()> {
+fn build_responses_tools_wraps_correctly_without_strict() -> Result<()> {
     let req = CompletionRequest {
         model: "gpt-4.5-preview".into(),
         messages: vec![],
@@ -273,7 +273,7 @@ fn build_responses_tools_wraps_correctly_with_strict() -> Result<()> {
     assert_eq!(arr[0]["type"], "function");
     assert_eq!(arr[0]["function"]["name"], "bash");
     assert_eq!(arr[0]["function"]["description"], "Run a command");
-    assert_eq!(arr[0]["function"]["strict"], true);
+    assert_eq!(arr[0]["function"]["strict"], false);
     assert!(arr[0]["function"]["parameters"].is_object());
     Ok(())
 }
