@@ -567,6 +567,41 @@ impl AutocompleteOverlay {
             cursor_pos,
         }
     }
+
+    pub fn update_suggestions(
+        &mut self,
+        input: &str,
+        cursor: usize,
+        slash_ac: &SlashCommandProvider,
+        tool_ac: &ToolAutocompleteProvider,
+        next_step_ac: &NextStepAutocompleteProvider,
+    ) {
+        let cursor = cursor.min(input.len());
+        let before = &input[..cursor];
+        if before.len() < self.word_start {
+            self.suggestions.clear();
+            self.selected_idx = 0;
+            return;
+        }
+        let partial = &before[self.word_start..cursor];
+
+        let suggestions = if partial.starts_with('/') {
+            slash_ac.completions(input, cursor)
+        } else if partial.starts_with(':') {
+            tool_ac.completions(input, cursor)
+        } else if partial.starts_with('?') {
+            next_step_ac.completions(input, cursor)
+        } else {
+            vec![]
+        };
+
+        self.suggestions = suggestions;
+
+        if self.selected_idx >= self.suggestions.len() {
+            self.selected_idx = 0;
+        }
+        self.cursor_pos = cursor;
+    }
 }
 
 impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
@@ -693,5 +728,55 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
                 cursor_pos: self.cursor_pos,
             }) as Box<dyn std::any::Any>
         })
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_autocomplete_overlay_dynamic_filtering() {
+        let slash_ac = SlashCommandProvider::new(vec![
+            SlashCommandDef {
+                name: "help".to_string(),
+                description: "Show help".to_string(),
+            },
+            SlashCommandDef {
+                name: "history".to_string(),
+                description: "Show history".to_string(),
+            },
+            SlashCommandDef {
+                name: "clear".to_string(),
+                description: "Clear terminal".to_string(),
+            },
+        ]);
+        let tool_ac = ToolAutocompleteProvider::default();
+        let next_step_ac = NextStepAutocompleteProvider::default();
+
+        let initial_suggestions = vec![
+            Completion {
+                text: "/help".to_string(),
+                description: Some("Show help".to_string()),
+            },
+            Completion {
+                text: "/history".to_string(),
+                description: Some("Show history".to_string()),
+            },
+        ];
+
+        let mut overlay = AutocompleteOverlay::new(initial_suggestions, 0, 2);
+        assert_eq!(overlay.suggestions.len(), 2);
+
+        // Update suggestions with "/he"
+        overlay.update_suggestions("/he", 3, &slash_ac, &tool_ac, &next_step_ac);
+        assert_eq!(overlay.suggestions.len(), 1);
+        assert_eq!(overlay.suggestions[0].text, "/help");
     }
 }
