@@ -15,6 +15,7 @@ pub mod router;
 pub mod tokenizer;
 pub mod types;
 pub mod utils;
+pub mod vcr;
 
 pub use catalogue::{CATALOGUE, ModelEntry};
 pub use registry::{ModelPricing, ModelRegistry, PricingRule};

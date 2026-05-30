@@ -198,6 +198,43 @@ fn router_resolve_inferred_prefix() -> Result<()> {
     Ok(())
 }
 
+// -- VcrCassette Tests
+
+#[test]
+fn test_vcr_cassette_replay() -> Result<()> {
+    use crate::vcr::{VcrCassette, VcrMode, HttpInteraction};
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    let interactions = vec![
+        HttpInteraction {
+            url: "https://api.openai.com/v1/chat/completions".to_string(),
+            method: "POST".to_string(),
+            request_body: "{\"prompt\":\"test\"}".to_string(),
+            response_status: 200,
+            response_body: "{\"text\":\"hello\"}".to_string(),
+        }
+    ];
+
+    let mut temp_file = NamedTempFile::new()?;
+    let content = serde_json::to_string_pretty(&interactions)?;
+    temp_file.write_all(content.as_bytes())?;
+
+    let cassette = VcrCassette::new(temp_file.path().to_path_buf(), VcrMode::Replay)?;
+    let matched = cassette.match_response(
+        "https://api.openai.com/v1/chat/completions",
+        "POST",
+        "{\"prompt\":\"test\"}",
+    );
+
+    assert!(matched.is_some());
+    let interaction = matched.unwrap();
+    assert_eq!(interaction.response_body, "{\"text\":\"hello\"}");
+    assert_eq!(interaction.response_status, 200);
+
+    Ok(())
+}
+
 #[test]
 fn router_resolve_unknown_falls_back_to_default() {
     let config = AiConfig {
