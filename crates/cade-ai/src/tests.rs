@@ -245,6 +245,19 @@ fn test_build_standard_http_client_is_configured() {
     assert!(req.is_ok());
 }
 
+// -- Observability Tests
+
+#[test]
+fn test_gen_ai_observability_fields() {
+    use crate::observability::semconv::*;
+    assert_eq!(GEN_AI_SYSTEM, "gen_ai.system");
+    assert_eq!(GEN_AI_REQUEST_MODEL, "gen_ai.request.model");
+    assert_eq!(GEN_AI_REQUEST_MAX_TOKENS, "gen_ai.request.max_tokens");
+    assert_eq!(GEN_AI_RESPONSE_MODEL, "gen_ai.response.model");
+    assert_eq!(GEN_AI_USAGE_INPUT_TOKENS, "gen_ai.response.tokens.input");
+    assert_eq!(GEN_AI_USAGE_OUTPUT_TOKENS, "gen_ai.response.tokens.output");
+}
+
 #[test]
 fn router_resolve_unknown_falls_back_to_default() {
     let config = AiConfig {

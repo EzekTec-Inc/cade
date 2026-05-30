@@ -487,21 +487,79 @@ impl OpenAiProvider {
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let bare_model_id = if self.base_url == OPENAI_URL {
-            bare_model(&req.model)
-        } else {
-            &req.model
-        };
-        let use_responses = needs_responses_api(bare_model_id) && self.base_url == OPENAI_URL;
+        use tracing::Instrument;
+        let span = crate::gen_ai_span!("openai", req);
 
-        if use_responses {
-            let mut body = json!({
-                "model": bare_model_id,
-                "input": Self::to_responses_input(req),
-                "max_output_tokens": req.max_tokens
-            });
+        let fut = async move {
+            let bare_model_id = if self.base_url == OPENAI_URL {
+                bare_model(&req.model)
+            } else {
+                &req.model
+            };
+            let use_responses = needs_responses_api(bare_model_id) && self.base_url == OPENAI_URL;
+
+            if use_responses {
+                let mut body = json!({
+                    "model": bare_model_id,
+                    "input": Self::to_responses_input(req),
+                    "max_output_tokens": req.max_tokens
+                });
+                if !req.tools.is_empty() {
+                    body["tools"] = Self::build_responses_tools(req);
+                }
+                if is_o_series(&req.model)
+                    && let Some(effort) = &req.reasoning_effort
+                {
+                    let mapped = match effort.as_str() {
+                        "xhigh" => "high",
+                        e @ ("low" | "medium" | "high") => e,
+                        _ => "",
+                    };
+                    if !mapped.is_empty() {
+                        body["reasoning_effort"] = mapped.into();
+                    }
+                }
+                return retry_with_backoff(
+                    "OpenAI::complete",
+                    3,
+                    std::time::Duration::from_secs(1),
+                    |_| {
+                        let client = self.client.clone();
+                        let api_key = self.api_key.clone();
+                        let body = body.clone();
+                        async move {
+                            let mut req = client.post(OPENAI_RESPONSES_URL).json(&body);
+                            if !api_key.is_empty() {
+                                req = req.bearer_auth(&api_key);
+                            }
+                            let resp = req.send().await?;
+                            if !resp.status().is_success() {
+                                let status = resp.status();
+                                let text = resp.text().await.unwrap_or_default();
+                                return Err(provider_error("OpenAI", status, &text));
+                            }
+                            Ok(Self::parse_responses_response(&resp.json::<Value>().await?))
+                        }
+                    },
+                )
+                .await;
+            }
+
+            let mut body = if needs_max_completion_tokens(bare_model_id) {
+                json!({
+                    "model": bare_model_id,
+                    "messages": Self::to_openai_messages(req),
+                    "max_completion_tokens": req.max_tokens
+                })
+            } else {
+                json!({
+                    "model": bare_model_id,
+                    "messages": Self::to_openai_messages(req),
+                    "max_tokens": req.max_tokens
+                })
+            };
             if !req.tools.is_empty() {
-                body["tools"] = Self::build_responses_tools(req);
+                body["tools"] = Self::build_tools(req);
             }
             if is_o_series(&req.model)
                 && let Some(effort) = &req.reasoning_effort
@@ -515,16 +573,21 @@ impl LlmProvider for OpenAiProvider {
                     body["reasoning_effort"] = mapped.into();
                 }
             }
-            return retry_with_backoff(
+            if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
+                body["include_reasoning"] = true.into();
+            }
+
+            retry_with_backoff(
                 "OpenAI::complete",
                 3,
                 std::time::Duration::from_secs(1),
                 |_| {
                     let client = self.client.clone();
+                    let base_url = self.base_url.clone();
                     let api_key = self.api_key.clone();
                     let body = body.clone();
                     async move {
-                        let mut req = client.post(OPENAI_RESPONSES_URL).json(&body);
+                        let mut req = client.post(&base_url).json(&body);
                         if !api_key.is_empty() {
                             req = req.bearer_auth(&api_key);
                         }
@@ -534,70 +597,14 @@ impl LlmProvider for OpenAiProvider {
                             let text = resp.text().await.unwrap_or_default();
                             return Err(provider_error("OpenAI", status, &text));
                         }
-                        Ok(Self::parse_responses_response(&resp.json::<Value>().await?))
+                        Ok(Self::parse_response(&resp.json::<Value>().await?))
                     }
                 },
             )
-            .await;
-        }
-
-        let mut body = if needs_max_completion_tokens(bare_model_id) {
-            json!({
-                "model": bare_model_id,
-                "messages": Self::to_openai_messages(req),
-                "max_completion_tokens": req.max_tokens
-            })
-        } else {
-            json!({
-                "model": bare_model_id,
-                "messages": Self::to_openai_messages(req),
-                "max_tokens": req.max_tokens
-            })
+            .await
         };
-        if !req.tools.is_empty() {
-            body["tools"] = Self::build_tools(req);
-        }
-        if is_o_series(&req.model)
-            && let Some(effort) = &req.reasoning_effort
-        {
-            let mapped = match effort.as_str() {
-                "xhigh" => "high",
-                e @ ("low" | "medium" | "high") => e,
-                _ => "",
-            };
-            if !mapped.is_empty() {
-                body["reasoning_effort"] = mapped.into();
-            }
-        }
-        if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
-            body["include_reasoning"] = true.into();
-        }
 
-        retry_with_backoff(
-            "OpenAI::complete",
-            3,
-            std::time::Duration::from_secs(1),
-            |_| {
-                let client = self.client.clone();
-                let base_url = self.base_url.clone();
-                let api_key = self.api_key.clone();
-                let body = body.clone();
-                async move {
-                    let mut req = client.post(&base_url).json(&body);
-                    if !api_key.is_empty() {
-                        req = req.bearer_auth(&api_key);
-                    }
-                    let resp = req.send().await?;
-                    if !resp.status().is_success() {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        return Err(provider_error("OpenAI", status, &text));
-                    }
-                    Ok(Self::parse_response(&resp.json::<Value>().await?))
-                }
-            },
-        )
-        .await
+        fut.instrument(span).await
     }
 
     async fn stream(

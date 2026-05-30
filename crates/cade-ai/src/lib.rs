@@ -14,6 +14,7 @@ pub mod registry;
 pub mod router;
 pub mod tokenizer;
 pub mod types;
+pub mod observability;
 pub mod utils;
 pub mod vcr;
 
