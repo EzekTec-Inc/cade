@@ -105,6 +105,32 @@ impl ModelRegistry {
     /// Returns approximate per-token pricing for a model.
     /// Evaluates rules in order. Unknown models get zero rates.
     pub fn pricing_for_model(&self, model_id: &str) -> ModelPricing {
+        // Try resolving against the new llm_providers database first
+        let id_clean = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
+        let parts: Vec<&str> = id_clean.split('/').collect();
+        if parts.len() == 2 {
+            let provider = parts[0];
+            let model_name = parts[1];
+            if let Some(m) = llm_providers::get_model(provider, model_name) {
+                let (cache_read, cache_write) = if provider == "anthropic" {
+                    (m.input_price * 0.1, m.input_price * 1.25)
+                } else if provider == "openai" {
+                    (m.input_price * 0.5, 0.0)
+                } else if provider == "gemini" || provider == "google" {
+                    (m.input_price * 0.25, 0.0)
+                } else {
+                    (0.0, 0.0)
+                };
+
+                return ModelPricing {
+                    input: m.input_price,
+                    output: m.output_price,
+                    cache_read,
+                    cache_write,
+                };
+            }
+        }
+
         for rule in &self.rules {
             if rule.matches(model_id) {
                 return rule.pricing.clone();
@@ -203,5 +229,27 @@ mod tests {
         let registry = ModelRegistry::load_or_default(Some(temp_file.path()));
         let p = registry.pricing_for_model("custom-model-1");
         assert_eq!(p.input, 99.0);
+    }
+
+    #[test]
+    fn pricing_llm_providers_resolves_openai_gpt4o() {
+        let registry = ModelRegistry::new();
+        let p = registry.pricing_for_model("openai/gpt-4o");
+        assert!(p.input > 0.0);
+        assert!(p.output > 0.0);
+        // Should pull from llm_providers
+        assert_eq!(p.input, 2.5); // $2.50 per 1M tokens
+        assert_eq!(p.output, 10.0); // $10.00 per 1M tokens
+    }
+
+    #[test]
+    fn pricing_llm_providers_resolves_anthropic_claude() {
+        let registry = ModelRegistry::new();
+        let p = registry.pricing_for_model("anthropic/claude-3-5-sonnet-20241022");
+        assert!(p.input > 0.0);
+        assert!(p.output > 0.0);
+        // Cache read should be 10% of input, cache write should be 1.25x of input
+        assert_eq!(p.cache_read, p.input * 0.1);
+        assert_eq!(p.cache_write, p.input * 1.25);
     }
 }

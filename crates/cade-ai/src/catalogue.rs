@@ -185,6 +185,16 @@ impl ModelEntry {
     }
 }
 
+fn parse_cade_model_id(model_id: &str) -> Option<(&str, &str)> {
+    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
+    let parts: Vec<&str> = id.split('/').collect();
+    if parts.len() == 2 {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
 /// Determine the toolset for a specific model ID. Defaults to "default" if unknown.
 pub fn toolset_for_model(model_id: &str) -> String {
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
@@ -241,6 +251,15 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
         return m.5;
     }
+
+    // Try llm_providers database
+    if let Some((provider, model)) = parse_cade_model_id(model_id) {
+        if let Some(m) = llm_providers::get_model(provider, model) {
+            if let Some(cl) = m.context_length {
+                return cl as u32;
+            }
+        }
+    }
     // Provider-prefix heuristics for dynamic / uncatalogued models
     if id.starts_with("anthropic/") {
         if id.contains("opus") || id.contains("sonnet") {
@@ -283,6 +302,8 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
 }
+
+
 
 // endregion: --- Tests
 

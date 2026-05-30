@@ -946,6 +946,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "futures",
+ "llm_providers",
  "once_cell",
  "parking_lot",
  "reqwest 0.12.28",
@@ -4289,6 +4290,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "llm_providers"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3af26486d6894124e48323621285f968121d6a1fcc97cfe72a3348164e26c75"
+dependencies = [
+ "phf 0.11.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5752,6 +5764,7 @@ checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
  "phf_macros 0.11.3",
  "phf_shared 0.11.3",
+ "serde",
 ]
 
 [[package]]
