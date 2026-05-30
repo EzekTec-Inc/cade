@@ -187,29 +187,33 @@ impl ModelEntry {
 
 /// Determine the toolset for a specific model ID. Defaults to "default" if unknown.
 pub fn toolset_for_model(model_id: &str) -> String {
-    if let Some(m) = CATALOGUE.iter().find(|(_, _, id, _, _, _)| *id == model_id) {
+    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
+    if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
         m.3.to_string()
-    } else if model_id.starts_with("gemini/") {
+    } else if id.starts_with("gemini/") || id.starts_with("google/") {
         "gemini".to_string()
+    } else if id.starts_with("openai/") {
+        "codex".to_string()
     } else {
-        "default".to_string() // Groq, OpenRouter, Ollama default to generic openai/anthropic style
+        "default".to_string() // Groq, Ollama default to generic openai/anthropic style
     }
 }
 
 /// Determine the max output tokens for a specific model ID. Defaults to 4096 if unknown.
 pub fn max_tokens_for_model(model_id: &str) -> u32 {
-    if let Some(m) = CATALOGUE.iter().find(|(_, _, id, _, _, _)| *id == model_id) {
+    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
+    if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
         m.4
-    } else if model_id.starts_with("anthropic/claude-") {
+    } else if id.starts_with("anthropic/claude-") {
         128_000
-    } else if model_id.starts_with("openai/o")
-        || model_id.starts_with("openai/gpt-5")
-        || model_id.starts_with("gpt-5")
+    } else if id.starts_with("openai/o")
+        || id.starts_with("openai/gpt-5")
+        || id.starts_with("gpt-5")
     {
         100_000
-    } else if model_id.starts_with("gemini/")
-        || model_id.starts_with("google/gemini")
-        || model_id.starts_with("openai/")
+    } else if id.starts_with("gemini/")
+        || id.starts_with("google/gemini")
+        || id.starts_with("openai/")
     {
         8192
     } else {
@@ -230,28 +234,31 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     {
         return n;
     }
+    
+    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
+    
     // Exact catalogue match
-    if let Some(m) = CATALOGUE.iter().find(|(_, _, id, _, _, _)| *id == model_id) {
+    if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
         return m.5;
     }
     // Provider-prefix heuristics for dynamic / uncatalogued models
-    if model_id.starts_with("anthropic/") {
-        if model_id.contains("opus") || model_id.contains("sonnet") {
+    if id.starts_with("anthropic/") {
+        if id.contains("opus") || id.contains("sonnet") {
             return 1_048_576;
         }
         return 200_000;
     }
-    if model_id.starts_with("gemini/") || model_id.starts_with("google/gemini") {
+    if id.starts_with("gemini/") || id.starts_with("google/gemini") {
         return 1_048_576;
     }
-    if model_id.starts_with("openai/") {
-        if model_id.starts_with("openai/o") || model_id.starts_with("openai/gpt-5") {
+    if id.starts_with("openai/") {
+        if id.starts_with("openai/o") || id.starts_with("openai/gpt-5") {
             return 200_000; // o-series and gpt-5 models have a 200k context window
         }
         return 128_000;
     }
     // Groq models (fast inference, smaller windows)
-    if model_id.contains("llama") {
+    if id.contains("llama") {
         return 128_000;
     }
     if model_id.contains("mixtral") {
