@@ -201,6 +201,23 @@ fn router_resolve_inferred_prefix() -> Result<()> {
 // -- VcrCassette Tests
 
 #[test]
+fn test_vcr_redact_secrets() {
+    use crate::vcr::redact_secrets;
+    
+    let raw_anthropic = "api_key=sk-ant-sid01-someletters1234567890-XYZ123456";
+    let redacted_anthropic = redact_secrets(raw_anthropic);
+    assert_eq!(redacted_anthropic, "api_key=[REDACTED_ANTHROPIC_KEY]");
+
+    let raw_openai = "api_key=sk-openai123456789012345678901234567890";
+    let redacted_openai = redact_secrets(raw_openai);
+    assert_eq!(redacted_openai, "api_key=[REDACTED_OPENAI_KEY]");
+
+    let raw_bearer = "Authorization: Bearer 12345.abcde.XYZ";
+    let redacted_bearer = redact_secrets(raw_bearer);
+    assert_eq!(redacted_bearer, "Authorization: Bearer [REDACTED_BEARER_TOKEN]");
+}
+
+#[test]
 fn test_vcr_cassette_replay() -> Result<()> {
     use crate::vcr::{VcrCassette, VcrMode, HttpInteraction};
     use tempfile::NamedTempFile;

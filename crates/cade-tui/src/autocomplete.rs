@@ -576,14 +576,23 @@ impl AutocompleteOverlay {
         tool_ac: &ToolAutocompleteProvider,
         next_step_ac: &NextStepAutocompleteProvider,
     ) {
-        let cursor = cursor.min(input.len());
+        let mut cursor = cursor.min(input.len());
+        while cursor > 0 && !input.is_char_boundary(cursor) {
+            cursor -= 1;
+        }
         let before = &input[..cursor];
-        if before.len() < self.word_start {
+
+        let mut word_start = self.word_start.min(before.len());
+        while word_start > 0 && !before.is_char_boundary(word_start) {
+            word_start -= 1;
+        }
+
+        if before.len() < word_start {
             self.suggestions.clear();
             self.selected_idx = 0;
             return;
         }
-        let partial = &before[self.word_start..cursor];
+        let partial = &before[word_start..cursor];
 
         let suggestions = if partial.starts_with('/') {
             slash_ac.completions(input, cursor)

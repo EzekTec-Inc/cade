@@ -31,6 +31,69 @@ pub struct VcrCassette {
     interactions: Arc<Mutex<Vec<HttpInteraction>>>,
 }
 
+/// Redact standard API keys, bearer tokens, and secrets from JSON or raw text.
+pub fn redact_secrets(text: &str) -> String {
+    let mut redacted = text.to_string();
+
+    // 1. Redact Bearer tokens safely by tracking search position
+    let mut search_pos = 0;
+    while let Some(pos) = redacted[search_pos..].to_lowercase().find("bearer ") {
+        let actual_pos = search_pos + pos;
+        let start = actual_pos + "bearer ".len();
+        let end_offset = redacted[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\\' || c == '\'' || c == '}')
+            .unwrap_or(redacted[start..].len());
+        let end = start + end_offset;
+        redacted.replace_range(start..end, "[REDACTED_BEARER_TOKEN]");
+        search_pos = start + "[REDACTED_BEARER_TOKEN]".len();
+    }
+
+    // 2. Redact Anthropic keys safely
+    let mut search_pos = 0;
+    while let Some(pos) = redacted[search_pos..].find("sk-ant-") {
+        let actual_pos = search_pos + pos;
+        let start = actual_pos;
+        let end_offset = redacted[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\\' || c == '\'' || c == '}' || c == '&')
+            .unwrap_or(redacted[start..].len());
+        let end = start + end_offset;
+        redacted.replace_range(start..end, "[REDACTED_ANTHROPIC_KEY]");
+        search_pos = start + "[REDACTED_ANTHROPIC_KEY]".len();
+    }
+
+    // 3. Redact OpenAI keys safely
+    let mut search_pos = 0;
+    while let Some(pos) = redacted[search_pos..].find("sk-") {
+        let actual_pos = search_pos + pos;
+        if redacted[actual_pos..].starts_with("sk-ant-") {
+            search_pos = actual_pos + "sk-ant-".len();
+            continue;
+        }
+        let start = actual_pos;
+        let end_offset = redacted[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\\' || c == '\'' || c == '}' || c == '&')
+            .unwrap_or(redacted[start..].len());
+        let end = start + end_offset;
+        redacted.replace_range(start..end, "[REDACTED_OPENAI_KEY]");
+        search_pos = start + "[REDACTED_OPENAI_KEY]".len();
+    }
+
+    // 4. Redact Google Gemini keys safely
+    let mut search_pos = 0;
+    while let Some(pos) = redacted[search_pos..].find("AIzaSy") {
+        let actual_pos = search_pos + pos;
+        let start = actual_pos;
+        let end_offset = redacted[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\\' || c == '\'' || c == '}' || c == '&')
+            .unwrap_or(redacted[start..].len());
+        let end = start + end_offset;
+        redacted.replace_range(start..end, "[REDACTED_GEMINI_KEY]");
+        search_pos = start + "[REDACTED_GEMINI_KEY]".len();
+    }
+
+    redacted
+}
+
 impl VcrCassette {
     pub fn new(path: PathBuf, mode: VcrMode) -> Result<Self> {
         let interactions = if mode == VcrMode::Replay {
@@ -53,17 +116,23 @@ impl VcrCassette {
     }
 
     pub fn match_response(&self, url: &str, method: &str, body: &str) -> Option<HttpInteraction> {
-        let lock = self.interactions.lock().unwrap();
+        let lock = self.interactions.lock().unwrap_or_else(|e| e.into_inner());
         lock.iter()
             .find(|i| i.url == url && i.method == method && i.request_body == body)
             .cloned()
     }
 
-    pub fn record_interaction(&self, interaction: HttpInteraction) -> Result<()> {
+    pub fn record_interaction(&self, mut interaction: HttpInteraction) -> Result<()> {
         if self.mode != VcrMode::Record {
             return Ok(());
         }
-        let mut lock = self.interactions.lock().unwrap();
+
+        // Sanitize and redact secrets before persisting
+        interaction.request_body = redact_secrets(&interaction.request_body);
+        interaction.response_body = redact_secrets(&interaction.response_body);
+        interaction.url = redact_secrets(&interaction.url);
+
+        let mut lock = self.interactions.lock().unwrap_or_else(|e| e.into_inner());
         lock.push(interaction);
 
         let content = serde_json::to_string_pretty(&*lock)
