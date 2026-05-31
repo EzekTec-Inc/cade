@@ -192,9 +192,7 @@ Skills: {}
 
                     (KeyCode::Enter, _) if !filtered_indices.is_empty() => {
                         let orig_idx = filtered_indices[selected_filtered];
-                        break Some(SubagentPickerResult::Run(
-                            subagents[orig_idx].name.clone(),
-                        ));
+                        break Some(SubagentPickerResult::Run(subagents[orig_idx].name.clone()));
                     }
 
                     (KeyCode::Char('e'), KeyModifiers::NONE)

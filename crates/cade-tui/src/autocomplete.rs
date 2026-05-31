@@ -788,4 +788,22 @@ mod tests {
         assert_eq!(overlay.suggestions.len(), 1);
         assert_eq!(overlay.suggestions[0].text, "/help");
     }
+
+    #[test]
+    fn test_autocomplete_overlay_invalid_boundaries() {
+        let slash_ac = SlashCommandProvider::new(vec![]);
+        let tool_ac = ToolAutocompleteProvider::default();
+        let next_step_ac = NextStepAutocompleteProvider::default();
+
+        let initial_suggestions = vec![];
+        let mut overlay = AutocompleteOverlay::new(initial_suggestions, 1, 2);
+
+        // "🌟" is 4 bytes: [240, 159, 140, 159]
+        // Index 2 is inside the character boundary. Slicing there would normally panic.
+        // update_suggestions must safely clamp the boundaries.
+        overlay.update_suggestions("🌟test", 2, &slash_ac, &tool_ac, &next_step_ac);
+
+        // It should complete safely without panicking.
+        assert!(overlay.suggestions.is_empty());
+    }
 }

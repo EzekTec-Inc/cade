@@ -71,12 +71,8 @@ impl Repl {
         let buffer_tok = window * 3 / 100;
         let free_tok = window.saturating_sub(total_used + buffer_tok);
         // Cat 7: autocompact buffer
-        let pct_val = pct_opt.unwrap_or_else(|| {
-            (total_used * 100)
-                .checked_div(window)
-                .unwrap_or(0)
-                .min(100) as u8
-        });
+        let pct_val = pct_opt
+            .unwrap_or_else(|| (total_used * 100).checked_div(window).unwrap_or(0).min(100) as u8);
         let model_short = model.rsplit('/').next().unwrap_or(&model).to_string();
         // Emit single ContextBar entry
         let category_tokens = vec![

@@ -109,7 +109,8 @@ pub fn clean_openai_schema(v: &mut Value) {
             let sub_schemas = ["anyOf", "allOf", "oneOf"];
             for key in sub_schemas {
                 if let Some(val) = map.remove(key)
-                    && let Some(arr) = val.as_array() && !arr.is_empty()
+                    && let Some(arr) = val.as_array()
+                    && !arr.is_empty()
                 {
                     // Extract and merge fields of the first nested schema
                     if let Some(obj) = arr[0].as_object() {

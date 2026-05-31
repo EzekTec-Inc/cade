@@ -7,7 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- **Centralized HTTP Connection Pooling:** Standardized and pooled outgoing connections across all first-party providers (`OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`), utilizing a unified HTTP client built with standard keepalive (60s), connection timeout (15s), and stream timeout (120s) configurations to optimize connection reuse.
+- **Cassette-Based (VCR) Mock Testing:** Developed an offline-capable, deterministic integration testing harness (`crates/cade-ai/src/vcr.rs`) with standard key, auth, and bearer token redaction, enabling cost-free, offline provider test execution in CI/CD pipelines.
+- **Decoupled Embedding & Vector Indexes:** Exposed abstract `Embedder` and `VectorIndex` traits (`crates/cade-store/src/sqlite/embedding.rs`) to separate vector persistence from SQLite, making CADE's storage layer completely database-agnostic.
+- **Hybrid Compile-Time Tools:** Created the strongly-typed `BuiltInTool` and `CoreToolAdapter` traits (`crates/cade-agent/src/tools/traits.rs`) to wrap high-performance local tools at compile-time with zero-copy JSON erasure, running them safely alongside the runtime dynamic MCP server dispatch loop.
+- **Stateful TUI Autocomplete Controller:** Added reactive, live-filtering autocomplete overlays to the TUI input field (`crates/cade-tui`), utilizing `as_any_mut` upcasting to intercept and delegate editor keystrokes dynamically as the user types.
+- **Automated Secret Scanning Workflow:** Configured a production-ready `.github/workflows/secret-scan.yml` workflow using `gitleaks` to automatically scan commits and PRs for API keys and credential leaks.
+
 ### Fixed
+
+- **Eliminated TUI & Server Warnings:** Cleaned up compilation and Clippy lints across `test_rich.rs` (removed unused `super::*` imports) and `crates/cade-server/src/server/state.rs` (removed unnecessary `mut` keywords).
+- **Hardened Autocomplete Boundary Slicing:** Clamped cursor offsets and word start indices safely to valid UTF-8 character boundaries inside `AutocompleteOverlay::update_suggestions`, entirely preventing multi-byte slicing panics.
+- **Sanitized Tool Parse Errors:** Redacted and shielded raw serde deserialization and Rust trace internals from public-facing tool execution errors to prevent information disclosure.
+- **Resolved Clippy Nesting Lints:** Resolved `clippy::collapsible_if` warnings in both `crates/cade-ai/src/catalogue.rs` and `crates/cade-tui/src/app/input.rs` using elegant and highly functional `and_then` combinations.
 
 #### Mouse text selection works without any command
 - Removed `EnableMouseCapture` from TUI startup so the terminal handles mouse events natively

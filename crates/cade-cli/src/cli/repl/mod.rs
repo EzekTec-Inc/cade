@@ -487,7 +487,14 @@ impl Repl {
             "? Let's run a cargo check to verify".to_string(),
             "? Please generate a summary of what we've done so far".to_string(),
         ];
-        if let Some(goal) = self.client.get_memory(&self.agent_id()).await.ok().as_ref().and_then(|m| m.iter().find(|m| m.label == "active_goal")) {
+        if let Some(goal) = self
+            .client
+            .get_memory(&self.agent_id())
+            .await
+            .ok()
+            .as_ref()
+            .and_then(|m| m.iter().find(|m| m.label == "active_goal"))
+        {
             for line in goal.value.lines() {
                 let cleaned = line.trim();
                 if cleaned.starts_with('-') || cleaned.starts_with('*') {

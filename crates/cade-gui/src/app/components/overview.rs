@@ -1,5 +1,5 @@
-use eframe::egui;
 use crate::theme::EguiThemeExt;
+use eframe::egui;
 
 pub fn render(
     ui: &mut egui::Ui,
@@ -36,12 +36,10 @@ pub fn render(
                         // Profile Avatar and Info Card on the right
                         ui.horizontal(|ui| {
                             let initial = profile_name.chars().next().unwrap_or('C').to_string();
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                            ui.painter().circle_filled(
-                                rect.center(),
-                                12.0,
-                                theme.primary(),
-                            );
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                            ui.painter()
+                                .circle_filled(rect.center(), 12.0, theme.primary());
                             ui.painter().text(
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -56,12 +54,12 @@ pub fn render(
                                     egui::RichText::new(&*profile_name)
                                         .color(theme.text_primary())
                                         .size(11.0)
-                                        .strong()
+                                        .strong(),
                                 );
                                 ui.label(
                                     egui::RichText::new(&*profile_email)
                                         .color(theme.text_muted())
-                                        .size(9.0)
+                                        .size(9.0),
                                 );
                             });
                         });
@@ -74,8 +72,12 @@ pub fn render(
                         )
                         .fill(theme.primary())
                         .corner_radius(egui::CornerRadius::same(4));
-                        
-                        if ui.add(btn).on_hover_text("Open CADE Command Palette (Ctrl+P)").clicked() {
+
+                        if ui
+                            .add(btn)
+                            .on_hover_text("Open CADE Command Palette (Ctrl+P)")
+                            .clicked()
+                        {
                             // Open command palette
                         }
 
@@ -87,7 +89,7 @@ pub fn render(
                             egui::vec2(220.0, 26.0),
                             egui::TextEdit::singleline(&mut search_query)
                                 .hint_text("Search metrics, nodes, or commands...")
-                                .margin(egui::Margin::symmetric(8, 4))
+                                .margin(egui::Margin::symmetric(8, 4)),
                         );
                     });
                 });
@@ -223,7 +225,8 @@ pub fn render(
                                     .size(11.0),
                             );
                             ui.add_space(8.0);
-                            let total_tokens = session.total_input_tokens + session.total_output_tokens;
+                            let total_tokens =
+                                session.total_input_tokens + session.total_output_tokens;
                             ui.label(
                                 egui::RichText::new(format!("{total_tokens} / 128k"))
                                     .color(theme.text_primary())
@@ -246,7 +249,7 @@ pub fn render(
                             ui.add(
                                 egui::ProgressBar::new(fraction)
                                     .desired_height(4.0)
-                                    .fill(bar_color)
+                                    .fill(bar_color),
                             );
                         });
                     });
@@ -472,4 +475,3 @@ pub fn render(
             });
         });
 }
-

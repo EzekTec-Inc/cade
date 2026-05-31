@@ -468,18 +468,23 @@ impl TuiApp {
                     EditorAction::Consumed => {
                         self.draw_dirty = true;
 
-                        if let Some(overlay) = self.overlays.last_mut() {
-                            if let Some(ac) = overlay.as_any_mut().and_then(|a| a.downcast_mut::<crate::autocomplete::AutocompleteOverlay>()) {
-                                ac.update_suggestions(
-                                    &self.editor.text(),
-                                    self.editor.cursor_pos(),
-                                    &self.slash_ac,
-                                    &self.tool_ac,
-                                    &self.next_step_ac,
-                                );
-                                if ac.suggestions.is_empty() {
-                                    ac.dismissed = true;
-                                }
+                        if let Some(ac) = self
+                            .overlays
+                            .last_mut()
+                            .and_then(|o| o.as_any_mut())
+                            .and_then(|a| {
+                                a.downcast_mut::<crate::autocomplete::AutocompleteOverlay>()
+                            })
+                        {
+                            ac.update_suggestions(
+                                &self.editor.text(),
+                                self.editor.cursor_pos(),
+                                &self.slash_ac,
+                                &self.tool_ac,
+                                &self.next_step_ac,
+                            );
+                            if ac.suggestions.is_empty() {
+                                ac.dismissed = true;
                             }
                         }
 

@@ -181,7 +181,7 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
-        
+
         let client = if base.contains("openrouter.ai") {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
@@ -189,7 +189,7 @@ impl OpenAiProvider {
                 reqwest::header::HeaderValue::from_static("https://github.com/EzekTec-Inc/CADE"),
             );
             headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
-            
+
             Client::builder()
                 .tcp_keepalive(std::time::Duration::from_secs(60))
                 .connect_timeout(std::time::Duration::from_secs(15))

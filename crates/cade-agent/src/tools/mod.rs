@@ -2,7 +2,6 @@
 
 pub mod ask;
 pub mod bash;
-pub mod traits;
 pub mod catalog;
 #[cfg(feature = "desktop")]
 pub mod desktop;
@@ -14,6 +13,7 @@ pub mod meta;
 pub mod plan;
 pub mod runtime;
 pub mod search;
+pub mod traits;
 
 pub use ask::AskUserQuestionTool;
 pub use manager::{

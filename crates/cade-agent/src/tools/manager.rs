@@ -454,7 +454,7 @@ mod tests {
     #[tokio::test]
     async fn test_built_in_tool_dispatch() -> Result<()> {
         use crate::tools::traits::{BuiltInTool, CoreToolAdapter};
-        
+
         #[derive(serde::Deserialize, serde::Serialize)]
         struct AddArgs {
             x: i32,
@@ -467,8 +467,12 @@ mod tests {
             type Args = AddArgs;
             type Output = i32;
 
-            fn name(&self) -> &'static str { "add" }
-            fn description(&self) -> &'static str { "Add two numbers" }
+            fn name(&self) -> &'static str {
+                "add"
+            }
+            fn description(&self) -> &'static str {
+                "Add two numbers"
+            }
             fn schema(&self) -> Value {
                 json!({
                     "name": "add",
@@ -489,10 +493,57 @@ mod tests {
 
         let adapter = CoreToolAdapter::new(AddTool);
         assert_eq!(adapter.name(), "add");
-        
+
         let args = json!({ "x": 10, "y": 20 });
         let result = adapter.execute_erased(args)?;
         assert_eq!(result.as_i64(), Some(30));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_built_in_tool_parse_error_sanitization() -> Result<()> {
+        use crate::tools::traits::{BuiltInTool, CoreToolAdapter};
+
+        #[derive(serde::Deserialize, serde::Serialize)]
+        struct AddArgs {
+            x: i32,
+            y: i32,
+        }
+
+        struct AddTool;
+
+        impl BuiltInTool for AddTool {
+            type Args = AddArgs;
+            type Output = i32;
+
+            fn name(&self) -> &'static str {
+                "add"
+            }
+            fn description(&self) -> &'static str {
+                "Add two numbers"
+            }
+            fn schema(&self) -> Value {
+                json!({})
+            }
+            fn execute(&self, args: Self::Args) -> crate::Result<Self::Output> {
+                Ok(args.x + args.y)
+            }
+        }
+
+        let adapter = CoreToolAdapter::new(AddTool);
+
+        // Pass invalid arguments (missing fields and wrong type)
+        let invalid_args = json!({ "x": "not-an-integer" });
+        let result = adapter.execute_erased(invalid_args);
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+
+        // The error message must be sanitized and must not leak raw serde details
+        assert!(err_msg.contains("Invalid arguments provided for tool 'add'"));
+        assert!(!err_msg.contains("invalid type: string"));
+        assert!(!err_msg.contains("expected i32"));
 
         Ok(())
     }

@@ -198,7 +198,10 @@ fn parse_cade_model_id(model_id: &str) -> Option<(&str, &str)> {
 /// Determine the toolset for a specific model ID. Defaults to "default" if unknown.
 pub fn toolset_for_model(model_id: &str) -> String {
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
+    if let Some(m) = CATALOGUE
+        .iter()
+        .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
+    {
         m.3.to_string()
     } else if id.starts_with("gemini/") || id.starts_with("google/") {
         "gemini".to_string()
@@ -212,7 +215,10 @@ pub fn toolset_for_model(model_id: &str) -> String {
 /// Determine the max output tokens for a specific model ID. Defaults to 4096 if unknown.
 pub fn max_tokens_for_model(model_id: &str) -> u32 {
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
+    if let Some(m) = CATALOGUE
+        .iter()
+        .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
+    {
         m.4
     } else if id.starts_with("anthropic/claude-") {
         128_000
@@ -244,21 +250,23 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     {
         return n;
     }
-    
+
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    
+
     // Exact catalogue match
-    if let Some(m) = CATALOGUE.iter().find(|(_, _, id_cat, _, _, _)| *id_cat == id) {
+    if let Some(m) = CATALOGUE
+        .iter()
+        .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
+    {
         return m.5;
     }
 
     // Try llm_providers database
-    if let Some((provider, model)) = parse_cade_model_id(model_id) {
-        if let Some(m) = llm_providers::get_model(provider, model) {
-            if let Some(cl) = m.context_length {
-                return cl as u32;
-            }
-        }
+    if let Some(cl) = parse_cade_model_id(model_id)
+        .and_then(|(p, m)| llm_providers::get_model(p, m))
+        .and_then(|m| m.context_length)
+    {
+        return cl as u32;
     }
     // Provider-prefix heuristics for dynamic / uncatalogued models
     if id.starts_with("anthropic/") {
@@ -302,8 +310,6 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
 }
-
-
 
 // endregion: --- Tests
 

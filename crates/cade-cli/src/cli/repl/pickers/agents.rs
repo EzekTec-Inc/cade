@@ -272,19 +272,18 @@ impl Repl {
                         if !name.is_empty() {
                             match self.client.rename_agent(&a.id, &name).await {
                                 Ok(_) => {
-                                        agents[orig_idx].name = name.clone();
-                                        if a.id == current {
-                                            break Some(AgentPickerResult::Rename {
-                                                agent: a,
-                                                new_name: name,
-                                            });
-                                        }
+                                    agents[orig_idx].name = name.clone();
+                                    if a.id == current {
+                                        break Some(AgentPickerResult::Rename {
+                                            agent: a,
+                                            new_name: name,
+                                        });
                                     }
+                                }
                                 Err(e) => {
-                                    app_arc.lock().show_toast(
-                                        e.to_string(),
-                                        crate::ui::ToastLevel::Error,
-                                    );
+                                    app_arc
+                                        .lock()
+                                        .show_toast(e.to_string(), crate::ui::ToastLevel::Error);
                                 }
                             }
                         }

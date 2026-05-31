@@ -15,7 +15,7 @@ pub trait BuiltInTool: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn schema(&self) -> Value;
-    
+
     fn execute(&self, args: Self::Args) -> Result<Self::Output>;
 }
 
@@ -25,8 +25,8 @@ pub struct CoreToolAdapter {
 }
 
 impl CoreToolAdapter {
-    pub fn new<T>(tool: T) -> Self 
-    where 
+    pub fn new<T>(tool: T) -> Self
+    where
         T: BuiltInTool + 'static,
     {
         Self {
@@ -53,8 +53,8 @@ pub trait ErasedBuiltInTool: Send + Sync {
     fn execute_erased(&self, args: Value) -> Result<Value>;
 }
 
-impl<T> ErasedBuiltInTool for T 
-where 
+impl<T> ErasedBuiltInTool for T
+where
     T: BuiltInTool + 'static,
 {
     fn name(&self) -> &'static str {
@@ -66,11 +66,13 @@ where
     }
 
     fn execute_erased(&self, args: Value) -> Result<Value> {
-        let typed_args: T::Args = serde_json::from_value(args)
-            .map_err(|e| {
-                tracing::warn!("Failed to parse arguments for tool {}: {e}", self.name());
-                crate::Error::custom(format!("Invalid arguments provided for tool '{}'. Please verify the tool schema.", self.name()))
-            })?;
+        let typed_args: T::Args = serde_json::from_value(args).map_err(|e| {
+            tracing::warn!("Failed to parse arguments for tool {}: {e}", self.name());
+            crate::Error::custom(format!(
+                "Invalid arguments provided for tool '{}'. Please verify the tool schema.",
+                self.name()
+            ))
+        })?;
         let result = self.execute(typed_args)?;
         Ok(serde_json::to_value(result)?)
     }

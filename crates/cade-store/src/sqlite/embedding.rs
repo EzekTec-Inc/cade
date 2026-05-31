@@ -456,10 +456,19 @@ mod tests {
         struct NoopVectorIndex;
 
         impl VectorIndex for NoopVectorIndex {
-            async fn insert(&self, _id: &str, _vector: &[f32], _payload: serde_json::Value) -> crate::error::Result<()> {
+            async fn insert(
+                &self,
+                _id: &str,
+                _vector: &[f32],
+                _payload: serde_json::Value,
+            ) -> crate::error::Result<()> {
                 Ok(())
             }
-            async fn search(&self, _query_vector: &[f32], _limit: usize) -> crate::error::Result<Vec<SearchResult>> {
+            async fn search(
+                &self,
+                _query_vector: &[f32],
+                _limit: usize,
+            ) -> crate::error::Result<Vec<SearchResult>> {
                 Ok(vec![])
             }
             async fn delete(&self, _id: &str) -> crate::error::Result<()> {

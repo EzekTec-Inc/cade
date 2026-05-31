@@ -203,7 +203,7 @@ fn router_resolve_inferred_prefix() -> Result<()> {
 #[test]
 fn test_vcr_redact_secrets() {
     use crate::vcr::redact_secrets;
-    
+
     let raw_anthropic = "api_key=sk-ant-sid01-someletters1234567890-XYZ123456";
     let redacted_anthropic = redact_secrets(raw_anthropic);
     assert_eq!(redacted_anthropic, "api_key=[REDACTED_ANTHROPIC_KEY]");
@@ -214,24 +214,25 @@ fn test_vcr_redact_secrets() {
 
     let raw_bearer = "Authorization: Bearer 12345.abcde.XYZ";
     let redacted_bearer = redact_secrets(raw_bearer);
-    assert_eq!(redacted_bearer, "Authorization: Bearer [REDACTED_BEARER_TOKEN]");
+    assert_eq!(
+        redacted_bearer,
+        "Authorization: Bearer [REDACTED_BEARER_TOKEN]"
+    );
 }
 
 #[test]
 fn test_vcr_cassette_replay() -> Result<()> {
-    use crate::vcr::{VcrCassette, VcrMode, HttpInteraction};
-    use tempfile::NamedTempFile;
+    use crate::vcr::{HttpInteraction, VcrCassette, VcrMode};
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
-    let interactions = vec![
-        HttpInteraction {
-            url: "https://api.openai.com/v1/chat/completions".to_string(),
-            method: "POST".to_string(),
-            request_body: "{\"prompt\":\"test\"}".to_string(),
-            response_status: 200,
-            response_body: "{\"text\":\"hello\"}".to_string(),
-        }
-    ];
+    let interactions = vec![HttpInteraction {
+        url: "https://api.openai.com/v1/chat/completions".to_string(),
+        method: "POST".to_string(),
+        request_body: "{\"prompt\":\"test\"}".to_string(),
+        response_status: 200,
+        response_body: "{\"text\":\"hello\"}".to_string(),
+    }];
 
     let mut temp_file = NamedTempFile::new()?;
     let content = serde_json::to_string_pretty(&interactions)?;
@@ -604,7 +605,47 @@ fn test_vcr_integration() -> Result<()> {
 
     assert!(matched.is_some());
     let interaction = matched.unwrap();
-    assert!(interaction.response_body.contains("How can I assist you today?"));
+    assert!(
+        interaction
+            .response_body
+            .contains("How can I assist you today?")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_vcr_cassette_recording_redacts_secrets() -> Result<()> {
+    use crate::vcr::{HttpInteraction, VcrCassette, VcrMode};
+    use std::io::Read;
+    use tempfile::NamedTempFile;
+
+    let temp_file = NamedTempFile::new()?;
+    let path = temp_file.path().to_path_buf();
+    let cassette = VcrCassette::new(path.clone(), VcrMode::Record)?;
+
+    let raw_interaction = HttpInteraction {
+        url: "https://api.openai.com/v1/chat/completions?key=AIzaSy_123456789012345678901234567890123".to_string(),
+        method: "sk-ant-sid01-someletters1234567890-XYZ123456".to_string(),
+        request_body: "{\"api_key\":\"sk-openai123456789012345678901234567890\",\"text\":\"hello\"}".to_string(),
+        response_status: 200,
+        response_body: "Bearer some_raw_bearer_token".to_string(),
+    };
+
+    cassette.record_interaction(raw_interaction)?;
+
+    // Read file and verify it's redacted before writing
+    let mut file = std::fs::File::open(&path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+
+    assert!(!contents.contains("sk-openai"));
+    assert!(!contents.contains("sk-ant-"));
+    assert!(!contents.contains("AIzaSy"));
+    assert!(contents.contains("[REDACTED_OPENAI_KEY]"));
+    assert!(contents.contains("[REDACTED_ANTHROPIC_KEY]"));
+    assert!(contents.contains("[REDACTED_GEMINI_KEY]"));
+    assert!(contents.contains("[REDACTED_BEARER_TOKEN]"));
 
     Ok(())
 }

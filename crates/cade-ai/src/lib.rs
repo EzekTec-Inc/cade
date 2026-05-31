@@ -7,6 +7,7 @@ pub use error::{Error, Result};
 pub mod anthropic;
 pub mod catalogue;
 pub mod gemini;
+pub mod observability;
 pub mod ollama;
 pub mod openai;
 pub mod provider_registry;
@@ -14,7 +15,6 @@ pub mod registry;
 pub mod router;
 pub mod tokenizer;
 pub mod types;
-pub mod observability;
 pub mod utils;
 pub mod vcr;
 

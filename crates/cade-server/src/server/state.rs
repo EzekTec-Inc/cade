@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn accumulate_usage_sums_all_four_token_fields() {
-        let mut m = AgentMetrics::default();
+        let m = AgentMetrics::default();
         m.accumulate_usage(&TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn accumulate_usage_saturates_on_overflow() {
-        let mut m = AgentMetrics {
+        let m = AgentMetrics {
             input_tokens_total: (u64::MAX - 5).into(),
             ..Default::default()
         };
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn accumulate_usage_zero_is_noop() {
-        let mut m = AgentMetrics::default();
+        let m = AgentMetrics::default();
         m.accumulate_usage(&TokenUsage::default());
         assert_eq!(
             m.input_tokens_total
