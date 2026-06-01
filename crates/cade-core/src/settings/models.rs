@@ -166,6 +166,8 @@ pub enum ExecutionBackendKind {
     Ssh,
     /// Block all writes; allow reads only.
     ReadOnly,
+    /// Run commands in a virtual restricted local sandbox.
+    Virtual,
 }
 
 impl ExecutionBackendKind {
@@ -175,6 +177,7 @@ impl ExecutionBackendKind {
             Self::Docker => "docker",
             Self::Ssh => "ssh",
             Self::ReadOnly => "readonly",
+            Self::Virtual => "virtual",
         }
     }
 }
@@ -187,8 +190,9 @@ impl std::str::FromStr for ExecutionBackendKind {
             "docker" => Ok(Self::Docker),
             "ssh" => Ok(Self::Ssh),
             "readonly" | "read-only" | "read_only" => Ok(Self::ReadOnly),
+            "virtual" => Ok(Self::Virtual),
             other => Err(format!(
-                "Unknown backend '{other}'. Valid: local, docker, ssh, readonly"
+                "Unknown backend '{other}'. Valid: local, docker, ssh, readonly, virtual"
             )),
         }
     }

@@ -17,6 +17,7 @@ pub mod readonly;
 #[cfg(feature = "backend-ssh")]
 pub mod ssh;
 pub mod storage;
+pub mod virtual_sandbox;
 
 #[cfg(feature = "backend-docker")]
 pub use docker::DockerBackend;
@@ -24,6 +25,7 @@ pub use local::LocalBackend;
 pub use readonly::ReadOnlyBackend;
 #[cfg(feature = "backend-ssh")]
 pub use ssh::SshBackend;
+pub use virtual_sandbox::VirtualSandboxBackend;
 
 use std::path::{Path, PathBuf};
 
@@ -177,6 +179,9 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
         }
         ExecutionBackendKind::ReadOnly => Box::new(ReadOnlyBackend::new(LocalBackend)),
         ExecutionBackendKind::Local => Box::new(LocalBackend),
+        ExecutionBackendKind::Virtual => Box::new(VirtualSandboxBackend::new(
+            std::env::current_dir().unwrap_or_default(),
+        )),
     }
 }
 
