@@ -79,3 +79,26 @@ The autocomplete mechanism in `crates/cade-tui` operates as a stateful, reactive
 - Outlays like the `AutocompleteOverlay` implement `as_any_mut` for type-safe downcasting on the `OverlayComponent` stack.
 - Input handlers dynamically intercept and delegate raw character keystrokes and backspaces to the underlying editor first, and then call `.update_suggestions()` in real-time.
 - This live-filters the active suggestion box on-the-fly, completely resolving any static completion freezing.
+
+## 9. Schema-Validated Structured Completions
+
+To guarantee that LLM output strictly conforms to a defined machine-readable data model, CADE provides structured completion handling:
+- **Default Trait Method:** `complete_structured` inside the `LlmProvider` trait standardises JSON schema enforcement. By default, it requests completions and cleans markdown backticks (e.g. ````json ... ````) using `clean_json_markers` before parsing.
+- **Provider-Specific Overrides:** Providers can override `complete_structured` to leverage native engine support (such as OpenAI's native `response_format` with `strict: true` JSON schema validation).
+
+Use `LlmProvider::complete_structured` when developing internal deterministic LLM decisions (such as memory consolidation or auto-compaction).
+
+## 10. Lightweight Virtual Sandboxing
+
+For local shell execution, CADE provides a fast, lightweight, and isolated backend (`VirtualSandboxBackend` / `ExecutionBackendKind::Virtual`) as an alternative to raw local execution or heavy Docker containers:
+- **Path Isolation:** Slices, canonicalizes, and verifies every path operation (`read_file`, `write_file`, `list_dir`) to block breakout attempts outside the active workspace directory.
+- **Environment Sanitization:** Clears the environment block and inherits only allowlisted safe keys (`PATH`, `HOME`, `LANG`, `TZ`, `TERM`), completely shielding parent API keys or system secrets from escaping to the shell process.
+- **Asynchronous Lifecycles:** Spawns asynchronous processes via `tokio::process::Command` and implements async timeouts to safely terminate child run loops without lock deadlocks or unsafe blocks.
+
+## 11. Webhook Workflow Router
+
+CADE supports automated, headless execution workflows triggered by external third-party webhook integrations:
+- **Routing Endpoints:** Exposes `/v1/workflows/{workflow_name}` under `crates/cade-server`.
+- **Dispatcher Loop:** Mounts wildcard Axum endpoints that receive HTTP JSON payloads, maps them to dynamic triggers, and asynchronously spawns decoupled agent workflows in background runtimes.
+
+Use this routing surface to integrate CADE as an automated issue-triager, Slack action responder, or CI/CD test automation agent.

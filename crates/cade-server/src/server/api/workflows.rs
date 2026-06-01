@@ -6,12 +6,12 @@
 
 use crate::server::state::AppState;
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Webhook entrypoint to dispatch automated, headless CADE workflow sessions.
 pub async fn dispatch_workflow(

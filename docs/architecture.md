@@ -106,6 +106,8 @@ CADE utilizes robust, production-grade systems to ensure zero-panic stability, s
 6. **Decoupled Embedding & Vector Indexes**: Exposes abstract `Embedder` and `VectorIndex` traits to decouple embedding generation and vector search from tight local SQLite coupling, providing an easy path for future enterprise-grade, distributed vector backends (e.g. Qdrant, PGVector).
 7. **Hybrid Compile-Time Tools**: Leverages strongly-typed `BuiltInTool` and `CoreToolAdapter` traits to compile-time wrap CADE's own high-performance local tools, running them with zero-copy serialization alongside CADE's dynamic Model Context Protocol (MCP) server dispatch loop.
 8. **Stateful TUI Autocomplete Controller**: Extends the `OverlayComponent` trait with the type-safe `as_any_mut` upcasting pattern, enabling the TUI's active `AutocompleteOverlay` to intercept editor keystrokes and dynamically re-filter suggestion lists on-the-fly as the user types.
+9. **Schema-Validated Structured Completions**: Introduces the `complete_structured` trait method to standardise structured LLM outcomes matching a strict JSON schema, using `clean_json_markers` to cleanly strip markdown block backticks and ensure 100% deterministic parsing.
+10. **Lightweight Virtual Sandboxing**: Adds a secure `VirtualSandboxBackend` that isolates process environments and performs watertight path canonicalization to enforce directory boundary checks, blocking sandbox escape vectors.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in
@@ -130,6 +132,7 @@ The DB key lives at `~/.cade/db.key` (also re-derivable from
 | POST | `/v1/agents/:id/links` | Sync and re-attach tools to session |
 | GET / POST / DELETE | `/v1/mcp/servers` | Manage MCP servers |
 | GET / POST | `/v1/backends` | Manage execution backends |
+| POST | `/v1/workflows/:workflow_name` | Webhook workflow dispatch loop with payload injection |
 | GET | `/v1/runs/:id` `/v1/runs/:id/stream` | Background run status |
 | GET / POST / DELETE | `/v1/providers` | LLM provider keys |
 | GET | `/v1/health` `/v1/config` | Server health |
