@@ -815,3 +815,133 @@ fn pricing_gpt_5_series() {
     assert_eq!(p_mini.input, 1.1);
     assert_eq!(p_mini.output, 4.4);
 }
+
+#[test]
+fn test_clean_json_markers_strips_markdown() {
+    use crate::utils::clean_json_markers;
+
+    let raw = "```json\n{\"test\": true}\n```";
+    assert_eq!(clean_json_markers(raw), "{\"test\": true}");
+
+    let raw_no_lang = "```\n{\"test\": true}\n```";
+    assert_eq!(clean_json_markers(raw_no_lang), "{\"test\": true}");
+
+    let plain = "{\"test\": true}";
+    assert_eq!(clean_json_markers(plain), "{\"test\": true}");
+}
+
+#[tokio::test]
+async fn test_provider_default_complete_structured() -> Result<()> {
+    struct MockProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockProvider {
+        async fn complete(&self, _req: &CompletionRequest) -> crate::Result<CompletionResponse> {
+            Ok(CompletionResponse {
+                content: Some("```json\n{\"foo\": \"bar\"}\n```".to_string()),
+                tool_calls: vec![],
+                finish_reason: "stop".to_string(),
+            })
+        }
+        async fn stream(
+            &self,
+            _req: &CompletionRequest,
+        ) -> crate::Result<
+            std::pin::Pin<Box<dyn tokio_stream::Stream<Item = crate::Result<StreamChunk>> + Send>>,
+        > {
+            Err(crate::Error::custom("not implemented"))
+        }
+    }
+
+    let provider = MockProvider;
+    let req = CompletionRequest {
+        model: "test-model".to_string(),
+        messages: vec![],
+        tools: vec![],
+        max_tokens: 100,
+        reasoning_effort: None,
+    };
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "foo": { "type": "string" }
+        }
+    });
+
+    let res = provider.complete_structured(&req, schema).await?;
+    assert_eq!(res["foo"], "bar");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_openai_complete_structured_vcr() -> Result<()> {
+    use crate::vcr::{HttpInteraction, VcrCassette, VcrMode};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "age": { "type": "integer" }
+        },
+        "required": ["name", "age"]
+    });
+
+    let interactions = vec![
+        HttpInteraction {
+            url: "https://api.openai.com/v1/chat/completions".to_string(),
+            method: "POST".to_string(),
+            request_body: serde_json::to_string(&serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [],
+                "tools": [],
+                "max_tokens": 100,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "structured_output",
+                        "strict": true,
+                        "schema": schema
+                    }
+                }
+            }))?,
+            response_status: 200,
+            response_body: "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"name\\\": \\\"Jane\\\", \\\"age\\\": 30}\",\"role\":\"assistant\"}}]}".to_string(),
+        }
+    ];
+
+    let mut temp_file = NamedTempFile::new()?;
+    let content = serde_json::to_string_pretty(&interactions)?;
+    temp_file.write_all(content.as_bytes())?;
+
+    let cassette = VcrCassette::new(temp_file.path().to_path_buf(), VcrMode::Replay)?;
+
+    let matched = cassette.match_response(
+        "https://api.openai.com/v1/chat/completions",
+        "POST",
+        &serde_json::to_string(&serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [],
+            "tools": [],
+            "max_tokens": 100,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "strict": true,
+                    "schema": schema
+                }
+            }
+        }))?,
+    );
+
+    assert!(matched.is_some());
+    let interaction = matched.unwrap();
+    assert!(interaction.response_body.contains("Jane"));
+    assert!(interaction.response_body.contains("30"));
+
+    Ok(())
+}

@@ -106,4 +106,22 @@ pub trait LlmProvider: Send + Sync {
         &self,
         req: &CompletionRequest,
     ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
+
+    /// Fetches a structured completion strictly parsed into the provided JSON Schema.
+    /// Defaults to calling standard complete and parsing JSON, but can be overridden
+    /// by specific providers for native structured formats.
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        _schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let res = self.complete(req).await?;
+        let text = res.content.unwrap_or_default();
+        let json_str = crate::utils::clean_json_markers(&text);
+        serde_json::from_str(&json_str).map_err(|e| {
+            crate::Error::custom(format!(
+                "Structured output parsing failed: {e}. Raw response: {text}"
+            ))
+        })
+    }
 }

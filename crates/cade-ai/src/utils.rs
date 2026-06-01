@@ -267,3 +267,18 @@ pub fn build_standard_http_client() -> reqwest::Client {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
+
+/// Cleans raw text responses from the LLM, stripping markdown code block backticks
+/// (such as ```json ... ```) to extract a clean JSON string for deserialization.
+pub fn clean_json_markers(text: &str) -> String {
+    let mut cleaned = text.trim();
+    if cleaned.starts_with("```") {
+        cleaned = cleaned.find('\n')
+            .map(|idx| &cleaned[idx..])
+            .unwrap_or(cleaned);
+    }
+    if cleaned.ends_with("```") {
+        cleaned = &cleaned[..cleaned.len() - 3];
+    }
+    cleaned.trim().to_string()
+}
