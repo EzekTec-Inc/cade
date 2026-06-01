@@ -273,7 +273,8 @@ pub fn build_standard_http_client() -> reqwest::Client {
 pub fn clean_json_markers(text: &str) -> String {
     let mut cleaned = text.trim();
     if cleaned.starts_with("```") {
-        cleaned = cleaned.find('\n')
+        cleaned = cleaned
+            .find('\n')
             .map(|idx| &cleaned[idx..])
             .unwrap_or(cleaned);
     }
