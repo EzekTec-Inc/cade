@@ -25,6 +25,7 @@ pub mod runs;
 pub mod skills;
 pub mod tool_executions;
 pub mod tools;
+pub mod workflows;
 
 use crate::server::{rate_limit::rate_limit_middleware, state::AppState};
 use axum::{
@@ -66,6 +67,10 @@ pub fn router(state: AppState) -> Router {
         // Health + server config
         .route("/v1/health", get(health::get_health))
         .route("/v1/config", get(health::get_config))
+        .route(
+            "/v1/workflows/{workflow_name}",
+            post(workflows::dispatch_workflow),
+        )
         // Dashboard (public, unauthenticated — see auth.rs for exemption)
         // Gzip-compressed so the ~7 MB .wasm transfers as ~2.7 MB.
         // Both `/dashboard` and `/dashboard/` serve index.html — the nest

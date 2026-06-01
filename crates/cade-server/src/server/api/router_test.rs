@@ -203,3 +203,20 @@ async fn dashboard_asset_wildcard_is_reachable_through_full_router_without_auth(
         resp.status()
     );
 }
+
+#[tokio::test]
+async fn test_workflow_dispatch_router_integration() {
+    let state = make_state(Some("tok".into()));
+    let app = router(state);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/workflows/test-triage-workflow")
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"issueNumber": 42}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}
