@@ -274,3 +274,47 @@ async fn test_workflow_dispatch_success_with_config() {
     // Clean up
     let _ = std::fs::remove_file(config_path);
 }
+
+#[tokio::test]
+async fn test_workflow_dispatch_runs_background_execution() {
+    let state = make_state(Some("tok".into()));
+    let app = router(state.clone());
+
+    // Create a temporary workflow config file on disk
+    let workflows_dir = std::path::Path::new(".cade/workflows");
+    std::fs::create_dir_all(workflows_dir).unwrap();
+    let config_path = workflows_dir.join("test_background_workflow.json");
+    std::fs::write(
+        &config_path,
+        r#"{
+            "name": "test_background_workflow",
+            "agent": "test-background-agent",
+            "model": "openai/gpt-4o",
+            "prompt": "Test background system prompt"
+        }"#,
+    )
+    .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/workflows/test_background_workflow")
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"issueNumber": 42}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    // Verify the response body contains the newly generated run ID (execution_id)
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024).await.unwrap();
+    let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let execution_id = body_json["execution_id"].as_str().unwrap();
+
+    // Verify that the run record exists in the database
+    let run = cade_store::sqlite::get_run(&state.db, execution_id).unwrap().unwrap();
+    assert_eq!(run.agent_id, "agent-workflow-test_background_workflow");
+
+    // Clean up
+    let _ = std::fs::remove_file(config_path);
+}

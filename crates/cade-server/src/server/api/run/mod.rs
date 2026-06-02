@@ -269,7 +269,7 @@ pub(super) type SseTx = tokio::sync::mpsc::Sender<Result<Event, std::convert::In
 ///
 /// Handles `/theme <name>` commands and the full multi-turn agentic loop.
 /// All SSE events are sent via `tx`; the caller owns the receiver side.
-async fn run_agent_loop(
+pub(crate) async fn run_agent_loop(
     state2: AppState,
     agent_id2: String,
     conv_id2: Option<String>,

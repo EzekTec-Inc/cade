@@ -4,14 +4,18 @@
 //! (CI/CD triggers, GitHub/GitLab Actions, Slack slashes) and asynchronously
 //! spawn, inject payload parameters, and run CADE's automated backend workflows.
 
+use crate::server::api::messages::persist::persist;
+use crate::server::api::run::run_agent_loop;
 use crate::server::state::AppState;
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
+
+use cade_store::sqlite::{self, AgentRow};
 
 /// Workflow configuration structure loaded from `.cade/workflows/{name}.json`.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -25,7 +29,7 @@ pub struct WorkflowConfig {
 /// Webhook entrypoint to dispatch automated, headless CADE workflow sessions.
 pub async fn dispatch_workflow(
     Path(workflow_name): Path<String>,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<Value>,
 ) -> impl IntoResponse {
     // 1. Validate workflow name: no path traversal, alphanumeric + hyphens/underscores only
@@ -92,13 +96,118 @@ pub async fn dispatch_workflow(
         }
     };
 
-    // Dynamic Hono-like trigger schema mapping the workflow execution
+    // 4. Resolve or create Agent
+    let agent_id = format!("agent-workflow-{}", workflow_name);
+    let agent_exists = sqlite::get_agent(&state.db, &agent_id).is_ok();
+
+    if !agent_exists {
+        let row = AgentRow {
+            id: agent_id.clone(),
+            name: config.agent.clone(),
+            model: config.model.clone(),
+            description: Some(format!("Automated workflow agent for '{}'", workflow_name)),
+            system_prompt: Some(config.prompt.clone()),
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+        };
+        if let Err(e) = sqlite::create_agent(&state.db, &row) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to create agent for workflow: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // 5. Create a new conversation for this agent run
+    let conv_title = format!("Workflow Run: {}", workflow_name);
+    let conv = match sqlite::create_conversation(&state.db, &agent_id, &conv_title) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to create conversation for workflow: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
+    let conv_id = conv.id;
+
+    // 6. Format and persist the initial trigger message containing the webhook payload
+    let initial_message = format!(
+        "Execute Workflow: '{}'. Input Payload: {}",
+        workflow_name,
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
+    persist(
+        &state,
+        &agent_id,
+        Some(&conv_id),
+        "user",
+        json!({ "content": initial_message }),
+    );
+
+    // 7. Create a run record in the database
+    let run = match sqlite::create_run(&state.db, &agent_id, Some(&conv_id)) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to create run record in DB: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
+    let run_id = run.id;
+
+    // 8. Spawn run_agent_loop asynchronously in a background tokio task
+    let state_clone = state.clone();
+    let agent_id_clone = agent_id.clone();
+    let conv_id_clone = Some(conv_id.clone());
+    let run_id_clone = run_id.clone();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+
+    tokio::spawn(async move {
+        // Run standard agent loop
+        let _ = run_agent_loop(
+            state_clone,
+            agent_id_clone,
+            conv_id_clone,
+            run_id_clone,
+            None, // No specific theme_cmd for automated background runs
+            tx,
+        )
+        .await;
+    });
+
+    // Drain and log incoming stream events in the background so the loop executes fully
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                Ok(e) => {
+                    tracing::debug!(target: "cade::workflow", "Workflow Run Event: {:?}", e);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 9. Return the real run ID as execution_id
     let response_body = json!({
         "status": "accepted",
         "workflow": workflow_name,
         "config": config,
         "payload": payload,
-        "execution_id": uuid::Uuid::new_v4().to_string(),
+        "execution_id": run_id,
     });
 
     (StatusCode::ACCEPTED, Json(response_body)).into_response()
