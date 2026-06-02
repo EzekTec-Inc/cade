@@ -407,6 +407,9 @@ pub(crate) fn render_frame(
             top.render_inline(frame, chunks[5], colors);
         }
     } else {
+        // Clear the entire input chunk to prevent any leftover characters or artifacts
+        frame.render_widget(ratatui::widgets::Clear, chunks[5]);
+
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
         let prefix_w = badge_text.chars().count() as u16 + 3;
 
@@ -457,13 +460,19 @@ pub(crate) fn render_frame(
             prefix_w,
         );
 
-        // When text overflows MAX_INPUT_ROWS, tui_textarea scrolls internally to keep the cursor visible.
-        // Therefore, the visual cursor is effectively clamped to the bottom of the visible chunk.
-        let clamped_visual_y = visual_y.min(input_chunks[1].height.saturating_sub(1));
+        // Compute relative visual Y taking tui_textarea's vertical scrolling into account
+        let relative_visual_y = if visual_y >= input_chunks[1].height {
+            let scroll_top = visual_y
+                .saturating_sub(input_chunks[1].height)
+                .saturating_add(1);
+            visual_y.saturating_sub(scroll_top)
+        } else {
+            visual_y
+        };
 
         input_cursor_pos = Some((
             input_chunks[1].x + visual_x,
-            input_chunks[1].y + clamped_visual_y,
+            input_chunks[1].y + relative_visual_y,
         ));
 
         *last_input_width = input_chunks[1].width;

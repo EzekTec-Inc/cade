@@ -121,4 +121,25 @@ mod tests {
         assert_eq!(y, 0);
         assert!(x > 0);
     }
+
+    #[test]
+    fn test_calc_visual_cursor_with_overflowing_and_scrolling_clamping() {
+        let buf = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
+        let cursor_row = 6;
+        let cursor_col = 3;
+
+        let (x, y) = calc_visual_cursor(buf, cursor_row, cursor_col, 40, 10);
+        assert_eq!(y, 6);
+        assert_eq!(x, 3);
+
+        let height = 3;
+        let relative_y = if y >= height {
+            let scroll_top = y.saturating_sub(height).saturating_add(1);
+            y.saturating_sub(scroll_top)
+        } else {
+            y
+        };
+
+        assert_eq!(relative_y, 2);
+    }
 }
