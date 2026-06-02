@@ -307,12 +307,16 @@ async fn test_workflow_dispatch_runs_background_execution() {
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
     // Verify the response body contains the newly generated run ID (execution_id)
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let execution_id = body_json["execution_id"].as_str().unwrap();
 
     // Verify that the run record exists in the database
-    let run = cade_store::sqlite::get_run(&state.db, execution_id).unwrap().unwrap();
+    let run = cade_store::sqlite::get_run(&state.db, execution_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(run.agent_id, "agent-workflow-test_background_workflow");
 
     // Clean up

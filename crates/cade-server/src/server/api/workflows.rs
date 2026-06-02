@@ -8,12 +8,12 @@ use crate::server::api::messages::persist::persist;
 use crate::server::api::run::run_agent_loop;
 use crate::server::state::AppState;
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use cade_store::sqlite::{self, AgentRow};
 
