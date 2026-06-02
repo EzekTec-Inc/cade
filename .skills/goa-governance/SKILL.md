@@ -44,7 +44,7 @@ CADE must align its execution model strictly with GoA's three authorized SDLC ro
 CADE must visually, mechanically, and structurally enforce GoA's repository trust levels to protect authoritative guidelines from pollution:
 
 ### 🟢 `approved/` — Authoritative Guidance (Directives Tier)
-* **Scope**: Official, GoA-blessed architecture playbooks, ADRs, prompts, skills, and hooks.
+* **Scope**: Official, GoA-approved architecture playbooks, ADRs, prompts, skills, and hooks.
 * **CADE Execution**:
   * Memory blocks loaded from this folder are mapped directly to CADE's **pinned/directives memory tier**, protecting them from token-budget truncation, turning decay, or archival.
   * **Strict Path Protection**: CADE’s permission manager physically blocks any `write_file` or `edit_file` tools on `approved/` files unless authenticated under a secure, signed `Core-Architect` profile.

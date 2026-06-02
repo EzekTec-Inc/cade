@@ -405,3 +405,17 @@ fn settings_manager_merged_hooks() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_execution_backend_kind_parsing() {
+    use crate::settings::ExecutionBackendKind;
+    use std::str::FromStr;
+
+    let b_virtual = ExecutionBackendKind::from_str("virtual").unwrap();
+    assert_eq!(b_virtual, ExecutionBackendKind::Virtual);
+    assert_eq!(b_virtual.as_str(), "virtual");
+
+    let b_local = ExecutionBackendKind::from_str("local").unwrap();
+    assert_eq!(b_local, ExecutionBackendKind::Local);
+    assert_eq!(b_local.as_str(), "local");
+}

@@ -194,7 +194,7 @@ const SECTIONS: &[Section] = &[
         items: &[
             CmdEntry {
                 cmd: "/backend",
-                desc: "/backend [local|docker|ssh|readonly]  — show or switch backend",
+                desc: "/backend [local|docker|ssh|readonly|virtual]  — show or switch backend",
             },
             CmdEntry {
                 cmd: "/link",

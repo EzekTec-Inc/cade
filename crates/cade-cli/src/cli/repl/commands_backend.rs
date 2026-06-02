@@ -9,9 +9,9 @@ impl Repl {
         match backend_arg {
             None => {
                 self.tui_hdr(format!("  Execution backend: {current}"));
-                self.tui_dim("  Available: local, docker, ssh, readonly".to_string());
-                self.tui_dim("  Change: /backend local|docker|ssh|readonly".to_string());
-                self.tui_dim("  Or set in ~/.cade/settings.json: { \"execution\": { \"backend\": \"docker\" } }".to_string());
+                self.tui_dim("  Available: local, docker, ssh, readonly, virtual".to_string());
+                self.tui_dim("  Change: /backend local|docker|ssh|readonly|virtual".to_string());
+                self.tui_dim("  Or set in ~/.cade/settings.json: { \"execution\": { \"backend\": \"virtual\" } }".to_string());
             }
             Some(new_backend) => {
                 use cade_core::settings::ExecutionBackendKind;
