@@ -1076,3 +1076,37 @@ async fn test_gemini_complete_structured_vcr() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_corrected_token_pricing_resolution() {
+    let registry = crate::ModelRegistry::new();
+
+    // 1. Verify Claude 3.5 Haiku updated pricing
+    let p_haiku = registry.pricing_for_model("anthropic/claude-3-5-haiku");
+    assert_eq!(p_haiku.input, 1.0);
+    assert_eq!(p_haiku.output, 5.0);
+    assert_eq!(p_haiku.cache_read, 0.1);
+    assert_eq!(p_haiku.cache_write, 1.25);
+
+    // 2. Verify DeepSeek R1 (reasoner) matches the reasoner rules via fallback
+    let p_r1 = registry.pricing_for_model("deepseek/some-deepseek-r1");
+    assert_eq!(p_r1.input, 0.55);
+    assert_eq!(p_r1.output, 2.19);
+    assert_eq!(p_r1.cache_read, 0.14);
+
+    // 3. Verify DeepSeek V3 (chat) matches the chat rules via fallback
+    let p_v3 = registry.pricing_for_model("deepseek/some-deepseek-v3");
+    assert_eq!(p_v3.input, 0.14);
+    assert_eq!(p_v3.output, 0.28);
+    assert_eq!(p_v3.cache_read, 0.014);
+
+    // 4. Verify generic deepseek/ wildcard falls back to V3 prices
+    let p_generic = registry.pricing_for_model("deepseek/some-unknown-model");
+    assert_eq!(p_generic.input, 0.14);
+    assert_eq!(p_generic.output, 0.28);
+
+    // 5. Verify dynamic prompt-caching multiplier for DeepSeek models in llm_providers
+    let p_r1_dynamic = registry.pricing_for_model("deepseek/deepseek-reasoner");
+    assert_eq!(p_r1_dynamic.input, 4.0);
+    assert_eq!(p_r1_dynamic.cache_read, 1.0);
+}

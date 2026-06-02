@@ -118,6 +118,12 @@ impl ModelRegistry {
                     (m.input_price * 0.5, 0.0)
                 } else if provider == "gemini" || provider == "google" {
                     (m.input_price * 0.25, 0.0)
+                } else if provider == "deepseek" {
+                    if model_name.contains("reasoner") || model_name.contains("r1") {
+                        (m.input_price * 0.25, 0.0) // DeepSeek R1 cache-hits are $0.14 / 1M (~25% of $0.55 base)
+                    } else {
+                        (m.input_price * 0.1, 0.0) // DeepSeek V3 cache-hits are $0.014 / 1M (exactly 10% of $0.14 base)
+                    }
                 } else {
                     (0.0, 0.0)
                 };
