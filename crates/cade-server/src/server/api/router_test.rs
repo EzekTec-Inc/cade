@@ -205,13 +205,64 @@ async fn dashboard_asset_wildcard_is_reachable_through_full_router_without_auth(
 }
 
 #[tokio::test]
-async fn test_workflow_dispatch_router_integration() {
+async fn test_workflow_dispatch_path_traversal_rejected() {
     let state = make_state(Some("tok".into()));
     let app = router(state);
 
+    // Traversal or nested paths should be rejected with 400 Bad Request
     let req = Request::builder()
         .method(Method::POST)
-        .uri("/v1/workflows/test-triage-workflow")
+        .uri("/v1/workflows/..%2Fsecrets")
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"issueNumber": 42}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_workflow_dispatch_missing_not_found() {
+    let state = make_state(Some("tok".into()));
+    let app = router(state);
+
+    // Non-existent workflow config should return 404 Not Found
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/workflows/non_existent_workflow")
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"issueNumber": 42}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_workflow_dispatch_success_with_config() {
+    let state = make_state(Some("tok".into()));
+    let app = router(state);
+
+    // Create a temporary workflow config file on disk
+    let workflows_dir = std::path::Path::new(".cade/workflows");
+    std::fs::create_dir_all(workflows_dir).unwrap();
+    let config_path = workflows_dir.join("test_success_workflow.json");
+    std::fs::write(
+        &config_path,
+        r#"{
+            "name": "test_success_workflow",
+            "agent": "test-agent",
+            "model": "openai/gpt-4o",
+            "prompt": "Hello world"
+        }"#,
+    )
+    .unwrap();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/workflows/test_success_workflow")
         .header("Authorization", "Bearer tok")
         .header("Content-Type", "application/json")
         .body(Body::from(r#"{"issueNumber": 42}"#))
@@ -219,4 +270,7 @@ async fn test_workflow_dispatch_router_integration() {
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    // Clean up
+    let _ = std::fs::remove_file(config_path);
 }
