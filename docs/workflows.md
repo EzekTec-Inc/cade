@@ -36,12 +36,35 @@ When a webhook is received at `/v1/workflows/{workflow_name}`, CADE automaticall
 
 To safely trigger CADE from a GitHub Actions workflow (such as on `EzekTec-Inc/cade`), configure the following **Repository Secrets** under `Settings -> Secrets and variables -> Actions`:
 
-* `CADE_SERVER_URL`: The public-facing HTTP/HTTPS base URL of your hosted `cade-server` (e.g., `https://cade.ezektec.com` or your corporate IP).
+* `CADE_SERVER_URL`: The public-facing HTTP/HTTPS base URL of your hosted `cade-server` (e.g., `https://cade.ezektec.com` or your corporate IP). This server must be publicly reachable from GitHub's runner IP ranges or accessible via a private tunnel.
 * `CADE_API_KEY`: The bearer token configured on your CADE server (`CADE_API_KEY` environmental variable).
 
-### Example GitHub Actions Workflow (`.github/workflows/cade-triage.yml`)
+### 2.1 Prerequisites & Verification Checks
 
-Create this file in your repository to automatically dispatch issue payloads to CADE:
+Before attempting to trigger a workflow, verify that your environment, secrets, and CLI are correctly set up:
+
+1. **Verify GitHub CLI Auth & Scopes:**
+   Ensure your local GitHub CLI is authenticated and has the required `workflow` scope:
+   ```bash
+   gh auth status
+   ```
+   If the `workflow` scope is missing, re-authenticate:
+   ```bash
+   gh auth refresh -s workflow
+   ```
+
+2. **Verify Repository Secrets:**
+   Ensure the required secrets exist on your repository (it should return `CADE_SERVER_URL` and `CADE_API_KEY`):
+   ```bash
+   gh secret list --repo EzekTec-Inc/cade
+   ```
+
+3. **Check Workflow Config Existence:**
+   The CADE server will reject any webhook if the corresponding configuration does not exist in `.cade/workflows/{workflow_name}.json` on the server's local file system.
+
+### 2.2 Example GitHub Actions Workflow (`.github/workflows/cade-triage.yml`)
+
+Create this file in your repository to automatically dispatch issue payloads to CADE on issue creation, or manually via `workflow_dispatch` with a custom JSON payload:
 
 ```yaml
 name: CADE Automated Issue Triage
@@ -49,22 +72,74 @@ name: CADE Automated Issue Triage
 on:
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      custom_payload:
+        description: 'Manual JSON payload for CADE workflow'
+        required: false
+        default: '{"trigger_type": "manual", "issue_number": 42}'
 
 jobs:
   triage:
     name: Dispatch Triage Webhook
     runs-on: ubuntu-latest
     steps:
+      - name: Formulate Workflow Payload
+        id: payload
+        run: |
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            JSON_BODY=$(cat <<EOF
+          {
+            "repository": "${{ github.repository }}",
+            "issue_number": ${{ github.event.issue.number }},
+            "issue_title": $(echo "${{ github.event.issue.title }}" | jq -R .),
+            "sender": "${{ github.event.sender.login }}",
+            "trigger_type": "github_issue_opened"
+          }
+          EOF
+          )
+          else
+            JSON_BODY='${{ github.event.inputs.custom_payload }}'
+          fi
+          
+          # Write safely to outputs
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$JSON_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        shell: bash
+
       - name: Send Event Payload to CADE
         run: |
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.CADE_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d '${{ toJson(github.event) }}' \
+            -d '${{ steps.payload.outputs.body }}' \
             "${{ secrets.CADE_SERVER_URL }}/v1/workflows/issue_triage" \
             --fail \
             --include
 ```
+
+### 2.3 Triggering and Monitoring Workflows
+
+Once the workflow is committed to your repository's default branch, you can trigger and observe it using the following commands:
+
+* **List available workflows:**
+  ```bash
+  gh workflow list --repo EzekTec-Inc/cade
+  ```
+
+* **Manually trigger the dispatch workflow:**
+  ```bash
+  gh workflow run "CADE Automated Issue Triage" \
+    --repo EzekTec-Inc/cade \
+    -f custom_payload='{"trigger_type": "manual", "issue_number": 99}'
+  ```
+
+* **Monitor active workflow run logs:**
+  ```bash
+  gh run list --workflow="CADE Automated Issue Triage" --repo EzekTec-Inc/cade
+  gh run watch <run_id> --repo EzekTec-Inc/cade
+  ```
 
 ---
 
