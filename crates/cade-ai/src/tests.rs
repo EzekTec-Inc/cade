@@ -945,3 +945,134 @@ async fn test_openai_complete_structured_vcr() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_anthropic_complete_structured_vcr() -> Result<()> {
+    use crate::vcr::{HttpInteraction, VcrCassette, VcrMode};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" }
+        },
+        "required": ["title"]
+    });
+
+    let interactions = vec![
+        HttpInteraction {
+            url: "https://api.anthropic.com/v1/messages".to_string(),
+            method: "POST".to_string(),
+            request_body: serde_json::to_string(&serde_json::json!({
+                "model": "claude-3-5-sonnet-20241022",
+                "messages": [],
+                "max_tokens": 100,
+                "tools": [
+                    {
+                        "name": "structured_output",
+                        "description": "Output the final structured JSON response matching the required schema.",
+                        "input_schema": schema
+                    }
+                ],
+                "tool_choice": {
+                    "type": "tool",
+                    "name": "structured_output"
+                }
+            }))?,
+            response_status: 200,
+            response_body: "{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"structured_output\",\"input\":{\"title\":\"Hello Anthropic\"}}],\"stop_reason\":\"tool_use\"}".to_string(),
+        }
+    ];
+
+    let mut temp_file = NamedTempFile::new()?;
+    let content = serde_json::to_string_pretty(&interactions)?;
+    temp_file.write_all(content.as_bytes())?;
+
+    let cassette = VcrCassette::new(temp_file.path().to_path_buf(), VcrMode::Replay)?;
+
+    let matched = cassette.match_response(
+        "https://api.anthropic.com/v1/messages",
+        "POST",
+        &serde_json::to_string(&serde_json::json!({
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [],
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "name": "structured_output",
+                    "description": "Output the final structured JSON response matching the required schema.",
+                    "input_schema": schema
+                }
+            ],
+            "tool_choice": {
+                "type": "tool",
+                "name": "structured_output"
+            }
+        }))?,
+    );
+
+    assert!(matched.is_some());
+    let interaction = matched.unwrap();
+    assert!(interaction.response_body.contains("Hello Anthropic"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_gemini_complete_structured_vcr() -> Result<()> {
+    use crate::vcr::{HttpInteraction, VcrCassette, VcrMode};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "score": { "type": "integer" }
+        },
+        "required": ["score"]
+    });
+
+    let mut clean_schema = schema.clone();
+    crate::utils::clean_gemini_schema(&mut clean_schema);
+
+    let interactions = vec![
+        HttpInteraction {
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=mock_key".to_string(),
+            method: "POST".to_string(),
+            request_body: serde_json::to_string(&serde_json::json!({
+                "contents": [],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "responseSchema": clean_schema
+                }
+            }))?,
+            response_status: 200,
+            response_body: "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"score\\\": 95}\"}]}}]}".to_string(),
+        }
+    ];
+
+    let mut temp_file = NamedTempFile::new()?;
+    let content = serde_json::to_string_pretty(&interactions)?;
+    temp_file.write_all(content.as_bytes())?;
+
+    let cassette = VcrCassette::new(temp_file.path().to_path_buf(), VcrMode::Replay)?;
+
+    let matched = cassette.match_response(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=mock_key",
+        "POST",
+        &serde_json::to_string(&serde_json::json!({
+            "contents": [],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseSchema": clean_schema
+            }
+        }))?,
+    );
+
+    assert!(matched.is_some());
+    let interaction = matched.unwrap();
+    assert!(interaction.response_body.contains("95"));
+
+    Ok(())
+}

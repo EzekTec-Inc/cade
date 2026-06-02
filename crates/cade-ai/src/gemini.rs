@@ -722,6 +722,87 @@ impl LlmProvider for GeminiProvider {
         };
         Ok(Box::pin(s))
     }
+
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        use tracing::Instrument;
+        let span = crate::gen_ai_span!("gemini", req);
+
+        let fut = async move {
+            let (system_text, contents) = Self::to_gemini_contents(req);
+            let tools: Vec<Value> = req
+                .tools
+                .iter()
+                .map(|s| {
+                    let mut params = s
+                        .get("parameters")
+                        .filter(|v| !v.is_null())
+                        .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
+                        .cloned()
+                        .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                    inline_schema_refs(&mut params);
+                    clean_gemini_schema(&mut params);
+                    json!({
+                        "name": s["name"],
+                        "description": s["description"],
+                        "parameters": params
+                    })
+                })
+                .collect();
+
+            // Clean schema specifically for Gemini constraints
+            let mut clean_schema = schema.clone();
+            inline_schema_refs(&mut clean_schema);
+            clean_gemini_schema(&mut clean_schema);
+
+            let base_body = json!({
+                "contents": contents,
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "responseSchema": clean_schema
+                }
+            });
+            let body = self
+                .apply_system_and_tools(bare_model(&req.model), base_body, &system_text, &tools)
+                .await;
+
+            let url = self.url(&req.model, false);
+            let res = retry_with_backoff(
+                "Gemini::complete_structured",
+                3,
+                std::time::Duration::from_secs(1),
+                |_| {
+                    let client = self.client.clone();
+                    let url = url.clone();
+                    let body = body.clone();
+                    async move {
+                        let resp = client.post(&url).json(&body).send().await?;
+                        if !resp.status().is_success() {
+                            let status = resp.status();
+                            let text = resp.text().await.unwrap_or_default();
+                            return Err(provider_error("Gemini", status, &text));
+                        }
+                        let json: serde_json::Value = resp.json().await?;
+                        Ok(Self::parse_response(&json))
+                    }
+                },
+            )
+            .await?;
+
+            let text = res.content.unwrap_or_default();
+            let json_str = crate::utils::clean_json_markers(&text);
+            serde_json::from_str(&json_str).map_err(|e| {
+                crate::Error::custom(format!(
+                    "Gemini structured output parsing failed: {e}. Raw response: {text}"
+                ))
+            })
+        };
+
+        fut.instrument(span).await
+    }
 }
 
 #[cfg(test)]

@@ -555,6 +555,80 @@ impl LlmProvider for AnthropicProvider {
 
         Ok(Box::pin(s))
     }
+
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        use tracing::Instrument;
+        let span = crate::gen_ai_span!("anthropic", req);
+
+        let fut = async move {
+            let mut body = self.build_body(req, false);
+
+            // Set up a single forced structured output tool matching the required schema
+            let forced_tool = json!({
+                "name": "structured_output",
+                "description": "Output the final structured JSON response matching the required schema.",
+                "input_schema": schema
+            });
+            body["tools"] = json!([forced_tool]);
+            body["tool_choice"] = json!({
+                "type": "tool",
+                "name": "structured_output"
+            });
+
+            let res = retry_with_backoff(
+                "Anthropic::complete_structured",
+                3,
+                std::time::Duration::from_secs(1),
+                |_| {
+                    let client = self.client.clone();
+                    let api_key = self.api_key.clone();
+                    let body = body.clone();
+                    async move {
+                        let resp = client
+                            .post(API_URL)
+                            .header("x-api-key", &api_key)
+                            .header("anthropic-version", ANTHROPIC_VERSION)
+                            .header("anthropic-beta", "prompt-caching-2024-07-31")
+                            .header("content-type", "application/json")
+                            .json(&body)
+                            .send()
+                            .await?;
+                        if !resp.status().is_success() {
+                            let status = resp.status();
+                            let text = resp.text().await.unwrap_or_default();
+                            return Err(provider_error("Anthropic", status, &text));
+                        }
+                        let json: serde_json::Value = resp.json().await?;
+                        Ok(json)
+                    }
+                },
+            )
+            .await?;
+
+            // Extract the input payload of the "tool_use" content block with name "structured_output"
+            if let Some(content_array) = res["content"].as_array() {
+                for block in content_array {
+                    if block["type"] == "tool_use" && block["name"] == "structured_output" {
+                        let input = block["input"].clone();
+                        if !input.is_null() {
+                            return Ok(input);
+                        }
+                    }
+                }
+            }
+
+            Err(crate::Error::custom(format!(
+                "Anthropic structured completions tool_use block not found. Response: {}",
+                res
+            )))
+        };
+
+        fut.instrument(span).await
+    }
 }
 
 // region:    --- Tests
