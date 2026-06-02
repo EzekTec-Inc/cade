@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ### Added
 
+- **Provider-Native Structured Completions:** Added native structured completions for OpenAI (`json_schema`), Anthropic (forced tool-use), and Gemini (`responseSchema` + `responseMimeType`) providers in `crates/cade-ai` with robust fallback.
+- **Lightweight Virtual Sandboxing Backend:** Added secure virtual restricted local execution sandbox (`VirtualSandboxBackend` / `ExecutionBackendKind::Virtual`) in `crates/cade-agent` with strict path verification and environment-variable sanitization.
+- **Webhook Workflow Router Execution:** Upgraded the `/v1/workflows/{workflow_name}` endpoint to dynamically load configurations from `.cade/workflows/{name}.json`, resolve/create CADE agents, conversations, and run standard background agentic execution loops.
+- **CLI/UI Controls for Backend Selection:** Added support for `/backend virtual` to dynamically select and hot-swap between execution backends, and updated the TUI menu items.
+
+### Fixed
+
+- **Input Field Rendering Artifacts & Cursor Drift:** Added `ratatui::widgets::Clear` pass on the input chunk inside `crates/cade-tui/src/app/render.rs` before rendering the input field, preventing ghosting artifacts, and refactored `clamped_visual_y` to compute relative `relative_visual_y` taking `tui-textarea`'s vertical scrolling viewport into account.
 - **Centralized HTTP Connection Pooling:** Standardized and pooled outgoing connections across all first-party providers (`OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`), utilizing a unified HTTP client built with standard keepalive (60s), connection timeout (15s), and stream timeout (120s) configurations to optimize connection reuse.
 - **Cassette-Based (VCR) Mock Testing:** Developed an offline-capable, deterministic integration testing harness (`crates/cade-ai/src/vcr.rs`) with standard key, auth, and bearer token redaction, enabling cost-free, offline provider test execution in CI/CD pipelines.
 - **Decoupled Embedding & Vector Indexes:** Exposed abstract `Embedder` and `VectorIndex` traits (`crates/cade-store/src/sqlite/embedding.rs`) to separate vector persistence from SQLite, making CADE's storage layer completely database-agnostic.
