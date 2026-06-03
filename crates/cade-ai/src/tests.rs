@@ -1110,3 +1110,39 @@ fn test_corrected_token_pricing_resolution() {
     assert_eq!(p_r1_dynamic.input, 4.0);
     assert_eq!(p_r1_dynamic.cache_read, 1.0);
 }
+
+#[test]
+fn debug_prices() {
+    if let Some(m) = llm_providers::get_model("anthropic", "claude-3-5-sonnet-20241022") {
+        eprintln!("claude-3-5-sonnet-20241022: input={}, output={}, cache_read_computed={}", m.input_price, m.output_price, m.input_price * 0.1);
+    } else {
+        eprintln!("claude-3-5-sonnet-20241022: NOT FOUND in llm_providers");
+    }
+    if let Some(m) = llm_providers::get_model("openai", "gpt-4.1") {
+        eprintln!("gpt-4.1: input={}, output={}", m.input_price, m.output_price);
+    } else {
+        eprintln!("gpt-4.1: NOT FOUND -> fallback");
+    }
+    if let Some(m) = llm_providers::get_model("openai", "gpt-5") {
+        eprintln!("gpt-5: input={}, output={}", m.input_price, m.output_price);
+    } else {
+        eprintln!("gpt-5: NOT FOUND -> fallback");
+    }
+    if let Some(m) = llm_providers::get_model("openai", "gpt-5-mini") {
+        eprintln!("gpt-5-mini: input={}, output={}", m.input_price, m.output_price);
+    } else {
+        eprintln!("gpt-5-mini: NOT FOUND -> fallback");
+    }
+}
+
+
+#[test]
+fn debug_prices_claude_variants() {
+    for name in &["claude-3-5-sonnet-20241022", "claude-3-5-sonnet-latest", "claude-sonnet-4-20250514", "claude-sonnet-4"] {
+        if let Some(m) = llm_providers::get_model("anthropic", name) {
+            eprintln!("{}: input={}, output={}", name, m.input_price, m.output_price);
+        } else {
+            eprintln!("{}: NOT FOUND", name);
+        }
+    }
+}
