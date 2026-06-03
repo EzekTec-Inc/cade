@@ -500,3 +500,140 @@ fn build_tools_preserves_load_skill_when_truncating() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn build_tools_preserves_memory_writing_tools_when_truncating() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+
+    for name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {
+        tools.push(json!({
+            "name": name,
+            "description": "Core memory tool",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
+    for name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {
+        assert!(
+            arr.iter().any(|tool| tool
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|name| name.as_str())
+                == Some(name)),
+            "build_tools should preserve {name} inside the 128-tool cap"
+        );
+    }
+
+    let resp_tools_val = OpenAiProvider::build_responses_tools(&req);
+    let arr2 = resp_tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(
+        arr2.len(),
+        128,
+        "build_responses_tools should still cap at 128"
+    );
+    for name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {
+        assert!(
+            arr2.iter()
+                .any(|tool| tool.get("name").and_then(|name| name.as_str()) == Some(name)),
+            "build_responses_tools should preserve {name} inside the 128-tool cap"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+
+    // Add a priority memory tool (flat schema)
+    tools.push(json!({
+        "name": "update_memory",
+        "description": "Core memory tool",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }));
+
+    // Add a priority prefix tool (flat schema)
+    tools.push(json!({
+        "name": "serena__find_symbol",
+        "description": "Priority prefix tool",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }));
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
+
+    // Both "update_memory" and "serena__find_symbol" should be preserved!
+    assert!(
+        arr.iter().any(|tool| tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|name| name.as_str())
+            == Some("update_memory")),
+        "should preserve update_memory"
+    );
+    assert!(
+        arr.iter().any(|tool| tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|name| name.as_str())
+            == Some("serena__find_symbol")),
+        "should preserve serena__find_symbol"
+    );
+
+    Ok(())
+}

@@ -153,14 +153,27 @@ const PRIORITY_TOOL_NAMES: &[&str] = &[
     "search_memory",
     "conversation_search",
     "archival_memory_search",
+    "update_memory",
+    "update_memory_typed",
+    "memory_apply_patch",
 ];
 
 fn tool_name(schema: &Value) -> Option<&str> {
+    if let Some(function) = schema.get("function") {
+        if let Some(name) = function.get("name").and_then(Value::as_str) {
+            return Some(name);
+        }
+    }
     schema.get("name").and_then(Value::as_str)
 }
 
 fn is_priority_tool(schema: &Value) -> bool {
-    tool_name(schema).is_some_and(|name| PRIORITY_TOOL_NAMES.contains(&name))
+    tool_name(schema).is_some_and(|name| {
+        PRIORITY_TOOL_NAMES.contains(&name)
+            || name.starts_with("serena__")
+            || name.starts_with("cade-rag__")
+            || name.starts_with("cade-ide-mcp__")
+    })
 }
 
 fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
