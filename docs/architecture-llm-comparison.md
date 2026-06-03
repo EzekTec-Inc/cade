@@ -99,6 +99,41 @@ Because CADE is built to work with **Model Context Protocol (MCP)** servers, its
 
 Therefore, Rig's static, compile-time tool-definition pattern is **incompatible with CADE's runtime-driven MCP tool architecture**.
 
+### 3.3 OpenAI Responses API and OpenRouter Runtime Notes
+
+CADE keeps bespoke provider serialization logic because upstream OpenAI-compatible
+APIs do not all accept the same tool schema. For GPT-5-style OpenAI Responses
+API requests, function tools are serialized in the flat Responses API shape:
+
+```json
+{
+  "type": "function",
+  "name": "tool_name",
+  "description": "Tool description",
+  "parameters": {},
+  "strict": false
+}
+```
+
+Keeping `name`, `description`, and `parameters` at the tool-object top level is
+required for Responses API compatibility; nesting them under a secondary
+`function` object can produce upstream validation failures such as missing
+`tools[0].name`. CADE sets `strict` to `false` deliberately because many tools
+are discovered from MCP servers at runtime and may include optional fields or
+loose nested schemas that should not be rejected by strict OpenAI validation.
+
+OpenAI-compatible providers may also enforce request-specific tool limits. CADE
+caps OpenAI tool payloads at 128 tools and applies priority filtering before
+truncation so essential meta-tools and MCP tools are preserved. This prevents
+critical capabilities such as `load_skill` and server-prefixed MCP tools from
+being dropped when a large workspace exposes more tools than OpenAI accepts.
+
+OpenRouter is implemented as an OpenAI-compatible provider with provider-prefix
+routing. Models addressed as `openrouter/...` are resolved to the OpenRouter
+provider, have the provider prefix stripped before the upstream request, and use
+OpenRouter's model catalogue response shape (`data: [{ id: ... }]`) for dynamic
+model discovery.
+
 ---
 
 ## 4. Deep Dive: Vector Databases and Retrieval-Augmented Generation (RAG)

@@ -48,6 +48,31 @@ that crate and its dependents — not the entire project.
 | `CADE_LLM_PROVIDER` | auto-detect | Force a provider |
 | `CADE_DEFAULT_MODEL` | provider default | Force a model |
 
+### OpenAI-compatible providers
+
+CADE routes OpenAI, GPT/o-series, GPT-5-style models, and OpenRouter through
+the OpenAI-compatible provider implementation in `crates/cade-ai`. The runtime
+selects a provider from explicit model prefixes such as `openrouter/...`, from
+configured provider defaults, or from model-name auto-detection.
+
+OpenRouter is configured as an OpenAI-compatible provider with these upstream
+endpoints:
+
+| Endpoint | URL |
+|----------|-----|
+| Chat completions | `https://openrouter.ai/api/v1/chat/completions` |
+| Model catalogue | `https://openrouter.ai/api/v1/models` |
+
+When OpenRouter model IDs are routed through CADE, the provider prefix is
+stripped before sending the upstream request. For example, `openrouter/foo/bar`
+is resolved as OpenRouter and sent upstream as `foo/bar`.
+
+OpenAI Responses API tool definitions must use the flat function-tool shape:
+`type`, `name`, `description`, `parameters`, and `strict: false` all belong at
+the top level of each tool object. CADE intentionally sets `strict` to `false`
+so optional fields and runtime MCP-provided nested schemas remain compatible
+with OpenAI-compatible tool calling.
+
 ### CLI
 
 | Variable | Default | Description |

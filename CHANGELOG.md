@@ -16,6 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ### Fixed
 
+- **OpenAI/OpenRouter Tool Compatibility Docs:** Documented OpenAI-compatible tool serialization around GPT-5-style Responses API flat function tools, `strict: false`, OpenAI's 128-tool cap, priority preservation for critical meta/MCP tools, and OpenRouter provider-prefix routing.
 - **Input Field Rendering Artifacts & Cursor Drift:** Added `ratatui::widgets::Clear` pass on the input chunk inside `crates/cade-tui/src/app/render.rs` before rendering the input field, preventing ghosting artifacts, and refactored `clamped_visual_y` to compute relative `relative_visual_y` taking `tui-textarea`'s vertical scrolling viewport into account.
 - **Centralized HTTP Connection Pooling:** Standardized and pooled outgoing connections across all first-party providers (`OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`), utilizing a unified HTTP client built with standard keepalive (60s), connection timeout (15s), and stream timeout (120s) configurations to optimize connection reuse.
 - **Cassette-Based (VCR) Mock Testing:** Developed an offline-capable, deterministic integration testing harness (`crates/cade-ai/src/vcr.rs`) with standard key, auth, and bearer token redaction, enabling cost-free, offline provider test execution in CI/CD pipelines.
