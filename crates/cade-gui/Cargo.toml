@@ -1,46 +1,24 @@
 [package]
 name        = "cade-gui"
-version = "2.3.0"
+version     = "2.3.0"
 edition     = "2024"
 description = "CADE — web GUI (WASM) served by cade-server at /dashboard"
 license     = "MIT OR Apache-2.0"
 
 [lib]
-# rlib → native `cargo test` for the pure logic modules (config, etc.).
-# cdylib → wasm32 build produces a loadable WebAssembly module.
 crate-type  = ["rlib", "cdylib"]
 doctest     = false
 
-# -- Pure-Rust dependencies (compile on both native and wasm32)
 [dependencies]
 cade-api-types       = { path = "../cade-api-types" }
 cade-core            = { path = "../cade-core", default-features = false }
 serde.workspace      = true
 serde_json.workspace = true
 urlencoding.workspace = true
-
-# egui is not cfg-gated so that `theme.rs` (pure colour constants + tests)
-# compiles and is testable on native targets.
-egui                 = "0.34"
-egui_plot            = "0.34"
-opaline = { version = "0.4", features = ["egui", "builtin-themes"] }
-
-# -- Browser-only dependencies
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-eframe               = { version = "0.34", default-features = false, features = ["web_screen_reader", "wgpu"] }
-uuid                 = { version = "1.2", features = ["js", "v4"] }
-getrandom            = { version = "0.2", features = ["js"] }
-egui_commonmark      = { version = "0.23", features = ["better_syntax_highlighting"] }
 wasm-bindgen         = "0.2"
-wasm-bindgen-futures = "0.4"
-web-sys              = { version = "0.3", features = ["Window", "Document", "Location", "UrlSearchParams", "HtmlCanvasElement", "Element", "ReadableStream", "ReadableStreamDefaultReader", "Storage"] }
-gloo-net             = "0.6"
-serde-wasm-bindgen   = "0.6"
-log                  = "0.4"
 
-# -- Browser-only dev dependencies (for wasm-bindgen-test harness)
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test    = "0.3"
+# Dioxus for full responsive HTML/CSS UI
+dioxus = { version = "0.5", features = ["web"] }
 
 [lints.rust]
 unsafe_code = "forbid"
