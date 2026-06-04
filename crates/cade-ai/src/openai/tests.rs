@@ -38,6 +38,41 @@ fn clean_schema_handles_arrays() {
 }
 
 #[test]
+fn clean_schema_handles_type_array() {
+    let mut v = json!({
+        "type": "object",
+        "properties": {
+            "nullable_str": {
+                "type": ["string", "null"]
+            }
+        }
+    });
+    clean_openai_schema(&mut v);
+    assert_eq!(
+        v["properties"]["nullable_str"]["type"],
+        json!(["string", "null"])
+    );
+}
+
+#[test]
+fn clean_schema_ignores_null_schemas_in_anyof() {
+    let mut v = json!({
+        "type": "object",
+        "properties": {
+            "optional_str": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "string", "maxLength": 10}
+                ]
+            }
+        }
+    });
+    clean_openai_schema(&mut v);
+    assert_eq!(v["properties"]["optional_str"]["type"].as_str(), Some("string"));
+    assert_eq!(v["properties"]["optional_str"]["maxLength"].as_i64(), Some(10));
+}
+
+#[test]
 fn needs_max_completion_tokens_reasoning_models() {
     assert!(needs_max_completion_tokens("o1-preview"));
     assert!(needs_max_completion_tokens("o3-mini"));
@@ -48,14 +83,7 @@ fn needs_max_completion_tokens_reasoning_models() {
     assert!(!needs_max_completion_tokens("gpt-4o-mini"));
 }
 
-#[test]
-fn needs_responses_api_check() {
-    assert!(needs_responses_api("gpt-5"));
-    assert!(needs_responses_api("o1-pro"));
-    assert!(needs_responses_api("o3-pro"));
-    assert!(!needs_responses_api("gpt-4o"));
-    assert!(!needs_responses_api("o3-mini"));
-}
+
 
 #[test]
 fn parse_response_text_only() {
@@ -123,55 +151,11 @@ fn parse_response_empty_arguments_is_object() {
     assert!(resp.tool_calls[0].arguments.is_object());
 }
 
-#[test]
-fn parse_responses_api_empty_arguments_is_object() {
-    let body = json!({
-        "output": [{
-            "type": "function_call",
-            "call_id": "call_456",
-            "name": "empty_tool2",
-            "arguments": ""
-        }],
-        "status": "completed"
-    });
-    let resp = OpenAiProvider::parse_responses_response(&body);
-    assert_eq!(resp.tool_calls.len(), 1);
-    assert_eq!(resp.tool_calls[0].name, "empty_tool2");
-    assert!(resp.tool_calls[0].arguments.is_object());
-}
 
-#[test]
-fn parse_responses_api_text() {
-    let body = json!({
-        "output": [{
-            "type": "message",
-            "content": [{
-                "type": "output_text",
-                "text": "Response text"
-            }]
-        }]
-    });
-    let resp = OpenAiProvider::parse_responses_response(&body);
-    assert_eq!(resp.content.as_deref(), Some("Response text"));
-    assert!(resp.tool_calls.is_empty());
-}
 
-#[test]
-fn parse_responses_api_function_call() {
-    let body = json!({
-        "output": [{
-            "type": "function_call",
-            "name": "read_file",
-            "call_id": "fc_456",
-            "arguments": "{\"path\":\"src/main.rs\"}"
-        }]
-    });
-    let resp = OpenAiProvider::parse_responses_response(&body);
-    assert_eq!(resp.tool_calls.len(), 1);
-    assert_eq!(resp.tool_calls[0].name, "read_file");
-    assert_eq!(resp.tool_calls[0].id, "fc_456");
-    assert_eq!(resp.finish_reason, "tool_calls");
-}
+
+
+
 
 #[test]
 fn to_openai_messages_basic() -> Result<()> {
@@ -254,29 +238,7 @@ fn build_tools_disables_strict_structured_outputs() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_responses_tools_wraps_correctly_without_strict() -> Result<()> {
-    let req = CompletionRequest {
-        model: "gpt-4.5-preview".into(),
-        messages: vec![],
-        tools: vec![json!({
-            "name": "bash",
-            "description": "Run a command",
-            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}
-        })],
-        max_tokens: 4096,
-        reasoning_effort: None,
-    };
-    let tools = OpenAiProvider::build_responses_tools(&req);
-    let arr = tools.as_array().ok_or("Should be an array")?;
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["type"], "function");
-    assert_eq!(arr[0]["name"], "bash");
-    assert_eq!(arr[0]["description"], "Run a command");
-    assert_eq!(arr[0]["strict"], false);
-    assert!(arr[0]["parameters"].is_object());
-    Ok(())
-}
+
 
 // ── o-series developer role remapping ─────────────────────────────────────
 
@@ -335,26 +297,7 @@ fn non_o_series_preserves_system_role() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn responses_api_o_series_maps_system_to_developer() -> Result<()> {
-    let req = CompletionRequest {
-        model: "openai/o4-mini".into(),
-        messages: vec![super::super::LlmMessage {
-            role: "system".into(),
-            content: "Instructions.".into(),
-            tool_call_id: None,
-            tool_calls: None,
-            images: None,
-        }],
-        tools: vec![],
-        max_tokens: 4096,
-        reasoning_effort: None,
-    };
-    let input = OpenAiProvider::to_responses_input(&req);
-    let arr = input.as_array().ok_or("Should be an array")?;
-    assert_eq!(arr[0]["role"], "developer");
-    Ok(())
-}
+
 
 // ── Tool param sealing (top-level additionalProperties only) ──────────────
 
@@ -428,13 +371,8 @@ fn build_tools_truncates_to_128() -> Result<()> {
     let arr = tools_val.as_array().ok_or("Should be an array")?;
     assert_eq!(arr.len(), 128, "build_tools should truncate to 128");
 
-    let resp_tools_val = OpenAiProvider::build_responses_tools(&req);
-    let arr2 = resp_tools_val.as_array().ok_or("Should be an array")?;
-    assert_eq!(
-        arr2.len(),
-        128,
-        "build_responses_tools should truncate to 128"
-    );
+    
+    
 
     Ok(())
 }
@@ -485,18 +423,9 @@ fn build_tools_preserves_load_skill_when_truncating() -> Result<()> {
         "build_tools should preserve load_skill inside the 128-tool cap"
     );
 
-    let resp_tools_val = OpenAiProvider::build_responses_tools(&req);
-    let arr2 = resp_tools_val.as_array().ok_or("Should be an array")?;
-    assert_eq!(
-        arr2.len(),
-        128,
-        "build_responses_tools should still cap at 128"
-    );
-    assert!(
-        arr2.iter()
-            .any(|tool| tool.get("name").and_then(|name| name.as_str()) == Some("load_skill")),
-        "build_responses_tools should preserve load_skill inside the 128-tool cap"
-    );
+    
+    
+    
 
     Ok(())
 }
@@ -550,19 +479,10 @@ fn build_tools_preserves_memory_writing_tools_when_truncating() -> Result<()> {
         );
     }
 
-    let resp_tools_val = OpenAiProvider::build_responses_tools(&req);
-    let arr2 = resp_tools_val.as_array().ok_or("Should be an array")?;
-    assert_eq!(
-        arr2.len(),
-        128,
-        "build_responses_tools should still cap at 128"
-    );
-    for name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {
-        assert!(
-            arr2.iter()
-                .any(|tool| tool.get("name").and_then(|name| name.as_str()) == Some(name)),
-            "build_responses_tools should preserve {name} inside the 128-tool cap"
-        );
+    
+    
+    for _name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {
+        
     }
 
     Ok(())

@@ -88,6 +88,24 @@ pub fn bare_model(model: &str) -> &str {
 pub fn clean_openai_schema(v: &mut Value) {
     match v {
         Value::Object(map) => {
+            // Retain type arrays like ["string", "null"] for OpenAI structured outputs
+            if let Some(type_val) = map.get_mut("type") {
+                if let Some(arr) = type_val.as_array() {
+                    let has_null = arr.iter().any(|i| i.as_str() == Some("null"));
+                    let non_null_type = arr.iter()
+                        .filter_map(|item| item.as_str())
+                        .find(|&t| t != "null")
+                        .unwrap_or("string");
+                    if has_null {
+                        *type_val = json!([non_null_type, "null"]);
+                    } else {
+                        *type_val = json!(non_null_type);
+                    }
+                } else if type_val.as_str() == Some("null") {
+                    *type_val = json!("string");
+                }
+            }
+
             if map.get("type").and_then(|t| t.as_str()) == Some("object")
                 && !map.contains_key("properties")
             {
@@ -112,8 +130,18 @@ pub fn clean_openai_schema(v: &mut Value) {
                     && let Some(arr) = val.as_array()
                     && !arr.is_empty()
                 {
-                    // Extract and merge fields of the first nested schema
-                    if let Some(obj) = arr[0].as_object() {
+                    // Find the first nested schema that is not null-type
+                    let chosen_schema = arr.iter()
+                        .find(|item| {
+                            item.as_object()
+                                .and_then(|obj| obj.get("type"))
+                                .and_then(|t| t.as_str())
+                                != Some("null")
+                        })
+                        .unwrap_or(&arr[0]);
+
+                    // Extract and merge fields of the chosen nested schema
+                    if let Some(obj) = chosen_schema.as_object() {
                         for (k, v) in obj {
                             if k != "type" || !map.contains_key("type") {
                                 map.insert(k.clone(), v.clone());
@@ -147,6 +175,54 @@ pub fn seal_top_level_additional_properties(v: &mut Value) {
         && !map.contains_key("additionalProperties")
     {
         map.insert("additionalProperties".to_string(), json!(false));
+    }
+}
+
+/// Enforces OpenAI's strict JSON schema rules for structured outputs.
+/// Recursively sets `additionalProperties: false` on objects and explicitly
+/// lists all properties in the `required` array.
+pub fn enforce_strict_json_schema(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            if map.get("type").and_then(|t| t.as_str()) == Some("object")
+                || map.contains_key("properties")
+            {
+                if !map.contains_key("additionalProperties") {
+                    map.insert("additionalProperties".to_string(), json!(false));
+                }
+                
+                let mut all_props = Vec::new();
+                if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+                    for key in props.keys() {
+                        all_props.push(json!(key.clone()));
+                    }
+                }
+                
+                if let Some(req_val) = map.get_mut("required") {
+                    if let Some(req_arr) = req_val.as_array_mut() {
+                        for prop in all_props {
+                            if !req_arr.contains(&prop) {
+                                req_arr.push(prop);
+                            }
+                        }
+                    }
+                } else if !all_props.is_empty() {
+                    map.insert("required".to_string(), json!(all_props));
+                } else {
+                    map.insert("required".to_string(), json!([]));
+                }
+            }
+            
+            for val in map.values_mut() {
+                enforce_strict_json_schema(val);
+            }
+        }
+        Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                enforce_strict_json_schema(val);
+            }
+        }
+        _ => {}
     }
 }
 

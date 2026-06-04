@@ -98,7 +98,7 @@ pub async fn dispatch_workflow(
 
     // 4. Resolve or create Agent
     let agent_id = format!("agent-workflow-{}", workflow_name);
-    let agent_exists = sqlite::get_agent(&state.db, &agent_id).is_ok();
+    let agent_exists = matches!(sqlite::get_agent(&state.db, &agent_id), Ok(Some(_)));
 
     if !agent_exists {
         let row = AgentRow {

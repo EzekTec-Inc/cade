@@ -123,6 +123,14 @@ pub fn render(
                     ("📊", ActivePage::Overview, "Usage"),
                 ],
             );
+
+            render_section(
+                "REFERENCE",
+                &[
+                    ("📖", ActivePage::Documentation, "Documentation"),
+                    ("🔌", ActivePage::ApiReference, "API Reference"),
+                ],
+            );
         });
 
     action

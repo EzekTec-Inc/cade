@@ -27,6 +27,18 @@ pub struct PricingRule {
 }
 
 impl PricingRule {
+    pub fn is_generic_fallback(&self) -> bool {
+        self.contains_any.is_empty()
+            && self.starts_with_any.iter().any(|s| {
+                s == "openai/"
+                    || s == "anthropic/"
+                    || s == "gemini/"
+                    || s == "gemini-"
+                    || s == "deepseek/"
+                    || s == "xai/"
+            })
+    }
+
     fn matches(&self, model_id: &str) -> bool {
         if !self.not_contains_any.is_empty()
             && self.not_contains_any.iter().any(|nc| model_id.contains(nc))
@@ -105,7 +117,14 @@ impl ModelRegistry {
     /// Returns approximate per-token pricing for a model.
     /// Evaluates rules in order. Unknown models get zero rates.
     pub fn pricing_for_model(&self, model_id: &str) -> ModelPricing {
-        // Try resolving against the new llm_providers database first
+        // 1. Try matching specific (non-generic fallback) rules from default_pricing.json first
+        for rule in &self.rules {
+            if !rule.is_generic_fallback() && rule.matches(model_id) {
+                return rule.pricing.clone();
+            }
+        }
+
+        // 2. Try resolving against the new llm_providers database
         let id_clean = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
         let parts: Vec<&str> = id_clean.split('/').collect();
         if parts.len() == 2 {
@@ -137,8 +156,9 @@ impl ModelRegistry {
             }
         }
 
+        // 3. Fall back to generic rules in default_pricing.json
         for rule in &self.rules {
-            if rule.matches(model_id) {
+            if rule.is_generic_fallback() && rule.matches(model_id) {
                 return rule.pricing.clone();
             }
         }
@@ -255,7 +275,7 @@ mod tests {
         assert!(p.input > 0.0);
         assert!(p.output > 0.0);
         // Cache read should be 10% of input, cache write should be 1.25x of input
-        assert_eq!(p.cache_read, p.input * 0.1);
-        assert_eq!(p.cache_write, p.input * 1.25);
+        assert!((p.cache_read - p.input * 0.1).abs() < 1e-9);
+        assert!((p.cache_write - p.input * 1.25).abs() < 1e-9);
     }
 }

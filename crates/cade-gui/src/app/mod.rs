@@ -50,6 +50,8 @@ pub enum ActivePage {
     Logs,
     Memory,
     Skills,
+    Documentation,
+    ApiReference,
 }
 
 /// Top-level eframe app for the cade-gui dashboard.
@@ -215,6 +217,286 @@ impl CadeApp {
             &self.session,
             &self.theme,
         )
+    }
+
+    /// Renders the beautiful Reference Documentation view
+    fn draw_documentation(&self, ui: &mut egui::Ui) {
+        let card_frame = egui::Frame::NONE
+            .fill(self.theme.bg_card())
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(20))
+            .stroke(egui::Stroke::new(1.0, self.theme.border_base()));
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.set_max_width(900.0);
+
+            ui.vertical(|ui| {
+                ui.heading(
+                    egui::RichText::new("Documentation")
+                        .color(self.theme.text_primary())
+                        .size(24.0)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Guides and platform references for CADE developers.")
+                        .color(self.theme.text_muted())
+                        .size(12.0),
+                );
+            });
+            ui.add_space(28.0);
+
+            ui.columns(2, |columns| {
+                // Column 1: Core Guides
+                columns[0].vertical(|ui| {
+                    card_frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            egui::RichText::new("Getting Started")
+                                .color(self.theme.text_primary())
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("CADE is a stateful coding assistant with multi-transport MCP support, persistence, and multiple frontends. To start a new session, run: ")
+                                .color(self.theme.text_primary())
+                                .size(12.0),
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            egui::Frame::NONE
+                                .fill(self.theme.bg_surface0())
+                                .corner_radius(egui::CornerRadius::same(3))
+                                .inner_margin(egui::Margin::symmetric(8, 4))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new("cade --new-agent")
+                                            .color(self.theme.purple())
+                                            .code()
+                                            .size(11.0),
+                                    );
+                                });
+                        });
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new("This launches the interactive terminal TUI client and boots any locally registered Model Context Protocol (MCP) servers in settings.json.")
+                                .color(self.theme.text_muted())
+                                .size(11.0),
+                        );
+                    });
+                    ui.add_space(20.0);
+
+                    card_frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            egui::RichText::new("Model Context Protocol (MCP)")
+                                .color(self.theme.text_primary())
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Integrate external services (databases, cloud architectures, APIs) seamlessly as LLM tools by registering compliant MCP servers in settings.json:")
+                                .color(self.theme.text_primary())
+                                .size(12.0),
+                        );
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new("1. Open Settings -> MCP Configuration.\n2. Add your server name, executable path, and execution arguments.\n3. The background startup manager boots and synchronizes all tools automatically.")
+                                .color(self.theme.text_muted())
+                                .size(11.0),
+                        );
+                    });
+                });
+
+                // Column 2: Commands & Shortcuts
+                columns[1].vertical(|ui| {
+                    card_frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            egui::RichText::new("Slash Commands")
+                                .color(self.theme.text_primary())
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.add_space(12.0);
+
+                        let commands = [
+                            ("/skills", "Opens the Skills Library manager"),
+                            ("/todos", "Toggles visibility of the active plan"),
+                            ("/theme", "Launches the interactive Theme Picker"),
+                            ("/compact", "Triggers manual token compression & memory compaction"),
+                        ];
+
+                        for (cmd, desc) in commands {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(cmd)
+                                        .color(self.theme.primary())
+                                        .strong()
+                                        .size(12.0),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(desc)
+                                        .color(self.theme.text_muted())
+                                        .size(11.0),
+                                );
+                            });
+                            ui.add_space(8.0);
+                        }
+                    });
+                    ui.add_space(20.0);
+
+                    card_frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            egui::RichText::new("Keyboard Shortcuts")
+                                .color(self.theme.text_primary())
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.add_space(12.0);
+
+                        let shortcuts = [
+                            ("Ctrl + P", "Toggle command/slash palette"),
+                            ("Ctrl + L", "Focus the main chat input field"),
+                            ("Ctrl + O", "Toggle global timeline output expansion"),
+                            ("Ctrl + T", "Toggle visibility of active plan checklist"),
+                        ];
+
+                        for (keys, action) in shortcuts {
+                            ui.horizontal(|ui| {
+                                egui::Frame::NONE
+                                    .fill(self.theme.bg_surface0())
+                                    .corner_radius(egui::CornerRadius::same(3))
+                                    .inner_margin(egui::Margin::symmetric(6, 3))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(keys)
+                                                .color(self.theme.text_primary())
+                                                .strong()
+                                                .size(10.0),
+                                        );
+                                    });
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(action)
+                                        .color(self.theme.text_muted())
+                                        .size(11.0),
+                                );
+                            });
+                            ui.add_space(8.0);
+                        }
+                    });
+                });
+            });
+            ui.add_space(32.0);
+        });
+    }
+
+    /// Renders the beautiful REST API documentation reference
+    fn draw_api_reference(&self, ui: &mut egui::Ui) {
+        let card_frame = egui::Frame::NONE
+            .fill(self.theme.bg_card())
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(20))
+            .stroke(egui::Stroke::new(1.0, self.theme.border_base()));
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.set_max_width(900.0);
+
+            ui.vertical(|ui| {
+                ui.heading(
+                    egui::RichText::new("API Reference")
+                        .color(self.theme.text_primary())
+                        .size(24.0)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Stand-alone server HTTP REST endpoints for automation and integration.")
+                        .color(self.theme.text_muted())
+                        .size(12.0),
+                );
+            });
+            ui.add_space(28.0);
+
+            let endpoints = [
+                ("GET", "/v1/agents", "List all registered agents and their current model/persistence configuration.", "{} -> Vec<AgentInfo>"),
+                ("POST", "/v1/agents", "Create a new agent session with seed memory blocks and specified model/RAG options.", "CreateAgentRequest -> AgentInfo"),
+                ("POST", "/v1/agents/:id/messages", "Send user message and execute the autonomous loop (MCP tools, RAG context, and thought generation).", "MessageRequest -> Stream<SSE>"),
+                ("GET", "/v1/checkpoints", "List all active VCS/Git snapshots and local checkpoints registered in the session.", "{} -> Vec<Checkpoint>"),
+                ("POST", "/v1/compact", "Trigger manual context compression, summarization, and memory auto-compaction.", "CompactRequest -> CompactResult"),
+            ];
+
+            for (method, path, desc, signature) in endpoints {
+                card_frame.show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+
+                    ui.horizontal(|ui| {
+                        let badge_color = if method == "GET" {
+                            self.theme.success()
+                        } else {
+                            self.theme.primary()
+                        };
+
+                        egui::Frame::NONE
+                            .fill(self.theme.tinted_bg(badge_color, 32))
+                            .corner_radius(egui::CornerRadius::same(3))
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(method)
+                                        .color(badge_color)
+                                        .strong()
+                                        .size(11.0),
+                                );
+                            });
+
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(path)
+                                .color(self.theme.text_primary())
+                                .strong()
+                                .size(14.0)
+                                .code(),
+                        );
+                    });
+
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(desc)
+                            .color(self.theme.text_primary())
+                            .size(12.0),
+                    );
+
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Signature: ")
+                                .color(self.theme.text_muted())
+                                .size(11.0),
+                        );
+                        egui::Frame::NONE
+                            .fill(self.theme.bg_surface0())
+                            .corner_radius(egui::CornerRadius::same(3))
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(signature)
+                                        .color(self.theme.teal())
+                                        .size(11.0)
+                                        .code(),
+                                );
+                            });
+                    });
+                });
+                ui.add_space(16.0);
+            }
+            ui.add_space(16.0);
+        });
     }
 }
 
@@ -656,6 +938,12 @@ impl eframe::App for CadeApp {
                             ) {
                                 action = new_action;
                             }
+                        }
+                        ActivePage::Documentation => {
+                            self.draw_documentation(ui);
+                        }
+                        ActivePage::ApiReference => {
+                            self.draw_api_reference(ui);
                         }
                         ActivePage::Logs => {
                             if let Some(new_action) = components::timeline::render(

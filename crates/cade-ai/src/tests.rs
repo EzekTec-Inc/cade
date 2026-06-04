@@ -1105,10 +1105,10 @@ fn test_corrected_token_pricing_resolution() {
     assert_eq!(p_generic.input, 0.14);
     assert_eq!(p_generic.output, 0.28);
 
-    // 5. Verify dynamic prompt-caching multiplier for DeepSeek models in llm_providers
+    // 5. Verify pricing for DeepSeek models in default_pricing.json
     let p_r1_dynamic = registry.pricing_for_model("deepseek/deepseek-reasoner");
-    assert_eq!(p_r1_dynamic.input, 4.0);
-    assert_eq!(p_r1_dynamic.cache_read, 1.0);
+    assert_eq!(p_r1_dynamic.input, 0.55);
+    assert_eq!(p_r1_dynamic.cache_read, 0.14);
 }
 
 #[test]

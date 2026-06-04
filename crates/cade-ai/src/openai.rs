@@ -14,7 +14,6 @@ use super::{
 };
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
-const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
 fn needs_max_completion_tokens(model: &str) -> bool {
     let bare = bare_model(model).to_lowercase();
@@ -28,14 +27,6 @@ fn needs_max_completion_tokens(model: &str) -> bool {
 fn is_o_series(model: &str) -> bool {
     let bare = bare_model(model).to_lowercase();
     bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
-}
-
-fn needs_responses_api(model: &str) -> bool {
-    let bare = model.to_lowercase();
-    bare.starts_with("gpt-5")
-        || bare == "o1-pro"
-        || bare.starts_with("o3-pro")
-        || bare.starts_with("computer-use-preview")
 }
 
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
@@ -247,20 +238,24 @@ impl OpenAiProvider {
 
         for m in processed_messages {
             let value = match m.role.as_str() {
-                "tool" => json!({
-                    "role": "tool",
-                    // OpenAI rejects null tool_call_id — fall back to empty string
-                    // so the message is at least structurally valid.
-                    "tool_call_id": m.tool_call_id.as_deref().unwrap_or(""),
-                    "content": m.content
-                }),
+                "tool" => {
+                    let tid = m.tool_call_id.as_deref().unwrap_or("");
+                    if tid.is_empty() {
+                        tracing::warn!("OpenAI: skipping tool message with missing tool_call_id");
+                        continue;
+                    }
+                    json!({
+                        "role": "tool",
+                        "tool_call_id": tid,
+                        "content": m.content
+                    })
+                }
                 "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
                     let tcs: Vec<Value> = m.tool_calls.as_deref().unwrap_or_default().iter().map(|tc| json!({
                         "id": tc.id,
                         "type": "function",
                         "function": { "name": tc.name, "arguments": tc.arguments.to_string() }
                     })).collect();
-                    // OpenAI requires `content` to be null (not "") when tool_calls present
                     let content = if m.content.is_empty() {
                         Value::Null
                     } else {
@@ -268,9 +263,18 @@ impl OpenAiProvider {
                     };
                     json!({"role": "assistant", "content": content, "tool_calls": tcs})
                 }
+                "assistant" => {
+                    let content = if m.content.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(m.content.clone())
+                    };
+                    json!({"role": "assistant", "content": content})
+                }
                 _ => {
                     // When images are attached, build a multi-part content array.
-                    if let Some(images) = &m.images
+                    if m.role == "user"
+                        && let Some(images) = &m.images
                         && !images.is_empty()
                     {
                         let mut parts: Vec<Value> = images.iter().map(|img| json!({
@@ -338,17 +342,26 @@ impl OpenAiProvider {
         let tools: Vec<Value> = capped_tools(&req.tools)
             .iter()
             .map(|s| {
-                let mut params = s
+                let params_val = s
                     .get("parameters")
+                    .or_else(|| s.get("input_schema"))
+                    .or_else(|| s.get("function").and_then(|f| f.get("parameters")));
+                    
+                let mut params = params_val
                     .filter(|v| !v.is_null())
-                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
                 crate::utils::inline_schema_refs(&mut params);
                 clean_openai_schema(&mut params);
                 seal_top_level_additional_properties(&mut params);
 
-                let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
+                let name = tool_name(s).unwrap_or("unknown_tool").to_string();
+                let description = s
+                    .get("description")
+                    .or_else(|| s.get("function").and_then(|f| f.get("description")))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+
                 if name == "unknown_tool" {
                     tracing::warn!(
                         "OpenAI: missing tool name in schema: {}",
@@ -360,7 +373,7 @@ impl OpenAiProvider {
                     "type": "function",
                     "function": {
                         "name": name,
-                        "description": s["description"],
+                        "description": description,
                         "parameters": params,
                         "strict": false
                     }
@@ -370,131 +383,6 @@ impl OpenAiProvider {
         json!(tools)
     }
 
-    fn build_responses_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = capped_tools(&req.tools)
-            .iter()
-            .map(|s| {
-                let mut params = s
-                    .get("parameters")
-                    .filter(|v| !v.is_null())
-                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
-                    .cloned()
-                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-                crate::utils::inline_schema_refs(&mut params);
-                clean_openai_schema(&mut params);
-                seal_top_level_additional_properties(&mut params);
-
-                let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
-                if name == "unknown_tool" {
-                    tracing::warn!(
-                        "OpenAI: missing tool name in schema: {}",
-                        serde_json::to_string(s).unwrap_or_default()
-                    );
-                }
-
-                json!({
-                    "type": "function",
-                    "name": name,
-                    "description": s["description"],
-                    "parameters": params,
-                    "strict": false
-                })
-            })
-            .collect();
-        json!(tools)
-    }
-
-    fn to_responses_input(req: &CompletionRequest) -> Value {
-        let is_o_series = is_o_series(&req.model);
-        let mut items: Vec<Value> = Vec::new();
-        for m in &req.messages {
-            match m.role.as_str() {
-                "tool" => items.push(json!({
-                    "type": "function_call_output",
-                    "call_id": m.tool_call_id.as_deref().unwrap_or(""),
-                    "output": m.content
-                })),
-                "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
-                    if !m.content.is_empty() {
-                        items.push(json!({"role": "assistant", "content": m.content}));
-                    }
-                    for tc in m.tool_calls.as_deref().unwrap_or_default() {
-                        items.push(json!({
-                            "type": "function_call",
-                            "call_id": tc.id,
-                            "name": tc.name,
-                            "arguments": tc.arguments.to_string()
-                        }));
-                    }
-                }
-                _ => {
-                    // o-series models use "developer" instead of "system"
-                    let role = if m.role == "system" && is_o_series {
-                        "developer"
-                    } else {
-                        m.role.as_str()
-                    };
-                    items.push(json!({"role": role, "content": m.content}))
-                }
-            }
-        }
-        json!(items)
-    }
-
-    fn parse_responses_response(body: &Value) -> CompletionResponse {
-        let output = body["output"].as_array().cloned().unwrap_or_default();
-        let mut content: Option<String> = None;
-        let mut tool_calls: Vec<LlmToolCall> = Vec::new();
-        let mut finish_reason = "stop".to_string();
-
-        for item in &output {
-            let item_type = item["type"].as_str().unwrap_or("");
-            match item_type {
-                "message" => {
-                    let parts = item["content"].as_array().cloned().unwrap_or_default();
-                    let mut text = String::new();
-                    for part in &parts {
-                        if part["type"].as_str() == Some("output_text")
-                            && let Some(t) = part["text"].as_str()
-                        {
-                            text.push_str(t);
-                        }
-                    }
-                    if !text.is_empty() {
-                        content = Some(text);
-                    }
-                }
-                "function_call" => {
-                    finish_reason = "tool_calls".to_string();
-                    let name = item["name"].as_str().unwrap_or("").to_string();
-                    let id = item["call_id"].as_str().unwrap_or("").to_string();
-                    let args_str = item["arguments"].as_str().unwrap_or("{}").trim();
-                    let args_str = if args_str.is_empty() { "{}" } else { args_str };
-                    let arguments = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
-                    tool_calls.push(LlmToolCall {
-                        id,
-                        name,
-                        arguments,
-                        thought_signature: None,
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        if body["status"].as_str() == Some("incomplete") {
-            finish_reason = body["incomplete_details"]["reason"]
-                .as_str()
-                .unwrap_or("stop")
-                .to_string();
-        }
-
-        CompletionResponse {
-            content,
-            tool_calls,
-            finish_reason,
-        }
-    }
 }
 
 #[async_trait]
@@ -509,55 +397,6 @@ impl LlmProvider for OpenAiProvider {
             } else {
                 &req.model
             };
-            let use_responses = needs_responses_api(bare_model_id) && self.base_url == OPENAI_URL;
-
-            if use_responses {
-                let mut body = json!({
-                    "model": bare_model_id,
-                    "input": Self::to_responses_input(req),
-                    "max_output_tokens": req.max_tokens
-                });
-                if !req.tools.is_empty() {
-                    body["tools"] = Self::build_responses_tools(req);
-                }
-                if is_o_series(&req.model)
-                    && let Some(effort) = &req.reasoning_effort
-                {
-                    let mapped = match effort.as_str() {
-                        "xhigh" => "high",
-                        e @ ("low" | "medium" | "high") => e,
-                        _ => "",
-                    };
-                    if !mapped.is_empty() {
-                        body["reasoning_effort"] = mapped.into();
-                    }
-                }
-                return retry_with_backoff(
-                    "OpenAI::complete",
-                    3,
-                    std::time::Duration::from_secs(1),
-                    |_| {
-                        let client = self.client.clone();
-                        let api_key = self.api_key.clone();
-                        let body = body.clone();
-                        async move {
-                            let mut req = client.post(OPENAI_RESPONSES_URL).json(&body);
-                            if !api_key.is_empty() {
-                                req = req.bearer_auth(&api_key);
-                            }
-                            let resp = req.send().await?;
-                            if !resp.status().is_success() {
-                                let status = resp.status();
-                                let text = resp.text().await.unwrap_or_default();
-                                return Err(provider_error("OpenAI", status, &text));
-                            }
-                            Ok(Self::parse_responses_response(&resp.json::<Value>().await?))
-                        }
-                    },
-                )
-                .await;
-            }
-
             let mut body = if needs_max_completion_tokens(bare_model_id) {
                 json!({
                     "model": bare_model_id,
@@ -630,176 +469,6 @@ impl LlmProvider for OpenAiProvider {
         } else {
             &req_model
         };
-        let use_responses = needs_responses_api(bare_model_id) && self.base_url == OPENAI_URL;
-
-        if use_responses {
-            let mut body = json!({
-                "model": bare_model_id,
-                "input": Self::to_responses_input(req),
-                "max_output_tokens": req.max_tokens,
-                "stream": true
-            });
-            if !req.tools.is_empty() {
-                body["tools"] = Self::build_responses_tools(req);
-            }
-            if is_o_series(&req.model)
-                && let Some(effort) = &req.reasoning_effort
-            {
-                let mapped = match effort.as_str() {
-                    "xhigh" => "high",
-                    e @ ("low" | "medium" | "high") => e,
-                    _ => "",
-                };
-                if !mapped.is_empty() {
-                    body["reasoning_effort"] = mapped.into();
-                }
-            }
-
-            let resp = retry_with_backoff(
-                "OpenAI::stream",
-                3,
-                std::time::Duration::from_secs(1),
-                |_| {
-                    let client = self.client.clone();
-                    let api_key = self.api_key.clone();
-                    let body = body.clone();
-                    async move {
-                        let mut req = client.post(OPENAI_RESPONSES_URL).json(&body);
-                        if !api_key.is_empty() {
-                            req = req.bearer_auth(&api_key);
-                        }
-                        let resp = req.send().await?;
-                        if !resp.status().is_success() {
-                            let status = resp.status();
-                            let text = resp.text().await.unwrap_or_default();
-                            return Err(provider_error("OpenAI", status, &text));
-                        }
-                        Ok(resp)
-                    }
-                },
-            )
-            .await?;
-
-            let mut byte_stream = resp.bytes_stream();
-            let s = stream! {
-                let mut buf = Vec::new();
-                let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
-                    std::collections::BTreeMap::new();
-
-                while let Some(chunk) = byte_stream.next().await {
-                    let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
-                    buf.extend_from_slice(&chunk);
-
-                    let mut start = 0;
-                    while start < buf.len() {
-                        let Some((pos, len)) = ({
-                            let slice = &buf[start..];
-                            let mut earliest = None;
-                            if let Some(p) = slice.windows(2).position(|w| w == b"\n\n") {
-                                earliest = Some((p, 2));
-                            }
-                            if let Some(p) = slice.windows(4).position(|w| w == b"\r\n\r\n")
-                                && earliest.is_none_or(|(ep, _)| p < ep) {
-                                    earliest = Some((p, 4));
-                                }
-                            earliest
-                        }) else { break };
-                        let end = start + pos;
-                        let next_start = end + len;
-
-                        if let Ok(block_str) = std::str::from_utf8(&buf[start..end]) {
-                            let block = block_str.trim();
-                            if !block.is_empty() {
-                                let mut event_type = "";
-                                let mut data_str = "";
-
-                                for line in block.lines() {
-                                    let line = line.trim();
-                                    if let Some(t) = line.strip_prefix("event: ") {
-                                        event_type = t.trim();
-                                    } else if let Some(d) = line.strip_prefix("data: ") {
-                                        data_str = d.trim();
-                                    }
-                                }
-
-                                if !data_str.is_empty() && data_str != "[DONE]"
-                                    && let Ok(v) = serde_json::from_str::<Value>(data_str) {
-                                        match event_type {
-                                    "response.output_text.delta" => {
-                                        if let Some(text) = v["delta"].as_str()
-                                            && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
-                                    }
-                                    "response.function_call_arguments.delta" => {
-                                        let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                                        let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                                        if let Some(a) = v["delta"].as_str() { entry.2.push_str(a); }
-                                    }
-                                    "response.output_item.added" => {
-                                        let item = &v["item"];
-                                        if item["type"].as_str() == Some("function_call") {
-                                            let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                                            let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                                            if let Some(id) = item["call_id"].as_str() { entry.0 = id.to_string(); }
-                                            if let Some(n) = item["name"].as_str() { entry.1 = n.to_string(); }
-                                        }
-                                    }
-                                    "response.completed" => {
-                                        let calls: Vec<(String, String, String)> =
-                                            std::mem::take(&mut tool_map).into_values().collect();
-                                        for (id, name, args_str) in calls {
-                                            if !name.is_empty() {
-                                                let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
-                                                    tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
-                                                    serde_json::Value::Object(Default::default())
-                                                });
-                                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
-                                            }
-                                        }
-                                        let usage = &v["response"]["usage"];
-                                        let in_tok  = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
-                                        let out_tok = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
-                                        let cache_tok = usage["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
-                                        if in_tok > 0 || out_tok > 0 {
-                                            yield Ok(StreamChunk::Usage(TokenUsage {
-                                                input_tokens:       in_tok,
-                                                output_tokens:      out_tok,
-                                                cache_read_tokens:  cache_tok,
-                                                cache_write_tokens: 0,
-                                                model:              req_model.clone(),
-                                            }));
-                                        }
-                                        if let Some(reason) = v["response"]["output"].as_array()
-                                            .and_then(|arr| arr.iter().find_map(|item| item["finish_reason"].as_str()))
-                                            .or_else(|| v["response"]["status"].as_str()) {
-                                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
-                                        }
-                                        yield Ok(StreamChunk::Done);
-                                        return;
-                                    }
-                                    _ => {}
-                                }
-                                    }
-                            }
-                        }
-                        start = next_start;
-                    }
-                    if start > 0 {
-                        buf.drain(..start);
-                    }
-                }
-                let remaining: Vec<(String, String, String)> =
-                    std::mem::take(&mut tool_map).into_values().collect();
-                for (id, name, args_str) in remaining {
-                    if !name.is_empty() {
-                        let args = serde_json::from_str(&args_str).unwrap_or_default();
-                        yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
-                    }
-                }
-                yield Ok(StreamChunk::Done);
-            };
-            return Ok(Box::pin(s));
-        }
-
         let mut body = if needs_max_completion_tokens(bare_model_id) {
             json!({
                 "model": bare_model_id,
@@ -898,59 +567,61 @@ impl LlmProvider for OpenAiProvider {
                         yield Ok(StreamChunk::Done);
                         return;
                     }
-                    let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
-                    let delta = &v["choices"][0]["delta"];
+                    let v_res = serde_json::from_str::<Value>(data);
+                    if let Ok(v) = v_res {
+                        let delta = &v["choices"][0]["delta"];
 
-                    if let Some(text) = delta["content"].as_str()
-                        && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
-                    if let Some(reasoning) = delta["reasoning"].as_str()
-                        && !reasoning.is_empty() { yield Ok(StreamChunk::Reasoning(reasoning.to_string())); }
-                    if let Some(tcs) = delta["tool_calls"].as_array() {
-                        for tc in tcs {
-                            // `index` distinguishes parallel tool calls in one stream
-                            let idx = tc["index"].as_u64().unwrap_or(0) as usize;
-                            let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                            if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
-                            if let Some(n) = tc["function"]["name"].as_str() { entry.1 = n.to_string(); }
-                            if let Some(a) = tc["function"]["arguments"].as_str() { entry.2.push_str(a); }
-                        }
-                    }
-                    if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
-                        if matches!(reason, "stop" | "tool_calls") {
-                            // Emit every accumulated tool call in index order
-                            let calls: Vec<(String, String, String)> =
-                                std::mem::take(&mut tool_map).into_values().collect();
-                            for (id, name, args_str) in calls {
-                                if !name.is_empty() {
-                                    let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
-                                        tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
-                                        serde_json::Value::Object(Default::default())
-                                    });
-                                    yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
-                                }
+                        if let Some(text) = delta["content"].as_str()
+                            && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                        if let Some(reasoning) = delta["reasoning"].as_str()
+                            && !reasoning.is_empty() { yield Ok(StreamChunk::Reasoning(reasoning.to_string())); }
+                        if let Some(tcs) = delta["tool_calls"].as_array() {
+                            for tc in tcs {
+                                // `index` distinguishes parallel tool calls in one stream
+                                let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                                let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                                if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
+                                if let Some(n) = tc["function"]["name"].as_str() { entry.1 = n.to_string(); }
+                                if let Some(a) = tc["function"]["arguments"].as_str() { entry.2.push_str(a); }
                             }
-                            // Don't return here — OpenAI sends usage in a separate chunk
-                            // before [DONE] when stream_options.include_usage=true.
                         }
-                        if !finish_emitted {
-                            yield Ok(StreamChunk::FinishReason(reason.to_string()));
-                            finish_emitted = true;
+                        if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
+                            if matches!(reason, "stop" | "tool_calls") {
+                                // Emit every accumulated tool call in index order
+                                let calls: Vec<(String, String, String)> =
+                                    std::mem::take(&mut tool_map).into_values().collect();
+                                for (id, name, args_str) in calls {
+                                    if !name.is_empty() {
+                                        let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
+                                            tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
+                                            serde_json::Value::Object(Default::default())
+                                        });
+                                        yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                                    }
+                                }
+                                // Don't return here — OpenAI sends usage in a separate chunk
+                                // before [DONE] when stream_options.include_usage=true.
+                            }
+                            if !finish_emitted {
+                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
+                                finish_emitted = true;
+                            }
                         }
-                    }
-                    // Usage chunk: may arrive in any chunk, including the separate
-                    // empty-choices chunk OpenAI sends after finish_reason.
-                    if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
-                        let in_tok   = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-                        let out_tok  = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
-                        let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
-                        if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
-                            yield Ok(StreamChunk::Usage(TokenUsage {
-                                input_tokens:       in_tok,
-                                output_tokens:      out_tok,
-                                cache_read_tokens:  cache_tok,
-                                cache_write_tokens: 0,
-                                model:              req_model.clone(),
-                            }));
+                        // Usage chunk: may arrive in any chunk, including the separate
+                        // empty-choices chunk OpenAI sends after finish_reason.
+                        if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
+                            let in_tok   = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+                            let out_tok  = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                            let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
+                            if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
+                                yield Ok(StreamChunk::Usage(TokenUsage {
+                                    input_tokens:       in_tok,
+                                    output_tokens:      out_tok,
+                                    cache_read_tokens:  cache_tok,
+                                    cache_write_tokens: 0,
+                                    model:              req_model.clone(),
+                                }));
+                            }
                         }
                     }
                         }
@@ -981,10 +652,12 @@ impl LlmProvider for OpenAiProvider {
     async fn complete_structured(
         &self,
         req: &CompletionRequest,
-        schema: serde_json::Value,
+        mut schema: serde_json::Value,
     ) -> Result<serde_json::Value> {
         use tracing::Instrument;
         let span = crate::gen_ai_span!("openai", req);
+
+        crate::utils::enforce_strict_json_schema(&mut schema);
 
         let fut = async move {
             let bare_model_id = if self.base_url == OPENAI_URL {
