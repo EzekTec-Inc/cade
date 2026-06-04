@@ -3,7 +3,9 @@ use dioxus::prelude::*;
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
     // Launch the Dioxus web application
-    launch(App);
+    LaunchBuilder::new()
+        .with_cfg(dioxus::web::Config::new().rootname("cade_gui_canvas"))
+        .launch(App);
 }
 
 #[allow(dead_code)]
