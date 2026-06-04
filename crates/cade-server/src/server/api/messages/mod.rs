@@ -602,7 +602,7 @@ pub async fn stream_message(
             }
             let s = futures::stream::iter([
                 Ok::<Event, std::convert::Infallible>(
-                    Event::default().data(json!({ "error": err_msg }).to_string()),
+                    Event::default().data(json!({ "message_type": "error", "error": err_msg }).to_string()),
                 ),
                 Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]")),
             ]);
@@ -746,7 +746,7 @@ pub async fn stream_message(
                     if let Some(rid) = &run_id_clone {
                         let _ = sqlite::finish_run(&db_clone, rid, "failed");
                     }
-                    Event::default().data(json!({ "error": e.to_string() }).to_string())
+                    Event::default().data(json!({ "message_type": "error", "error": e.to_string() }).to_string())
                 }
             };
             Ok::<Event, std::convert::Infallible>(event)

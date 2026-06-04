@@ -293,6 +293,13 @@ impl Repl {
                             }
                         }
                     }
+                                        "error" => {
+                        if let Some(err) = msg.data.get("error").and_then(|v| v.as_str()) {
+                            let mut app = app_arc.lock();
+                            app.show_toast(err.to_string(), crate::ui::ToastLevel::Error);
+                            let _ = app.push(cade_tui::RenderLine::ErrorMsg(err.to_string()));
+                        }
+                    }
                     _ => {}
                 }
             }
