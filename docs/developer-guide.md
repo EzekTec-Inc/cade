@@ -12,7 +12,7 @@ CADE is a Rust workspace structured via Cargo workspaces. The root package owns 
 - **`cade-server`**: The Axum HTTP server that powers the LLM agentic loop, tool dispatching, and background consolidation.
 - **`cade-agent`**: Tool execution environment, MCP integration, execution backends, and client-side agent loop helpers.
 - **`cade-cli` / `cade-tui`**: The interactive Terminal User Interface (Ratatui + Crossterm).
-- **`cade-gui`**: Egui/eframe WASM dashboard.
+- **`cade-gui`**: Dioxus v0.5 WASM dashboard.
 - **`cade-mcp` / `cade-ide-mcp`**: MCP client/server integration and IDE-state bridge.
 - **`cade-web`**: Web search and fetching capabilities.
 - **`cade-plugin` / `cade-sdk`**: Plugin manifests/loading and programmatic Rust SDK.

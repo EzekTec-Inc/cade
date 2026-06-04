@@ -26,7 +26,7 @@ crates/
 ├── cade-sdk/                    # Rust SDK for programmatic control
 ├── cade-ide-mcp/                # IDE bridge (Neovim, VS Code, JetBrains)
 ├── cade-askpass/                # SSH/GPG password prompt (IPC, token auth)
-└── cade-gui/                    # WASM dashboard (eframe/egui)
+└── cade-gui/                    # WASM dashboard (Dioxus v0.5)
 
 plugins/
 └── cade.nvim/                   # Neovim plugin and IDE bridge

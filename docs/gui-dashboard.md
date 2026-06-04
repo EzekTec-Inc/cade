@@ -1,7 +1,7 @@
 # GUI Dashboard
 
 CADE ships a WASM-based dashboard at `/dashboard`. It mirrors most of
-the TUI's capabilities through a browser UI built with `eframe`/`egui`.
+the TUI's capabilities through a beautiful, responsive browser UI built with **Dioxus v0.5** (HTML/CSS).
 
 ## Quick start
 

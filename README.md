@@ -282,7 +282,7 @@ cade-server      → Axum HTTP API, context building, consolidation
 cade-agent       → Tool implementations, subagents, MCP, execution backends
 cade-cli         → TUI setup, REPL, slash commands, headless mode
 cade-tui         → Ratatui terminal UI components
-cade-gui         → WASM dashboard (egui/eframe)
+cade-gui         → WASM dashboard (Dioxus v0.5)
 cade-mcp         → Model Context Protocol integration
 cade-ide-mcp     → IDE MCP bridge exposing editor state as tools
 cade-desktop     → Screen capture, window control, notifications
