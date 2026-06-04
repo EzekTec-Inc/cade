@@ -150,10 +150,12 @@ const PRIORITY_TOOL_NAMES: &[&str] = &[
 ];
 
 fn tool_name(schema: &Value) -> Option<&str> {
-    if let Some(function) = schema.get("function") {
-        if let Some(name) = function.get("name").and_then(Value::as_str) {
-            return Some(name);
-        }
+    if let Some(name) = schema
+        .get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(Value::as_str)
+    {
+        return Some(name);
     }
     schema.get("name").and_then(Value::as_str)
 }

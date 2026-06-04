@@ -6,6 +6,7 @@ pub fn start() {
     launch(App);
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 enum SelectedPage {
     Dashboard,
