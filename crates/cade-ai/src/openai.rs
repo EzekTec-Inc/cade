@@ -346,7 +346,7 @@ impl OpenAiProvider {
                     .get("parameters")
                     .or_else(|| s.get("input_schema"))
                     .or_else(|| s.get("function").and_then(|f| f.get("parameters")));
-                    
+
                 let mut params = params_val
                     .filter(|v| !v.is_null())
                     .cloned()
@@ -382,7 +382,6 @@ impl OpenAiProvider {
             .collect();
         json!(tools)
     }
-
 }
 
 #[async_trait]

@@ -60,9 +60,15 @@ fn App() -> Element {
     let code_content = match (active_tab(), selected_lang()) {
         (0, CodeLanguage::Javascript) => vec![
             ("import", "{ Cade } from \"@cade-ai/cade-sdk\";"),
-            ("const", "client = new Cade({ apiKey: \"sk-cade...OA==\" });"),
+            (
+                "const",
+                "client = new Cade({ apiKey: \"sk-cade...OA==\" });",
+            ),
             ("", ""),
-            ("const", "response = await client.agents.messages.create(\"AGENT_ID\", {"),
+            (
+                "const",
+                "response = await client.agents.messages.create(\"AGENT_ID\", {",
+            ),
             ("    input:", "\"What do you remember about me?\","),
             ("});", ""),
             ("", ""),
@@ -81,14 +87,23 @@ fn App() -> Element {
             ("print", "(response.messages)"),
         ],
         (0, CodeLanguage::Curl) => vec![
-            ("curl", "-X POST \"https://api.cade.ai/v1/agents/AGENT_ID/messages\" \\"),
+            (
+                "curl",
+                "-X POST \"https://api.cade.ai/v1/agents/AGENT_ID/messages\" \\",
+            ),
             ("  -H", "\"Authorization: Bearer sk-cade...OA==\" \\"),
             ("  -H", "\"Content-Type: application/json\" \\"),
-            ("  -d", "'{\"message\": \"What do you remember about me?\"}'"),
+            (
+                "  -d",
+                "'{\"message\": \"What do you remember about me?\"}'",
+            ),
         ],
         (1, CodeLanguage::Javascript) => vec![
             ("import", "{ Cade } from \"@cade-ai/cade-sdk\";"),
-            ("const", "client = new Cade({ apiKey: \"sk-cade...OA==\" });"),
+            (
+                "const",
+                "client = new Cade({ apiKey: \"sk-cade...OA==\" });",
+            ),
             ("", ""),
             ("const", "agent = await client.agents.create({"),
             ("    name:", "\"Research-Assistant\","),
@@ -117,15 +132,24 @@ fn App() -> Element {
             ("  -H", "\"Content-Type: application/json\" \\"),
             ("  -d", "'{"),
             ("    \"name\":", "\"Research-Assistant\","),
-            ("    \"system_prompt\":", "\"You are a helpful researcher.\","),
+            (
+                "    \"system_prompt\":",
+                "\"You are a helpful researcher.\",",
+            ),
             ("    \"model\":", "\"gpt-4o\""),
             ("  }'", ""),
         ],
         (2, CodeLanguage::Javascript) => vec![
             ("import", "{ Cade } from \"@cade-ai/cade-sdk\";"),
-            ("const", "client = new Cade({ apiKey: \"sk-cade...OA==\" });"),
+            (
+                "const",
+                "client = new Cade({ apiKey: \"sk-cade...OA==\" });",
+            ),
             ("", ""),
-            ("const", "memory = await client.agents.memory.retrieve(\"AGENT_ID\");"),
+            (
+                "const",
+                "memory = await client.agents.memory.retrieve(\"AGENT_ID\");",
+            ),
             ("", ""),
             ("console.log", "(\"Core Memory Blocks:\", memory.blocks);"),
         ],
@@ -134,12 +158,18 @@ fn App() -> Element {
             ("", ""),
             ("client", "= Cade(api_key=\"sk-cade...OA==\")"),
             ("", ""),
-            ("memory", "= client.agents.memory.retrieve(agent_id=\"AGENT_ID\")"),
+            (
+                "memory",
+                "= client.agents.memory.retrieve(agent_id=\"AGENT_ID\")",
+            ),
             ("", ""),
             ("print", "(f\"Core Memory Blocks: {memory.blocks}\")"),
         ],
         _ => vec![
-            ("curl", "-X GET \"https://api.cade.ai/v1/agents/AGENT_ID/memory\" \\"),
+            (
+                "curl",
+                "-X GET \"https://api.cade.ai/v1/agents/AGENT_ID/memory\" \\",
+            ),
             ("  -H", "\"Authorization: Bearer sk-cade...OA==\""),
         ],
     };
@@ -176,7 +206,7 @@ fn App() -> Element {
                 nav { class: "px-2 space-y-0.5",
                     // Main Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-3 pb-1 tracking-wider uppercase", "Dashboard" }
-                    div { 
+                    div {
                         class: if active_page() == SelectedPage::Dashboard { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Dashboard),
                         div { class: "flex items-center space-x-2.5",
@@ -201,7 +231,7 @@ fn App() -> Element {
 
                     // Development Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Development" }
-                    div { 
+                    div {
                         class: if active_page() == SelectedPage::Agents { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Agents),
                         div { class: "flex items-center space-x-2.5",
@@ -209,7 +239,7 @@ fn App() -> Element {
                             span { "Agents" }
                         }
                     }
-                    div { 
+                    div {
                         class: if active_page() == SelectedPage::Logs { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Logs),
                         div { class: "flex items-center space-x-2.5",
@@ -220,7 +250,7 @@ fn App() -> Element {
 
                     // Resources Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Resources" }
-                    div { 
+                    div {
                         class: if active_page() == SelectedPage::MemoryBlocks { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::MemoryBlocks),
                         div { class: "flex items-center space-x-2.5",
@@ -228,7 +258,7 @@ fn App() -> Element {
                             span { "Memory blocks" }
                         }
                     }
-                    div { 
+                    div {
                         class: if active_page() == SelectedPage::Tools { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Tools),
                         div { class: "flex items-center space-x-2.5",
@@ -236,7 +266,7 @@ fn App() -> Element {
                             span { "Tools" }
                         }
                     }
-                    div { 
+                    div {
                         class: if active_page() == SelectedPage::Models { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Models),
                         div { class: "flex items-center space-x-2.5",
@@ -256,19 +286,19 @@ fn App() -> Element {
 
             // Bottom controls
             div { class: "p-2 border-t border-[#1f222b] space-y-0.5",
-                div { 
+                div {
                     class: if active_page() == SelectedPage::ApiKeys { "flex items-center px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                     onclick: move |_| active_page.set(SelectedPage::ApiKeys),
                     span { class: "mr-2.5 text-sm", "🔑" }
                     span { "API Keys" }
                 }
-                div { 
+                div {
                     class: if active_page() == SelectedPage::Usage { "flex items-center px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                     onclick: move |_| active_page.set(SelectedPage::Usage),
                     span { class: "mr-2.5 text-sm", "📊" }
                     span { "Usage" }
                 }
-                div { 
+                div {
                     class: if active_page() == SelectedPage::Settings { "flex items-center px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                     onclick: move |_| active_page.set(SelectedPage::Settings),
                     span { class: "mr-2.5 text-sm", "⚙" }
@@ -387,17 +417,17 @@ fn App() -> Element {
                     // Tab navigation subheader
                     div { class: "px-6 py-3 border-b border-[#21232c] flex items-center justify-between select-none text-[13px] font-medium text-gray-400",
                         div { class: "flex items-center space-x-1.5",
-                            span { 
+                            span {
                                 class: if active_tab() == 0 { "px-4 py-2 bg-[#1d1e26] text-white rounded-md cursor-pointer border border-[#2d2f3d]" } else { "px-4 py-2 hover:text-white cursor-pointer transition duration-150" },
                                 onclick: move |_| active_tab.set(0),
                                 "Send message to an agent"
                             }
-                            span { 
+                            span {
                                 class: if active_tab() == 1 { "px-4 py-2 bg-[#1d1e26] text-white rounded-md cursor-pointer border border-[#2d2f3d]" } else { "px-4 py-2 hover:text-white cursor-pointer transition duration-150" },
                                 onclick: move |_| active_tab.set(1),
                                 "Create an agent"
                             }
-                            span { 
+                            span {
                                 class: if active_tab() == 2 { "px-4 py-2 bg-[#1d1e26] text-white rounded-md cursor-pointer border border-[#2d2f3d]" } else { "px-4 py-2 hover:text-white cursor-pointer transition duration-150" },
                                 onclick: move |_| active_tab.set(2),
                                 "Inspect agent memory"
@@ -408,7 +438,7 @@ fn App() -> Element {
                         div { class: "flex items-center space-x-2 bg-[#0f1115] border border-[#21232c] py-1.5 px-3 rounded-md text-xs",
                             span { class: "text-gray-500 font-semibold", "API Key:" }
                             span { class: "text-gray-300 font-mono tracking-wider", "sk-cade-••••••••••••••••••••••••••••••••" }
-                            button { 
+                            button {
                                 class: "hover:text-white text-gray-500 font-semibold flex items-center space-x-1 pl-1 border-l border-[#21232c] ml-1 transition duration-150",
                                 onclick: move |_| {
                                     copied_key.set(true);
@@ -438,7 +468,7 @@ fn App() -> Element {
                                 h3 { class: "text-white text-lg font-bold mb-4 tracking-tight", "{tab_title}" }
                                 p { class: "text-gray-400 text-[13px] leading-6", "{tab_desc}" }
                             }
-                            a { 
+                            a {
                                 href: "https://docs.letta.com",
                                 target: "_blank",
                                 class: "inline-flex items-center space-x-2 text-xs font-semibold text-white border border-[#2d2f3d] bg-[#1d1e26] hover:bg-[#252735] py-2 px-4 rounded-md w-fit shadow transition duration-150",
@@ -452,7 +482,7 @@ fn App() -> Element {
                             div { class: "flex items-center justify-between border-b border-[#1b1c24] pb-3 mb-4 select-none",
                                 // Language select dropdown
                                 div { class: "flex items-center space-x-2",
-                                    select { 
+                                    select {
                                         class: "bg-transparent text-gray-400 border border-[#21232c] py-1 px-2.5 rounded-md cursor-pointer outline-none hover:text-white transition duration-150 text-xs",
                                         onchange: move |evt| {
                                             match evt.value().as_str() {
@@ -468,7 +498,7 @@ fn App() -> Element {
                                 }
 
                                 // Code copy button
-                                button { 
+                                button {
                                     class: "text-gray-500 hover:text-white transition duration-150 flex items-center space-x-1.5",
                                     onclick: move |_| {
                                         copied_code.set(true);
@@ -497,7 +527,7 @@ fn App() -> Element {
                                         // Colored keywords & values
                                         div { class: "flex-1",
                                             if !kw.is_empty() {
-                                                span { 
+                                                span {
                                                     class: if *kw == "import" || *kw == "from" || *kw == "const" || *kw == "curl" { "text-[#ff7c5c] font-semibold mr-2" } else { "text-[#34d399] mr-2" },
                                                     "{kw}"
                                                 }
@@ -513,7 +543,7 @@ fn App() -> Element {
                                                     }
                                                 }
                                             } else {
-                                                span { 
+                                                span {
                                                     class: if val.starts_with('"') || val.starts_with('\'') { "text-teal-400" } else { "text-gray-300" },
                                                     "{val}"
                                                 }

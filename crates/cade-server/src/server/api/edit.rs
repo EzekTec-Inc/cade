@@ -130,7 +130,8 @@ pub async fn edit(
             tracing::error!("/v1/edit stream open failed for model '{model}': {err_msg}");
             let s = futures::stream::iter([
                 Ok::<Event, std::convert::Infallible>(
-                    Event::default().data(json!({"message_type": "error", "error": err_msg}).to_string()),
+                    Event::default()
+                        .data(json!({"message_type": "error", "error": err_msg}).to_string()),
                 ),
                 Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]")),
             ]);
@@ -158,7 +159,8 @@ pub async fn edit(
                 .to_string(),
             ),
             Ok(StreamChunk::FinishReason(_)) => Event::default().comment(""),
-            Err(e) => Event::default().data(json!({"message_type": "error", "error": e.to_string()}).to_string()),
+            Err(e) => Event::default()
+                .data(json!({"message_type": "error", "error": e.to_string()}).to_string()),
         };
         Ok::<Event, std::convert::Infallible>(event)
     });

@@ -68,8 +68,14 @@ fn clean_schema_ignores_null_schemas_in_anyof() {
         }
     });
     clean_openai_schema(&mut v);
-    assert_eq!(v["properties"]["optional_str"]["type"].as_str(), Some("string"));
-    assert_eq!(v["properties"]["optional_str"]["maxLength"].as_i64(), Some(10));
+    assert_eq!(
+        v["properties"]["optional_str"]["type"].as_str(),
+        Some("string")
+    );
+    assert_eq!(
+        v["properties"]["optional_str"]["maxLength"].as_i64(),
+        Some(10)
+    );
 }
 
 #[test]
@@ -82,8 +88,6 @@ fn needs_max_completion_tokens_reasoning_models() {
     assert!(!needs_max_completion_tokens("gpt-4o"));
     assert!(!needs_max_completion_tokens("gpt-4o-mini"));
 }
-
-
 
 #[test]
 fn parse_response_text_only() {
@@ -150,12 +154,6 @@ fn parse_response_empty_arguments_is_object() {
     assert_eq!(resp.tool_calls[0].name, "empty_tool");
     assert!(resp.tool_calls[0].arguments.is_object());
 }
-
-
-
-
-
-
 
 #[test]
 fn to_openai_messages_basic() -> Result<()> {
@@ -238,8 +236,6 @@ fn build_tools_disables_strict_structured_outputs() -> Result<()> {
     Ok(())
 }
 
-
-
 // ── o-series developer role remapping ─────────────────────────────────────
 
 #[test]
@@ -296,8 +292,6 @@ fn non_o_series_preserves_system_role() -> Result<()> {
     assert_eq!(arr[0]["role"], "system");
     Ok(())
 }
-
-
 
 // ── Tool param sealing (top-level additionalProperties only) ──────────────
 
@@ -371,9 +365,6 @@ fn build_tools_truncates_to_128() -> Result<()> {
     let arr = tools_val.as_array().ok_or("Should be an array")?;
     assert_eq!(arr.len(), 128, "build_tools should truncate to 128");
 
-    
-    
-
     Ok(())
 }
 
@@ -422,10 +413,6 @@ fn build_tools_preserves_load_skill_when_truncating() -> Result<()> {
             == Some("load_skill")),
         "build_tools should preserve load_skill inside the 128-tool cap"
     );
-
-    
-    
-    
 
     Ok(())
 }
@@ -479,11 +466,7 @@ fn build_tools_preserves_memory_writing_tools_when_truncating() -> Result<()> {
         );
     }
 
-    
-    
-    for _name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {
-        
-    }
+    for _name in ["update_memory", "update_memory_typed", "memory_apply_patch"] {}
 
     Ok(())
 }

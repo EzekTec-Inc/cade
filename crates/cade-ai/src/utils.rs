@@ -92,7 +92,8 @@ pub fn clean_openai_schema(v: &mut Value) {
             if let Some(type_val) = map.get_mut("type") {
                 if let Some(arr) = type_val.as_array() {
                     let has_null = arr.iter().any(|i| i.as_str() == Some("null"));
-                    let non_null_type = arr.iter()
+                    let non_null_type = arr
+                        .iter()
                         .filter_map(|item| item.as_str())
                         .find(|&t| t != "null")
                         .unwrap_or("string");
@@ -131,7 +132,8 @@ pub fn clean_openai_schema(v: &mut Value) {
                     && !arr.is_empty()
                 {
                     // Find the first nested schema that is not null-type
-                    let chosen_schema = arr.iter()
+                    let chosen_schema = arr
+                        .iter()
                         .find(|item| {
                             item.as_object()
                                 .and_then(|obj| obj.get("type"))
@@ -190,14 +192,14 @@ pub fn enforce_strict_json_schema(v: &mut Value) {
                 if !map.contains_key("additionalProperties") {
                     map.insert("additionalProperties".to_string(), json!(false));
                 }
-                
+
                 let mut all_props = Vec::new();
                 if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
                     for key in props.keys() {
                         all_props.push(json!(key.clone()));
                     }
                 }
-                
+
                 if let Some(req_val) = map.get_mut("required") {
                     if let Some(req_arr) = req_val.as_array_mut() {
                         for prop in all_props {
@@ -212,7 +214,7 @@ pub fn enforce_strict_json_schema(v: &mut Value) {
                     map.insert("required".to_string(), json!([]));
                 }
             }
-            
+
             for val in map.values_mut() {
                 enforce_strict_json_schema(val);
             }
