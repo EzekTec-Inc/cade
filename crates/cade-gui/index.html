@@ -12,11 +12,28 @@
     color: #e5e7eb;
     margin: 0;
     padding: 0;
+    overflow: hidden;
   }
 </style>
+<!-- Add Tailwind CSS for pixel-perfect design matching Letta -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          lettaDark: '#0f1115',
+          lettaCard: '#16171d',
+          lettaBorder: '#272833',
+          lettaAccent: '#ff7c5c',
+        }
+      }
+    }
+  }
+</script>
 <link data-trunk rel="rust" data-wasm-opt="0" />
 </head>
-<body>
-<div id="main"></div>
+<body class="bg-[#0f1115] text-[#e5e7eb]">
+<div id="cade_gui_canvas" class="h-screen w-screen flex"></div>
 </body>
 </html>

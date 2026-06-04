@@ -16,9 +16,15 @@ serde.workspace      = true
 serde_json.workspace = true
 urlencoding.workspace = true
 wasm-bindgen         = "0.2"
+gloo-timers          = { version = "0.2", features = ["futures"] }
 
 # Dioxus for full responsive HTML/CSS UI
 dioxus = { version = "0.5", features = ["web"] }
+
+# -- Browser-specific dependencies for random sources
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid                 = { version = "1", features = ["js", "v4"] }
+getrandom            = { version = "0.2", features = ["js"] }
 
 [lints.rust]
 unsafe_code = "forbid"
