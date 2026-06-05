@@ -8,11 +8,12 @@
 //! Safe methods (GET / HEAD / OPTIONS) are never subject to this check.
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use crate::server::state::AppState;
 
 /// Pure, deterministic policy.  Returns `true` if `origin` matches one
 /// of the two localhost schemes on any port (or on no port at all —
@@ -51,7 +52,7 @@ fn is_mutating(method: &Method) -> bool {
 
 /// Axum middleware that enforces the Origin allow-list on mutating
 /// requests.  See the module-level doc comment for the exact contract.
-pub async fn csrf_middleware(req: Request, next: Next) -> Response {
+pub async fn csrf_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     if !is_mutating(req.method()) {
         return next.run(req).await;
     }
@@ -68,7 +69,13 @@ pub async fn csrf_middleware(req: Request, next: Next) -> Response {
         None => return next.run(req).await,
     };
 
-    if origin_is_allowed(&origin) {
+    let allowed_origin_matches = if let Some(allowed) = &state.config.allowed_origin {
+        origin == *allowed
+    } else {
+        false
+    };
+
+    if origin_is_allowed(&origin) || allowed_origin_matches {
         return next.run(req).await;
     }
 

@@ -42,19 +42,94 @@ fn origin_policy_rejects_non_localhost() {
     assert!(!origin_is_allowed(""));
 }
 
+use crate::server::state::AppState;
+use std::sync::Arc;
+
 // -- Middleware integration
 
-fn make_app() -> Router {
+fn make_state(allowed_origin: Option<String>) -> AppState {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+
+    let config = Arc::new(crate::server::config::ServerConfig {
+        max_tokens_per_turn: Some(64_000),
+        addr: "127.0.0.1:0".parse().unwrap(),
+        db_path: ":memory:".into(),
+        llm_provider: crate::server::config::LlmProviderKind::Anthropic,
+        default_model: "test".into(),
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        ollama_base_url: String::new(),
+        api_key: None,
+        allowed_origin,
+        max_context_budget: None,
+    });
+
+    AppState {
+        subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        db,
+        llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: String::new(),
+            llm_provider: String::new(),
+        })),
+        llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: String::new(),
+            llm_provider: String::new(),
+        }))),
+        config,
+        mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
+        rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
+        memory_cache: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_metrics: std::sync::Arc::new(dashmap::DashMap::new()),
+        agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+            crate::server::state::CONTEXT_CACHE_CAPACITY,
+        ))),
+        all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+        embedder: None,
+    }
+}
+
+fn make_app(state: AppState) -> Router {
     async fn ok() -> &'static str {
         "ok"
     }
     Router::new()
         .route("/x", routing::get(ok).post(ok).put(ok).patch(ok).delete(ok))
-        .layer(middleware::from_fn(csrf_middleware))
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, csrf_middleware))
+}
+
+async fn run_with_state(state: AppState, req: Request<Body>) -> StatusCode {
+    make_app(state).oneshot(req).await.unwrap().status()
 }
 
 async fn run(req: Request<Body>) -> StatusCode {
-    make_app().oneshot(req).await.unwrap().status()
+    run_with_state(make_state(None), req).await
+}
+
+#[tokio::test]
+async fn csrf_allows_custom_allowed_origin() {
+    let state = make_state(Some("https://cade.mycompany.com".to_string()));
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/x")
+        .header("Origin", "https://cade.mycompany.com")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(run_with_state(state, req).await, StatusCode::OK);
 }
 
 #[tokio::test]

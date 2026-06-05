@@ -41,21 +41,24 @@ fn App() -> Element {
     let mut copied_code = use_signal(|| false);
 
     // Dynamic description text and link per tab
-    let (tab_title, tab_desc, tab_link) = match active_tab() {
+    let (tab_title, tab_desc, tab_link, tab_href) = match active_tab() {
         0 => (
             "Send a message to an agent",
             "Make an API request to send your stateful agent a message.",
             "Get started with the API",
+            "https://github.com/EzekTec-Inc/CADE/blob/main/docs/getting-started.md",
         ),
         1 => (
             "Create an agent",
             "Deploy a new autonomous agent with custom system prompts, tools, and persona.",
             "Explore agent creation",
+            "https://github.com/EzekTec-Inc/CADE/blob/main/docs/agents-and-conversations.md",
         ),
         _ => (
             "Inspect agent memory",
             "Retrieve and inspect the stateful core memory blocks of an active agent.",
             "Read about memory state",
+            "https://github.com/EzekTec-Inc/CADE/blob/main/docs/memory-system.md",
         ),
     };
 
@@ -210,7 +213,7 @@ fn App() -> Element {
                     // Main Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-3 pb-1 tracking-wider uppercase", "Dashboard" }
                     div {
-                        class: if active_page() == SelectedPage::Dashboard { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        class: if active_page() == SelectedPage::Dashboard { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Dashboard),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "🎛" }
@@ -224,7 +227,10 @@ fn App() -> Element {
                         }
                         span { class: "text-gray-600 text-xs", "↗" }
                     }
-                    a { href: "#", class: "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer",
+                    a {
+                        href: "https://app.letta.com/chat/agent-bf70ee97-4793-4ff5-820c-03a2d405677c",
+                        target: "_blank",
+                        class: "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer",
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "💬" }
                             span { "Chat" }
@@ -235,7 +241,7 @@ fn App() -> Element {
                     // Development Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Development" }
                     div {
-                        class: if active_page() == SelectedPage::Agents { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        class: if active_page() == SelectedPage::Agents { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Agents),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "🤖" }
@@ -243,7 +249,7 @@ fn App() -> Element {
                         }
                     }
                     div {
-                        class: if active_page() == SelectedPage::Logs { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        class: if active_page() == SelectedPage::Logs { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Logs),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "📋" }
@@ -254,7 +260,7 @@ fn App() -> Element {
                     // Resources Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Resources" }
                     div {
-                        class: if active_page() == SelectedPage::MemoryBlocks { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        class: if active_page() == SelectedPage::MemoryBlocks { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::MemoryBlocks),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "🧠" }
@@ -262,7 +268,7 @@ fn App() -> Element {
                         }
                     }
                     div {
-                        class: if active_page() == SelectedPage::Tools { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        class: if active_page() == SelectedPage::Tools { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Tools),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "🛠" }
@@ -270,7 +276,7 @@ fn App() -> Element {
                         }
                     }
                     div {
-                        class: if active_page() == SelectedPage::Models { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] border-l-2 border-[#ff7c5c] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        class: if active_page() == SelectedPage::Models { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
                         onclick: move |_| active_page.set(SelectedPage::Models),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "⚙" }
@@ -472,7 +478,7 @@ fn App() -> Element {
                                 p { class: "text-gray-400 text-[13px] leading-6", "{tab_desc}" }
                             }
                             a {
-                                href: "https://docs.letta.com",
+                                href: "{tab_href}",
                                 target: "_blank",
                                 class: "inline-flex items-center space-x-2 text-xs font-semibold text-white border border-[#2d2f3d] bg-[#1d1e26] hover:bg-[#252735] py-2 px-4 rounded-md w-fit shadow transition duration-150",
                                 span { "{tab_link}" }
