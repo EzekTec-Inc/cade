@@ -250,3 +250,18 @@ fn mime_for_returns_correct_types() {
     assert_eq!(mime_for("favicon.ico"), "image/x-icon");
     assert_eq!(mime_for("unknown.xyz"), "application/octet-stream");
 }
+
+#[tokio::test]
+async fn dashboard_existing_asset_returns_200() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard/cade-gui-ee9a23395c7c3ad2.js")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "existing dashboard asset must return 200 OK"
+    );
+}
