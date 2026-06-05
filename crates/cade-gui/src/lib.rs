@@ -1,5 +1,35 @@
 use dioxus::prelude::*;
 
+async fn api_request(method: &str, path: &str, body: Option<&str>, api_key: &str) -> Result<String, String> {
+    use web_sys::{Request, RequestInit, RequestMode, Response};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
+    let mut opts = RequestInit::new();
+    opts.method(method);
+    opts.mode(RequestMode::Cors);
+
+    if let Some(body_str) = body {
+        let js_body = wasm_bindgen::JsValue::from_str(body_str);
+        opts.body(Some(&js_body));
+    }
+
+    let request = Request::new_with_str_and_init(path, &opts).map_err(|e| format!("{:?}", e))?;
+    request.headers().set("Authorization", &format!("Bearer {}", api_key)).map_err(|e| format!("{:?}", e))?;
+    request.headers().set("Content-Type", "application/json").map_err(|e| format!("{:?}", e))?;
+
+    let resp_value = JsFuture::from(window.fetch_with_request(&request)).await.map_err(|e| format!("{:?}", e))?;
+    let resp: Response = resp_value.dyn_into().map_err(|e| format!("{:?}", e))?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP error: {}", resp.status()));
+    }
+
+    let text_value = JsFuture::from(resp.text().map_err(|e| format!("{:?}", e))?).await.map_err(|e| format!("{:?}", e))?;
+    Ok(text_value.as_string().unwrap_or_default())
+}
+
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
     // Launch the Dioxus web application
@@ -39,6 +69,40 @@ fn App() -> Element {
     let mut selected_lang = use_signal(|| CodeLanguage::Javascript);
     let mut copied_key = use_signal(|| false);
     let mut copied_code = use_signal(|| false);
+
+    // Chat specific states
+    let mut selected_agent = use_signal(|| Option::<cade_api_types::AgentInfo>::None);
+    let mut messages = use_signal(|| Vec::<cade_api_types::ChatMessage>::new());
+    let mut input_text = use_signal(|| String::new());
+    let mut is_loading = use_signal(|| false);
+    let api_key = use_signal(|| String::from("sk-placeholder-key-for-local-development"));
+    let agent_name = selected_agent().map(|a| a.name.clone()).unwrap_or_else(|| "deep-thought-research-agent_copy".to_string());
+
+    use_effect(move || {
+        spawn(async move {
+            // First fetch the first agent
+            if let Ok(agents_str) = api_request("GET", "/v1/agents", None, &api_key()).await {
+                if let Ok(agent_list) = serde_json::from_str::<Vec<cade_api_types::AgentInfo>>(&agents_str) {
+                    if let Some(first) = agent_list.first() {
+                        selected_agent.set(Some(first.clone()));
+                    }
+                }
+            }
+            
+            // Loop to poll messages
+            loop {
+                if let Some(agent) = selected_agent() {
+                    let path = format!("/v1/agents/{}/messages", agent.id);
+                    if let Ok(messages_str) = api_request("GET", &path, None, &api_key()).await {
+                        if let Ok(msg_list) = serde_json::from_str::<Vec<cade_api_types::ChatMessage>>(&messages_str) {
+                            messages.set(msg_list);
+                        }
+                    }
+                }
+                gloo_timers::future::TimeoutFuture::new(1500).await;
+            }
+        });
+    });
 
     // Dynamic description text and link per tab
     let (tab_title, tab_desc, tab_link, tab_href) = match active_tab() {
@@ -227,15 +291,13 @@ fn App() -> Element {
                         }
                         span { class: "text-gray-600 text-xs", "↗" }
                     }
-                    a {
-                        href: "https://app.letta.com/chat/agent-bf70ee97-4793-4ff5-820c-03a2d405677c",
-                        target: "_blank",
-                        class: "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer",
+                    div {
+                        class: if active_page() == SelectedPage::Chat { "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer" } else { "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer" },
+                        onclick: move |_| active_page.set(SelectedPage::Chat),
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "💬" }
                             span { "Chat" }
                         }
-                        span { class: "text-gray-600 text-xs", "↗" }
                     }
 
                     // Development Group
@@ -318,20 +380,186 @@ fn App() -> Element {
 
         // --- MAIN VIEW AREA (RIGHT) ---
         main { class: "flex-1 bg-[#0f1115] overflow-y-auto flex flex-col justify-between h-full select-text pb-8",
-            // Header bar
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                div {}
-                div { class: "flex items-center space-x-6 text-[13px] text-gray-400 font-medium",
-                    span { class: "hover:text-white cursor-pointer transition duration-150", "Support" }
-                    span { class: "hover:text-white cursor-pointer transition duration-150", "Docs" }
-                    span { class: "hover:text-white cursor-pointer transition duration-150", "API reference" }
-                    span { class: "hover:text-white cursor-pointer transition duration-150", "Manage LLM keys" }
-                    span { class: "bg-[#1f222b] hover:bg-[#272a35] text-white px-3 py-1.5 rounded-md border border-[#272833] cursor-pointer text-xs font-semibold shadow transition duration-150", "Free Tier" }
-                }
-            }
+            if active_page() == SelectedPage::Chat {
+                div { class: "flex flex-1 h-full overflow-hidden",
+                        // Sub-Sidebar (Left part of Chat View)
+                        div { class: "w-[260px] bg-[#16171d] border-r border-[#272833] flex flex-col p-4 justify-between h-full select-none shrink-0",
+                            div { class: "flex flex-col space-y-6",
+                                // Active Agent Header
+                                div { class: "flex items-center space-x-3 p-2",
+                                    div { class: "w-8 h-8 rounded-lg bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_6px_rgba(236,72,153,0.3)] shrink-0" }
+                                    span { class: "text-white text-sm font-semibold truncate", "{agent_name}" }
+                                }
+                                // Options Menu
+                                div { class: "flex flex-col space-y-1 text-sm text-gray-400",
+                                    div { class: "flex items-center space-x-2.5 px-3 py-2 rounded-md hover:bg-[#1f212a] hover:text-white cursor-pointer transition duration-150",
+                                        span { "🧠" }
+                                        span { "Memory" }
+                                    }
+                                    div { class: "flex items-center space-x-2.5 px-3 py-2 rounded-md hover:bg-[#1f212a] hover:text-white cursor-pointer transition duration-150",
+                                        span { "📝" }
+                                        span { "New chat" }
+                                    }
+                                }
+                                // Pinned Section
+                                div { class: "flex flex-col space-y-1",
+                                    div { class: "text-[10px] font-bold text-gray-500 px-3 tracking-wider uppercase", "Pinned" }
+                                    div { class: "flex items-center justify-between px-3 py-2 rounded-md bg-[#1f212a]/60 text-white font-medium cursor-pointer",
+                                        div { class: "flex items-center space-x-2.5",
+                                            span { "💬" }
+                                            span { "Main chat" }
+                                        }
+                                        span { class: "text-gray-500 text-[10px]", "7mo" }
+                                    }
+                                }
+                            }
+                            // Bottom User ID
+                            div { class: "p-2 border-t border-[#272833] flex items-center space-x-2.5 select-none",
+                                div { class: "w-7 h-7 rounded-full bg-orange-500 text-white text-xs flex items-center justify-center font-bold", "SE" }
+                                span { class: "text-gray-400 text-xs", "stephen" }
+                            }
+                        }
 
-            // Dashboard Content
-            div { class: "px-10 pt-6 flex-1",
+                        // Main Chat Panel (Right part of Chat View)
+                        div { class: "flex-1 flex flex-col justify-between bg-[#0f1115] h-full",
+                            // Header bar
+                            header { class: "px-6 py-4 flex items-center justify-between select-none border-b border-[#111218]",
+                                span { class: "text-white font-medium text-sm", "Main chat" }
+                            }
+
+                            // Messages area
+                            div { class: "flex-1 overflow-y-auto p-8 space-y-6 flex flex-col",
+                                if messages().is_empty() {
+                                    div { class: "m-auto flex flex-col items-center select-none",
+                                        div { class: "w-16 h-16 rounded-xl bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_12px_rgba(236,72,153,0.4)] mb-4" }
+                                        h2 { class: "text-[24px] font-semibold text-white mb-6", "Hi, I'm {agent_name}" }
+                                    }
+                                } else {
+                                    for m in messages().iter() {
+                                        {
+                                            let is_user = m.role == "user";
+                                            let content_val = m.content.as_str().unwrap_or_else(|| m.content.to_string());
+                                            rsx! {
+                                                div { class: "flex items-start space-x-3 max-w-[80%]" + if is_user { " ml-auto flex-row-reverse space-x-reverse" } else { " mr-auto" },
+                                                    div { class: "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs " + if is_user { "bg-orange-500 text-white" } else { "bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6]" },
+                                                        if is_user { "U" } else { "AI" }
+                                                    }
+                                                    div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm",
+                                                        div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", if is_user { "user" } else { "assistant" } }
+                                                        p { class: "text-gray-200 mt-1 whitespace-pre-wrap", "{content_val}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Message input section
+                            div { class: "p-6 bg-[#0f1115] border-t border-[#111218]",
+                                div { class: "relative border border-[#272833] bg-[#16171d] rounded-xl p-4 flex flex-col space-y-2",
+                                    textarea {
+                                        class: "bg-transparent text-gray-200 placeholder-gray-500 outline-none w-full text-sm resize-none h-12",
+                                        placeholder: "Ask anything, @ to add files, / for commands",
+                                        value: "{input_text}",
+                                        oninput: move |e| input_text.set(e.value().clone()),
+                                        onkeydown: move |e| {
+                                            if e.key() == Key::Enter && !e.modifiers().shift() {
+                                                e.stop_propagation();
+                                                let text = input_text().trim().to_string();
+                                                if !text.is_empty() && !is_loading() {
+                                                    is_loading.set(true);
+                                                    input_text.set(String::new());
+                                                    
+                                                    // Optimistically insert user message
+                                                    let mut current_msgs = messages();
+                                                    current_msgs.push(cade_api_types::ChatMessage {
+                                                        id: format!("temp-{}", messages().len()),
+                                                        role: "user".to_string(),
+                                                        content: serde_json::Value::String(text.clone()),
+                                                        conversation_id: None,
+                                                    });
+                                                    messages.set(current_msgs);
+                                                    
+                                                    let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
+                                                    let key = api_key();
+                                                    
+                                                    spawn(async move {
+                                                        let path = format!("/v1/agents/{}/run", agent_id);
+                                                        let body = serde_json::json!({ "input": text });
+                                                        let _ = api_request("POST", &path, Some(&body.to_string()), &key).await;
+                                                        is_loading.set(false);
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "flex items-center justify-between pt-2 border-t border-[#272833]/40 select-none",
+                                        div { class: "flex items-center space-x-3 text-xs text-gray-500 font-medium",
+                                            span { class: "flex items-center space-x-1",
+                                                span { class: "text-emerald-500", "🟢" }
+                                                span { "Cloud" }
+                                            }
+                                            span { class: "flex items-center space-x-1",
+                                                span { "📁" }
+                                                span { "root" }
+                                            }
+                                        }
+                                        button {
+                                            class: if is_loading() { "w-7 h-7 bg-[#ff7c5c] text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150 opacity-50 cursor-not-allowed" } else { "w-7 h-7 bg-[#ff7c5c] text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150" },
+                                            onclick: move |_| {
+                                                let text = input_text().trim().to_string();
+                                                if !text.is_empty() && !is_loading() {
+                                                    is_loading.set(true);
+                                                    input_text.set(String::new());
+                                                    
+                                                    let mut current_msgs = messages();
+                                                    current_msgs.push(cade_api_types::ChatMessage {
+                                                        id: format!("temp-{}", messages().len()),
+                                                        role: "user".to_string(),
+                                                        content: serde_json::Value::String(text.clone()),
+                                                        conversation_id: None,
+                                                    });
+                                                    messages.set(current_msgs);
+                                                    
+                                                    let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
+                                                    let key = api_key();
+                                                    
+                                                    spawn(async move {
+                                                        let path = format!("/v1/agents/{}/run", agent_id);
+                                                        let body = serde_json::json!({ "input": text });
+                                                        let _ = api_request("POST", &path, Some(&body.to_string()), &key).await;
+                                                        is_loading.set(false);
+                                                    });
+                                                }
+                                            },
+                                            // Send SVG icon
+                                            svg { class: "w-4 h-4 transform rotate-90", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.5",
+                                                path { "stroke-linecap": "round", "stroke-linejoin": "round", d: "M12 19V5m-7 7l7-7 7 7" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                rsx! {
+                    // Header bar
+                    header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
+                        div {}
+                        div { class: "flex items-center space-x-6 text-[13px] text-gray-400 font-medium",
+                            span { class: "hover:text-white cursor-pointer transition duration-150", "Support" }
+                            span { class: "hover:text-white cursor-pointer transition duration-150", "Docs" }
+                            span { class: "hover:text-white cursor-pointer transition duration-150", "API reference" }
+                            span { class: "hover:text-white cursor-pointer transition duration-150", "Manage LLM keys" }
+                            span { class: "bg-[#1f222b] hover:bg-[#272a35] text-white px-3 py-1.5 rounded-md border border-[#272833] cursor-pointer text-xs font-semibold shadow transition duration-150", "Free Tier" }
+                        }
+                    }
+
+                    // Dashboard Content
+                    div { class: "px-10 pt-6 flex-1",
                 // Greeting Heading
                 h1 { class: "text-[32px] font-bold text-white mb-8 tracking-tight flex items-center space-x-2",
                     span { "Evening, Stephen" }
@@ -567,4 +795,5 @@ fn App() -> Element {
             }
         }
     }
+}
 }
