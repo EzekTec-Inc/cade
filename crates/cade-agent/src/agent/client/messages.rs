@@ -134,6 +134,28 @@ impl HttpTransport {
         Ok(resp.json().await?)
     }
 
+    pub async fn create_conversation_fork(
+        &self,
+        agent_id: &str,
+        title: &str,
+        parent_id: &str,
+    ) -> Result<serde_json::Value> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/conversations")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&json!({ "title": title, "parent_id": parent_id }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            return Err(crate::Error::custom(format!(
+                "create_conversation_fork failed: {txt}"
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
     pub async fn delete_conversation(&self, agent_id: &str, conv_id: &str) -> Result<()> {
         let resp = self
             .client

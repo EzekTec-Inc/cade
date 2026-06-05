@@ -131,21 +131,46 @@ impl ModelRegistry {
             let provider = parts[0];
             let model_name = parts[1];
             if let Some(m) = llm_providers::get_model(provider, model_name) {
-                let (cache_read, cache_write) = if provider == "anthropic" {
-                    (m.input_price * 0.1, m.input_price * 1.25)
-                } else if provider == "openai" {
-                    (m.input_price * 0.5, 0.0)
-                } else if provider == "gemini" || provider == "google" {
-                    (m.input_price * 0.25, 0.0)
-                } else if provider == "deepseek" {
-                    if model_name.contains("reasoner") || model_name.contains("r1") {
-                        (m.input_price * 0.25, 0.0) // DeepSeek R1 cache-hits are $0.14 / 1M (~25% of $0.55 base)
-                    } else {
-                        (m.input_price * 0.1, 0.0) // DeepSeek V3 cache-hits are $0.014 / 1M (exactly 10% of $0.14 base)
+                // Find matching generic fallback rule to extract ratios
+                let mut cache_read_ratio = None;
+                let mut cache_write_ratio = None;
+                for rule in &self.rules {
+                    let is_fallback = rule.is_generic_fallback();
+                    let matches = rule.matches(model_id);
+                    if is_fallback && matches {
+                        if rule.pricing.input > 0.0 {
+                            cache_read_ratio = Some(rule.pricing.cache_read / rule.pricing.input);
+                            cache_write_ratio = Some(rule.pricing.cache_write / rule.pricing.input);
+                        }
+                        break;
                     }
-                } else {
-                    (0.0, 0.0)
-                };
+                }
+
+                let cache_read = cache_read_ratio.map(|r| m.input_price * r).unwrap_or_else(|| {
+                    if provider == "anthropic" {
+                        m.input_price * 0.1
+                    } else if provider == "openai" {
+                        m.input_price * 0.5
+                    } else if provider == "gemini" || provider == "google" {
+                        m.input_price * 0.25
+                    } else if provider == "deepseek" {
+                        if model_name.contains("reasoner") || model_name.contains("r1") {
+                            m.input_price * 0.25
+                        } else {
+                            m.input_price * 0.1
+                        }
+                    } else {
+                        0.0
+                    }
+                });
+
+                let cache_write = cache_write_ratio.map(|r| m.input_price * r).unwrap_or_else(|| {
+                    if provider == "anthropic" {
+                        m.input_price * 1.25
+                    } else {
+                        0.0
+                    }
+                });
 
                 return ModelPricing {
                     input: m.input_price,
@@ -277,5 +302,24 @@ mod tests {
         // Cache read should be 10% of input, cache write should be 1.25x of input
         assert!((p.cache_read - p.input * 0.1).abs() < 1e-9);
         assert!((p.cache_write - p.input * 1.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pricing_dynamic_ratio_resolution() {
+        use std::io::Write;
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let custom_json = r#"[
+            {
+                "starts_with_any": ["openai/"],
+                "pricing": { "input": 10.0, "output": 10.0, "cache_read": 2.0, "cache_write": 1.0 }
+            }
+        ]"#;
+        temp_file.write_all(custom_json.as_bytes()).unwrap();
+
+        let registry = ModelRegistry::load_or_default(Some(temp_file.path()));
+        let p = registry.pricing_for_model("openai/gpt-3.5-turbo");
+        assert_eq!(p.input, 0.5); // Database price for gpt-3.5-turbo is 0.5
+        assert!((p.cache_read - 0.1).abs() < 1e-9); // 0.5 * 0.2 = 0.1
+        assert!((p.cache_write - 0.05).abs() < 1e-9); // 0.5 * 0.1 = 0.05
     }
 }

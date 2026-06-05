@@ -135,6 +135,21 @@ pub(crate) enum ToolPreflightResult {
     Blocked(cade_agent::tools::ToolResult),
 }
 
+struct ReplLuaHookRunner {
+    app: Arc<Mutex<TuiApp>>,
+}
+
+impl cade_core::hooks::LuaHookRunner for ReplLuaHookRunner {
+    fn run_hook(&self, hook_name: &str, input: &serde_json::Value) -> Option<String> {
+        let app = self.app.lock();
+        if let Some(ref lua) = app.lua_engine {
+            lua.run_hook(hook_name, input.clone())
+        } else {
+            None
+        }
+    }
+}
+
 // -- Repl
 
 use crate::cli::repl::format::mode_display;
@@ -323,6 +338,9 @@ impl Repl {
             tui_app.bg_pending_count = Some(Box::new(move || bg_for_getter.lock().len()));
         }
 
+        let app = Arc::new(Mutex::new(tui_app));
+        let hooks = hooks.with_lua_runner(Arc::new(ReplLuaHookRunner { app: app.clone() }));
+
         Self {
             client,
             agent_id: Arc::new(Mutex::new(agent_id)),
@@ -364,7 +382,7 @@ impl Repl {
             session_input_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_stats: std::sync::Arc::new(parking_lot::Mutex::new(SessionStats::new())),
-            app: Arc::new(Mutex::new(tui_app)),
+            app,
             queued_steering: Arc::new(Mutex::new(None)),
             queued_followup: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             last_reasoning: Arc::new(Mutex::new(String::new())),
@@ -553,7 +571,7 @@ impl Repl {
             new_hooks,
             self.cwd.clone(),
             self.agent_id.lock().clone(),
-        );
+        ).with_lua_runner(Arc::new(ReplLuaHookRunner { app: self.app.clone() }));
         self.permissions.reload_from_settings(&new_perms);
 
         // 4. Reload MCP servers

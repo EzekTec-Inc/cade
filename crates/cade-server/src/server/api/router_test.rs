@@ -322,3 +322,69 @@ async fn test_workflow_dispatch_runs_background_execution() {
     // Clean up
     let _ = std::fs::remove_file(config_path);
 }
+
+#[tokio::test]
+async fn test_create_conversation_fork() {
+    let state = make_state(Some("tok".into()));
+    let db = state.db.clone();
+
+    // Seed agent
+    cade_store::sqlite::agents::create_agent(
+        &db,
+        &cade_store::sqlite::AgentRow {
+            id: "test_agent".into(),
+            name: "A".into(),
+            model: "m".into(),
+            description: None,
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+        },
+    ).unwrap();
+
+    // Seed parent conversation and some messages
+    let parent_conv = cade_store::sqlite::create_conversation(&db, "test_agent", "Parent").unwrap();
+    let msg1 = cade_store::sqlite::MessageRow {
+        id: "msg1".to_string(),
+        agent_id: "test_agent".to_string(),
+        conversation_id: Some(parent_conv.id.clone()),
+        role: "user".to_string(),
+        content: serde_json::json!("Hello"),
+        char_count: 5,
+    };
+    cade_store::sqlite::insert_message(&db, &msg1).unwrap();
+
+    let app = router(state);
+
+    // Request fork of parent conversation
+    let body = serde_json::json!({
+        "title": "Forked Chat",
+        "parent_id": parent_conv.id
+    });
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/agents/test_agent/conversations")
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let new_conv_id = body_json["id"].as_str().unwrap();
+
+    // Verify that messages were cloned
+    let cloned_messages = cade_store::sqlite::list_messages(&db, "test_agent", Some(new_conv_id), 10).unwrap();
+    assert_eq!(cloned_messages.len(), 1);
+    assert_eq!(cloned_messages[0].role, "user");
+    assert_eq!(cloned_messages[0].content.as_str().unwrap(), "Hello");
+    assert_ne!(cloned_messages[0].id, "msg1"); // ID must be newly generated
+}

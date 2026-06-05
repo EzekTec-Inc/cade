@@ -636,8 +636,29 @@ pub async fn create_conversation(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let title = body["title"].as_str().unwrap_or("").to_string();
+    let parent_id = body["parent_id"].as_str().map(String::from);
     let row = sqlite::create_conversation(&state.db, &agent_id, &title)
         .map_err(|e| server_err(e.to_string()))?;
+
+    if let Some(ref pid) = parent_id {
+        if let Ok(msgs) = sqlite::list_messages(&state.db, &agent_id, Some(pid), 1000) {
+            for m in msgs {
+                let new_id = format!("msg-{}", uuid::Uuid::new_v4());
+                let new_row = sqlite::MessageRow {
+                    id: new_id,
+                    agent_id: agent_id.clone(),
+                    conversation_id: Some(row.id.clone()),
+                    role: m.role,
+                    content: m.content,
+                    char_count: m.char_count,
+                };
+                if let Err(e) = sqlite::insert_message(&state.db, &new_row) {
+                    tracing::warn!("Failed to clone message on fork: {e}");
+                }
+            }
+        }
+    }
+
     Ok(Json(conv_to_json(&row)))
 }
 

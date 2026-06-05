@@ -38,6 +38,10 @@ impl HookOutcome {
     }
 }
 
+pub trait LuaHookRunner: Send + Sync {
+    fn run_hook(&self, hook_name: &str, input: &serde_json::Value) -> Option<String>;
+}
+
 // -- HookEngine
 
 #[derive(Clone)]
@@ -45,6 +49,7 @@ pub struct HookEngine {
     hooks: Arc<HooksConfig>,
     cwd: PathBuf,
     session_id: String,
+    lua_runner: Option<Arc<dyn LuaHookRunner>>,
 }
 
 impl HookEngine {
@@ -53,7 +58,13 @@ impl HookEngine {
             hooks: Arc::new(hooks),
             cwd,
             session_id,
+            lua_runner: None,
         }
+    }
+
+    pub fn with_lua_runner(mut self, runner: Arc<dyn LuaHookRunner>) -> Self {
+        self.lua_runner = Some(runner);
+        self
     }
 
     pub fn is_empty(&self) -> bool {
@@ -71,6 +82,16 @@ impl HookEngine {
             "tool_name":         tool_name,
             "tool_input":        args,
         });
+
+        if let Some(ref runner) = self.lua_runner {
+            if let Some(res) = runner.run_hook("pre_tool_use", &input) {
+                if res.starts_with("block") {
+                    let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+                    return HookOutcome::Block { reason };
+                }
+            }
+        }
+
         self.run_entries_blocking(&self.hooks.pre_tool_use, tool_name, input)
             .await
     }
@@ -95,6 +116,13 @@ impl HookEngine {
             "preceding_reasoning":       preceding_reasoning.unwrap_or(""),
             "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
+
+        if let Some(ref runner) = self.lua_runner {
+            if let Some(res) = runner.run_hook("post_tool_use", &input) {
+                return Some(res);
+            }
+        }
+
         self.run_entries_context(&self.hooks.post_tool_use, tool_name, input)
             .await
     }
@@ -118,6 +146,11 @@ impl HookEngine {
             "preceding_reasoning":       preceding_reasoning.unwrap_or(""),
             "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
+
+        if let Some(ref runner) = self.lua_runner {
+            let _ = runner.run_hook("post_tool_use_failure", &input);
+        }
+
         self.run_entries_fire_forget(&self.hooks.post_tool_use_failure, tool_name, input)
             .await;
     }
@@ -132,6 +165,16 @@ impl HookEngine {
             "tool_name":         tool_name,
             "tool_input":        args,
         });
+
+        if let Some(ref runner) = self.lua_runner {
+            if let Some(res) = runner.run_hook("permission_request", &input) {
+                if res.starts_with("block") {
+                    let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+                    return HookOutcome::Block { reason };
+                }
+            }
+        }
+
         self.run_entries_blocking(&self.hooks.permission_request, tool_name, input)
             .await
     }
@@ -146,6 +189,16 @@ impl HookEngine {
             "sessionId":         self.session_id,
             "prompt":            prompt,
         });
+
+        if let Some(ref runner) = self.lua_runner {
+            if let Some(res) = runner.run_hook("user_prompt_submit", &input) {
+                if res.starts_with("block") {
+                    let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+                    return HookOutcome::Block { reason };
+                }
+            }
+        }
+
         self.run_all_blocking(&self.hooks.user_prompt_submit, input)
             .await
     }

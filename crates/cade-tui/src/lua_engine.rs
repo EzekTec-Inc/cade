@@ -58,6 +58,7 @@ impl LuaEngine {
                 _commands = {},
                 _keybindings = {},
                 _ui_callbacks = {},
+                _hooks = {},
                 register_command = function(name, cb)
                     CADE._commands[name] = cb
                 end,
@@ -66,6 +67,9 @@ impl LuaEngine {
                 end,
                 bind_ui_callback = function(id, cb)
                     CADE._ui_callbacks[id] = cb
+                end,
+                register_hook = function(event, cb)
+                    CADE._hooks[event] = cb
                 end,
                 execute_slash_command = function(cmd)
                     _CADE_execute_slash_command(cmd)
@@ -261,6 +265,28 @@ impl LuaEngine {
         }
         false
     }
+
+    pub fn run_hook(&self, hook_name: &str, input: serde_json::Value) -> Option<String> {
+        if let Ok(cade) = self.lua.globals().get::<mlua::Table>("CADE")
+            && let Ok(hooks) = cade.get::<mlua::Table>("_hooks")
+            && let Ok(func) = hooks.get::<mlua::Function>(hook_name)
+        {
+            let input_lua = match self.lua.to_value(&input) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("Failed to convert JSON input to Lua for hook {}: {}", hook_name, e);
+                    return None;
+                }
+            };
+            match func.call::<Option<String>>(input_lua) {
+                Ok(res) => return res,
+                Err(e) => {
+                    tracing::warn!("Lua hook error for {}: {}", hook_name, e);
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +318,37 @@ mod tests {
         engine.load_plugins(dir.path());
 
         assert_eq!(engine.get_footer_text().unwrap(), "p1p2");
+    }
+
+    #[test]
+    fn test_lua_hooks_register_and_run() {
+        let engine = LuaEngine::new().unwrap();
+        let dir = tempdir().unwrap();
+
+        let hook_lua = r#"
+            CADE.register_hook("pre_tool_use", function(input)
+                if input.tool_name == "forbidden_tool" then
+                    return "block: reason"
+                else
+                    return "allow"
+                end
+            end)
+        "#;
+        std::fs::write(dir.path().join("hook.lua"), hook_lua).unwrap();
+
+        engine.load_plugins(dir.path());
+
+        let input_block = serde_json::json!({
+            "tool_name": "forbidden_tool"
+        });
+        let res_block = engine.run_hook("pre_tool_use", input_block);
+        assert_eq!(res_block, Some("block: reason".to_string()));
+
+        let input_allow = serde_json::json!({
+            "tool_name": "allowed_tool"
+        });
+        let res_allow = engine.run_hook("pre_tool_use", input_allow);
+        assert_eq!(res_allow, Some("allow".to_string()));
     }
 }
 
