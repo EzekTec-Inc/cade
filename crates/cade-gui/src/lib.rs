@@ -380,8 +380,10 @@ fn App() -> Element {
 
         // --- MAIN VIEW AREA (RIGHT) ---
         main { class: "flex-1 bg-[#0f1115] overflow-y-auto flex flex-col justify-between h-full select-text pb-8",
-            if active_page() == SelectedPage::Chat {
-                div { class: "flex flex-1 h-full overflow-hidden",
+            {
+                if active_page() == SelectedPage::Chat {
+                    rsx! {
+                        div { class: "flex flex-1 h-full overflow-hidden",
                         // Sub-Sidebar (Left part of Chat View)
                         div { class: "w-[260px] bg-[#16171d] border-r border-[#272833] flex flex-col p-4 justify-between h-full select-none shrink-0",
                             div { class: "flex flex-col space-y-6",
@@ -438,10 +440,26 @@ fn App() -> Element {
                                     for m in messages().iter() {
                                         {
                                             let is_user = m.role == "user";
-                                            let content_val = m.content.as_str().unwrap_or_else(|| m.content.to_string());
+                                            let content_str;
+                                            let content_val = if let Some(s) = m.content.as_str() {
+                                                s
+                                            } else {
+                                                content_str = m.content.to_string();
+                                                &content_str
+                                            };
+                                            let bubble_class = if is_user {
+                                                "flex items-start space-x-3 max-w-[80%] ml-auto flex-row-reverse space-x-reverse"
+                                            } else {
+                                                "flex items-start space-x-3 max-w-[80%] mr-auto"
+                                            };
+                                            let avatar_class = if is_user {
+                                                "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-orange-500 text-white"
+                                            } else {
+                                                "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6]"
+                                            };
                                             rsx! {
-                                                div { class: "flex items-start space-x-3 max-w-[80%]" + if is_user { " ml-auto flex-row-reverse space-x-reverse" } else { " mr-auto" },
-                                                    div { class: "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs " + if is_user { "bg-orange-500 text-white" } else { "bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6]" },
+                                                div { class: "{bubble_class}",
+                                                    div { class: "{avatar_class}",
                                                         if is_user { "U" } else { "AI" }
                                                     }
                                                     div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm",
@@ -544,8 +562,8 @@ fn App() -> Element {
                         }
                     }
                 }
-            } else {
-                rsx! {
+                } else {
+                    rsx! {
                     // Header bar
                     header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
                         div {}
@@ -795,5 +813,7 @@ fn App() -> Element {
             }
         }
     }
+}
+}
 }
 }
