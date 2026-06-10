@@ -616,7 +616,8 @@ impl LlmProvider for OpenAiProvider {
                             let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
                             if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
                                 yield Ok(StreamChunk::Usage(TokenUsage {
-                                    input_tokens:       in_tok,
+                                    // OpenAI includes cached tokens in prompt_tokens, so subtract to get non-cached input
+                                    input_tokens:       in_tok.saturating_sub(cache_tok),
                                     output_tokens:      out_tok,
                                     cache_read_tokens:  cache_tok,
                                     cache_write_tokens: 0,
