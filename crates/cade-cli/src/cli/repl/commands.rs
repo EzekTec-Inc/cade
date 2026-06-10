@@ -230,11 +230,11 @@ impl Repl {
                     }
                 }
             }
-            SlashCmd::Link => {
-                return self.cmd_link(pending_input).await;
+            SlashCmd::Link(arg) => {
+                return self.cmd_link(arg, pending_input).await;
             }
-            SlashCmd::Unlink => {
-                return self.cmd_unlink().await;
+            SlashCmd::Unlink(arg) => {
+                return self.cmd_unlink(arg).await;
             }
             SlashCmd::Stream => {
                 return self.cmd_stream().await;
