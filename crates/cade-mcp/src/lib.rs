@@ -243,6 +243,18 @@ impl McpManager {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Dynamically start and add a single MCP server on-demand.
+    pub async fn start_and_add_server(&self, key: &str, config: &McpServerConfig) -> Result<()> {
+        let server = Self::connect_server(key, config).await?;
+        let mut servers = self.servers.write().await;
+        // Remove existing server with same key to prevent duplication
+        servers.retain(|s| s.key != key);
+        servers.push(server);
+        self.schemas_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Reload MCP servers from a new config map.
     ///
     /// - Servers whose key **and** command are unchanged are kept as-is.

@@ -15,13 +15,32 @@ impl Repl {
             if server_name == "all" {
                 active.insert("all".to_string());
                 self.tui_ok("  ✓ Linking ALL MCP servers...");
+                // Start all configured servers dynamically
+                let configs = self.settings.lock().merged_mcp_servers();
+                for (k, c) in &configs {
+                    let _ = self.mcp.start_and_add_server(k, c).await;
+                }
             } else {
                 active.insert(server_name.to_string());
                 self.tui_ok(format!("  ✓ Linking MCP server: {server_name}..."));
+                // Start the requested server dynamically
+                let configs = self.settings.lock().merged_mcp_servers();
+                if let Some(c) = configs.get(server_name) {
+                    if let Err(e) = self.mcp.start_and_add_server(server_name, c).await {
+                        self.tui_err(format!("  ✗ Failed to start MCP server '{server_name}': {e}"));
+                    }
+                } else {
+                    self.tui_err(format!("  ✗ MCP server '{server_name}' not found in settings."));
+                }
             }
         } else {
             active.insert("all".to_string());
             self.tui_ok("  ✓ Linking ALL MCP servers (default)...");
+            // Start all configured servers dynamically
+            let configs = self.settings.lock().merged_mcp_servers();
+            for (k, c) in &configs {
+                let _ = self.mcp.start_and_add_server(k, c).await;
+            }
         }
         drop(active);
 

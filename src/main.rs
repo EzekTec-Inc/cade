@@ -382,7 +382,7 @@ async fn async_main() -> Result<()> {
     let bg_lazy_mcp = args.lazy_mcp || settings.lazy_mcp();
 
     tokio::spawn(async move {
-        let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled {
+        let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled || bg_lazy_mcp {
             std::sync::Arc::new(McpManager::empty())
         } else {
             let (mgr, _) = McpManager::start(

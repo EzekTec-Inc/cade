@@ -171,9 +171,9 @@ async fn async_main() -> Result<()> {
     let mcp: Arc<McpManager> = match SettingsManager::new(&cwd) {
         Ok(settings) => {
             let mcp_configs = settings.merged_mcp_servers();
-            if mcp_configs.is_empty() {
+            if mcp_configs.is_empty() || settings.lazy_mcp() {
                 tracing::info!(
-                    "No MCP servers configured — agentic loop will use native tools only"
+                    "No MCP servers configured (or lazy-load enabled) — agentic loop will use native tools only"
                 );
                 Arc::new(McpManager::empty())
             } else {
