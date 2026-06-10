@@ -656,7 +656,8 @@ impl LlmProvider for GeminiProvider {
                         let cache_tok = usage["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32;
                         if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
                             yield Ok(StreamChunk::Usage(TokenUsage {
-                                input_tokens:       in_tok,
+                                // Gemini promptTokenCount includes cachedContentTokenCount, so subtract to align with pi-coding-agent
+                                input_tokens:       in_tok.saturating_sub(cache_tok),
                                 output_tokens:      out_tok,
                                 cache_read_tokens:  cache_tok,
                                 cache_write_tokens: 0,

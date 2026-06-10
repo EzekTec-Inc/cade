@@ -128,7 +128,7 @@ impl ModelRegistry {
         let id_clean = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
         let parts: Vec<&str> = id_clean.split('/').collect();
         if parts.len() == 2 {
-            let provider = parts[0];
+            let provider = if parts[0] == "gemini" { "google" } else { parts[0] };
             let model_name = parts[1];
             if let Some(m) = llm_providers::get_model(provider, model_name) {
                 // Find matching generic fallback rule to extract ratios
