@@ -1,5 +1,5 @@
 use crate::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[cfg(feature = "desktop")]
 use super::desktop::{
@@ -239,6 +239,31 @@ pub fn is_file_edit_tool(name: &str) -> bool {
     )
 }
 
+
+fn sequential_tasks_schema() -> Value {
+    json!({
+        "name": "run_sequential_tasks",
+        "description": "Executes a sequence of tasks where the output of one step can be used as input for a subsequent step. Use $steps.N.output to reference the output of step N.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool_name": { "type": "string", "description": "The name of the tool to run." },
+                            "arguments": { "type": "object", "description": "The arguments for the tool." }
+                        },
+                        "required": ["tool_name", "arguments"]
+                    }
+                }
+            },
+            "required": ["steps"]
+        }
+    })
+}
+
 /// All tool JSON schemas for a given toolset.
 pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> Vec<Value> {
     #[cfg(feature = "desktop")]
@@ -273,6 +298,7 @@ pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> 
             FinishTaskTool::schema(),
         ],
         _ => vec![
+            sequential_tasks_schema(),
             BashTool::schema(),
             ReadTool::schema(),
             WriteTool::schema(),

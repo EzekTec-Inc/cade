@@ -198,6 +198,15 @@ async fn async_main() -> Result<()> {
         && args.rename.is_none();
     let progress = StartupProgress::new(is_interactive);
 
+    if !settings.is_trusted() && is_interactive {
+        eprintln!(
+            "⚠️  Warning: Current directory ({}) is NOT trusted.\n\
+             Project-local settings, custom hooks, and MCP servers are disabled for safety.\n\
+             To trust this directory, run CADE and use the command `/trust`.\n",
+            cwd.display()
+        );
+    }
+
     let sp_server = progress.start_server_connect();
     if !client.health().await.unwrap_or(false) {
         sp_server.set_message("Starting cade-server…");

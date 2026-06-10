@@ -1110,3 +1110,71 @@ mod run_agent_helpers_tests {
         assert!(id.len() > "run-local-".len());
     }
 }
+
+#[cfg(test)]
+mod advanced_execution_tests {
+    use super::*;
+    use crate::server::api::run::execution::execute_turn_tools;
+    use cade_ai::LlmToolCall;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_parallel_and_sequential_execution() {
+        let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+        let (tx, _rx) = tokio::sync::mpsc::channel(128);
+
+        // Create a temporary file in the current working directory to pass the sandbox
+        let temp_file_path = std::env::current_dir().unwrap().join("_test_advanced_execution_read.tmp");
+        std::fs::write(&temp_file_path, "test file content containing some lines total").unwrap();
+        let file_path_str = temp_file_path.to_str().unwrap().to_string();
+
+        let tool_calls = vec![
+            // A call for the parallel MoA dispatcher
+            LlmToolCall {
+                id: "tc-read".to_string(),
+                name: "read_file".to_string(),
+                arguments: json!({"path": file_path_str}),
+                thought_signature: None,
+            },
+            // A call for the sequential workflow dispatcher
+            LlmToolCall {
+                id: "tc-seq".to_string(),
+                name: "run_sequential_tasks".to_string(),
+                arguments: json!({
+                    "steps": [
+                        { "tool_name": "bash", "arguments": { "command": "echo 'hello'" } },
+                        { "tool_name": "bash", "arguments": { "command": "echo 'world'" } }
+                    ]
+                }),
+                thought_signature: None,
+            },
+        ];
+
+        let results = execute_turn_tools(
+            &state,
+            "test-agent",
+            Some("test-conv"),
+            "read Cargo.toml and run a sequence",
+            tool_calls,
+            tx,
+        )
+        .await;
+
+        // Clean up immediately after execution
+        let _ = std::fs::remove_file(&temp_file_path);
+
+        assert_eq!(results.len(), 2);
+
+        // Verify parallel result (read_file)
+        let read_result = results.iter().find(|(r, _)| r.tool_name == "read_file").unwrap();
+        assert!(!read_result.0.is_error, "read_file error output: {}", read_result.0.output);
+        // Verify that the output contains the expected content
+        assert!(read_result.0.output.contains("test file content"));
+
+        // Verify sequential result
+        let seq_result = results.iter().find(|(r, _)| r.tool_name == "run_sequential_tasks").unwrap();
+        assert!(!seq_result.0.is_error);
+        assert!(seq_result.0.output.contains("Step 0: bash ->\nhello"));
+        assert!(seq_result.0.output.contains("Step 1: bash ->\nworld"));
+    }
+}

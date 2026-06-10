@@ -404,6 +404,24 @@ impl Repl {
             SlashCmd::Reload => {
                 return self.cmd_reload().await;
             }
+            SlashCmd::Trust => {
+                let cwd = self.cwd.clone();
+                let mut settings = self.settings.lock();
+                match settings.trust_directory(&cwd) {
+                    Ok(_) => {
+                        self.tui_ok(format!(
+                            "  ✓ Directory trusted: {}. Project-local settings and MCP servers are now active.",
+                            cwd.display()
+                        ));
+                        let _ = settings.reload();
+                        self.app.lock().show_toast("Directory trusted successfully", ToastLevel::Success);
+                    }
+                    Err(e) => {
+                        self.tui_err(format!("  ✗ Failed to trust directory: {}", e));
+                    }
+                }
+                return Ok(false);
+            }
             SlashCmd::Update => {
                 let _ = self.app.lock().suspend();
                 let res = crate::cli::update::run_update(false).await;

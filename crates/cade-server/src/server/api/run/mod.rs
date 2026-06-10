@@ -54,6 +54,7 @@ mod tests;
 const MAX_TURNS: usize = 20;
 
 /// Maximum bytes of a tool's `output` to send over SSE before truncation.
+mod execution;
 /// The full output is still persisted to the DB so future turns see complete
 /// history; only the SSE payload is capped to keep the GUI responsive.
 pub(super) const SSE_OUTPUT_TRUNCATE_BYTES: usize = 8_192;
@@ -116,7 +117,9 @@ pub(super) fn parse_max_session_cost(raw: Option<&str>) -> Option<f64> {
 /// `AgentMetrics::compute_cost_usd`) exceeds this value.  Unset, empty, or
 /// non-positive values disable the guardrail entirely.
 fn max_session_cost_usd() -> Option<f64> {
+    // Default to a safe limit of $5.00 to prevent runaway loops if unset.
     parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref())
+        .or(Some(5.0))
 }
 
 /// P4: shared `ModelRegistry` used to price token totals against the
@@ -163,7 +166,9 @@ pub(super) fn parse_tool_turn_max_tokens(raw: Option<&str>) -> Option<u32> {
 /// tool-dispatch-only turns saves output cost without losing quality on the
 /// answer turns.
 fn tool_turn_max_tokens() -> Option<u32> {
+    // Default to a safe limit of 4096 tokens on intermediate tool-planning turns if unset.
     parse_tool_turn_max_tokens(std::env::var("CADE_TOOL_TURN_MAX_TOKENS").ok().as_deref())
+        .or(Some(4096))
 }
 
 // ── Pre-spawn helpers ─────────────────────────────────────────────────────
@@ -254,8 +259,15 @@ pub async fn run_agent(
     // We use an mpsc channel to bridge the async loop into an SSE stream.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
 
+    let input_clone = input.clone();
     tokio::spawn(run_agent_loop(
-        state2, agent_id2, conv_id2, run_id2, theme_cmd, tx,
+        state2,
+        agent_id2,
+        conv_id2,
+        run_id2,
+        theme_cmd,
+        tx,
+        input_clone,
     ));
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -276,6 +288,7 @@ pub(crate) async fn run_agent_loop(
     run_id2: String,
     theme_cmd: Option<String>,
     tx: SseTx,
+    input: String,
 ) {
     let send_raw = |json_string: String| {
         let tx = tx.clone();
@@ -711,261 +724,17 @@ pub(crate) async fn run_agent_loop(
         // RC5-FIX: Hoist ToolRuntime creation outside per-tool-call loop.
         // One runtime instance is reused across all tool calls in this turn,
         // avoiding redundant Arc::new + AppState clones per tool call.
-        let storage_backend = std::sync::Arc::new(storage_impl::ServerStorageBackend {
-            state: state2.clone(),
-        });
-        let runtime = cade_agent::tools::runtime::ToolRuntime::new(
-            storage_backend,
-            std::sync::Arc::clone(&state2.mcp),
-            agent_id2.clone(),
-            std::env::current_dir().unwrap_or_default(),
-        );
-        for tc in &tool_calls {
-            // For interactive tools (run_subagent, etc) that ToolRuntime doesn't handle,
-            // we intercept them server-side using the remaining meta_tools logic or subagent dispatcher.
-            let result = if tc.name == "run_subagent" {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                subagent::handle_run_subagent_tool(&state2, &agent_id2, &tc.id, &args, tx.clone())
-                    .await
-            } else if tc.name == "run_parallel_subagents" {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                subagent::handle_run_parallel_subagents_tool(
-                    &state2,
-                    &agent_id2,
-                    &tc.id,
-                    &args,
-                    tx.clone(),
-                )
-                .await
-            } else if tc.name == "cancel_subagent" {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                subagent::handle_cancel_subagent_tool(&state2, &tc.id, &args).await
-            } else if tc.name == "set_plan" {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                let steps = args
-                    .get("steps")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .enumerate()
-                            .filter_map(|(i, v)| {
-                                v.as_str().map(|s| {
-                                    serde_json::json!({
-                                        "id": i + 1,
-                                        "description": s,
-                                        "is_done": false
-                                    })
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+        let turn_results = execution::execute_turn_tools(
+            &state2,
+            &agent_id2,
+            conv_id2.as_deref(),
+            &input,
+            tool_calls,
+            tx.clone(),
+        )
+        .await;
 
-                let title = args
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Tasks")
-                    .to_string();
-
-                let n = steps.len();
-                let plan_json =
-                    serde_json::json!({ "title": title, "steps": steps, "is_visible": true })
-                        .to_string();
-                let _ = sqlite::agents::update_agent_active_plan(
-                    &state2.db,
-                    &agent_id2,
-                    Some(&plan_json),
-                );
-
-                // Write directly to .cade-todo.md
-                let path = std::env::current_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                    .join(".cade-todo.md");
-                let mut content = format!("# {}\n\n", title);
-                for step in &steps {
-                    content.push_str(&format!(
-                        "- [ ] {}\n",
-                        step["description"].as_str().unwrap_or("")
-                    ));
-                }
-                let _ = std::fs::write(&path, content);
-
-                send(serde_json::json!({
-                    "message_type": "plan_update",
-                    "plan": serde_json::json!({ "title": title, "steps": steps, "is_visible": true })
-                }))
-                .await;
-
-                cade_agent::tools::manager::ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    tool_name: tc.name.clone(),
-                    output: format!("Plan set with {n} step(s)."),
-                    is_error: false,
-                    ui_resource_uri: None,
-                }
-            } else if tc.name == "UpdatePlan" {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                let step_id = args.get("step_id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let done = args.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
-
-                let mut found = false;
-                #[allow(clippy::collapsible_if)]
-                if let Ok(Some(agent)) = sqlite::agents::get_agent(&state2.db, &agent_id2) {
-                    if let Some(plan_str) = agent.active_plan_json {
-                        if let Ok(mut plan) = serde_json::from_str::<serde_json::Value>(&plan_str) {
-                            if let Some(steps) =
-                                plan.get_mut("steps").and_then(|v| v.as_array_mut())
-                            {
-                                for step in steps.iter_mut() {
-                                    if step.get("id").and_then(|id| id.as_u64())
-                                        == Some(step_id as u64)
-                                    {
-                                        step["is_done"] = serde_json::json!(done);
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if found {
-                                let _ = sqlite::agents::update_agent_active_plan(
-                                    &state2.db,
-                                    &agent_id2,
-                                    Some(&plan.to_string()),
-                                );
-
-                                // Sync back to .cade-todo.md
-                                let path = std::env::current_dir()
-                                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                    .join(".cade-todo.md");
-                                let title = plan
-                                    .get("title")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Tasks");
-                                let mut content = format!("# {}\n\n", title);
-                                if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
-                                    for step in steps {
-                                        let mark = if step
-                                            .get("is_done")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(false)
-                                        {
-                                            "x"
-                                        } else {
-                                            " "
-                                        };
-                                        content.push_str(&format!(
-                                            "- [{}] {}\n",
-                                            mark,
-                                            step["description"].as_str().unwrap_or("")
-                                        ));
-                                    }
-                                }
-                                let _ = std::fs::write(&path, content);
-
-                                send(serde_json::json!({
-                                    "message_type": "plan_update",
-                                    "plan": plan
-                                }))
-                                .await;
-                            }
-                        }
-                    }
-                }
-
-                cade_agent::tools::manager::ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    tool_name: tc.name.clone(),
-                    output: if found {
-                        format!(
-                            "Step {step_id} marked {}.",
-                            if done { "done" } else { "not done" }
-                        )
-                    } else {
-                        format!("error: Step {step_id} not found in the active plan.")
-                    },
-                    is_error: !found,
-                    ui_resource_uri: None,
-                }
-            } else if tc.name == "finish_task" {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
-                let summary = args
-                    .get("summary")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let reason = args
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let output = std::process::Command::new("git")
-                    .args(["status", "--porcelain"])
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                    .unwrap_or_default();
-
-                let files_modified = if output.trim().is_empty() {
-                    "None".to_string()
-                } else {
-                    output
-                        .lines()
-                        .map(|l| format!("- {}", l.trim()))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                };
-
-                let timestamp =
-                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-                let log_entry = format!(
-                    "\n## {} — {}\n\n**Reason:** {}\n\n**Files modified:**\n{}\n\n---\n",
-                    timestamp, summary, reason, files_modified
-                );
-
-                let path = std::path::Path::new("CADE_AUDIT.md");
-                let existing = std::fs::read_to_string(path)
-                    .unwrap_or_else(|_| "# CADE Audit Log\n\n".to_string());
-                let _ = std::fs::write(path, format!("{}{}", existing, log_entry));
-
-                cade_agent::tools::manager::ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    tool_name: tc.name.clone(),
-                    output: "Task finished. Audit log appended to CADE_AUDIT.md.".to_string(),
-                    is_error: false,
-                    ui_resource_uri: None,
-                }
-            } else if let Some(executed) = runtime
-                .execute(tc.id.clone(), &tc.name, &tc.arguments)
-                .await
-            {
-                cade_agent::tools::manager::ToolResult {
-                    tool_call_id: executed.tool_call_id,
-                    tool_name: executed.tool_name,
-                    output: executed.output,
-                    is_error: executed.is_error,
-                    ui_resource_uri: executed.ui_resource_uri,
-                }
-            } else {
-                // Any other interactive tools that reach here but shouldn't
-                cade_agent::tools::manager::ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    tool_name: tc.name.clone(),
-                    output: format!(
-                        "Tool '{}' requires interactive TUI context and is not supported in background server loop.",
-                        tc.name
-                    ),
-                    is_error: true,
-                    ui_resource_uri: None,
-                }
-            };
-
+        for (result, arguments) in turn_results {
             // H3: persist the FULL output to the DB so future build_context
             // calls feed complete tool results back to the LLM.  Only the
             // SSE payload is truncated for GUI responsiveness.
@@ -1012,9 +781,9 @@ pub(crate) async fn run_agent_loop(
             {
                 let turn = sqlite::get_turn_counter(&state2.db, &agent_id2).unwrap_or(0);
                 let summary =
-                    build_observation_summary(&result.tool_name, &tc.arguments, &result.output);
+                    build_observation_summary(&result.tool_name, &arguments, &result.output);
                 let importance = rate_observation_importance(&result.tool_name, result.is_error);
-                let files = extract_file_paths(&tc.arguments);
+                let files = extract_file_paths(&arguments);
                 let _ = sqlite::observations::insert_observation(
                     &state2.db,
                     &agent_id2,
@@ -1030,8 +799,8 @@ pub(crate) async fn run_agent_loop(
 
             // ── A5: Track active_goal freshness ───────────────────────────
             tool_calls_since_goal_update += 1;
-            if tc.name == "update_memory" || tc.name == "memory_apply_patch" {
-                let label = tc.arguments["label"].as_str().unwrap_or("");
+            if result.tool_name == "update_memory" || result.tool_name == "memory_apply_patch" {
+                let label = arguments["label"].as_str().unwrap_or("");
                 if label == "active_goal" {
                     tool_calls_since_goal_update = 0;
                 }

@@ -4,6 +4,37 @@ use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TrustRegistry {
+    #[serde(default)]
+    pub trusted_paths: Vec<PathBuf>,
+}
+
+fn is_path_trusted(cwd: &Path) -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    if let Some(home) = dirs::home_dir() {
+        if cwd == home || cwd.starts_with(home.join(".cade")) {
+            return true;
+        }
+        let trust_path = home.join(".cade").join("trust.json");
+        if !trust_path.exists() {
+            return false;
+        }
+        if let Ok(content) = std::fs::read_to_string(&trust_path)
+            && let Ok(reg) = serde_json::from_str::<TrustRegistry>(&content)
+        {
+            for tp in &reg.trusted_paths {
+                if cwd == tp || cwd.starts_with(tp) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub struct SettingsManager {
     global_path: PathBuf,
     project_path: PathBuf,
@@ -11,6 +42,7 @@ pub struct SettingsManager {
     global: GlobalSettings,
     project: ProjectSettings,
     local: LocalSettings,
+    is_trusted: bool,
 }
 
 impl SettingsManager {
@@ -24,6 +56,8 @@ impl SettingsManager {
         let project: ProjectSettings = Self::load_json(&project_path).unwrap_or_default();
         let local: LocalSettings = Self::load_json(&local_path).unwrap_or_default();
 
+        let is_trusted = is_path_trusted(cwd);
+
         Ok(Self {
             global_path,
             project_path,
@@ -31,7 +65,32 @@ impl SettingsManager {
             global,
             project,
             local,
+            is_trusted,
         })
+    }
+
+    pub fn is_trusted(&self) -> bool {
+        self.is_trusted
+    }
+
+    pub fn trust_directory(&mut self, cwd: &Path) -> Result<()> {
+        let Some(home) = dirs::home_dir() else {
+            return Err(crate::Error::custom("cannot resolve home dir".to_string()));
+        };
+        let trust_path = home.join(".cade").join("trust.json");
+        if let Some(parent) = trust_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = std::fs::read_to_string(&trust_path).unwrap_or_default();
+        let mut reg: TrustRegistry = serde_json::from_str(&content).unwrap_or_default();
+        let canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        if !reg.trusted_paths.contains(&canonical) {
+            reg.trusted_paths.push(canonical);
+            let serialized = serde_json::to_string_pretty(&reg)?;
+            std::fs::write(&trust_path, serialized)?;
+        }
+        self.is_trusted = true;
+        Ok(())
     }
 
     /// Reload settings from disk (useful for hot-reloading).
@@ -39,20 +98,32 @@ impl SettingsManager {
         self.global = Self::load_json(&self.global_path).unwrap_or_default();
         self.project = Self::load_json(&self.project_path).unwrap_or_default();
         self.local = Self::load_json(&self.local_path).unwrap_or_default();
+        if let Some(parent) = self.project_path.parent().and_then(|p| p.parent()) {
+            self.is_trusted = is_path_trusted(parent);
+        }
         Ok(())
     }
 
     /// Merged MCP servers: local > project > global (same key = higher priority wins).
     /// Disabled servers are excluded.
+    /// Gated by Directory Trust: project-local and local servers are ignored if untrusted.
     pub fn merged_mcp_servers(&self) -> std::collections::HashMap<String, McpServerConfig> {
         let mut merged = self.global.mcp_servers.clone();
-        // Project overrides global
-        for (k, v) in &self.project.mcp_servers {
-            merged.insert(k.clone(), v.clone());
-        }
-        // Local overrides project (highest priority — gitignored)
-        for (k, v) in &self.local.mcp_servers {
-            merged.insert(k.clone(), v.clone());
+        if self.is_trusted {
+            // Project overrides global
+            for (k, v) in &self.project.mcp_servers {
+                merged.insert(k.clone(), v.clone());
+            }
+            // Local overrides project (highest priority — gitignored)
+            for (k, v) in &self.local.mcp_servers {
+                merged.insert(k.clone(), v.clone());
+            }
+        } else {
+            if !self.project.mcp_servers.is_empty() || !self.local.mcp_servers.is_empty() {
+                tracing::warn!(
+                    "Directory is NOT trusted. Skipping project-local and local MCP servers for safety."
+                );
+            }
         }
         // Remove disabled entries and entries with no transport configured
         merged.retain(|_, v| !v.disabled && (!v.command.is_empty() || v.url.is_some()));
@@ -60,12 +131,21 @@ impl SettingsManager {
     }
 
     /// Merged hooks config: local first (highest priority), then project, then global.
+    /// Gated by Directory Trust: project-local and local hooks are ignored if untrusted.
     pub fn merged_hooks(&self) -> HooksConfig {
-        // Clone each source; local runs first per CADE spec
-        let local = self.local.hooks.clone();
-        let project = self.project.hooks.clone();
-        let global = self.global.hooks.clone();
-        local.merge(project).merge(global)
+        if self.is_trusted {
+            let local = self.local.hooks.clone();
+            let project = self.project.hooks.clone();
+            let global = self.global.hooks.clone();
+            local.merge(project).merge(global)
+        } else {
+            if !self.project.hooks.is_empty() || !self.local.hooks.is_empty() {
+                tracing::warn!(
+                    "Directory is NOT trusted. Skipping project-local and local hooks for safety."
+                );
+            }
+            self.global.hooks.clone()
+        }
     }
 
     /// Path to the project settings file (.cade/settings.json — committable)

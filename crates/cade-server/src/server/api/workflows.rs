@@ -176,6 +176,7 @@ pub async fn dispatch_workflow(
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(128);
 
+    let payload_for_loop = payload.clone();
     tokio::spawn(async move {
         // Run standard agent loop
         let _ = run_agent_loop(
@@ -185,6 +186,7 @@ pub async fn dispatch_workflow(
             run_id_clone,
             None, // No specific theme_cmd for automated background runs
             tx,
+            payload_for_loop.to_string(),
         )
         .await;
     });

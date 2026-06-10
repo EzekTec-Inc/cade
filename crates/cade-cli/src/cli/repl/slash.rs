@@ -83,6 +83,8 @@ pub(crate) enum SlashCmd {
     Reload,
     /// Check for and apply CADE updates.
     Update,
+    /// Trust the current project directory.
+    Trust,
 }
 
 pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -121,6 +123,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "marketplace" | "plugins" => Some(SlashCmd::Marketplace),
         "reload" => Some(SlashCmd::Reload),
         "update" => Some(SlashCmd::Update),
+        "trust" => Some(SlashCmd::Trust),
         "theme" => Some(SlashCmd::Theme(arg)),
         "providers" | "provider-list" => Some(SlashCmd::Providers),
         "connect" => Some(SlashCmd::Connect(arg)),

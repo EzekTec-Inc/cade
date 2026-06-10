@@ -483,6 +483,16 @@ pub(crate) async fn build_context(
         }
     }
 
+    // Pad system_static to the nearest 512-character boundary to maximize prompt cache hits.
+    let len = system_static.len();
+    if len > 0 {
+        let remainder = len % 512;
+        if remainder > 0 {
+            let padding_len = 512 - remainder;
+            system_static.push_str(&" ".repeat(padding_len));
+        }
+    }
+
     // Memory-change detection: cache the assembled static system_core per agent.
     let system_prompt_static = {
         use std::hash::{Hash, Hasher};

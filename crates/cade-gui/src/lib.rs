@@ -6,13 +6,13 @@ async fn api_request(method: &str, path: &str, body: Option<&str>, api_key: &str
     use wasm_bindgen_futures::JsFuture;
 
     let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
-    let mut opts = RequestInit::new();
-    opts.method(method);
-    opts.mode(RequestMode::Cors);
+    let opts = RequestInit::new();
+    opts.set_method(method);
+    opts.set_mode(RequestMode::Cors);
 
     if let Some(body_str) = body {
         let js_body = wasm_bindgen::JsValue::from_str(body_str);
-        opts.body(Some(&js_body));
+        opts.set_body(&js_body);
     }
 
     let request = Request::new_with_str_and_init(path, &opts).map_err(|e| format!("{:?}", e))?;
@@ -72,8 +72,8 @@ fn App() -> Element {
 
     // Chat specific states
     let mut selected_agent = use_signal(|| Option::<cade_api_types::AgentInfo>::None);
-    let mut messages = use_signal(|| Vec::<cade_api_types::ChatMessage>::new());
-    let mut input_text = use_signal(|| String::new());
+    let mut messages = use_signal(Vec::<cade_api_types::ChatMessage>::new);
+    let mut input_text = use_signal(String::new);
     let mut is_loading = use_signal(|| false);
     let api_key = use_signal(|| String::from("sk-placeholder-key-for-local-development"));
     let agent_name = selected_agent().map(|a| a.name.clone()).unwrap_or_else(|| "deep-thought-research-agent_copy".to_string());
@@ -81,22 +81,21 @@ fn App() -> Element {
     use_effect(move || {
         spawn(async move {
             // First fetch the first agent
-            if let Ok(agents_str) = api_request("GET", "/v1/agents", None, &api_key()).await {
-                if let Ok(agent_list) = serde_json::from_str::<Vec<cade_api_types::AgentInfo>>(&agents_str) {
-                    if let Some(first) = agent_list.first() {
-                        selected_agent.set(Some(first.clone()));
-                    }
-                }
+            if let Ok(agents_str) = api_request("GET", "/v1/agents", None, &api_key()).await
+                && let Ok(agent_list) = serde_json::from_str::<Vec<cade_api_types::AgentInfo>>(&agents_str)
+                && let Some(first) = agent_list.first()
+            {
+                selected_agent.set(Some(first.clone()));
             }
             
             // Loop to poll messages
             loop {
                 if let Some(agent) = selected_agent() {
                     let path = format!("/v1/agents/{}/messages", agent.id);
-                    if let Ok(messages_str) = api_request("GET", &path, None, &api_key()).await {
-                        if let Ok(msg_list) = serde_json::from_str::<Vec<cade_api_types::ChatMessage>>(&messages_str) {
-                            messages.set(msg_list);
-                        }
+                    if let Ok(messages_str) = api_request("GET", &path, None, &api_key()).await
+                        && let Ok(msg_list) = serde_json::from_str::<Vec<cade_api_types::ChatMessage>>(&messages_str)
+                    {
+                        messages.set(msg_list);
                     }
                 }
                 gloo_timers::future::TimeoutFuture::new(1500).await;

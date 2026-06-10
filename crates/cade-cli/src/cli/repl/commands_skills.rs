@@ -271,6 +271,79 @@ impl Repl {
                     }
                 }
 
+                "unload" => {
+                    let id = sub_arg.trim();
+                    if id.is_empty() {
+                        self.tui_err("  Usage: /skills unload <skill_name>");
+                    } else {
+                        let agent_id = self.agent_id();
+                        let existing = self.client.get_memory(&agent_id).await.unwrap_or_default();
+                        
+                        let mut skill_removed = false;
+                        let mut project_updated = false;
+
+                        if let Some(project_block) = existing.iter().find(|b| b.label == "project") {
+                            let mut lines = Vec::new();
+                            let mut in_section = false;
+                            
+                            for line in project_block.value.lines() {
+                                let trimmed = line.trim();
+                                if trimmed.starts_with("## Required Skills") || trimmed.starts_with("## Required skills") {
+                                    in_section = true;
+                                    lines.push(line.to_string());
+                                    continue;
+                                }
+                                if in_section && trimmed.starts_with("## ") {
+                                    in_section = false;
+                                }
+                                
+                                if in_section && (trimmed.starts_with("- ") || trimmed.starts_with("* ")) {
+                                    let clean = trimmed[2..].trim();
+                                    let parsed_id = clean.split_whitespace().next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+                                    if parsed_id.to_lowercase() == id.to_lowercase() {
+                                        skill_removed = true;
+                                        continue;
+                                    }
+                                }
+                                lines.push(line.to_string());
+                            }
+                            
+                            let new_value = lines.join("\n");
+                            if skill_removed {
+                                match self.client.upsert_memory(&agent_id, "project", &new_value, None).await {
+                                    Ok(()) => {
+                                        self.tui_ok(format!("  ✓ Removed skill '{id}' from [project] memory block."));
+                                        project_updated = true;
+                                    }
+                                    Err(e) => {
+                                        self.tui_err(format!("  Failed to update [project] memory block on server: {e}"));
+                                    }
+                                }
+                            } else {
+                                self.tui_dim(format!("  Info: Skill '{id}' was not found in [project] memory's required skills list."));
+                            }
+                        } else {
+                            self.tui_dim("  Info: No [project] memory block found for this agent.");
+                        }
+
+                        // Also disable/exclude on server so it doesn't get loaded dynamically in this turn
+                        match self.client.disable_skill_on_server(&agent_id, id).await {
+                            Ok(()) => {
+                                self.tui_ok(format!(
+                                    "  ✓ Skill '{id}' disabled — excluded from active context."
+                                ));
+                            }
+                            Err(e) => {
+                                if !project_updated && !skill_removed {
+                                    self.tui_err(format!("  Failed to disable skill: {e}"));
+                                } else {
+                                    tracing::debug!("Failed to disable skill on server: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+
                 other => {
                     self.tui_err(format!("  Unknown /skills subcommand: '{other}'"));
                     self.tui_blank();
@@ -281,6 +354,7 @@ impl Repl {
                         "  /skills disable <id>       — exclude skill from context (keeps files)",
                     );
                     self.tui_dim("  /skills enable <id>        — re-include a disabled skill");
+                    self.tui_dim("  /skills unload <id>        — remove skill from [project] memory and exclude it");
                     self.tui_dim("  /skills reload             — rescan all skill directories");
                     self.tui_blank();
                 }

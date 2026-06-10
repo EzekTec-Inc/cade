@@ -28,7 +28,7 @@ use super::dashboard_assets::DashboardAssets;
 fn mime_for(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
-        Some("js") => "application/javascript; charset=utf-8",
+        Some("js") => "text/javascript",
         Some("wasm") => "application/wasm",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json",

@@ -240,7 +240,7 @@ fn mime_for_returns_correct_types() {
     assert_eq!(mime_for("index.html"), "text/html; charset=utf-8");
     assert_eq!(
         mime_for("cade-gui-abc123.js"),
-        "application/javascript; charset=utf-8"
+        "text/javascript"
     );
     assert_eq!(mime_for("cade-gui-abc123_bg.wasm"), "application/wasm");
     assert_eq!(mime_for("style.css"), "text/css; charset=utf-8");

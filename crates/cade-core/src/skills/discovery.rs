@@ -117,17 +117,4 @@ pub fn skills_listing(skills: &[Skill]) -> Option<String> {
     Some(out)
 }
 
-/// Full context block for ALL skills — kept for backwards compat / debug.
-#[deprecated(note = "Injects too many tokens. Use skills_listing instead.")]
-#[allow(deprecated)] // Keep here in case it's used internally for debug temporarily
-pub fn skills_context(skills: &[Skill]) -> Option<String> {
-    if skills.is_empty() {
-        return None;
-    }
-    let mut out = "# Available Skills\n\n".to_string();
-    for s in skills {
-        out.push_str(&s.to_context_block());
-        out.push('\n');
-    }
-    Some(out)
-}
+

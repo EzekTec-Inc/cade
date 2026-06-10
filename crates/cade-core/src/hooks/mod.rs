@@ -83,13 +83,12 @@ impl HookEngine {
             "tool_input":        args,
         });
 
-        if let Some(ref runner) = self.lua_runner {
-            if let Some(res) = runner.run_hook("pre_tool_use", &input) {
-                if res.starts_with("block") {
-                    let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
-                    return HookOutcome::Block { reason };
-                }
-            }
+        if let Some(ref runner) = self.lua_runner
+            && let Some(res) = runner.run_hook("pre_tool_use", &input)
+            && res.starts_with("block")
+        {
+            let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+            return HookOutcome::Block { reason };
         }
 
         self.run_entries_blocking(&self.hooks.pre_tool_use, tool_name, input)
@@ -117,10 +116,10 @@ impl HookEngine {
             "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
 
-        if let Some(ref runner) = self.lua_runner {
-            if let Some(res) = runner.run_hook("post_tool_use", &input) {
-                return Some(res);
-            }
+        if let Some(ref runner) = self.lua_runner
+            && let Some(res) = runner.run_hook("post_tool_use", &input)
+        {
+            return Some(res);
         }
 
         self.run_entries_context(&self.hooks.post_tool_use, tool_name, input)
@@ -166,13 +165,12 @@ impl HookEngine {
             "tool_input":        args,
         });
 
-        if let Some(ref runner) = self.lua_runner {
-            if let Some(res) = runner.run_hook("permission_request", &input) {
-                if res.starts_with("block") {
-                    let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
-                    return HookOutcome::Block { reason };
-                }
-            }
+        if let Some(ref runner) = self.lua_runner
+            && let Some(res) = runner.run_hook("permission_request", &input)
+            && res.starts_with("block")
+        {
+            let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+            return HookOutcome::Block { reason };
         }
 
         self.run_entries_blocking(&self.hooks.permission_request, tool_name, input)
@@ -190,13 +188,12 @@ impl HookEngine {
             "prompt":            prompt,
         });
 
-        if let Some(ref runner) = self.lua_runner {
-            if let Some(res) = runner.run_hook("user_prompt_submit", &input) {
-                if res.starts_with("block") {
-                    let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
-                    return HookOutcome::Block { reason };
-                }
-            }
+        if let Some(ref runner) = self.lua_runner
+            && let Some(res) = runner.run_hook("user_prompt_submit", &input)
+            && res.starts_with("block")
+        {
+            let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+            return HookOutcome::Block { reason };
         }
 
         self.run_all_blocking(&self.hooks.user_prompt_submit, input)
