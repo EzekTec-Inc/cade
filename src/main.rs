@@ -379,6 +379,7 @@ async fn async_main() -> Result<()> {
     let bg_args_unlink = args.unlink;
     let bg_startup_ready = startup_ready.clone();
     let bg_mcp_boot_status = mcp_boot_status.clone();
+    let bg_lazy_mcp = args.lazy_mcp || settings.lazy_mcp();
 
     tokio::spawn(async move {
         let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled {
@@ -424,7 +425,7 @@ async fn async_main() -> Result<()> {
                 .await;
         }
 
-        if !mgr.is_empty().await {
+        if !mgr.is_empty().await && !bg_lazy_mcp {
             use agent::tools::register_mcp_tools;
             let mcp_tool_ids: Vec<String> =
                 register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
@@ -451,7 +452,7 @@ async fn async_main() -> Result<()> {
 
             register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities)
                 .await;
-            if !mgr.is_empty().await {
+            if !mgr.is_empty().await && !bg_lazy_mcp {
                 use agent::tools::register_mcp_tools;
                 let mcp_ids: Vec<String> =
                     register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)

@@ -278,6 +278,11 @@ impl SettingsManager {
     pub fn global(&self) -> &GlobalSettings {
         &self.global
     }
+
+    /// Whether to lazy-load MCP servers (do not attach them automatically on boot).
+    pub fn lazy_mcp(&self) -> bool {
+        self.global.lazy_mcp
+    }
     pub fn project_settings_mut(&mut self) -> &mut ProjectSettings {
         &mut self.project
     }

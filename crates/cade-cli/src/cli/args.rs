@@ -117,6 +117,10 @@ pub struct Args {
     #[arg(long = "unlink")]
     pub unlink: bool,
 
+    /// Do not automatically attach MCP tools on boot (enables gated/lazy tool orchestration)
+    #[arg(long = "lazy-mcp")]
+    pub lazy_mcp: bool,
+
     /// Maximum wall-clock time for headless mode in seconds (0 = no limit).
     /// On timeout the process exits with code 124 (standard timeout exit code).
     #[arg(long = "timeout-secs", default_value_t = 0)]

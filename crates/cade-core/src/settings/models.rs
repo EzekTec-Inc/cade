@@ -138,6 +138,10 @@ pub struct GlobalSettings {
     /// Plugin marketplace registry URL. Defaults to the official CADE registry.
     #[serde(default = "default_marketplace_url")]
     pub marketplace_url: String,
+
+    /// Whether to lazy-load MCP servers (do not attach them automatically on boot).
+    #[serde(default)]
+    pub lazy_mcp: bool,
 }
 
 fn default_true() -> bool {

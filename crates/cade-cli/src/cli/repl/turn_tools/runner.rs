@@ -1058,12 +1058,16 @@ ui_resource_uri: None,
     /// it immediately and return the result. Returns None for generic tools.
     pub(crate) async fn sync_plan_tools(&self, enter_plan: bool) {
         let agent_id = self.agent_id.lock().clone();
+        let lazy_mcp = self.settings.lock().lazy_mcp();
 
         if enter_plan {
             // Strip write tools
             if let Ok(attached) = self.client.get_agent_tools(&agent_id).await {
                 let mut new_ids = Vec::new();
                 for (id, name) in attached {
+                    if lazy_mcp && name.contains("__") {
+                        continue;
+                    }
                     let canonical_name = cade_agent::tools::manager::canonical_name(&name);
                     let is_mcp = cade_agent::tools::is_mcp_write_tool(&name, &self.mcp).await;
                     let is_write =
@@ -1085,6 +1089,9 @@ ui_resource_uri: None,
             if let Ok(all_tools) = self.client.list_tools().await {
                 let mut new_ids = Vec::new();
                 for t in all_tools {
+                    if lazy_mcp && t.name.contains("__") {
+                        continue;
+                    }
                     // For now, let's just add everything back that isn't a known tool from a disabled capability.
                     // This might be slightly loose but works for re-attaching.
                     // To be safe, we only add back the write tools that exist on the server.

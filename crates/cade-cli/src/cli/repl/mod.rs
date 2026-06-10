@@ -194,6 +194,8 @@ pub struct Repl {
     pub(crate) conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
     pub(crate) mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
+    /// List of actively linked/enabled MCP server names for tool attachment.
+    pub(crate) active_mcp_servers: std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
     /// Active capability set — controls which tools and commands are available.
     pub(crate) capabilities: cade_core::capabilities::CapabilitySet,
     /// Semaphore limiting concurrent subagent LLM calls.
@@ -368,6 +370,7 @@ impl Repl {
             turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id: Arc::new(Mutex::new(conversation_id)),
             mcp,
+            active_mcp_servers: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
             subagent_cancellations: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -617,6 +620,9 @@ impl Repl {
             .lock()
             .permission_settings()
             .allow_agent_mode_changes;
+        let active_mcp = self.active_mcp_servers.lock().clone();
+        let lazy_mcp = self.settings.lock().lazy_mcp();
+
         tokio::spawn(async move {
             use cade_agent::agent::client::CreateToolRequest;
             use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
@@ -646,7 +652,19 @@ impl Repl {
             }
 
             // 3. MCP tools
-            let mcp_tools = register_mcp_tools(&client, mcp_arc.all_tool_schemas().await)
+            let mut mcp_schemas = mcp_arc.all_tool_schemas().await;
+            if lazy_mcp {
+                mcp_schemas.retain(|schema| {
+                    let name = schema["name"].as_str().unwrap_or("");
+                    if let Some(pos) = name.find("__") {
+                        let server_name = &name[..pos];
+                        active_mcp.contains(server_name) || active_mcp.contains("all")
+                    } else {
+                        false
+                    }
+                });
+            }
+            let mcp_tools = register_mcp_tools(&client, mcp_schemas)
                 .await
                 .unwrap_or_default();
             for t in mcp_tools {
