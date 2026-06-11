@@ -331,7 +331,11 @@ async fn async_main() -> Result<()> {
 
     // Skills listing — compact (names + descriptions only), not full bodies.
     // The agent uses load_skill(id) to pull full content on-demand.
-    let skills_block = skills_listing(&initial_loaded_skills);
+    let skills_block = if args.lazy_mcp || settings.lazy_mcp() {
+        None
+    } else {
+        skills_listing(&initial_loaded_skills)
+    };
 
     // Agent resolution — helper closure avoids repeating the create logic
     let sp_agent = progress.start_agent_resolve();
