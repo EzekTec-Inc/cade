@@ -13,6 +13,35 @@ CADE does:  scaffolds → writes code → runs tests → builds Docker image →
 
 ---
 
+## Table of Contents
+
+- [Why CADE?](#why-cade)
+- [Quickstart — Up and Running in 2 Minutes](#quickstart--up-and-running-in-2-minutes)
+- [What Can CADE Do?](#what-can-cade-do)
+  - [🔧 Core Coding Tools](#-core-coding-tools)
+  - [🖥️ Desktop Extensions (the "D" in CADE)](#️-desktop-extensions-the-d-in-cade)
+  - [🧠 Memory & Intelligence](#-memory--intelligence)
+  - [🔌 Extensible by Design](#-extensible-by-design)
+- [The Terminal Experience](#the-terminal-experience)
+- [Slash Commands — Your Control Panel](#slash-commands--your-control-panel)
+- [CLI Usage](#cli-usage)
+  - [Permission Modes](#permission-modes)
+  - [Headless Output Formats](#headless-output-formats)
+- [Toolsets](#toolsets)
+- [Session Persistence — CADE Remembers](#session-persistence--cade-remembers)
+- [Advanced Features](#advanced-features)
+- [Documentation](#documentation)
+- [Installation](#installation)
+  - [Linux / macOS](#linux--macos)
+  - [Windows](#windows)
+  - [Docker](#docker)
+- [Building from Source](#building-from-source)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
 ## Why CADE?
 
 | What you get | How it works |
