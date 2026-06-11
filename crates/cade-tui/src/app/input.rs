@@ -49,17 +49,18 @@ impl TuiApp {
                         }
                     } else {
                         self.mcp_all_settled_at = None;
+                        self.mcp_closed = false; // Reset if loading starts again
                     }
                     if let Some(settled) = self.mcp_all_settled_at
                         && settled.elapsed() < std::time::Duration::from_secs(3)
                     {
                         show_card = true;
                     }
-                    if show_card && !boot_map.is_empty() {
+                    if show_card && !boot_map.is_empty() && !self.mcp_closed {
                         self.draw_dirty = true;
-                    } else if self.mcp_all_settled_at.is_some() {
-                        // Clear settled timestamp and trigger one last redraw to erase the card.
-                        self.mcp_all_settled_at = None;
+                    } else if self.mcp_all_settled_at.is_some() && !self.mcp_closed {
+                        // The display window has expired! Mark as closed and trigger exactly one redraw to erase the card.
+                        self.mcp_closed = true;
                         self.draw_dirty = true;
                     }
                 }

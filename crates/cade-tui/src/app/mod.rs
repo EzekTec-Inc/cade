@@ -981,6 +981,8 @@ pub struct TuiApp {
     pub startup_ready: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Flag indicating whether the completed MCP boot has been processed and popped as a sentinel.
     pub mcp_processed: bool,
+    /// When true, the MCP Engine Status card has been closed/dismissed after settling.
+    pub mcp_closed: bool,
 }
 
 impl TuiApp {
@@ -1099,6 +1101,7 @@ impl TuiApp {
             mcp_all_settled_at: None,
             startup_ready: None,
             mcp_processed: false,
+            mcp_closed: false,
         }
     }
 
@@ -1439,7 +1442,9 @@ impl TuiApp {
             }
 
             // Render MCP boot status card floating in the top right
-            if let Some(ref progress) = self.mcp_boot_status {
+            if let Some(ref progress) = self.mcp_boot_status
+                && !self.mcp_closed
+            {
                 let boot_map = progress.lock().clone();
 
                 // Determine if we should show the card.

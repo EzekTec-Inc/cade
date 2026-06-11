@@ -993,6 +993,7 @@ impl Repl {
                         self.set_tools_ready();
                     } else {
                         self.mcp_rx = Some(rx);
+                        self.app.lock().mcp_processed = false;
                     }
                 }
                 continue;
