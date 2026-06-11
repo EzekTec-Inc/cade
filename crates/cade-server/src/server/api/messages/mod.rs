@@ -678,22 +678,13 @@ pub async fn stream_message(
                 Ok(StreamChunk::Usage(u)) => {
                     {
                         let mut acc = usage_acc2.lock();
-                        // P2: accumulate all 4 token fields (was input/output only —
-                        // cache_read/cache_write were silently dropped).
-                        acc.input_tokens += u.input_tokens;
-                        acc.output_tokens += u.output_tokens;
-                        acc.cache_read_tokens += u.cache_read_tokens;
-                        acc.cache_write_tokens += u.cache_write_tokens;
+                        acc.input_tokens = acc.input_tokens.max(u.input_tokens);
+                        acc.output_tokens = acc.output_tokens.max(u.output_tokens);
+                        acc.cache_read_tokens = acc.cache_read_tokens.max(u.cache_read_tokens);
+                        acc.cache_write_tokens = acc.cache_write_tokens.max(u.cache_write_tokens);
+                        acc.model = u.model.clone();
                     }
-                    // Emit usage_statistics event for client-side display
-                    emit(json!({
-                        "message_type":      "usage_statistics",
-                        "input_tokens":      u.input_tokens,
-                        "output_tokens":     u.output_tokens,
-                        "cache_read_tokens":  u.cache_read_tokens,
-                        "cache_write_tokens": u.cache_write_tokens,
-                        "model":             u.model,
-                    }))
+                    Event::default().comment("usage_updated")
                 }
                 Ok(StreamChunk::FinishReason(reason)) => emit(json!({
                     "message_type": "finish_reason",
@@ -741,7 +732,16 @@ pub async fn stream_message(
                                 .accumulate_usage(&snap);
                         });
                     }
-                    Event::default().data("[DONE]")
+                    let u = usage_acc3.lock();
+                    let snap = u.clone();
+                    emit(json!({
+                        "message_type":      "usage_statistics",
+                        "input_tokens":      snap.input_tokens,
+                        "output_tokens":     snap.output_tokens,
+                        "cache_read_tokens":  snap.cache_read_tokens,
+                        "cache_write_tokens": snap.cache_write_tokens,
+                        "model":             snap.model,
+                    }))
                 }
                 Err(e) => {
                     if let Some(rid) = &run_id_clone {
