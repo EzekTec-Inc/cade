@@ -1,8 +1,7 @@
-
 use crate::moa::{Agent, AgentRequest, AgentResponse, AgentResult};
-use crate::tools::fs::{ReadTool, WriteTool, EditTool, ApplyPatchTool};
+use crate::tools::fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn parse_json_args(prompt: &str) -> Option<Value> {
     if let Some(start_idx) = prompt.find('{')
@@ -68,7 +67,9 @@ impl Agent for WriteToolAgent {
         } else {
             let parts: Vec<&str> = request.prompt.split_whitespace().collect();
             if parts.len() < 4 {
-                return Err(Box::from("Invalid write file command: requires path and content"));
+                return Err(Box::from(
+                    "Invalid write file command: requires path and content",
+                ));
             }
             let path = parts[2];
             let content = parts[3..].join(" ");
@@ -110,7 +111,10 @@ impl Agent for EditToolAgent {
                 path = p;
             }
 
-            if let Some(captures) = regex::Regex::new(r"'(.*?)' '(.*?)'").unwrap().captures(&request.prompt) {
+            if let Some(captures) = regex::Regex::new(r"'(.*?)' '(.*?)'")
+                .unwrap()
+                .captures(&request.prompt)
+            {
                 if let Some(old) = captures.get(1) {
                     old_string = old.as_str();
                 }
@@ -118,9 +122,11 @@ impl Agent for EditToolAgent {
                     new_string = new.as_str();
                 }
             }
-            
+
             if path.is_empty() || old_string.is_empty() {
-                return Err(Box::from("Invalid edit file command: requires path, 'old string', and 'new string'"));
+                return Err(Box::from(
+                    "Invalid edit file command: requires path, 'old string', and 'new string'",
+                ));
             }
 
             json!({ "path": path, "old_string": old_string, "new_string": new_string })

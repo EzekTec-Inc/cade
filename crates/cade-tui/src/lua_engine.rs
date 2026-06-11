@@ -274,7 +274,11 @@ impl LuaEngine {
             let input_lua = match self.lua.to_value(&input) {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!("Failed to convert JSON input to Lua for hook {}: {}", hook_name, e);
+                    tracing::warn!(
+                        "Failed to convert JSON input to Lua for hook {}: {}",
+                        hook_name,
+                        e
+                    );
                     return None;
                 }
             };

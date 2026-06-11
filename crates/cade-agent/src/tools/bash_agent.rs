@@ -12,7 +12,11 @@ impl Agent for BashToolAgent {
     }
 
     fn capabilities(&self) -> Vec<String> {
-        vec!["bash".to_string(), "shell".to_string(), "command".to_string()]
+        vec![
+            "bash".to_string(),
+            "shell".to_string(),
+            "command".to_string(),
+        ]
     }
 
     fn supported_tools(&self) -> Vec<&'static str> {
@@ -21,7 +25,11 @@ impl Agent for BashToolAgent {
 
     async fn execute(&self, request: &AgentRequest) -> AgentResult {
         // Extracts the command from a prompt like "bash ls -l"
-        let command = request.prompt.split_once(' ').map(|(_, cmd)| cmd).unwrap_or("");
+        let command = request
+            .prompt
+            .split_once(' ')
+            .map(|(_, cmd)| cmd)
+            .unwrap_or("");
         let args = json!({ "command": command });
 
         match BashTool::run(&args).await {

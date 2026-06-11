@@ -342,7 +342,8 @@ async fn test_create_conversation_fork() {
             theme: None,
             active_plan_json: None,
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     // Seed parent conversation and some messages
     let parent_conv = cade_store::sqlite::create_conversation(&db, "test_agent", "Parent").unwrap();
@@ -382,7 +383,8 @@ async fn test_create_conversation_fork() {
     let new_conv_id = body_json["id"].as_str().unwrap();
 
     // Verify that messages were cloned
-    let cloned_messages = cade_store::sqlite::list_messages(&db, "test_agent", Some(new_conv_id), 10).unwrap();
+    let cloned_messages =
+        cade_store::sqlite::list_messages(&db, "test_agent", Some(new_conv_id), 10).unwrap();
     assert_eq!(cloned_messages.len(), 1);
     assert_eq!(cloned_messages[0].role, "user");
     assert_eq!(cloned_messages[0].content.as_str().unwrap(), "Hello");

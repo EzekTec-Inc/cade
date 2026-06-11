@@ -27,10 +27,14 @@ impl Repl {
                 let configs = self.settings.lock().merged_mcp_servers();
                 if let Some(c) = configs.get(server_name) {
                     if let Err(e) = self.mcp.start_and_add_server(server_name, c).await {
-                        self.tui_err(format!("  ✗ Failed to start MCP server '{server_name}': {e}"));
+                        self.tui_err(format!(
+                            "  ✗ Failed to start MCP server '{server_name}': {e}"
+                        ));
                     }
                 } else {
-                    self.tui_err(format!("  ✗ MCP server '{server_name}' not found in settings."));
+                    self.tui_err(format!(
+                        "  ✗ MCP server '{server_name}' not found in settings."
+                    ));
                 }
             }
         } else {
@@ -69,7 +73,9 @@ impl Repl {
             active.clear();
             drop(active);
             match self.client.detach_agent_tools(&agent_id).await {
-                Ok(n) => self.tui_ok(format!("  ✓ Detached {n} tool(s) from agent (Zero-Tool mode)")),
+                Ok(n) => self.tui_ok(format!(
+                    "  ✓ Detached {n} tool(s) from agent (Zero-Tool mode)"
+                )),
                 Err(e) => self.tui_err(e.to_string()),
             }
         }

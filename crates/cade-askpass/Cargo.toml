@@ -18,10 +18,11 @@ default = []
 # Tokio-based IPC server.  Used by cade-agent to host the password
 # channel.  The binary itself does NOT enable this feature so it
 # stays std-only and small.
-server = ["dep:tokio"]
+server = ["dep:tokio", "dep:getrandom"]
 
 [dependencies]
 anyhow = "1"
+getrandom = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]

@@ -238,10 +238,7 @@ async fn dashboard_assets_do_not_require_auth() {
 fn mime_for_returns_correct_types() {
     use super::mime_for;
     assert_eq!(mime_for("index.html"), "text/html; charset=utf-8");
-    assert_eq!(
-        mime_for("cade-gui-abc123.js"),
-        "text/javascript"
-    );
+    assert_eq!(mime_for("cade-gui-abc123.js"), "text/javascript");
     assert_eq!(mime_for("cade-gui-abc123_bg.wasm"), "application/wasm");
     assert_eq!(mime_for("style.css"), "text/css; charset=utf-8");
     assert_eq!(mime_for("data.json"), "application/json");

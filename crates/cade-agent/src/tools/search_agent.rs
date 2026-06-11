@@ -12,7 +12,11 @@ impl Agent for SearchToolAgent {
     }
 
     fn capabilities(&self) -> Vec<String> {
-        vec!["search".to_string(), "find in files".to_string(), "grep".to_string()]
+        vec![
+            "search".to_string(),
+            "find in files".to_string(),
+            "grep".to_string(),
+        ]
     }
 
     fn supported_tools(&self) -> Vec<&'static str> {

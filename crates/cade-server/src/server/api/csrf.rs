@@ -7,13 +7,13 @@
 //! CADE CLI, curl, CI harnesses) and the bearer token is the real gate.
 //! Safe methods (GET / HEAD / OPTIONS) are never subject to this check.
 
+use crate::server::state::AppState;
 use axum::{
     extract::{Request, State},
     http::{Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use crate::server::state::AppState;
 
 /// Pure, deterministic policy.  Returns `true` if `origin` matches one
 /// of the two localhost schemes on any port (or on no port at all —

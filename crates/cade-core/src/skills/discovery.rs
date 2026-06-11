@@ -116,5 +116,3 @@ pub fn skills_listing(skills: &[Skill]) -> Option<String> {
     }
     Some(out)
 }
-
-

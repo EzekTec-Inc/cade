@@ -278,17 +278,20 @@ impl Repl {
                     } else {
                         let agent_id = self.agent_id();
                         let existing = self.client.get_memory(&agent_id).await.unwrap_or_default();
-                        
+
                         let mut skill_removed = false;
                         let mut project_updated = false;
 
-                        if let Some(project_block) = existing.iter().find(|b| b.label == "project") {
+                        if let Some(project_block) = existing.iter().find(|b| b.label == "project")
+                        {
                             let mut lines = Vec::new();
                             let mut in_section = false;
-                            
+
                             for line in project_block.value.lines() {
                                 let trimmed = line.trim();
-                                if trimmed.starts_with("## Required Skills") || trimmed.starts_with("## Required skills") {
+                                if trimmed.starts_with("## Required Skills")
+                                    || trimmed.starts_with("## Required skills")
+                                {
                                     in_section = true;
                                     lines.push(line.to_string());
                                     continue;
@@ -296,10 +299,15 @@ impl Repl {
                                 if in_section && trimmed.starts_with("## ") {
                                     in_section = false;
                                 }
-                                
-                                if in_section && (trimmed.starts_with("- ") || trimmed.starts_with("* ")) {
+
+                                if in_section
+                                    && (trimmed.starts_with("- ") || trimmed.starts_with("* "))
+                                {
                                     let clean = trimmed[2..].trim();
-                                    let parsed_id = clean.split_whitespace().next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+                                    let parsed_id =
+                                        clean.split_whitespace().next().unwrap_or("").trim_matches(
+                                            |c: char| !c.is_alphanumeric() && c != '-' && c != '_',
+                                        );
                                     if parsed_id.to_lowercase() == id.to_lowercase() {
                                         skill_removed = true;
                                         continue;
@@ -307,12 +315,18 @@ impl Repl {
                                 }
                                 lines.push(line.to_string());
                             }
-                            
+
                             let new_value = lines.join("\n");
                             if skill_removed {
-                                match self.client.upsert_memory(&agent_id, "project", &new_value, None).await {
+                                match self
+                                    .client
+                                    .upsert_memory(&agent_id, "project", &new_value, None)
+                                    .await
+                                {
                                     Ok(()) => {
-                                        self.tui_ok(format!("  ✓ Removed skill '{id}' from [project] memory block."));
+                                        self.tui_ok(format!(
+                                            "  ✓ Removed skill '{id}' from [project] memory block."
+                                        ));
                                         project_updated = true;
                                     }
                                     Err(e) => {

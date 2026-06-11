@@ -87,7 +87,11 @@ impl HookEngine {
             && let Some(res) = runner.run_hook("pre_tool_use", &input)
             && res.starts_with("block")
         {
-            let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+            let reason = res
+                .strip_prefix("block:")
+                .unwrap_or(&res)
+                .trim()
+                .to_string();
             return HookOutcome::Block { reason };
         }
 
@@ -169,7 +173,11 @@ impl HookEngine {
             && let Some(res) = runner.run_hook("permission_request", &input)
             && res.starts_with("block")
         {
-            let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+            let reason = res
+                .strip_prefix("block:")
+                .unwrap_or(&res)
+                .trim()
+                .to_string();
             return HookOutcome::Block { reason };
         }
 
@@ -192,7 +200,11 @@ impl HookEngine {
             && let Some(res) = runner.run_hook("user_prompt_submit", &input)
             && res.starts_with("block")
         {
-            let reason = res.strip_prefix("block:").unwrap_or(&res).trim().to_string();
+            let reason = res
+                .strip_prefix("block:")
+                .unwrap_or(&res)
+                .trim()
+                .to_string();
             return HookOutcome::Block { reason };
         }
 

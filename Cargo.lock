@@ -922,6 +922,7 @@ name = "cade-askpass"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "getrandom 0.4.2",
  "tempfile",
  "tokio",
 ]

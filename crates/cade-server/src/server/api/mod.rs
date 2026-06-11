@@ -274,7 +274,10 @@ pub fn router(state: AppState) -> Router {
         .merge(rest)
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-        .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::auth_middleware,
+        ))
         .layer(middleware::from_fn_with_state(state, csrf::csrf_middleware))
 }
 

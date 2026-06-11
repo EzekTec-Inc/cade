@@ -30,7 +30,11 @@ impl Repl {
             Ok(cp_id) => {
                 let parent_id = self.conversation_id().unwrap_or_default();
                 // Start a new conversation from this point
-                match self.client.create_conversation_fork(&agent_id, "", &parent_id).await {
+                match self
+                    .client
+                    .create_conversation_fork(&agent_id, "", &parent_id)
+                    .await
+                {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
                         *self.conversation_id.lock() = Some(cid.clone());

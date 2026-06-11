@@ -1,5 +1,5 @@
 use crate::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[cfg(feature = "desktop")]
 use super::desktop::{
@@ -238,7 +238,6 @@ pub fn is_file_edit_tool(name: &str) -> bool {
             | "edit_block"
     )
 }
-
 
 fn sequential_tasks_schema() -> Value {
     json!({

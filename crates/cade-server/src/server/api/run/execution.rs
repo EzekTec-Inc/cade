@@ -1,11 +1,8 @@
 //! Tool execution dispatcher for the agentic loop.
 
-use super::{storage_impl, subagent, SseTx};
+use super::{SseTx, storage_impl, subagent};
 use crate::server::state::AppState;
-use cade_agent::tools::{
-    bash_agent::BashToolAgent,
-    search_agent::SearchToolAgent,
-};
+use cade_agent::tools::{bash_agent::BashToolAgent, search_agent::SearchToolAgent};
 use cade_agent::{
     moa::{Agent, AgentRequest},
     routing::Router,
@@ -17,14 +14,11 @@ use cade_agent::{
 };
 use cade_ai::LlmToolCall;
 use futures::future;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::HashSet, sync::Arc};
 
 /// Recursively substitutes placeholders in serde_json::Value.
-fn substitute_step_arguments(
-    args: &mut Value,
-    step_results: &[ToolResult],
-) {
+fn substitute_step_arguments(args: &mut Value, step_results: &[ToolResult]) {
     match args {
         Value::String(s) => {
             let re = regex::Regex::new(r#"\$steps\.(\d+)\.output"#).unwrap();
@@ -78,7 +72,10 @@ async fn handle_sequential_workflow(
         let tool_name = match step.get("tool_name").and_then(|t| t.as_str()) {
             Some(t) => t,
             None => {
-                aggregated_output.push_str(&format!("\n--- Step {} Failed: 'tool_name' not found. ---", i));
+                aggregated_output.push_str(&format!(
+                    "\n--- Step {} Failed: 'tool_name' not found. ---",
+                    i
+                ));
                 break;
             }
         };
@@ -89,20 +86,20 @@ async fn handle_sequential_workflow(
         };
 
         substitute_step_arguments(&mut step_args, &step_results);
-        
+
         let step_tool_call_id = format!("{}-step-{}", tool_call_id, i);
 
         let runtime_result = runtime
             .execute(step_tool_call_id, tool_name, &step_args)
             .await
             .unwrap_or_else(|| cade_agent::tools::runtime::RuntimeToolResult {
-                 tool_call_id: format!("{}-step-{}", tool_call_id, i),
-                 tool_name: tool_name.to_string(),
-                 output: format!("Error: Tool '{}' not found in runtime.", tool_name),
-                 is_error: true,
-                 ui_resource_uri: None,
+                tool_call_id: format!("{}-step-{}", tool_call_id, i),
+                tool_name: tool_name.to_string(),
+                output: format!("Error: Tool '{}' not found in runtime.", tool_name),
+                is_error: true,
+                ui_resource_uri: None,
             });
-        
+
         let result_to_store = ToolResult {
             tool_call_id: runtime_result.tool_call_id.clone(),
             tool_name: runtime_result.tool_name.clone(),
@@ -116,16 +113,14 @@ async fn handle_sequential_workflow(
         }
         aggregated_output.push_str(&format!(
             "Step {}: {} ->\n{}",
-            i,
-            result_to_store.tool_name,
-            result_to_store.output
+            i, result_to_store.tool_name, result_to_store.output
         ));
 
         let is_error = result_to_store.is_error;
         step_results.push(result_to_store);
 
         if is_error {
-            break; 
+            break;
         }
     }
 
@@ -242,9 +237,17 @@ pub(super) async fn execute_turn_tools(
         let result = if tc.name == "run_sequential_tasks" {
             handle_sequential_workflow(state, agent_id, &tc.id, &arguments, &runtime).await
         } else if tc.name == "run_subagent" {
-            subagent::handle_run_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
+            subagent::handle_run_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
+                .await
         } else if tc.name == "run_parallel_subagents" {
-            subagent::handle_run_parallel_subagents_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
+            subagent::handle_run_parallel_subagents_tool(
+                state,
+                agent_id,
+                &tc.id,
+                &arguments,
+                tx.clone(),
+            )
+            .await
         } else if tc.name == "cancel_subagent" {
             subagent::handle_cancel_subagent_tool(state, &tc.id, &arguments).await
         } else {

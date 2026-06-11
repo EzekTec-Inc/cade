@@ -414,7 +414,9 @@ impl Repl {
                             cwd.display()
                         ));
                         let _ = settings.reload();
-                        self.app.lock().show_toast("Directory trusted successfully", ToastLevel::Success);
+                        self.app
+                            .lock()
+                            .show_toast("Directory trusted successfully", ToastLevel::Success);
                     }
                     Err(e) => {
                         self.tui_err(format!("  ✗ Failed to trust directory: {}", e));

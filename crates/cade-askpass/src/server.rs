@@ -32,7 +32,7 @@ use anyhow::{Context, Result, bail};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-use crate::protocol::{decode_line, encode_line};
+use crate::protocol::Message;
 
 /// Per-session auth token length in bytes (hex-encoded → 64 chars).
 const TOKEN_BYTES: usize = 32;
@@ -41,13 +41,10 @@ const TOKEN_BYTES: usize = 32;
 const PASSWORD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Generate a cryptographically random hex token.
-fn generate_token() -> String {
-    use std::io::Read;
+fn generate_token() -> Result<String> {
     let mut buf = [0u8; TOKEN_BYTES];
-    let mut rng = std::fs::File::open("/dev/urandom").expect("cannot open /dev/urandom");
-    rng.read_exact(&mut buf)
-        .expect("failed to read random bytes");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::fill(&mut buf).context("failed to generate secure random bytes")?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Result delivered by the password callback.
@@ -87,7 +84,7 @@ impl AskpassServer {
             .await
             .context("bind 127.0.0.1:0 for askpass IPC")?;
         let addr = listener.local_addr().context("local_addr after bind")?;
-        let token = generate_token();
+        let token = generate_token().context("generate session token")?;
 
         let server_token = token.clone();
         let callback = Arc::new(password_callback);
@@ -155,16 +152,30 @@ where
         .await
         .context("read AUTH line")?
         .ok_or_else(|| anyhow::anyhow!("connection closed before AUTH"))?;
-    let (kind, token) = decode_line(&auth_line)?;
-    if kind != "AUTH" {
-        writer.write_all(b"DENY\n").await.ok();
-        bail!("expected AUTH, got {kind}");
-    }
+
+    let msg = Message::decode(&auth_line).context("decode AUTH line")?;
+    let token = match msg {
+        Message::Auth(token) => token,
+        other => {
+            writer
+                .write_all(Message::Deny.encode().as_bytes())
+                .await
+                .ok();
+            bail!("expected AUTH, got {other:?}");
+        }
+    };
+
     if token != expected_token {
-        writer.write_all(b"DENY\n").await.ok();
+        writer
+            .write_all(Message::Deny.encode().as_bytes())
+            .await
+            .ok();
         bail!("invalid token");
     }
-    writer.write_all(b"OK\n").await.context("send OK")?;
+    writer
+        .write_all(Message::Ok.encode().as_bytes())
+        .await
+        .context("send OK")?;
     writer.flush().await.ok();
 
     // ── Phase 2: PROMPT ──────────────────────────────────────────
@@ -173,32 +184,27 @@ where
         .await
         .context("read PROMPT line")?
         .ok_or_else(|| anyhow::anyhow!("connection closed before PROMPT"))?;
-    let (kind, prompt) = decode_line(&prompt_line)?;
-    if kind != "PROMPT" {
-        bail!("expected PROMPT, got {kind}");
-    }
+
+    let msg = Message::decode(&prompt_line).context("decode PROMPT line")?;
+    let prompt = match msg {
+        Message::Prompt(prompt) => prompt,
+        other => bail!("expected PROMPT, got {other:?}"),
+    };
 
     // ── Phase 3: invoke callback with timeout ────────────────────
     let response = tokio::time::timeout(PASSWORD_TIMEOUT, callback(prompt)).await;
 
-    match response {
-        Ok(PasswordResponse::Password(pw)) => {
-            let line = encode_line("PASSWORD", &pw);
-            writer
-                .write_all(line.as_bytes())
-                .await
-                .context("send PASSWORD")?;
-        }
-        Ok(PasswordResponse::Cancel) => {
-            writer.write_all(b"CANCEL\n").await.context("send CANCEL")?;
-        }
-        Err(_timeout) => {
-            writer
-                .write_all(b"TIMEOUT\n")
-                .await
-                .context("send TIMEOUT")?;
-        }
-    }
+    let reply_msg = match response {
+        Ok(PasswordResponse::Password(pw)) => Message::Password(pw),
+        Ok(PasswordResponse::Cancel) => Message::Cancel,
+        Err(_timeout) => Message::Timeout,
+    };
+
+    writer
+        .write_all(reply_msg.encode().as_bytes())
+        .await
+        .context("send response")?;
+
     writer.flush().await.ok();
     Ok(())
 }
@@ -329,15 +335,15 @@ mod tests {
 
     #[test]
     fn generate_token_is_64_hex_chars() {
-        let token = generate_token();
+        let token = generate_token().unwrap();
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
     fn generate_token_is_unique_each_call() {
-        let a = generate_token();
-        let b = generate_token();
+        let a = generate_token().unwrap();
+        let b = generate_token().unwrap();
         assert_ne!(a, b);
     }
 }

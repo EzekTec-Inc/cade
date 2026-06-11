@@ -1,4 +1,3 @@
-
 use crate::moa::{Agent, AgentRequest, AgentResult};
 use std::sync::Arc;
 
@@ -16,7 +15,10 @@ impl Router {
         self.agents.push(agent);
     }
 
-    pub fn route(&self, request: &AgentRequest) -> Result<Vec<Arc<dyn Agent>>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn route(
+        &self,
+        request: &AgentRequest,
+    ) -> Result<Vec<Arc<dyn Agent>>, Box<dyn std::error::Error + Send + Sync>> {
         let mut selected_agents: Vec<Arc<dyn Agent>> = Vec::new();
 
         for agent in &self.agents {

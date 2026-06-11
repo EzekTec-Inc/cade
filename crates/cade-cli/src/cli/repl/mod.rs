@@ -195,7 +195,8 @@ pub struct Repl {
     /// MCP server manager — routes tool calls with `{server}__` prefix.
     pub(crate) mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
     /// List of actively linked/enabled MCP server names for tool attachment.
-    pub(crate) active_mcp_servers: std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
+    pub(crate) active_mcp_servers:
+        std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
     /// Active capability set — controls which tools and commands are available.
     pub(crate) capabilities: cade_core::capabilities::CapabilitySet,
     /// Semaphore limiting concurrent subagent LLM calls.
@@ -370,7 +371,9 @@ impl Repl {
             turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id: Arc::new(Mutex::new(conversation_id)),
             mcp,
-            active_mcp_servers: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
+            active_mcp_servers: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
             subagent_cancellations: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -574,7 +577,10 @@ impl Repl {
             new_hooks,
             self.cwd.clone(),
             self.agent_id.lock().clone(),
-        ).with_lua_runner(Arc::new(ReplLuaHookRunner { app: self.app.clone() }));
+        )
+        .with_lua_runner(Arc::new(ReplLuaHookRunner {
+            app: self.app.clone(),
+        }));
         self.permissions.reload_from_settings(&new_perms);
 
         // 4. Reload MCP servers

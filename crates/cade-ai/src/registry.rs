@@ -128,7 +128,11 @@ impl ModelRegistry {
         let id_clean = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
         let parts: Vec<&str> = id_clean.split('/').collect();
         if parts.len() == 2 {
-            let provider = if parts[0] == "gemini" { "google" } else { parts[0] };
+            let provider = if parts[0] == "gemini" {
+                "google"
+            } else {
+                parts[0]
+            };
             let model_name = parts[1];
             if let Some(m) = llm_providers::get_model(provider, model_name) {
                 // Find matching generic fallback rule to extract ratios
@@ -146,31 +150,36 @@ impl ModelRegistry {
                     }
                 }
 
-                let cache_read = cache_read_ratio.map(|r| m.input_price * r).unwrap_or_else(|| {
-                    if provider == "anthropic" {
-                        m.input_price * 0.1
-                    } else if provider == "openai" {
-                        m.input_price * 0.5
-                    } else if provider == "gemini" || provider == "google" {
-                        m.input_price * 0.25
-                    } else if provider == "deepseek" {
-                        if model_name.contains("reasoner") || model_name.contains("r1") {
-                            m.input_price * 0.25
-                        } else {
+                let cache_read = cache_read_ratio
+                    .map(|r| m.input_price * r)
+                    .unwrap_or_else(|| {
+                        if provider == "anthropic" {
                             m.input_price * 0.1
+                        } else if provider == "openai" {
+                            m.input_price * 0.5
+                        } else if provider == "gemini" || provider == "google" {
+                            m.input_price * 0.25
+                        } else if provider == "deepseek" {
+                            if model_name.contains("reasoner") || model_name.contains("r1") {
+                                m.input_price * 0.25
+                            } else {
+                                m.input_price * 0.1
+                            }
+                        } else {
+                            0.0
                         }
-                    } else {
-                        0.0
-                    }
-                });
+                    });
 
-                let cache_write = cache_write_ratio.map(|r| m.input_price * r).unwrap_or_else(|| {
-                    if provider == "anthropic" {
-                        m.input_price * 1.25
-                    } else {
-                        0.0
-                    }
-                });
+                let cache_write =
+                    cache_write_ratio
+                        .map(|r| m.input_price * r)
+                        .unwrap_or_else(|| {
+                            if provider == "anthropic" {
+                                m.input_price * 1.25
+                            } else {
+                                0.0
+                            }
+                        });
 
                 return ModelPricing {
                     input: m.input_price,

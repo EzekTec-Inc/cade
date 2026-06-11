@@ -1,6 +1,5 @@
-
 use super::moa::{Agent, AgentRequest, AgentResponse, AgentResult};
-use super::routing::{Router, Aggregator};
+use super::routing::{Aggregator, Router};
 use async_trait::async_trait;
 use std::sync::Arc;
 

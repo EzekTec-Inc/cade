@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::Command;
 
-use cade_askpass::protocol::{decode_line, encode_line};
+use cade_askpass::protocol::Message;
 
 /// Path to the compiled `cade-askpass` binary, set by Cargo.
 const BIN: &str = env!("CARGO_BIN_EXE_cade-askpass");
@@ -17,7 +17,7 @@ const TOKEN: &str = "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef012
 
 /// Shared helper: accept one connection, do the AUTH handshake, read
 /// the PROMPT line, and reply with `response`.
-fn serve_one(listener: &TcpListener, response: &[u8]) {
+fn serve_one(listener: &TcpListener, response: &Message) {
     let (stream, _peer) = listener.accept().expect("accept");
     let mut reader = BufReader::new(stream.try_clone().expect("clone"));
     let mut sender = stream;
@@ -25,12 +25,15 @@ fn serve_one(listener: &TcpListener, response: &[u8]) {
     // AUTH
     let mut auth_line = String::new();
     reader.read_line(&mut auth_line).expect("read AUTH");
-    let (kind, tok) = decode_line(auth_line.trim()).unwrap();
-    assert_eq!(kind, "AUTH");
-    if tok == TOKEN {
-        sender.write_all(b"OK\n").unwrap();
+    let msg = Message::decode(auth_line.trim()).unwrap();
+    let token = match msg {
+        Message::Auth(tok) => tok,
+        other => panic!("expected AUTH, got {other:?}"),
+    };
+    if token == TOKEN {
+        sender.write_all(Message::Ok.encode().as_bytes()).unwrap();
     } else {
-        sender.write_all(b"DENY\n").unwrap();
+        sender.write_all(Message::Deny.encode().as_bytes()).unwrap();
         sender.flush().ok();
         return;
     }
@@ -39,11 +42,11 @@ fn serve_one(listener: &TcpListener, response: &[u8]) {
     // PROMPT
     let mut prompt_line = String::new();
     reader.read_line(&mut prompt_line).expect("read PROMPT");
-    let (pk, _pv) = decode_line(prompt_line.trim()).unwrap();
-    assert_eq!(pk, "PROMPT");
+    let pmsg = Message::decode(prompt_line.trim()).unwrap();
+    assert!(matches!(pmsg, Message::Prompt(_)));
 
     // Response
-    sender.write_all(response).unwrap();
+    sender.write_all(response.encode().as_bytes()).unwrap();
     sender.flush().ok();
 }
 
@@ -53,7 +56,7 @@ fn full_round_trip_prompt_password() {
     let addr = listener.local_addr().expect("local_addr");
 
     let server = std::thread::spawn(move || {
-        serve_one(&listener, encode_line("PASSWORD", "hunter2").as_bytes());
+        serve_one(&listener, &Message::Password("hunter2".to_string()));
     });
 
     let output = Command::new(BIN)
@@ -83,7 +86,7 @@ fn cancel_response_yields_nonzero_exit() {
     let addr = listener.local_addr().expect("local_addr");
 
     let server = std::thread::spawn(move || {
-        serve_one(&listener, b"CANCEL\n");
+        serve_one(&listener, &Message::Cancel);
     });
 
     let output = Command::new(BIN)

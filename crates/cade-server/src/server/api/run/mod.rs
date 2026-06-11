@@ -118,8 +118,7 @@ pub(super) fn parse_max_session_cost(raw: Option<&str>) -> Option<f64> {
 /// non-positive values disable the guardrail entirely.
 fn max_session_cost_usd() -> Option<f64> {
     // Default to a safe limit of $5.00 to prevent runaway loops if unset.
-    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref())
-        .or(Some(5.0))
+    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref()).or(Some(5.0))
 }
 
 /// P4: shared `ModelRegistry` used to price token totals against the
@@ -684,7 +683,11 @@ pub(crate) async fn run_agent_loop(
             break;
         }
 
-        if turn_usage.input_tokens > 0 || turn_usage.output_tokens > 0 || turn_usage.cache_read_tokens > 0 || turn_usage.cache_write_tokens > 0 {
+        if turn_usage.input_tokens > 0
+            || turn_usage.output_tokens > 0
+            || turn_usage.cache_read_tokens > 0
+            || turn_usage.cache_write_tokens > 0
+        {
             // P2: accumulate into AgentMetrics so cache tokens
             // are not silently dropped server-side.
             {

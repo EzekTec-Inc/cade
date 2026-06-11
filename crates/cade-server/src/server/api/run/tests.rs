@@ -1124,8 +1124,14 @@ mod advanced_execution_tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(128);
 
         // Create a temporary file in the current working directory to pass the sandbox
-        let temp_file_path = std::env::current_dir().unwrap().join("_test_advanced_execution_read.tmp");
-        std::fs::write(&temp_file_path, "test file content containing some lines total").unwrap();
+        let temp_file_path = std::env::current_dir()
+            .unwrap()
+            .join("_test_advanced_execution_read.tmp");
+        std::fs::write(
+            &temp_file_path,
+            "test file content containing some lines total",
+        )
+        .unwrap();
         let file_path_str = temp_file_path.to_str().unwrap().to_string();
 
         let tool_calls = vec![
@@ -1166,13 +1172,23 @@ mod advanced_execution_tests {
         assert_eq!(results.len(), 2);
 
         // Verify parallel result (read_file)
-        let read_result = results.iter().find(|(r, _)| r.tool_name == "read_file").unwrap();
-        assert!(!read_result.0.is_error, "read_file error output: {}", read_result.0.output);
+        let read_result = results
+            .iter()
+            .find(|(r, _)| r.tool_name == "read_file")
+            .unwrap();
+        assert!(
+            !read_result.0.is_error,
+            "read_file error output: {}",
+            read_result.0.output
+        );
         // Verify that the output contains the expected content
         assert!(read_result.0.output.contains("test file content"));
 
         // Verify sequential result
-        let seq_result = results.iter().find(|(r, _)| r.tool_name == "run_sequential_tasks").unwrap();
+        let seq_result = results
+            .iter()
+            .find(|(r, _)| r.tool_name == "run_sequential_tasks")
+            .unwrap();
         assert!(!seq_result.0.is_error);
         assert!(seq_result.0.output.contains("Step 0: bash ->\nhello"));
         assert!(seq_result.0.output.contains("Step 1: bash ->\nworld"));

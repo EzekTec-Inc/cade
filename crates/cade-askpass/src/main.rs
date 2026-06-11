@@ -17,12 +17,12 @@
 //! - We never log the prompt or password.  The only stderr output is
 //!   error context with no sensitive content.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use cade_askpass::protocol::{decode_line, encode_line};
+use cade_askpass::protocol::Message;
 use cade_askpass::{ENV_SOCKET, ENV_TOKEN};
 
 const PROTOCOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -53,29 +53,32 @@ fn run() -> Result<()> {
         .context("set write timeout")?;
 
     // ── Phase 1: AUTH handshake ──────────────────────────────────
-    let auth_line = encode_line("AUTH", &token);
+    let auth_msg = Message::Auth(token);
     stream
-        .write_all(auth_line.as_bytes())
+        .write_all(auth_msg.encode().as_bytes())
         .context("send AUTH to askpass server")?;
     stream.flush().ok();
 
-    let mut reader = BufReader::new(stream.try_clone().context("clone stream")?);
+    // Security: Limit reader to 4KB to prevent infinite streaming exhaustions.
+    let limit_reader = stream.try_clone().context("clone stream")?.take(4096);
+    let mut reader = BufReader::new(limit_reader);
     let mut auth_response = String::new();
     reader
         .read_line(&mut auth_response)
         .context("read auth response")?;
 
-    let (kind, _) = decode_line(auth_response.trim_end_matches('\n'))?;
-    match kind.as_str() {
-        "OK" => {}
-        "DENY" => bail!("server rejected auth token"),
-        other => bail!("unexpected auth response '{other}'"),
+    let msg =
+        Message::decode(auth_response.trim_end_matches('\n')).context("decode auth response")?;
+    match msg {
+        Message::Ok => {}
+        Message::Deny => bail!("server rejected auth token"),
+        other => bail!("unexpected auth response: {other:?}"),
     }
 
     // ── Phase 2: PROMPT ──────────────────────────────────────────
-    let prompt_line = encode_line("PROMPT", &prompt);
+    let prompt_msg = Message::Prompt(prompt);
     stream
-        .write_all(prompt_line.as_bytes())
+        .write_all(prompt_msg.encode().as_bytes())
         .context("send prompt to askpass server")?;
     stream.flush().ok();
 
@@ -84,15 +87,15 @@ fn run() -> Result<()> {
         .read_line(&mut response)
         .context("read response from askpass server")?;
 
-    let (kind, value) = decode_line(response.trim_end_matches('\n'))?;
-    match kind.as_str() {
-        "PASSWORD" => {
+    let msg = Message::decode(response.trim_end_matches('\n')).context("decode prompt response")?;
+    match msg {
+        Message::Password(value) => {
             print!("{value}");
             std::io::stdout().flush().ok();
             Ok(())
         }
-        "CANCEL" => bail!("user cancelled password prompt"),
-        "TIMEOUT" => bail!("password prompt timed out"),
-        other => bail!("unexpected response kind '{other}'"),
+        Message::Cancel => bail!("user cancelled password prompt"),
+        Message::Timeout => bail!("password prompt timed out"),
+        other => bail!("unexpected response kind: {other:?}"),
     }
 }
