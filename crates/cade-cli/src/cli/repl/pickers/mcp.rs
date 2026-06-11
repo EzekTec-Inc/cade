@@ -6,7 +6,8 @@ impl Repl {
     pub(crate) async fn interactive_mcp_picker(
         &self,
         app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
-    ) -> Result<Option<cade_tui::mcp_picker::McpAction>> {
+        initial_selected: usize,
+    ) -> Result<(Option<cade_tui::mcp_picker::McpAction>, usize)> {
         use cade_tui::mcp_picker::{McpEntry, show_mcp_manager};
 
         let mcp_configs = self.settings.lock().merged_mcp_servers();
@@ -37,9 +38,10 @@ impl Repl {
         let mut app = app_arc.lock();
         let colors = app.colors.clone();
 
-        let result = show_mcp_manager(&mut app.terminal, entries, &colors);
+        let result = show_mcp_manager(&mut app.terminal, entries, &colors, initial_selected);
         // Clear screen when done to force a re-render of underlying timeline
         let _ = app.terminal.clear();
-        Ok(result?)
+        let (action, final_idx) = result?;
+        Ok((action, final_idx))
     }
 }
