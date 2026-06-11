@@ -38,8 +38,14 @@ pub async fn reflect_agent(
     // -- 1. Fetch recent messages
     // Use get_context_window to respect the compaction boundary. We don't want
     // to re-reflect on history that has already been compressed.
-    let mut rows =
-        sqlite::get_context_window(&state.db, agent_id, conv_id, 999_999).unwrap_or_default();
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let cid = conv_id.map(String::from);
+    let rows_res = tokio::task::spawn_blocking(move || {
+        sqlite::get_context_window(&db, &aid, cid.as_deref(), 999_999)
+    })
+    .await;
+    let mut rows = rows_res.unwrap_or_else(|_| Ok(vec![])).unwrap_or_default();
 
     // limit to most recent 200 just in case
     if rows.len() > 200 {
@@ -84,7 +90,14 @@ pub async fn reflect_agent(
     }
 
     // -- 3. Fetch existing memory blocks to avoid duplication
-    let existing = sqlite::get_memory_blocks(&state.db, agent_id).unwrap_or_default();
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let existing_res = tokio::task::spawn_blocking(move || {
+        sqlite::get_memory_blocks(&db, &aid)
+    })
+    .await;
+    let existing = existing_res.unwrap_or_else(|_| Ok(vec![])).unwrap_or_default();
+
     let existing_labels: Vec<&str> = existing.iter().map(|(l, _, _)| l.as_str()).collect();
     let existing_summary = if existing_labels.is_empty() {
         "None yet.".to_string()
@@ -115,7 +128,7 @@ pub async fn reflect_agent(
 
     // -- 5. Call LLM
     let req = CompletionRequest {
-        model: get_agent_model(state, agent_id),
+        model: get_agent_model(state, agent_id).await,
         messages: vec![LlmMessage {
             role: "user".to_string(),
             content: prompt,
@@ -159,28 +172,44 @@ pub async fn reflect_agent(
         }
     }
 
-    for (label, value, memory_type) in &extracted {
-        let is_new = !existing.iter().any(|(l, _, _)| l == label);
-        match sqlite::upsert_memory_block_typed(
-            &state.db,
-            agent_id,
-            label,
-            value,
-            Some(&format!("Extracted by reflection ({trigger})")),
-            None,
-            Some(memory_type.as_str()),
-            Some(0.9),
-        ) {
-            Ok(_) => {
-                if is_new {
-                    result.blocks_created += 1;
-                } else {
-                    result.blocks_updated += 1;
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let extracted_to_move = extracted.clone();
+    let existing_to_move = existing.clone();
+    let trigger_to_move = trigger.to_string();
+
+    let loop_res = tokio::task::spawn_blocking(move || {
+        let mut created = 0;
+        let mut updated = 0;
+        for (label, value, memory_type) in &extracted_to_move {
+            let is_new = !existing_to_move.iter().any(|(l, _, _)| l == label);
+            match sqlite::upsert_memory_block_typed(
+                &db,
+                &aid,
+                label,
+                value,
+                Some(&format!("Extracted by reflection ({trigger_to_move})")),
+                None,
+                Some(memory_type.as_str()),
+                Some(0.9),
+            ) {
+                Ok(_) => {
+                    if is_new {
+                        created += 1;
+                    } else {
+                        updated += 1;
+                    }
                 }
+                Err(e) => tracing::warn!("reflect_agent: upsert '{label}': {e}"),
             }
-            Err(e) => tracing::warn!("reflect_agent: upsert '{label}': {e}"),
         }
-    }
+        (created, updated)
+    })
+    .await;
+
+    let (created, updated) = loop_res.unwrap_or((0, 0));
+    result.blocks_created = created;
+    result.blocks_updated = updated;
 
     result.summary = if extracted.is_empty() {
         "No new facts extracted from recent history.".to_string()
@@ -200,16 +229,25 @@ pub async fn reflect_agent(
     let duration_ms = t0.elapsed().as_millis();
     result.duration_ms = duration_ms;
     let log_id = format!("rl-{}", uuid::Uuid::new_v4());
-    let _ = sqlite::insert_reflection_log(
-        &state.db,
-        &log_id,
-        agent_id,
-        trigger,
-        result.blocks_created,
-        result.blocks_updated,
-        &result.summary,
-        duration_ms,
-    );
+    
+    let db = state.db.clone();
+    let log_id_to_move = log_id.clone();
+    let aid = agent_id.to_string();
+    let trigger_to_move = trigger.to_string();
+    let summary_to_move = result.summary.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        sqlite::insert_reflection_log(
+            &db,
+            &log_id_to_move,
+            &aid,
+            &trigger_to_move,
+            created,
+            updated,
+            &summary_to_move,
+            duration_ms,
+        )
+    })
+    .await;
 
     result
 }
@@ -218,8 +256,11 @@ pub async fn reflect_agent(
 
 // region:    --- Support
 
-fn get_agent_model(state: &AppState, agent_id: &str) -> String {
-    sqlite::get_agent(&state.db, agent_id)
+async fn get_agent_model(state: &AppState, agent_id: &str) -> String {
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let res = tokio::task::spawn_blocking(move || sqlite::get_agent(&db, &aid)).await;
+    res.unwrap_or_else(|_| Ok(None))
         .ok()
         .flatten()
         .map(|a| a.model)

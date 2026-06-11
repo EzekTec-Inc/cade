@@ -27,11 +27,19 @@ impl OllamaProvider {
     /// Returns an empty Vec if Ollama is unreachable or returns no models.
     pub async fn list_models(&self) -> Vec<String> {
         let url = format!("{}/api/tags", self.base_url);
-        let Ok(resp) = reqwest::get(&url).await else {
-            return vec![];
+        let resp = match reqwest::get(&url).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Ollama list_models: request failed for {url}: {e}");
+                return vec![];
+            }
         };
-        let Ok(body) = resp.json::<serde_json::Value>().await else {
-            return vec![];
+        let body = match resp.json::<serde_json::Value>().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Ollama list_models: failed to parse JSON response body for {url}: {e}");
+                return vec![];
+            }
         };
         body["models"]
             .as_array()

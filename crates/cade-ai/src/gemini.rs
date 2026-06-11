@@ -29,12 +29,21 @@ pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
     let req = client.get(&url).send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) | Err(_) => return vec![],
+        Ok(Err(e)) => {
+            tracing::warn!("fetch_gemini_models: request failed: {e}");
+            return vec![];
+        }
+        Err(_) => {
+            tracing::warn!("fetch_gemini_models: request timed out");
+            return vec![];
+        }
     };
     if !resp.status().is_success() {
+        tracing::warn!("fetch_gemini_models: API returned error status: {}", resp.status());
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {
+        tracing::warn!("fetch_gemini_models: failed to parse JSON response body");
         return vec![];
     };
 

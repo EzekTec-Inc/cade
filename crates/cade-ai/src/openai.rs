@@ -47,12 +47,21 @@ pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
         .send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) | Err(_) => return vec![],
+        Ok(Err(e)) => {
+            tracing::warn!("fetch_openai_chat_models: request failed: {e}");
+            return vec![];
+        }
+        Err(_) => {
+            tracing::warn!("fetch_openai_chat_models: request timed out");
+            return vec![];
+        }
     };
     if !resp.status().is_success() {
+        tracing::warn!("fetch_openai_chat_models: API returned error status: {}", resp.status());
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {
+        tracing::warn!("fetch_openai_chat_models: failed to parse JSON response body");
         return vec![];
     };
 
@@ -101,12 +110,21 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
     let req = req_builder.send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) | Err(_) => return vec![],
+        Ok(Err(e)) => {
+            tracing::warn!("fetch_model_ids: request failed for {models_url}: {e}");
+            return vec![];
+        }
+        Err(_) => {
+            tracing::warn!("fetch_model_ids: request timed out for {models_url}");
+            return vec![];
+        }
     };
     if !resp.status().is_success() {
+        tracing::warn!("fetch_model_ids: API returned error status for {models_url}: {}", resp.status());
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {
+        tracing::warn!("fetch_model_ids: failed to parse JSON response body for {models_url}");
         return vec![];
     };
 
