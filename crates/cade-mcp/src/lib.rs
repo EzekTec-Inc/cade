@@ -679,14 +679,17 @@ impl McpManager {
             cmd.env(k, v);
         }
 
-        // rmcp 1.4's `TokioChildProcess::new()` silently overrides the
-        // caller's Stdio settings (it forces stdin/stdout=piped, stderr=inherit
-        // via the builder's Default). That re-enables the server's stderr and
-        // pollutes CADE's terminal. Use the builder API directly so we can
-        // pin stderr=null. `.spawn()` returns (transport, Option<ChildStderr>);
-        // the second element is always None because stderr isn't piped.
+        // Redirect server's stderr to a log file for debugging and transparency.
+        let stderr_io = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open("/tmp/mcp_server_err.log")
+            .map(std::process::Stdio::from)
+            .unwrap_or_else(|_| std::process::Stdio::null());
+
         let (transport, _stderr) = TokioChildProcess::builder(cmd)
-            .stderr(std::process::Stdio::null())
+            .stderr(stderr_io)
             .spawn()
             .map_err(|e| {
                 Error::custom(format!(

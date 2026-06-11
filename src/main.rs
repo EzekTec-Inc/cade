@@ -386,9 +386,20 @@ async fn async_main() -> Result<()> {
     let bg_lazy_mcp = args.lazy_mcp || settings.lazy_mcp();
 
     tokio::spawn(async move {
+        tracing::warn!(
+            "DEBUG: Starting MCP servers background task... configs count = {}, enabled = {}, lazy = {}",
+            bg_mcp_configs.len(),
+            bg_mcp_enabled,
+            bg_lazy_mcp
+        );
         let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled || bg_lazy_mcp {
+            tracing::warn!(
+                "DEBUG: Bypassing McpManager::start (lazy or disabled or empty configs)"
+            );
+            bg_mcp_boot_status.lock().clear(); // Instantly clear loadings so TUI knows none are pending
             std::sync::Arc::new(McpManager::empty())
         } else {
+            tracing::warn!("DEBUG: Invoking McpManager::start...");
             let (mgr, _) = McpManager::start(
                 &bg_mcp_configs,
                 Some(&mut |res| {
@@ -411,6 +422,7 @@ async fn async_main() -> Result<()> {
                 }),
             )
             .await;
+            tracing::warn!("DEBUG: McpManager::start completed successfully!");
             std::sync::Arc::new(mgr)
         };
 
