@@ -614,6 +614,7 @@ pub(crate) async fn run_agent_loop(
 
         let mut text_acc = String::new();
         let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+        let mut turn_usage = cade_ai::TokenUsage::default();
         // Race the LLM stream against tx.closed() so a mid-stream
         // disconnect (Ctrl+C in the TUI, client process exit, network
         // drop) aborts the LLM call instead of letting it run to
@@ -655,23 +656,11 @@ pub(crate) async fn run_agent_loop(
                             tool_calls.push(tc);
                         }
                         Ok(StreamChunk::Usage(u)) => {
-                            // P2: accumulate into AgentMetrics so cache tokens
-                            // are not silently dropped server-side.
-                            {
-                                let map = state2.agent_metrics.clone();
-                                map.entry(agent_id2.clone())
-                                    .or_default()
-                                    .accumulate_usage(&u);
-                            }
-                            send(json!({
-                                "message_type": "usage_statistics",
-                                "input_tokens":  u.input_tokens,
-                                "output_tokens": u.output_tokens,
-                                "cache_read_tokens":  u.cache_read_tokens,
-                                "cache_write_tokens": u.cache_write_tokens,
-                                "model": u.model,
-                            }))
-                            .await;
+                            turn_usage.input_tokens = turn_usage.input_tokens.max(u.input_tokens);
+                            turn_usage.output_tokens = turn_usage.output_tokens.max(u.output_tokens);
+                            turn_usage.cache_read_tokens = turn_usage.cache_read_tokens.max(u.cache_read_tokens);
+                            turn_usage.cache_write_tokens = turn_usage.cache_write_tokens.max(u.cache_write_tokens);
+                            turn_usage.model = u.model.clone();
                         }
                         Ok(StreamChunk::FinishReason(r)) => {
                             send(json!({ "message_type": "finish_reason", "reason": r })).await;
@@ -693,6 +682,26 @@ pub(crate) async fn run_agent_loop(
             drop(llm_stream);
             exit_status = RunExitStatus::Cancelled;
             break;
+        }
+
+        if turn_usage.input_tokens > 0 || turn_usage.output_tokens > 0 || turn_usage.cache_read_tokens > 0 || turn_usage.cache_write_tokens > 0 {
+            // P2: accumulate into AgentMetrics so cache tokens
+            // are not silently dropped server-side.
+            {
+                let map = state2.agent_metrics.clone();
+                map.entry(agent_id2.clone())
+                    .or_default()
+                    .accumulate_usage(&turn_usage);
+            }
+            send(json!({
+                "message_type": "usage_statistics",
+                "input_tokens":  turn_usage.input_tokens,
+                "output_tokens": turn_usage.output_tokens,
+                "cache_read_tokens":  turn_usage.cache_read_tokens,
+                "cache_write_tokens": turn_usage.cache_write_tokens,
+                "model": turn_usage.model,
+            }))
+            .await;
         }
 
         // ── Persist assistant message ─────────────────────────────────
