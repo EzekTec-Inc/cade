@@ -16,6 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ### Fixed
 
+- **Model Pricing & Floating-Point Accuracy Tests**: Resolved the pricing tests in `crates/cade-ai` for `gpt-4.1` and `gpt-5` model series, correcting token cost validation against the external `llm_providers` DB database precedence rules, and fixed the Anthropic Claude cache-read pricing test to use safe approximate floating-point comparisons to prevent precision failures.
 - **OpenAI/OpenRouter Tool Compatibility Docs:** Documented OpenAI-compatible tool serialization around GPT-5-style Responses API flat function tools, `strict: false`, OpenAI's 128-tool cap, priority preservation for critical meta/MCP tools, and OpenRouter provider-prefix routing.
 - **Input Field Rendering Artifacts & Cursor Drift:** Added `ratatui::widgets::Clear` pass on the input chunk inside `crates/cade-tui/src/app/render.rs` before rendering the input field, preventing ghosting artifacts, and refactored `clamped_visual_y` to compute relative `relative_visual_y` taking `tui-textarea`'s vertical scrolling viewport into account.
 - **Centralized HTTP Connection Pooling:** Standardized and pooled outgoing connections across all first-party providers (`OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`), utilizing a unified HTTP client built with standard keepalive (60s), connection timeout (15s), and stream timeout (120s) configurations to optimize connection reuse.
