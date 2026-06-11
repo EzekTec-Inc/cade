@@ -505,6 +505,12 @@ impl Repl {
         ];
         app.slash_ac.set_commands(slash_cmds);
 
+        let subagent_names = cade_agent::subagents::discover_all_subagents(&self.cwd)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        app.slash_ac.set_at_subagents(subagent_names);
+
         // Populate helpful next step prompt based on active plan/task state
         let mut next_steps = vec![
             "? What are the next steps for my current task?".to_string(),

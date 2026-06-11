@@ -175,13 +175,16 @@ impl Repl {
                                 // then process the key (async question or Esc/scroll).
                                 loop {
                                     if let Some(mut app) = tick_app.try_lock() {
-                                        let has_async_question = app.overlays.last().is_some_and(|o| o.id() == "active_question");
-                                        if has_async_question {
+                                        let has_async_overlay = app.overlays.last().is_some_and(|o| o.id() == "active_question" || o.id() == "password");
+                                        if has_async_overlay {
                                             if let Some(top) = app.overlays.last_mut() {
                                                 let res = top.handle_input(k);
                                                 if matches!(res, cade_tui::overlay_component::OverlayInputResult::Dismiss) {
-                                                    app.overlays.pop();
+                                                    if let Some(mut popped) = app.overlays.pop() {
+                                                        let _ = popped.take_result();
+                                                    }
                                                 }
+                                                app.draw_dirty = true;
                                             }
                                         } else {
                                             match (k.code, k.modifiers) {

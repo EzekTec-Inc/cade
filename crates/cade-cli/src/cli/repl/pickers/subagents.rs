@@ -66,6 +66,17 @@ impl Repl {
 
                     let model_str = s.model.as_deref().unwrap_or("inherited");
 
+                    let format_str = match s.path.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                        Some("json") => "[JSON profile]",
+                        Some("md")   => "[Markdown]",
+                        _            => "[builtin]",
+                    };
+                    let format_color = match s.path.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                        Some("json") => RC::Yellow,
+                        Some("md")   => RC::Blue,
+                        _            => RC::Magenta,
+                    };
+
                     Row::new(vec![
                         Cell::from(Span::styled(
                             scope_str,
@@ -76,6 +87,10 @@ impl Repl {
                             Style::default().fg(if is_sel { RC::White } else { RC::Cyan }),
                         )),
                         Cell::from(Span::styled(model_str, Style::default().fg(RC::DarkGray))),
+                        Cell::from(Span::styled(
+                            format_str,
+                            Style::default().fg(if is_sel { RC::White } else { format_color }),
+                        )),
                     ])
                     .style(style)
                 })
@@ -87,10 +102,11 @@ impl Repl {
                     Constraint::Length(12),
                     Constraint::Length(25),
                     Constraint::Min(20),
+                    Constraint::Length(16),
                 ],
             )
             .header(
-                Row::new(vec!["Scope", "Name", "Model"])
+                Row::new(vec!["Scope", "Name", "Model", "Format"])
                     .style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)),
             )
             .block(

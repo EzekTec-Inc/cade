@@ -204,9 +204,11 @@ pub struct SlashCommandDef {
     pub description: String,
 }
 
-/// Provides `/` prefix slash-command completions.
+/// Provides `/` prefix slash-command completions and `@` prefix subagent completions.
 pub struct SlashCommandProvider {
     commands: Vec<SlashCommandDef>,
+    /// Subagent mode names (without `@`) for `@`-prefix Tab completions.
+    at_subagents: Vec<String>,
 }
 
 // -- AgentModelAutocompleteProvider
@@ -330,12 +332,21 @@ impl AutocompleteProvider for AgentModelAutocompleteProvider {
 
 impl SlashCommandProvider {
     pub fn new(commands: Vec<SlashCommandDef>) -> Self {
-        Self { commands }
+        Self {
+            commands,
+            at_subagents: Vec::new(),
+        }
     }
 
     /// Update the command list (e.g. when skills change).
     pub fn set_commands(&mut self, commands: Vec<SlashCommandDef>) {
         self.commands = commands;
+    }
+
+    /// Update the list of available subagent modes for `@` completion.
+    /// Each entry should be the bare mode name (without `@`), e.g. `"worker"`.
+    pub fn set_at_subagents(&mut self, modes: Vec<String>) {
+        self.at_subagents = modes;
     }
 
     /// Filter commands matching a prefix (case-insensitive).
@@ -344,6 +355,19 @@ impl SlashCommandProvider {
         self.commands
             .iter()
             .filter(|c| c.name.to_lowercase().starts_with(&lower))
+            .collect()
+    }
+
+    /// Return `@`-prefixed completions for subagent modes that match `prefix`.
+    pub fn at_completions(&self, prefix: &str) -> Vec<Completion> {
+        let lower = prefix.to_lowercase();
+        self.at_subagents
+            .iter()
+            .filter(|m| m.to_lowercase().starts_with(&lower))
+            .map(|m| Completion {
+                text: format!("@{}", m),
+                description: Some("Subagent mode".to_string()),
+            })
             .collect()
     }
 }
@@ -596,6 +620,9 @@ impl AutocompleteOverlay {
 
         let suggestions = if partial.starts_with('/') {
             slash_ac.completions(input, cursor)
+        } else if partial.starts_with('@') {
+            let prefix = partial.strip_prefix('@').unwrap_or("");
+            slash_ac.at_completions(prefix)
         } else if partial.starts_with(':') {
             tool_ac.completions(input, cursor)
         } else if partial.starts_with('?') {

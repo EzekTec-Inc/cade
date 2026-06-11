@@ -201,7 +201,7 @@ file path and line). If nothing relevant is found, say so clearly."
 
 // -- Discovery
 
-/// Scan a directory for *.md files defining custom subagents.
+/// Scan a directory for `*.md` and `*.json` files defining custom subagents.
 fn discover_in_dir(dir: &Path, scope: SubagentScope) -> Vec<SubagentDef> {
     if !dir.exists() {
         return vec![];
@@ -212,20 +212,37 @@ fn discover_in_dir(dir: &Path, scope: SubagentScope) -> Vec<SubagentDef> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let id = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        match parse_subagent_md(&id, &content, scope, path.clone()) {
-            Ok(def) => defs.push(def),
-            Err(e) => tracing::warn!("Bad subagent at {}: {e}", path.display()),
+        let ext = path.extension().and_then(|e| e.to_str());
+        match ext {
+            Some("md") => {
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let id = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                match parse_subagent_md(&id, &content, scope, path.clone()) {
+                    Ok(def) => defs.push(def),
+                    Err(e) => tracing::warn!("Bad subagent at {}: {e}", path.display()),
+                }
+            }
+            Some("json") => {
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let id = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                match parse_subagent_json(&id, &content, scope, path.clone()) {
+                    Ok(def) => defs.push(def),
+                    Err(e) => tracing::warn!("Bad subagent profile at {}: {e}", path.display()),
+                }
+            }
+            _ => {}
         }
     }
     defs
@@ -294,6 +311,87 @@ pub fn resolve_subagent_def<'a>(mode: &str, all: &'a [SubagentDef]) -> Option<&'
 
 // -- Parsing
 
+/// Parse a JSON profile file into a [`SubagentDef`].
+///
+/// Expected schema:
+/// ```json
+/// {
+///   "name":          "tester",
+///   "description":   "Runs the test suite",
+///   "model":         "anthropic/claude-haiku-4-5",
+///   "tools":         ["bash", "read_file", "glob"],
+///   "system_prompt": "You are a test runner.",
+///   "skills":        []
+/// }
+/// ```
+///
+/// `tools` can be:
+/// - `"all"` or `"readonly"` (string shortcuts)
+/// - `["bash", "read_file"]` (explicit list)
+/// - absent / `null`  → `SubagentTools::All`
+fn parse_subagent_json(
+    id: &str,
+    content: &str,
+    scope: SubagentScope,
+    path: PathBuf,
+) -> std::result::Result<SubagentDef, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    let name = v["name"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(id)
+        .to_string();
+
+    let description = v["description"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    let model = v["model"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let tools = match &v["tools"] {
+        serde_json::Value::String(s) => SubagentTools::from_str(s),
+        serde_json::Value::Array(arr) => {
+            let list: Vec<String> = arr
+                .iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect();
+            SubagentTools::List(list)
+        }
+        _ => SubagentTools::All,
+    };
+
+    let system_prompt = v["system_prompt"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    let skills: Vec<String> = v["skills"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(SubagentDef {
+        name,
+        description,
+        model,
+        tools,
+        system_prompt,
+        skills,
+        scope,
+        path: Some(path),
+    })
+}
+
 fn parse_subagent_md(
     id: &str,
     content: &str,
@@ -342,6 +440,80 @@ fn parse_subagent_md(
         path: Some(path),
         system_prompt: body.trim().to_string(),
     })
+}
+
+// -- Scaffold built-in profiles
+
+/// Write example JSON profile files to `~/.cade/subagents/` the first time
+/// a user runs CADE, so they have working templates to customise.
+///
+/// This function is intentionally **not** called automatically — the caller
+/// decides when to invoke it (e.g. on first-run detection).
+///
+/// Files are only written if they do **not** already exist, so re-invoking
+/// this is safe and idempotent.
+pub fn scaffold_builtin_profiles(cwd: &Path) {
+    let _ = cwd; // reserved for future project-local scaffolding
+
+    let Some(home) = dirs::home_dir() else {
+        tracing::warn!("scaffold_builtin_profiles: cannot determine home directory");
+        return;
+    };
+    let dir = home.join(".cade").join("subagents");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!("scaffold_builtin_profiles: cannot create {}: {e}", dir.display());
+        return;
+    }
+
+    let profiles: &[(&str, &str)] = &[
+        (
+            "tester.json",
+            r#"{
+  "name": "tester",
+  "description": "Runs the test suite and reports failures",
+  "model": "anthropic/claude-haiku-4-5",
+  "tools": ["bash", "read_file", "glob"],
+  "system_prompt": "You are a test runner. Your only job is to run the project's test suite and report any failures concisely.\n\n1. Find the test command (look for Makefile, package.json, Cargo.toml, etc.).\n2. Run it.\n3. Collect failures and report them with file paths and line numbers.\nDo NOT fix anything — only report.",
+  "skills": []
+}
+"#,
+        ),
+        (
+            "refactorer.json",
+            r#"{
+  "name": "refactorer",
+  "description": "Reads code and applies targeted refactoring edits",
+  "model": null,
+  "tools": ["read_file", "edit_file", "glob", "grep"],
+  "system_prompt": "You are a refactoring specialist. You improve code structure, readability, and maintainability without changing observable behaviour.\n\nRules:\n- Read the relevant files first.\n- Make minimal, targeted edits.\n- Do NOT add new features or fix bugs unless explicitly asked.\n- Preserve all public APIs and existing tests.",
+  "skills": []
+}
+"#,
+        ),
+        (
+            "researcher.json",
+            r#"{
+  "name": "researcher",
+  "description": "Read-only research agent — explores code and web, never writes files",
+  "model": null,
+  "tools": "readonly",
+  "system_prompt": "You are a read-only research assistant. Your job is to gather information and produce a clear, concise report.\n\nYou MAY:\n- Read files (read_file, glob, grep)\n- Search the web (web_search)\n- Search memory\n\nYou MUST NOT modify any file or run mutating shell commands. Return a structured report with your findings.",
+  "skills": []
+}
+"#,
+        ),
+    ];
+
+    for (filename, content) in profiles {
+        let dest = dir.join(filename);
+        if dest.exists() {
+            continue; // never overwrite user edits
+        }
+        match std::fs::write(&dest, content) {
+            Ok(()) => tracing::info!("scaffolded {}", dest.display()),
+            Err(e) => tracing::warn!("scaffold_builtin_profiles: cannot write {}: {e}", dest.display()),
+        }
+    }
 }
 
 // -- Background result
