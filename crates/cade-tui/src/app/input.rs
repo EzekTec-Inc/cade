@@ -32,18 +32,44 @@ impl TuiApp {
             // 50 ms poll: allows animation ticks without burning CPU.
             if !event::poll(std::time::Duration::from_millis(50))? {
                 // Trigger redraw if any MCP server is loading (for spinner animation)
+                // or if we are displaying the settled results before hiding the card.
                 if let Some(ref progress) = self.mcp_boot_status {
                     let boot_map = progress.lock();
-                    let mut loading = false;
+                    let mut show_card = false;
+                    let mut all_done = true;
                     for status in boot_map.values() {
                         if matches!(status, ServerBootStatus::Loading) {
-                            loading = true;
-                            break;
+                            show_card = true;
+                            all_done = false;
                         }
                     }
-                    if loading {
+                    if all_done {
+                        if self.mcp_all_settled_at.is_none() {
+                            self.mcp_all_settled_at = Some(std::time::Instant::now());
+                        }
+                    } else {
+                        self.mcp_all_settled_at = None;
+                    }
+                    if let Some(settled) = self.mcp_all_settled_at
+                        && settled.elapsed() < std::time::Duration::from_secs(3)
+                    {
+                        show_card = true;
+                    }
+                    if show_card && !boot_map.is_empty() {
+                        self.draw_dirty = true;
+                    } else if self.mcp_all_settled_at.is_some() {
+                        // Clear settled timestamp and trigger one last redraw to erase the card.
+                        self.mcp_all_settled_at = None;
                         self.draw_dirty = true;
                     }
+                }
+
+                if let Some(ref ready) = self.startup_ready
+                    && !self.mcp_processed
+                    && ready.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.mcp_processed = true;
+                    return Ok(Some("__MCP_READY__".to_string()));
                 }
 
                 // Background-subagent completion toast (Option 2).

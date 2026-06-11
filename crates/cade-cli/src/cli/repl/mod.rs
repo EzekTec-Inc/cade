@@ -324,6 +324,7 @@ impl Repl {
             theme,
         );
         tui_app.mcp_boot_status = mcp_boot_status.clone();
+        tui_app.startup_ready = Some(startup_ready.clone());
         let models: Vec<String> = cade_ai::catalogue::CATALOGUE
             .iter()
             .map(|m| m.0.to_string())
@@ -984,6 +985,18 @@ impl Repl {
                 }
             };
             let input = input.trim().to_string();
+
+            if input == "__MCP_READY__" {
+                if let Some(mut rx) = self.mcp_rx.take() {
+                    if let Ok(mgr) = rx.try_recv() {
+                        self.set_mcp(mgr).await;
+                        self.set_tools_ready();
+                    } else {
+                        self.mcp_rx = Some(rx);
+                    }
+                }
+                continue;
+            }
 
             // Clear status immediately upon submit
             self.app.lock().set_last_status(None);

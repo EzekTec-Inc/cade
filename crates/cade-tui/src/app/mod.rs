@@ -977,6 +977,10 @@ pub struct TuiApp {
     >,
     /// When did all configured MCP servers settle?
     pub mcp_all_settled_at: Option<std::time::Instant>,
+    /// Shared signal that the background MCP boot has finished.
+    pub startup_ready: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Flag indicating whether the completed MCP boot has been processed and popped as a sentinel.
+    pub mcp_processed: bool,
 }
 
 impl TuiApp {
@@ -1093,6 +1097,8 @@ impl TuiApp {
             bg_last_announced: 0,
             mcp_boot_status: None,
             mcp_all_settled_at: None,
+            startup_ready: None,
+            mcp_processed: false,
         }
     }
 

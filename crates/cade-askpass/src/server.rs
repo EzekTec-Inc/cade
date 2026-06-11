@@ -212,6 +212,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{decode_line, encode_line};
     use tokio::io::BufReader as TokioBufReader;
 
     #[tokio::test]
