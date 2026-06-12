@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-11
+
 ### Added
 
 - **Provider-Native Structured Completions:** Added native structured completions for OpenAI (`json_schema`), Anthropic (forced tool-use), and Gemini (`responseSchema` + `responseMimeType`) providers in `crates/cade-ai` with robust fallback.
