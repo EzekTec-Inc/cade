@@ -262,7 +262,11 @@ impl McpManager {
     /// - New or changed servers are (re-)started with a per-server timeout.
     ///
     /// Returns a `ReloadSummary` suitable for display in the REPL.
-    pub async fn reload(&self, new_configs: &HashMap<String, McpServerConfig>) -> ReloadSummary {
+    pub async fn reload(
+        &self,
+        new_configs: &HashMap<String, McpServerConfig>,
+        mut on_progress: Option<&mut (dyn FnMut(McpStartResult) + Send)>,
+    ) -> ReloadSummary {
         let mut summary = ReloadSummary::default();
 
         // Sort new configs for deterministic startup order
@@ -287,11 +291,6 @@ impl McpManager {
         for (key, config) in &entries {
             // Keep existing connection if the server identity is unchanged and
             // the server is healthy.
-            //
-            // Identity for stdio servers  = the `command` binary path.
-            // Identity for remote servers = the `url` field (stored in config).
-            // `existing.command` holds "[http] <url>" for remote servers, so we
-            // compare against `config.url` directly instead of `config.command`.
             let identity_unchanged = if let Some(url) = &config.url {
                 existing_identity(&old_by_key.get(*key)) == Some(url.as_str())
             } else {
@@ -305,9 +304,6 @@ impl McpManager {
                 && identity_unchanged
                 && !existing.disabled
             {
-                // The `if let Some(...)` immediately above proved `*key`
-                // is in the map.  Use unwrap_or_else for belt-and-suspenders
-                // safety under panic=unwind — log rather than crash.
                 let Some(existing) = old_by_key.remove(*key) else {
                     tracing::error!(
                         "BUG: key '{key}' vanished from old_by_key between get and remove"
@@ -315,6 +311,13 @@ impl McpManager {
                     continue;
                 };
                 summary.kept.push(key.to_string());
+                let res = McpStartResult::Ok {
+                    key: key.to_string(),
+                    tool_count: existing.tools.len(),
+                };
+                if let Some(ref mut cb) = on_progress {
+                    cb(res);
+                }
                 new_servers.push(existing);
                 continue;
             }
@@ -330,18 +333,27 @@ impl McpManager {
         }
 
         while let Some(Ok((key, result))) = join_set.join_next().await {
-            match result {
+            let res = match result {
                 Ok(Ok(server)) => {
                     info!(
                         "MCP reload: started server '{key}' — {} tool(s)",
                         server.tools.len()
                     );
                     summary.started.push(key.to_string());
+                    let r = McpStartResult::Ok {
+                        key: key.clone(),
+                        tool_count: server.tools.len(),
+                    };
                     new_servers.push(server);
+                    r
                 }
                 Ok(Err(e)) => {
                     warn!("MCP reload: server '{key}' failed to start: {e}");
                     summary.failed.push(key.to_string());
+                    McpStartResult::Failed {
+                        key: key.clone(),
+                        error: e.to_string(),
+                    }
                 }
                 Err(_elapsed) => {
                     warn!(
@@ -349,7 +361,14 @@ impl McpManager {
                         MCP_SERVER_TIMEOUT_SECS
                     );
                     summary.failed.push(key.to_string());
+                    McpStartResult::Timeout {
+                        key: key.clone(),
+                        timeout_secs: MCP_SERVER_TIMEOUT_SECS,
+                    }
                 }
+            };
+            if let Some(ref mut cb) = on_progress {
+                cb(res);
             }
         }
 

@@ -591,7 +591,35 @@ impl Repl {
         self.permissions.reload_from_settings(&new_perms);
 
         // 4. Reload MCP servers
-        let summary = self.mcp.reload(&new_mcp).await;
+        if let Some(ref mbs) = self.mcp_boot_status {
+            let mut guard = mbs.lock();
+            guard.clear();
+            for key in new_mcp.keys() {
+                guard.insert(key.clone(), cade_tui::app::ServerBootStatus::Loading);
+            }
+        }
+
+        let mbs_clone = self.mcp_boot_status.clone();
+        let mut on_progress = move |res: cade_agent::mcp::McpStartResult| {
+            if let Some(ref mbs) = mbs_clone {
+                let status = match &res {
+                    cade_agent::mcp::McpStartResult::Ok { tool_count, .. } => {
+                        cade_tui::app::ServerBootStatus::Ready {
+                            tool_count: *tool_count,
+                        }
+                    }
+                    cade_agent::mcp::McpStartResult::Failed { error, .. } => {
+                        cade_tui::app::ServerBootStatus::Failed(error.clone())
+                    }
+                    cade_agent::mcp::McpStartResult::Timeout { timeout_secs, .. } => {
+                        cade_tui::app::ServerBootStatus::Timeout(*timeout_secs)
+                    }
+                };
+                mbs.lock().insert(res.key().to_string(), status);
+            }
+        };
+
+        let summary = self.mcp.reload(&new_mcp, Some(&mut on_progress)).await;
 
         if !summary.stopped.is_empty() {
             self.tui_dim(format!("  stopped: {}", summary.stopped.join(", ")));
