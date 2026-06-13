@@ -97,8 +97,7 @@ local function get_visual_selection()
     -- Fallback to standard line collection
     region_lines = vim.api.nvim_buf_get_lines(0, s_pos[2] - 1, e_pos[2], false)
   end
-  local selected_text = table.concat(region_lines, "
-")
+  local selected_text = table.concat(region_lines, "\n")
 
   local start_row = s_pos[2] - 1
   local start_col = s_pos[3] - 1
