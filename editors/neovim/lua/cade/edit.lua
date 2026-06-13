@@ -104,17 +104,23 @@ local function get_visual_selection()
   local end_row = e_pos[2] - 1
   local end_col = e_pos[3]
 
-  -- Clamp end_col safely
   local last_line = vim.api.nvim_buf_get_lines(0, end_row, end_row + 1, true)[1] or ""
   local line_len = string.len(last_line)
-  if end_col > line_len or end_col < 0 then
-    end_col = line_len
-  end
-  if start_col < 0 then
+
+  if mode == "V" then
     start_col = 0
+    end_col = line_len
+  else
+    -- Clamp end_col safely
+    if end_col > line_len or end_col < 0 then
+      end_col = line_len
+    end
+    if start_col < 0 then
+      start_col = 0
+    end
   end
 
-  return selected_text, start_row, start_col, end_row, end_col
+  return selected_text, start_row, start_col, end_row, end_col, mode
 end
 
 local function replace_text(buf, start_row, start_col, end_row, end_col, new_text)
@@ -131,9 +137,9 @@ function M.update_visual_hint()
     return
   end
   
+  local v_pos = vim.fn.getpos("v")
   local cur_pos = vim.fn.getpos(".")
-  local row = cur_pos[2] - 1
-  local col = cur_pos[3] - 1
+  local row = math.max(v_pos[2], cur_pos[2]) - 1
   
   vim.api.nvim_buf_clear_namespace(0, hint_ns, 0, -1)
   
@@ -170,15 +176,20 @@ function M.hover_edit()
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
 
   vim.schedule(function()
-    local selected_text, s_row, s_col, e_row, e_col = get_visual_selection()
+    local selected_text, s_row, s_col, e_row, e_col, mode = get_visual_selection()
     local buf = vim.api.nvim_get_current_buf()
     
     local sel_ns = vim.api.nvim_create_namespace("cade_edit_sel")
-    local sel_extmark = vim.api.nvim_buf_set_extmark(buf, sel_ns, s_row, s_col, {
+    local sel_opts = {
       end_row = e_row,
       end_col = e_col,
       hl_group = "Visual",
-    })
+      priority = 10000,
+    }
+    if mode == "V" then
+      sel_opts.hl_eol = true
+    end
+    local sel_extmark = vim.api.nvim_buf_set_extmark(buf, sel_ns, s_row, s_col, sel_opts)
     
     local prefix_lines = vim.api.nvim_buf_get_lines(buf, math.max(0, s_row - 50), s_row, false)
     if #prefix_lines > 0 then
@@ -252,19 +263,22 @@ function M.hover_edit()
       pcall(vim.api.nvim_buf_del_extmark, buf, sel_ns, sel_extmark)
     end
     
-    local function submit_or_apply()
+    local function submit_or_apply(is_ctrl_s)
       if is_streaming then
         vim.notify("Wait for the edit to finish streaming, or press Esc to cancel.", vim.log.levels.INFO)
         return
       end
       
       if error_occurred then
-        vim.notify("Edit failed. Press Esc to close.", vim.log.levels.WARN)
-        return
+        error_occurred = false
       end
       
-      -- If we already have a response, apply it
+      -- If we already have a response, apply it (only via <C-s>)
       if accumulated_response ~= "" then
+        if not is_ctrl_s then
+          -- Do not apply on Enter, only on <C-s>!
+          return
+        end
         local start_pos = vim.api.nvim_buf_get_extmark_by_id(buf, sel_ns, sel_extmark, {details=true})
         if #start_pos > 0 then
           local cur_s_row, cur_s_col, details = start_pos[1], start_pos[2], start_pos[3]
@@ -277,6 +291,26 @@ function M.hover_edit()
       
       -- Otherwise, submit instruction
       local lines = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
+      
+      -- If there is a separator from a previous failed run, truncate it to retry cleanly
+      local separator_idx = nil
+      for i, line in ipairs(lines) do
+        if line == "---" then
+          separator_idx = i
+          break
+        end
+      end
+      
+      if separator_idx then
+        local new_lines = {}
+        for i = 1, separator_idx - 1 do
+          table.insert(new_lines, lines[i])
+        end
+        -- Remove the separator and everything after it
+        vim.api.nvim_buf_set_lines(prompt_buf, separator_idx - 1, -1, false, {})
+        lines = new_lines
+      end
+
       local instruction = vim.trim(table.concat(lines, "\n"))
       if instruction == "" then return end
       
@@ -329,12 +363,15 @@ function M.hover_edit()
     end, { buffer = prompt_buf })
     
     -- Use <C-s> or <CR> to submit or apply
-    vim.keymap.set("n", "<C-s>", submit_or_apply, { buffer = prompt_buf })
-    vim.keymap.set("i", "<C-s>", submit_or_apply, { buffer = prompt_buf })
+    vim.keymap.set("n", "<C-s>", function() submit_or_apply(true) end, { buffer = prompt_buf })
+    vim.keymap.set("i", "<C-s>", function() submit_or_apply(true) end, { buffer = prompt_buf })
     
-    vim.keymap.set("n", "<CR>", submit_or_apply, { buffer = prompt_buf })
-    vim.keymap.set("i", "<CR>", submit_or_apply, { buffer = prompt_buf })
+    vim.keymap.set("n", "<CR>", function() submit_or_apply(false) end, { buffer = prompt_buf })
+    vim.keymap.set("i", "<CR>", function() submit_or_apply(false) end, { buffer = prompt_buf })
   end)
 end
+
+M._get_visual_selection = get_visual_selection
+M._replace_text = replace_text
 
 return M
