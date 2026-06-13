@@ -19,7 +19,7 @@ use super::types::*;
 /// Uses `notify` 6.x `RecommendedWatcher` (inotify on Linux, FSEvents on macOS,
 /// ReadDirectoryChangesW on Windows). The watcher runs on a dedicated std thread
 /// (notify is not async-native) and forwards events to a `tokio::sync::mpsc` channel.
-pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
+pub fn spawn_skill_watcher(_cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
     use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -38,10 +38,7 @@ pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
         }
     }
 
-    let project_skills = cwd.join(".cade/skills");
-    if project_skills.exists() {
-        watch_dirs.push(project_skills.clone());
-    }
+
 
     if watch_dirs.is_empty() {
         // No dirs to watch yet — still return the receiver; caller can start

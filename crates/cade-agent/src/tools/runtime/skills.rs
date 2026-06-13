@@ -34,13 +34,9 @@ impl ToolRuntime {
         if url.is_empty() {
             return ("Error: 'url' is required".to_string(), true);
         }
-        let target_dir = if scope == "global" {
-            dirs::home_dir()
-                .map(|h| h.join(".cade").join("skills"))
-                .unwrap_or_else(|| self.cwd.join(".cade/skills"))
-        } else {
-            self.cwd.join(".cade/skills")
-        };
+        let target_dir = dirs::home_dir()
+            .map(|h| h.join(".cade").join("skills"))
+            .unwrap_or_else(|| self.cwd.join(".cade/skills"));
         match cade_core::skills::install_skill_from_url(&url, &target_dir, skill_name).await {
             Ok(skill) => (
                 format!(
