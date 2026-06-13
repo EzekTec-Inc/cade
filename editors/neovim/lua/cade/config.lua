@@ -30,11 +30,31 @@ local function resolve_agent_id(settings_path)
   return ""
 end
 
+local function resolve_api_key()
+  -- 1. Environment variable wins
+  local env = vim.env.CADE_API_KEY
+  if env and env ~= "" then
+    return env
+  end
+
+  -- 2. Fall back to ~/.cade/api-token
+  local token_path = vim.fn.expand("~/.cade/api-token")
+  local ok, lines = pcall(vim.fn.readfile, token_path)
+  if ok and lines and #lines > 0 then
+    local token = vim.trim(table.concat(lines, ""))
+    if token ~= "" then
+      return token
+    end
+  end
+
+  return ""
+end
+
 M.defaults = {
   enabled       = true,     -- legacy toggle for completions
   server_port   = 8284,
   agent_id      = resolve_agent_id(),
-  api_key       = vim.env.CADE_API_KEY  or "",
+  api_key       = resolve_api_key(),
   lines_before  = 50,       -- prefix context lines
   lines_after   = 20,       -- suffix context lines
   debounce_ms   = 300,      -- ms to wait after last keystroke
