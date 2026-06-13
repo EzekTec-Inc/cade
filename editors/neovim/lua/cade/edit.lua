@@ -84,26 +84,38 @@ function M.fetch_edit(prefix, selected_text, suffix, instruction, language, on_t
 end
 
 local function get_visual_selection()
-  local _, start_row, start_col, _ = unpack(vim.fn.getpos("'<"))
-  local _, end_row, end_col, _ = unpack(vim.fn.getpos("'>"))
-  
-  if start_row > end_row or (start_row == end_row and start_col > end_col) then
-    start_row, end_row = end_row, start_row
-    start_col, end_col = end_col, start_col
-  end
+  local s_pos = vim.fn.getpos("'<")
+  local e_pos = vim.fn.getpos("'>")
+  local mode = vim.fn.visualmode()
 
-  start_row = start_row - 1
-  end_row = end_row - 1
-  start_col = start_col - 1
-  
-  -- For line mode ('V'), end_col is usually v:maxcol, we need to clamp it
-  local line_len = string.len(vim.api.nvim_buf_get_lines(0, end_row, end_row+1, true)[1] or "")
-  if end_col > line_len then
+  -- Use robust getregion (Neovim >= 0.10 native, zero column-math crashes)
+  local region_lines = {}
+  local ok, err_reg = pcall(function()
+    region_lines = vim.fn.getregion(s_pos, e_pos, { type = mode })
+  end)
+  if not ok or not region_lines or #region_lines == 0 then
+    -- Fallback to standard line collection
+    region_lines = vim.api.nvim_buf_get_lines(0, s_pos[2] - 1, e_pos[2], false)
+  end
+  local selected_text = table.concat(region_lines, "
+")
+
+  local start_row = s_pos[2] - 1
+  local start_col = s_pos[3] - 1
+  local end_row = e_pos[2] - 1
+  local end_col = e_pos[3]
+
+  -- Clamp end_col safely
+  local last_line = vim.api.nvim_buf_get_lines(0, end_row, end_row + 1, true)[1] or ""
+  local line_len = string.len(last_line)
+  if end_col > line_len or end_col < 0 then
     end_col = line_len
   end
+  if start_col < 0 then
+    start_col = 0
+  end
 
-  local lines = vim.api.nvim_buf_get_text(0, start_row, start_col, end_row, end_col, {})
-  return table.concat(lines, "\n"), start_row, start_col, end_row, end_col
+  return selected_text, start_row, start_col, end_row, end_col
 end
 
 local function replace_text(buf, start_row, start_col, end_row, end_col, new_text)
@@ -170,14 +182,20 @@ function M.hover_edit()
     
     local prefix_lines = vim.api.nvim_buf_get_lines(buf, math.max(0, s_row - 50), s_row, false)
     if #prefix_lines > 0 then
-      local partial_start = vim.api.nvim_buf_get_text(buf, s_row, 0, s_row, s_col, {})[1] or ""
+      local partial_start = ""
+      pcall(function()
+        partial_start = vim.api.nvim_buf_get_text(buf, s_row, 0, s_row, s_col, {})[1] or ""
+      end)
       table.insert(prefix_lines, partial_start)
     end
     local prefix = table.concat(prefix_lines, "\n")
     
     local suffix_lines = vim.api.nvim_buf_get_lines(buf, e_row + 1, e_row + 20, false)
-    local partial_end_lines = vim.api.nvim_buf_get_text(buf, e_row, e_col, e_row, -1, {})
-    local partial_end = partial_end_lines[1] or ""
+    local partial_end = ""
+    pcall(function()
+      local partial_end_lines = vim.api.nvim_buf_get_text(buf, e_row, e_col, e_row, -1, {})
+      partial_end = partial_end_lines[1] or ""
+    end)
     table.insert(suffix_lines, 1, partial_end)
     local suffix = table.concat(suffix_lines, "\n")
     
