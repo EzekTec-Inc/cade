@@ -2,6 +2,23 @@
 
 local M = {}
 
+M._server_reachable = false
+M._probe_timer = nil
+
+function M._async_probe()
+  local cfg = require("cade.config").get()
+  local url = string.format("http://127.0.0.1:%d/v1/agents", cfg.server_port)
+  pcall(function()
+    vim.system(
+      { "curl", "--silent", "--max-time", "1", "-o", "/dev/null", "-w", "%{http_code}", url },
+      { text = true },
+      function(obj)
+        M._server_reachable = (obj.code == 0 and vim.trim(obj.stdout or "") ~= "000")
+      end
+    )
+  end)
+end
+
 --- Setup CADE completions with user options.
 ---@param opts table|nil  See cade.config for available options.
 function M.setup(opts)
@@ -18,6 +35,12 @@ function M.setup(opts)
     pcall(function()
       require("cade.mcp").setup(cfg.mcp)
     end)
+  end
+
+  -- Start async probe timer for statusline components
+  if not M._probe_timer then
+    M._probe_timer = vim.uv.new_timer()
+    M._probe_timer:start(100, 10000, vim.schedule_wrap(M._async_probe))
   end
 end
 
@@ -77,6 +100,20 @@ end
 
 --- Build and return a status summary string. Also calls vim.notify().
 ---@return string
+--- Return an elegant status symbol and label suitable for statuslines.
+---@return string symbol, string label
+function M.status_symbol()
+  local cfg = require("cade.config").get()
+  if not cfg.completions.enabled then
+    return "󰚪", "disabled"
+  end
+  if M._server_reachable then
+    return "󰚩", "connected"
+  else
+    return "󰚪", "offline"
+  end
+end
+
 function M.status()
   local cfg = require("cade.config").get()
 

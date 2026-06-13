@@ -113,6 +113,32 @@ Set automatically by `plugin/cade.lua`:
 
 `<Tab>` falls through to its normal behaviour when no ghost text is visible.
 
+## Statusline Integration
+
+You can easily display CADE’s active connection and completion status in your statusline (e.g., Lualine) without lagging your editor. CADE runs a fast, non-blocking background timer to poll server reachability and provides an instantaneous API:
+
+```lua
+-- Returns (symbol, label) -> e.g., ("󰚩", "connected"), ("󰚪", "offline"), or ("󰚪", "disabled")
+local symbol, label = require("cade").status_symbol()
+```
+
+Example config for **lualine.nvim**:
+```lua
+require("lualine").setup({
+  sections = {
+    lualine_x = {
+      {
+        function()
+          local symbol, label = require("cade").status_symbol()
+          return symbol .. " CADE (" .. label .. ")"
+        end,
+        color = { fg = "#a6e22e" }, -- green highlight
+      }
+    }
+  }
+})
+```
+
 ## How It Works
 
 ```
