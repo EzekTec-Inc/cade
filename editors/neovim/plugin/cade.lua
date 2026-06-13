@@ -8,15 +8,19 @@ vim.g.loaded_cade_nvim = 1
 
 local socket_path = "/tmp/nvim.pipe"
 
--- Automatically set the environment variable globally for Neovim and all child processes
-if vim.env.NVIM_LISTEN_ADDRESS == nil or vim.env.NVIM_LISTEN_ADDRESS == "" then
-  vim.env.NVIM_LISTEN_ADDRESS = socket_path
+-- Automatically set the environment variable globally for Neovim and all child processes (only if not headless)
+if #vim.api.nvim_list_uis() > 0 then
+  if vim.env.NVIM_LISTEN_ADDRESS == nil or vim.env.NVIM_LISTEN_ADDRESS == "" then
+    vim.env.NVIM_LISTEN_ADDRESS = socket_path
+  end
 end
 
--- Safely start the internal server on the socket
-pcall(function()
-  vim.fn.serverstart(socket_path)
-end)
+-- Safely start the internal server on the socket (only if not headless)
+if #vim.api.nvim_list_uis() > 0 then
+  pcall(function()
+    vim.fn.serverstart(socket_path)
+  end)
+end
 
 -- ── CADE Inline Completions (Option B) ──────────────────────────────────────
 
