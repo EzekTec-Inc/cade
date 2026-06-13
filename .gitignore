@@ -7,7 +7,6 @@ PLAN.md
 .env
 .gemini/
 .abacusai/
-.scripts/
 conductor/
 CHANGELOG.md
 CLAUDE.md
