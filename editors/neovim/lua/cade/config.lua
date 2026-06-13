@@ -16,13 +16,24 @@ local function resolve_agent_id(settings_path)
     return env
   end
 
-  -- 2. Fall back to ~/.cade/settings.json → last_agent
-  local path = settings_path or DEFAULT_SETTINGS_PATH
-  local ok, lines = pcall(vim.fn.readfile, path)
-  if ok and lines and #lines > 0 then
-    local json_ok, data = pcall(vim.fn.json_decode, table.concat(lines, "\n"))
-    if json_ok and type(data) == "table" and type(data.last_agent) == "string" and data.last_agent ~= "" then
-      return data.last_agent
+  -- 2. Fall back to settings files (workspace-local takes precedence over global)
+  local paths = {}
+  if settings_path then
+    table.insert(paths, settings_path)
+  else
+    table.insert(paths, vim.fn.getcwd() .. "/.cade/settings.local.json")
+    table.insert(paths, vim.fn.getcwd() .. "/.cade/settings.json")
+    table.insert(paths, vim.fn.expand("~/.cade/settings.local.json"))
+    table.insert(paths, DEFAULT_SETTINGS_PATH)
+  end
+
+  for _, path in ipairs(paths) do
+    local ok, lines = pcall(vim.fn.readfile, path)
+    if ok and lines and #lines > 0 then
+      local json_ok, data = pcall(vim.fn.json_decode, table.concat(lines, "\n"))
+      if json_ok and type(data) == "table" and type(data.last_agent) == "string" and data.last_agent ~= "" then
+        return data.last_agent
+      end
     end
   end
 

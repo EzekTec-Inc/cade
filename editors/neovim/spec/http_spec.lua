@@ -73,7 +73,8 @@ describe("http", function()
     local stop = http._parse_sse_line(
       'data: {"message_type":"stream_end"}'
     )
-    assert.is_nil(stop)
+    assert.is_not_nil(stop)
+    assert.are.equal("done", stop.type)
   end)
 
   -- ── fetch() ────────────────────────────────────────────────────────────────
