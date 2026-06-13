@@ -154,6 +154,7 @@ function M.setup_hints()
   local group = vim.api.nvim_create_augroup("CadeEditHints", { clear = true })
   vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
     group = group,
+    pattern = "*",
     callback = M.update_visual_hint,
   })
 end
