@@ -347,8 +347,8 @@ fn discover_all_skills_higher_scope_wins() -> Result<()> {
         .iter()
         .find(|s| s.id == "shared")
         .ok_or("Should find skill")?;
-    assert_eq!(shared.name, "Global Version"); // global scope wins because project is ignored
-    assert_eq!(shared.scope, SkillScope::Global);
+    assert_eq!(shared.name, "Project Version"); // project scope wins
+    assert_eq!(shared.scope, SkillScope::Project);
 
     Ok(())
 }

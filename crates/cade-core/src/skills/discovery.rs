@@ -57,8 +57,8 @@ pub fn discover_skills_in(dir: &Path, scope: SkillScope) -> Vec<Skill> {
 /// Discover skills from all scopes and merge by priority.
 /// Project > Agent > Global > Builtin (same ID → higher scope wins).
 pub fn discover_all_skills(
-    _cwd: &Path,
-    _agent_id: Option<&str>,
+    cwd: &Path,
+    agent_id: Option<&str>,
     cade_home: Option<&Path>,
 ) -> Vec<Skill> {
     let home = dirs::home_dir();
@@ -71,7 +71,17 @@ pub fn discover_all_skills(
     // Lowest priority first
     if let Some(ch) = &cade_home {
         all.extend(discover_skills_in(&ch.join("skills"), SkillScope::Global));
+        if let Some(id) = agent_id {
+            all.extend(discover_skills_in(
+                &ch.join("subagents").join(id).join("skills"),
+                SkillScope::Agent,
+            ));
+        }
     }
+    all.extend(discover_skills_in(
+        &cwd.join(".cade/skills"),
+        SkillScope::Project,
+    ));
 
     // Merge: for each ID keep only the highest-scope version
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
