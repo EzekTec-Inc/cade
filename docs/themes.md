@@ -185,14 +185,14 @@ However, if you still want to dynamically force CADE to synchronize automaticall
 
 ### Standalone Plugin (Legacy)
 
-The `cade.nvim` plugin is a minimal Lua script that extracts colors directly from Neovim highlight groups and exports a `.json` theme format to CADE. Since it is hosted in the main CADE monorepo, point your package manager to the `plugins/cade.nvim` directory.
+The `cade.nvim` plugin is a minimal Lua script that extracts colors directly from Neovim highlight groups and exports a `.json` theme format to CADE. Since it is hosted in the main CADE monorepo, point your package manager to the `editors/neovim` directory.
 
 Using **lazy.nvim**:
 ```lua
 {
   "EzekTec-Inc/cade",
   config = function(plugin)
-    vim.opt.rtp:append(plugin.dir .. "/plugins/cade.nvim")
+    vim.opt.rtp:append(plugin.dir .. "/editors/neovim")
     require("cade").setup({
       auto_export = true,
       theme_name = "nvim-exported"

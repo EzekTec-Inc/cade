@@ -33,7 +33,7 @@ return {
     "EzekTec-Inc/cade",
     -- Point lazy at the subdirectory that contains the plugin
     main = "cade",
-    subdir = "plugins/cade.nvim",
+    subdir = "editors/neovim",
     lazy = false,
     config = function()
       require("cade").setup({
@@ -68,7 +68,7 @@ If you have the CADE repo checked out locally:
 ```lua
 return {
   {
-    dir  = "/path/to/CADE/plugins/cade.nvim",
+    dir  = "/path/to/CADE/editors/neovim",
     lazy = false,
     config = function()
       require("cade").setup({})
@@ -133,7 +133,7 @@ trigger.lua ──► http.lua ──── curl POST /v1/agents/:id/complete �
 ## Module layout
 
 ```
-plugins/cade.nvim/
+editors/neovim/
 ├── lua/
 │   └── cade/
 │       ├── init.lua      ← public API (setup / accept / dismiss / toggle)

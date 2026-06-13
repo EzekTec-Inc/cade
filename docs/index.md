@@ -30,7 +30,7 @@ Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent 
 | Doc | When to read it |
 |---|---|
 | [MCP Servers](mcp-servers.md) | You want to connect external tools (GitHub, Jira, databases, etc.) |
-| [IDE Plugins](../plugins/cade.nvim/README.md) | You want to set up interactive inline edits and completions in Neovim |
+| [IDE Plugins](../editors/neovim/README.md) | You want to set up interactive inline edits and completions in Neovim |
 | [Hooks](hooks.md) | You want to run shell scripts when specific events happen |
 | [Permissions](permissions.md) | You want to control what CADE can and can't do |
 | [Execution Backends](execution-backends.md) | You want to run tools inside Docker, over SSH, or in read-only mode |

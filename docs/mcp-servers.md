@@ -94,7 +94,7 @@ This allows MCP servers to trigger rich interactive flows (such as form inputs, 
 
 Editor adapters live in `plugins/` (or external repos):
 
-- `plugins/cade.nvim/` — Neovim plugin
+- `editors/neovim/` — Neovim plugin
 
 ## Recommended public servers
 
