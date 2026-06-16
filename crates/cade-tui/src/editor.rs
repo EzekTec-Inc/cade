@@ -1,4 +1,4 @@
-use tui_textarea::{Input, Key, TextArea};
+use tui_textarea::{CursorMove, TextArea, WrapMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -23,7 +23,9 @@ pub struct ImageEntry {
 }
 
 pub struct Editor {
-    pub textarea: TextArea<'static>,
+    lines: Vec<String>,
+    cursor: (usize, usize),
+    wrap_mode: WrapMode,
     paste_counter: usize,
     pub paste_buffers: Vec<PasteEntry>,
     image_counter: usize,
@@ -46,10 +48,10 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new() -> Self {
-        let mut textarea = TextArea::default();
-        textarea.set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
         Self {
-            textarea,
+            lines: vec![String::new()],
+            cursor: (0, 0),
+            wrap_mode: WrapMode::WordOrGlyph,
             paste_counter: 0,
             paste_buffers: Vec::new(),
             image_counter: 0,
@@ -58,50 +60,48 @@ impl Editor {
         }
     }
 
+    pub fn cursor(&self) -> (usize, usize) {
+        self.cursor
+    }
+
     pub fn text(&self) -> String {
-        self.textarea.lines().join("\n")
+        self.lines.join("\n")
     }
 
     pub fn is_empty(&self) -> bool {
-        let lines = self.textarea.lines();
-        lines.is_empty() || (lines.len() == 1 && lines[0].is_empty())
+        self.lines.is_empty() || (self.lines.len() == 1 && self.lines[0].is_empty())
     }
 
     pub fn set_text(&mut self, text: String) {
-        self.textarea = TextArea::from(text.lines().map(|s| s.to_string()));
-        self.textarea
-            .set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
+        self.lines = text.lines().map(|s| s.to_string()).collect();
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.cursor = (0, 0);
+        self.wrap_mode = WrapMode::WordOrGlyph;
     }
 
     pub fn cursor_pos(&self) -> usize {
-        let (row, col) = self.textarea.cursor();
-        let lines = self.textarea.lines();
+        let (row, col) = self.cursor;
         let mut pos = 0;
         for i in 0..row {
-            pos += lines[i].len() + 1; // +1 for newline
+            pos += self.lines[i].len() + 1; // +1 for newline
         }
         pos + col
     }
 
     pub fn set_cursor_pos(&mut self, pos: usize) {
-        let lines = self.textarea.lines();
         let mut current_pos = 0;
-        for (row, line) in lines.iter().enumerate() {
+        for (row, line) in self.lines.iter().enumerate() {
             let next_pos = current_pos + line.len() + 1;
             if pos < next_pos {
-                self.textarea.move_cursor(tui_textarea::CursorMove::Jump(
-                    row as u16,
-                    (pos - current_pos) as u16,
-                ));
+                self.cursor = (row, (pos - current_pos).min(line.len()));
                 return;
             }
             current_pos = next_pos;
         }
-        if let Some(last_row) = lines.len().checked_sub(1) {
-            self.textarea.move_cursor(tui_textarea::CursorMove::Jump(
-                last_row as u16,
-                lines[last_row].len() as u16,
-            ));
+        if let Some(last_row) = self.lines.len().checked_sub(1) {
+            self.cursor = (last_row, self.lines[last_row].len());
         }
     }
 
@@ -129,9 +129,9 @@ impl Editor {
     }
 
     pub fn clear(&mut self) {
-        self.textarea = TextArea::default();
-        self.textarea
-            .set_wrap_mode(tui_textarea::WrapMode::WordOrGlyph);
+        self.lines = vec![String::new()];
+        self.cursor = (0, 0);
+        self.wrap_mode = WrapMode::WordOrGlyph;
     }
 
     pub fn snapshot(&mut self) {
@@ -139,24 +139,34 @@ impl Editor {
     }
 
     pub fn handle_key_event(&mut self, event: crossterm::event::KeyEvent, _max_width: u16) -> bool {
-        self.textarea.input(event)
+        let mut ta = TextArea::from(self.lines.clone());
+        ta.set_wrap_mode(self.wrap_mode);
+        let (row, col) = self.cursor;
+        ta.move_cursor(CursorMove::Jump(row as u16, col as u16));
+        let modified = ta.input(event);
+        self.lines = ta.lines().to_vec();
+        self.cursor = ta.cursor();
+        modified
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.textarea.input(Input {
-            key: Key::Char(c),
-            ctrl: false,
-            alt: false,
-            shift: false,
-        });
+        let (row, col) = self.cursor;
+        self.lines[row].insert(col, c);
+        self.cursor = (row, col + c.len_utf8());
     }
 
     pub fn insert_str(&mut self, s: &str) {
-        self.textarea.insert_str(s);
+        let (row, col) = self.cursor;
+        self.lines[row].insert_str(col, s);
+        self.cursor = (row, col + s.len());
     }
 
     pub fn insert_newline(&mut self) {
-        self.textarea.insert_newline();
+        let (row, col) = self.cursor;
+        let rest = self.lines[row][col..].to_string();
+        self.lines[row].truncate(col);
+        self.lines.insert(row + 1, rest);
+        self.cursor = (row + 1, 0);
     }
 
     pub fn handle_paste(&mut self, text: &str) {
@@ -258,7 +268,11 @@ impl crate::editor_component::EditorComponent for Editor {
         _colors: &crate::colors::ThemeColors,
     ) {
         self.last_render_area = Some(area);
-        frame.render_widget(&self.textarea, area);
+        let mut ta = TextArea::from(self.lines.clone());
+        ta.set_wrap_mode(self.wrap_mode);
+        let (row, col) = self.cursor;
+        ta.move_cursor(CursorMove::Jump(row as u16, col as u16));
+        frame.render_widget(&ta, area);
     }
 
     fn handle_input(
@@ -300,7 +314,7 @@ impl crate::editor_component::EditorComponent for Editor {
 
     fn cursor_position(&self) -> Option<(u16, u16)> {
         let area = self.last_render_area?;
-        let (row, col) = self.textarea.cursor();
+        let (row, col) = self.cursor;
         // Clamp to the rendered area to avoid emitting a MoveTo
         // outside the input region (which terminals interpret
         // unpredictably).
@@ -393,6 +407,6 @@ mod tests {
         let mut e = Editor::new();
         e.insert_newline();
         assert_eq!(e.text(), "\n");
-        assert_eq!(e.textarea.cursor(), (1, 0));
+        assert_eq!(e.cursor(), (1, 0));
     }
 }
