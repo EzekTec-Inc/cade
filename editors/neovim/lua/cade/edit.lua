@@ -32,6 +32,7 @@ function M.fetch_edit(prefix, selected_text, suffix, instruction, language, on_t
 
   local accumulated = ""
   local sse_buffer = ""
+  local raw_stdout = ""
   local done = false
 
   local handle = vim.system(cmd, {
@@ -44,6 +45,7 @@ function M.fetch_edit(prefix, selected_text, suffix, instruction, language, on_t
       end
       if not chunk then return end
 
+      raw_stdout = raw_stdout .. chunk
       sse_buffer = sse_buffer .. chunk
       local lines = vim.split(sse_buffer, "\n", { plain = true })
       sse_buffer = table.remove(lines) or ""
@@ -70,7 +72,20 @@ function M.fetch_edit(prefix, selected_text, suffix, instruction, language, on_t
   }, function(result)
     if not done then
       if result.code ~= 0 then
-        vim.schedule(function() on_error("cade.nvim: curl exited with code " .. result.code) end)
+        vim.schedule(function()
+          local err_msg = "cade.nvim: curl exited with code " .. result.code
+          if raw_stdout ~= "" then
+            local clean_body = vim.trim(raw_stdout)
+            if clean_body:find("Unauthorized") or clean_body:find("invalid API key") then
+              err_msg = "CADE server returned 401 Unauthorized. Please check that CADE_API_KEY is configured correctly on both server and client."
+            else
+              err_msg = err_msg .. "\nServer response: " .. clean_body
+            end
+          elseif result.stderr and result.stderr ~= "" then
+            err_msg = err_msg .. "\nError: " .. vim.trim(result.stderr)
+          end
+          on_error(err_msg)
+        end)
       else
         vim.schedule(on_done)
       end
