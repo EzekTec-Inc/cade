@@ -5,7 +5,7 @@
 -- Each test file is discovered in test/*.lua (excluding this runner).
 -- Tests are plain functions named test_* inside a returned table.
 
-vim.opt.runtimepath:prepend(vim.fn.fnamemodify(debug.getinfo(1).source:sub(2), ":h:h"))
+vim.opt.runtimepath:prepend(vim.fn.fnamemodify(debug.getinfo(1).source:sub(2), ":h:h:h"))
 
 local passed, failed, errors = 0, 0, {}
 
