@@ -178,6 +178,24 @@ editors/neovim/
 | `CADE_AGENT_ID` | Agent ID used when `agent_id` is not set in `setup()` |
 | `CADE_API_KEY` | Bearer token used when `api_key` is not set in `setup()` |
 
+## Testing
+
+You can run the tests for the Neovim plugin using two suites:
+
+### 1. MCP Runner Tests
+Minimal unit tests verifying the MCP state synchronization protocol. Run these with:
+```bash
+nvim --headless --noplugin -u editors/neovim/spec/mcp/runner.lua
+```
+
+### 2. Plenary Busted Tests
+Comprehensive spec testing for user configuration, ghost-text rendering, status lines, and asynchronous SSE completion behaviors. We set `XDG_CONFIG_HOME` to prevent interference from any existing local configuration:
+```bash
+XDG_CONFIG_HOME=/tmp/clean_nvim nvim --headless -u editors/neovim/spec/minimal_init.lua \
+  -c "PlenaryBustedDirectory editors/neovim/spec {minimal_init = 'editors/neovim/spec/minimal_init.lua'}" \
+  -c "qa!"
+```
+
 ---
 
 > **Theme export (legacy):** The old colorscheme-export functionality has been superseded by native `.tmTheme` support in the CADE TUI. Drop any `.tmTheme` file into `~/.cade/themes/` and activate it with `/theme <name>` inside CADE.

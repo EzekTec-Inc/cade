@@ -113,6 +113,8 @@ sqlite3 ~/.cade/cade.db "SELECT id, name, model FROM agents ORDER BY created_at 
 
 ## Testing
 
+### Rust Workspace Tests
+
 ```bash
 # All workspace tests (~1,434 tests)
 cargo test --workspace
@@ -128,6 +130,20 @@ cargo test -p cade-store --no-default-features --features bundled-sqlite
 # With output
 cargo test --workspace -- --nocapture
 ```
+
+### Neovim Plugin Tests
+
+The Neovim plugin has two independent test suites:
+
+1. **MCP Runner Tests**: Simple unit tests that run via a custom minimal runner.
+   ```bash
+   nvim --headless --noplugin -u editors/neovim/spec/mcp/runner.lua
+   ```
+
+2. **Plenary Busted Tests**: Rich spec tests that leverage plenary's busted runner. Note that we isolate from your local `init.lua` to prevent user-configuration or plugin conflicts.
+   ```bash
+   XDG_CONFIG_HOME=/tmp/clean_nvim nvim --headless -u editors/neovim/spec/minimal_init.lua -c "PlenaryBustedDirectory editors/neovim/spec {minimal_init = 'editors/neovim/spec/minimal_init.lua'}" -c "qa!"
+   ```
 
 ## Release Build
 
