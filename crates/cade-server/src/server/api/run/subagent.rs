@@ -1191,8 +1191,18 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         }));
     }
 
-    // Join all
-    let results = futures::future::join_all(futures).await;
+    use futures::StreamExt;
+
+    let concurrency_cap = std::env::var("CADE_MAX_SUBAGENTS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(4);
+
+    // Pace and execute subagents concurrently up to the cap to avoid semaphore starvation timeout.
+    let results = futures::stream::iter(futures)
+        .buffered(concurrency_cap)
+        .collect::<Vec<_>>()
+        .await;
 
     // Aggregate
     let mut aggregated = Vec::new();

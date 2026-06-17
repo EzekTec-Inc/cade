@@ -1258,16 +1258,22 @@ pub fn extract_subagent_memory_for_writeback(db: &Db, subagent_id: &str) -> Vec<
 
 pub fn write_back_subagent_memory(db: &Db, subagent_id: &str, parent_agent_id: &str) -> usize {
     let facts = extract_subagent_memory_for_writeback(db, subagent_id);
+    let parent_blocks = get_memory_blocks(db, parent_agent_id).unwrap_or_default();
 
     let mut written = 0;
     for fact in &facts {
-        // Prefix with `subagent:` to namespace it under the parent.
-        let parent_label = format!("subagent:{}", fact.label);
+        let mut parent_label = format!("subagent:{}", fact.label);
+        
+        // Suffix with fallback if parent already has this label to avoid overwriting parent facts
+        if parent_blocks.iter().any(|(l, _, _)| l == &parent_label) {
+            parent_label = format!("subagent:{}:fallback", fact.label);
+        }
+
         let desc = if fact.description.is_empty() {
-            Some(format!("Written back from subagent {subagent_id}"))
+            Some(format!("Written back from subagent {subagent_id} (fallback)"))
         } else {
             Some(format!(
-                "{} (from subagent {subagent_id})",
+                "{} (fallback from subagent {subagent_id})",
                 fact.description
             ))
         };
@@ -1290,7 +1296,7 @@ pub fn write_back_subagent_memory(db: &Db, subagent_id: &str, parent_agent_id: &
 
     if written > 0 {
         tracing::debug!(
-            "A15 write-back: {written}/{} facts from {subagent_id} → {parent_agent_id}",
+            "A15 write-back fallback: {written}/{} facts from {subagent_id} → {parent_agent_id}",
             facts.len()
         );
     }

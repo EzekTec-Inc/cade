@@ -2412,6 +2412,33 @@ fn test_a15_write_back_excludes_system_blocks() -> Result<()> {
     Ok(())
 }
 
+
+#[test]
+fn test_a15_write_back_avoids_overwriting_parent() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "parent")?;
+    make_agent(&db, "sa_003")?;
+
+    // Parent already has subagent:finding
+    upsert_memory_block(&db, "parent", "subagent:finding", "parent original value", None, None)?;
+
+    // Subagent writes a new finding fact.
+    upsert_memory_block(&db, "sa_003", "finding", "subagent finding value", None, None)?;
+
+    let written = write_back_subagent_memory(&db, "sa_003", "parent");
+    assert_eq!(written, 1, "should write back 1 block");
+
+    // Verify parent's original value was NOT overwritten, and new fallback exists
+    let parent_blocks = get_memory_blocks(&db, "parent")?;
+    let orig_finding = parent_blocks.iter().find(|(l, _, _)| l == "subagent:finding").map(|(_, v, _)| v.as_str());
+    let fallback_finding = parent_blocks.iter().find(|(l, _, _)| l == "subagent:finding:fallback").map(|(_, v, _)| v.as_str());
+
+    assert_eq!(orig_finding, Some("parent original value"), "original parent fact must be preserved");
+    assert_eq!(fallback_finding, Some("subagent finding value"), "subagent fallback fact must be created");
+
+    Ok(())
+}
+
 #[test]
 fn test_a15_write_back_skips_empty_values() -> Result<()> {
     let db = setup_mem_db()?;
