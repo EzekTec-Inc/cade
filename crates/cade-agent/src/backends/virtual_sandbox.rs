@@ -28,8 +28,6 @@ impl VirtualSandboxBackend {
         }
     }
 
-    /// Verifies that a given path stays strictly inside the workspace root boundary.
-    /// Returns the canonical absolute path if successful, otherwise blocks execution.
     fn verify_path(&self, path: &Path) -> Result<PathBuf> {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -37,8 +35,21 @@ impl VirtualSandboxBackend {
             self.workspace_root.join(path)
         };
 
-        // Attempt to canonicalize to resolve symlinks and relative elements (..)
-        let canonical = absolute.canonicalize().unwrap_or(absolute);
+        // Normalize path components manually to resolve any relative segments (.. or .)
+        // without requiring the target file/directory to actually exist on disk.
+        let mut normalized = PathBuf::new();
+        for component in absolute.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::CurDir => {}
+                c => normalized.push(c.as_os_str()),
+            }
+        }
+
+        // Attempt to canonicalize to resolve symlinks if the path exists
+        let canonical = normalized.canonicalize().unwrap_or(normalized);
 
         if !canonical.starts_with(&self.workspace_root) {
             return Err(crate::Error::custom(format!(
@@ -227,5 +238,25 @@ mod tests {
             .unwrap();
         assert_eq!(out_path.exit_code, 0);
         assert!(!out_path.stdout.is_empty());
+    }
+
+
+    #[tokio::test]
+    async fn test_virtual_sandbox_nonexistent_path_traversal() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let backend = VirtualSandboxBackend::new(root.clone());
+
+        // Attempt a breakout using relative path traversal on a nonexistent target
+        let breakout_path = Path::new("../nonexistent_dir/exploit.txt");
+        let write_res = backend.write_file(breakout_path, "malicious").await;
+        
+        assert!(write_res.is_err());
+        assert!(
+            write_res
+                .unwrap_err()
+                .to_string()
+                .contains("Security Exception")
+        );
     }
 }
