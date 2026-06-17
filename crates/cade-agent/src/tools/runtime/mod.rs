@@ -86,17 +86,16 @@ impl ToolRuntime {
         }
     }
 
-    /// Convenience constructor that clones the client and wraps an MCP reference.
+    /// Convenience constructor that wraps an MCP reference.
     pub fn from_refs(
         storage: Arc<dyn crate::backends::storage::StorageBackend>,
-        mcp: &McpManager,
+        mcp: Arc<McpManager>,
         agent_id: &str,
         cwd: PathBuf,
     ) -> Self {
-        let _ = mcp;
         Self {
             storage,
-            mcp: Arc::new(McpManager::empty()),
+            mcp,
             agent_id: agent_id.to_string(),
             cwd,
             conversation_id: None,

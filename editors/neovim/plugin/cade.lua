@@ -67,7 +67,7 @@ if cfg.keymaps ~= false then
     if lhs then
       vim.keymap.set("i", lhs, function()
         if cade.is_visible() then fn(); return "" end
-        return lhs
+        return vim.api.nvim_replace_termcodes(lhs, true, false, true)
       end, { expr = true, noremap = true, desc = desc })
     end
   end

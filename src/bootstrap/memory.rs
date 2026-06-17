@@ -13,3 +13,15 @@ pub async fn seed_default_memory(client: &HttpTransport, agent_id: &str) {
         }
     }
 }
+
+pub async fn view_memory_blocks() {
+    for (label, value, description, max_chars, tier) in cade::DEFAULT_MEMORY_BLOCKS {
+        println!("Label: {label}");
+        println!("Value: {value}");
+        println!("Description: {description}");
+        println!("Max Chars: {max_chars}");
+        println!("Tier: {tier}");
+        println!("----------------------------------------");
+    }
+    return;
+}

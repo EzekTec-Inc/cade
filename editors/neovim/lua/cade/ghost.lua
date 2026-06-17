@@ -78,8 +78,7 @@ function M.accept()
   if not M._pending then return false end
   local text = M._pending
   M.clear()
-  local lines = vim.split(text, "\n", { plain = true })
-  api.nvim_put(lines, "c", true, true)
+  api.nvim_feedkeys(api.nvim_replace_termcodes(text, true, false, true), "n", false)
   return true
 end
 
@@ -95,7 +94,7 @@ function M.accept_line()
   else
     M.clear()
   end
-  api.nvim_put({ first }, "c", true, true)
+  api.nvim_feedkeys(api.nvim_replace_termcodes(first, true, false, true), "n", false)
   return true
 end
 
@@ -103,7 +102,6 @@ end
 ---@return boolean
 function M.accept_word()
   if not M._pending then return false end
-  -- Match optional leading whitespace + non-whitespace
   local word, rest = M._pending:match("^(%s*%S+)(.*)")
   if not word then return false end
   if rest == "" or rest:match("^%s*$") then
@@ -112,7 +110,7 @@ function M.accept_word()
     M._pending = rest
     M.show(M._pending)
   end
-  api.nvim_put({ word }, "c", true, true)
+  api.nvim_feedkeys(api.nvim_replace_termcodes(word, true, false, true), "n", false)
   return true
 end
 
