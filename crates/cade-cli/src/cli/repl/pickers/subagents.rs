@@ -66,15 +66,25 @@ impl Repl {
 
                     let model_str = s.model.as_deref().unwrap_or("inherited");
 
-                    let format_str = match s.path.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                    let format_str = match s
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                    {
                         Some("json") => "[JSON profile]",
-                        Some("md")   => "[Markdown]",
-                        _            => "[builtin]",
+                        Some("md") => "[Markdown]",
+                        _ => "[builtin]",
                     };
-                    let format_color = match s.path.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                    let format_color = match s
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                    {
                         Some("json") => RC::Yellow,
-                        Some("md")   => RC::Blue,
-                        _            => RC::Magenta,
+                        Some("md") => RC::Blue,
+                        _ => RC::Magenta,
                     };
 
                     Row::new(vec![

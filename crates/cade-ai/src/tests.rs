@@ -662,6 +662,7 @@ fn clean_gemini_schema_strips_all_bad_fields() {
         "additionalProperties": false,
         "nullable": true,
         "deprecated": true,
+        "const": "hello",
         "x-google-identifier": true,
         "x-google-enum-descriptions": ["a", "b"],
         "x-google-enum-deprecated": [false, true],
@@ -687,6 +688,7 @@ fn clean_gemini_schema_strips_all_bad_fields() {
     assert!(!map.contains_key("additionalProperties"));
     assert!(!map.contains_key("nullable"));
     assert!(!map.contains_key("deprecated"));
+    assert!(!map.contains_key("const"));
     assert!(!map.contains_key("x-google-identifier"));
     assert!(!map.contains_key("x-google-enum-descriptions"));
     assert!(!map.contains_key("x-google-enum-deprecated"));

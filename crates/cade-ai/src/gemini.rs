@@ -39,7 +39,10 @@ pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
         }
     };
     if !resp.status().is_success() {
-        tracing::warn!("fetch_gemini_models: API returned error status: {}", resp.status());
+        tracing::warn!(
+            "fetch_gemini_models: API returned error status: {}",
+            resp.status()
+        );
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {
@@ -660,9 +663,9 @@ impl LlmProvider for GeminiProvider {
 
                     // 1. Always check for usage metadata at the root if it's present
                     if let Some(usage) = v.get("usageMetadata") {
-                        let in_tok   = usage["promptTokenCount"].as_u64().unwrap_or(0) as u32;
-                        let out_tok  = usage["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
-                        let cache_tok = usage["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32;
+                        let in_tok   = usage["promptTokenCount"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
+                        let out_tok  = usage["candidatesTokenCount"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
+                        let cache_tok = usage["cachedContentTokenCount"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
                         if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
                             yield Ok(StreamChunk::Usage(TokenUsage {
                                 // Gemini promptTokenCount includes cachedContentTokenCount, so subtract to align with pi-coding-agent

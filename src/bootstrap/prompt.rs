@@ -1,16 +1,3 @@
-use std::sync::LazyLock;
-
-#[allow(dead_code)]
-/// Base system prompt — behavioral instructions for the agent.
-/// Constructed dynamically on first access to prevent duplication.
-pub static BASE_SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
-    let mut caps = cade_core::capabilities::CapabilitySet::default();
-    caps.enable(cade_core::capabilities::Capability::Agentic);
-    caps.enable(cade_core::capabilities::Capability::Mcp);
-    caps.enable(cade_core::capabilities::Capability::AdvancedMemory);
-    build_system_prompt(&caps)
-});
-
 const PROMPT_HEADER: &str = r#"You are CADE (Coding AI assistant with Desktop Extensions), a stateful AI coding agent running in the user's terminal.
 
 ## How you work

@@ -57,7 +57,10 @@ pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
         }
     };
     if !resp.status().is_success() {
-        tracing::warn!("fetch_openai_chat_models: API returned error status: {}", resp.status());
+        tracing::warn!(
+            "fetch_openai_chat_models: API returned error status: {}",
+            resp.status()
+        );
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {
@@ -120,7 +123,10 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
         }
     };
     if !resp.status().is_success() {
-        tracing::warn!("fetch_model_ids: API returned error status for {models_url}: {}", resp.status());
+        tracing::warn!(
+            "fetch_model_ids: API returned error status for {models_url}: {}",
+            resp.status()
+        );
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {
@@ -629,9 +635,9 @@ impl LlmProvider for OpenAiProvider {
                         // Usage chunk: may arrive in any chunk, including the separate
                         // empty-choices chunk OpenAI sends after finish_reason.
                         if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
-                            let in_tok   = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-                            let out_tok  = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
-                            let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
+                            let in_tok   = usage["prompt_tokens"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
+                            let out_tok  = usage["completion_tokens"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
+                            let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
                             if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
                                 yield Ok(StreamChunk::Usage(TokenUsage {
                                     // OpenAI includes cached tokens in prompt_tokens, so subtract to get non-cached input

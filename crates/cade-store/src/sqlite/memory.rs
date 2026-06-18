@@ -62,7 +62,7 @@ pub fn get_block_by_id(db: &Db, block_id: &str) -> Result<Option<BlockInfo>> {
                 tier: r
                     .get::<_, String>(4)
                     .unwrap_or_else(|_| "short".to_string()),
-                max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
+                max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n.max(0) as usize),
                 updated_at: r.get(6)?,
             })
         },
@@ -183,7 +183,7 @@ fn block_info_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BlockInfo> {
         tier: r
             .get::<_, String>(4)
             .unwrap_or_else(|_| "short".to_string()),
-        max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
+        max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n.max(0) as usize),
         updated_at: r.get(6)?,
     })
 }
@@ -266,7 +266,7 @@ pub fn upsert_memory_block(
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, Option<i64>>(2)?.map(|n| n as usize),
+                    r.get::<_, Option<i64>>(2)?.map(|n| n.max(0) as usize),
                 ))
             },
         )
@@ -1263,14 +1263,16 @@ pub fn write_back_subagent_memory(db: &Db, subagent_id: &str, parent_agent_id: &
     let mut written = 0;
     for fact in &facts {
         let mut parent_label = format!("subagent:{}", fact.label);
-        
+
         // Suffix with fallback if parent already has this label to avoid overwriting parent facts
         if parent_blocks.iter().any(|(l, _, _)| l == &parent_label) {
             parent_label = format!("subagent:{}:fallback", fact.label);
         }
 
         let desc = if fact.description.is_empty() {
-            Some(format!("Written back from subagent {subagent_id} (fallback)"))
+            Some(format!(
+                "Written back from subagent {subagent_id} (fallback)"
+            ))
         } else {
             Some(format!(
                 "{} (fallback from subagent {subagent_id})",

@@ -179,10 +179,10 @@ impl Repl {
                                         if has_async_overlay {
                                             if let Some(top) = app.overlays.last_mut() {
                                                 let res = top.handle_input(k);
-                                                if matches!(res, cade_tui::overlay_component::OverlayInputResult::Dismiss) {
-                                                    if let Some(mut popped) = app.overlays.pop() {
-                                                        let _ = popped.take_result();
-                                                    }
+                                                if matches!(res, cade_tui::overlay_component::OverlayInputResult::Dismiss)
+                                                    && let Some(mut popped) = app.overlays.pop()
+                                                {
+                                                    let _ = popped.take_result();
                                                 }
                                                 app.draw_dirty = true;
                                             }

@@ -90,11 +90,7 @@ fn App() -> Element {
     let mut messages = use_signal(Vec::<cade_api_types::ChatMessage>::new);
     let mut input_text = use_signal(String::new);
     let mut is_loading = use_signal(|| false);
-    let api_key = use_signal(|| {
-        String::from(
-            "sk-placeholder-key-for-local-development",
-        )
-    });
+    let api_key = use_signal(|| String::from("sk-placeholder-key-for-local-development"));
     let agent_name = selected_agent()
         .map(|a| a.name.clone())
         .unwrap_or_else(|| "deep-thought-research-agent_copy".to_string());

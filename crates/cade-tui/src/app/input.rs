@@ -238,8 +238,16 @@ impl TuiApp {
                 _ => {}
             }
             if !key_str.is_empty() && lua.handle_keybinding(&key_str) {
-                let has_queued_cmd = !lua.command_queue.lock().unwrap().is_empty()
-                    || !lua.tool_queue.lock().unwrap().is_empty();
+                let has_queued_cmd = !lua
+                    .command_queue
+                    .lock()
+                    .expect("LuaEngine command_queue")
+                    .is_empty()
+                    || !lua
+                        .tool_queue
+                        .lock()
+                        .expect("LuaEngine tool_queue")
+                        .is_empty();
                 self.draw_dirty = true;
                 let _ = self.draw();
                 if has_queued_cmd {

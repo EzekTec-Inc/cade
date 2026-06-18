@@ -31,7 +31,10 @@ impl LuaEngine {
         let cmd_q = command_queue.clone();
         let exec_cmd = lua.create_function(move |_, cmd: String| {
             tracing::info!("[Lua] execute_slash_command: {}", cmd);
-            cmd_q.lock().unwrap().push_back(cmd);
+            cmd_q
+                .lock()
+                .expect("LuaEngine command_queue")
+                .push_back(cmd);
             Ok(())
         })?;
         lua.globals().set("_CADE_execute_slash_command", exec_cmd)?;
@@ -41,7 +44,10 @@ impl LuaEngine {
             lua.create_function(move |lua_ctx, (name, args): (String, mlua::Value)| {
                 let args_json: serde_json::Value = lua_ctx.from_value(args)?;
                 tracing::info!("[Lua] call_tool: {} with args {}", name, args_json);
-                tool_q.lock().unwrap().push_back((name, args_json));
+                tool_q
+                    .lock()
+                    .expect("LuaEngine tool_queue")
+                    .push_back((name, args_json));
                 Ok(())
             })?;
         lua.globals().set("_CADE_call_tool", call_tool_fn)?;

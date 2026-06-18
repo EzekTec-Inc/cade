@@ -962,7 +962,11 @@ impl Repl {
             if pending_input.is_none() {
                 let app = self.app.lock();
                 if let Some(lua) = &app.lua_engine
-                    && let Some(cmd) = lua.command_queue.lock().unwrap().pop_front()
+                    && let Some(cmd) = lua
+                        .command_queue
+                        .lock()
+                        .expect("LuaEngine command_queue")
+                        .pop_front()
                 {
                     pending_input = Some(cmd);
                 }
@@ -973,7 +977,7 @@ impl Repl {
                 let mut app = self.app.lock();
                 let mut ui_events = Vec::new();
                 if let Some(lua) = &app.lua_engine {
-                    let mut eq = lua.ui_event_queue.lock().unwrap();
+                    let mut eq = lua.ui_event_queue.lock().expect("LuaEngine ui_event_queue");
                     ui_events.extend(eq.drain(..));
                 }
 

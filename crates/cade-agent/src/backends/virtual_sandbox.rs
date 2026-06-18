@@ -240,7 +240,6 @@ mod tests {
         assert!(!out_path.stdout.is_empty());
     }
 
-
     #[tokio::test]
     async fn test_virtual_sandbox_nonexistent_path_traversal() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -250,7 +249,7 @@ mod tests {
         // Attempt a breakout using relative path traversal on a nonexistent target
         let breakout_path = Path::new("../nonexistent_dir/exploit.txt");
         let write_res = backend.write_file(breakout_path, "malicious").await;
-        
+
         assert!(write_res.is_err());
         assert!(
             write_res

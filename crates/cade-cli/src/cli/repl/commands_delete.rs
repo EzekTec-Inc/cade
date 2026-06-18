@@ -7,14 +7,14 @@ impl Repl {
     pub(crate) async fn cmd_delete(
         &mut self,
         target: Option<String>,
-        stdout: &mut std::io::Stdout,
+        _stdout: &mut std::io::Stdout,
         _pending_input: &mut Option<String>,
     ) -> Result<bool> {
         // /delete [name-or-id] — delete a specific agent by name/id prefix
         let agents = match self.client.list_agents().await {
             Ok(a) => a,
             Err(e) => {
-                self.print_error(stdout, &e.to_string())?;
+                self.tui_err(format!("Error: {e}"));
                 vec![]
             }
         };

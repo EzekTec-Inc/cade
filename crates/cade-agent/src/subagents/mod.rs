@@ -344,10 +344,7 @@ fn parse_subagent_json(
         .unwrap_or(id)
         .to_string();
 
-    let description = v["description"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let description = v["description"].as_str().unwrap_or("").to_string();
 
     let model = v["model"]
         .as_str()
@@ -366,10 +363,7 @@ fn parse_subagent_json(
         _ => SubagentTools::All,
     };
 
-    let system_prompt = v["system_prompt"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let system_prompt = v["system_prompt"].as_str().unwrap_or("").to_string();
 
     let skills: Vec<String> = v["skills"]
         .as_array()
@@ -461,7 +455,10 @@ pub fn scaffold_builtin_profiles(cwd: &Path) {
     };
     let dir = home.join(".cade").join("subagents");
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!("scaffold_builtin_profiles: cannot create {}: {e}", dir.display());
+        tracing::warn!(
+            "scaffold_builtin_profiles: cannot create {}: {e}",
+            dir.display()
+        );
         return;
     }
 
@@ -511,7 +508,10 @@ pub fn scaffold_builtin_profiles(cwd: &Path) {
         }
         match std::fs::write(&dest, content) {
             Ok(()) => tracing::info!("scaffolded {}", dest.display()),
-            Err(e) => tracing::warn!("scaffold_builtin_profiles: cannot write {}: {e}", dest.display()),
+            Err(e) => tracing::warn!(
+                "scaffold_builtin_profiles: cannot write {}: {e}",
+                dest.display()
+            ),
         }
     }
 }

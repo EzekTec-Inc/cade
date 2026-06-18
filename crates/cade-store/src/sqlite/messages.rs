@@ -50,7 +50,7 @@ pub fn last_assistant_message(
             conversation_id: r.get(2)?,
             role: r.get(3)?,
             content,
-            char_count: char_count as usize,
+            char_count: char_count.max(0) as usize,
         }))
     } else {
         Ok(None)
@@ -181,7 +181,7 @@ pub fn list_messages_since_last_compaction(
                     let s: String = row.get(4)?;
                     serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
                 },
-                char_count: row.get::<_, i64>(5).unwrap_or(0) as usize,
+                char_count: row.get::<_, i64>(5).unwrap_or(0).max(0) as usize,
             })
         })?
         .filter_map(|r| r.ok())
@@ -236,7 +236,7 @@ pub fn list_messages_page(
                 conversation_id,
                 role,
                 content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
-                char_count: char_count as usize,
+                char_count: char_count.max(0) as usize,
             },
         )
         .collect();
@@ -333,7 +333,7 @@ pub fn get_context_window(
                 conversation_id,
                 role,
                 content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
-                char_count: char_count as usize,
+                char_count: char_count.max(0) as usize,
             },
         )
         .collect();
@@ -392,7 +392,7 @@ pub fn compact_old_tool_outputs(
     let mut to_compact: Vec<(i64, i64)> = Vec::new();
 
     for &(rowid, char_count) in &rows {
-        let cc = char_count as usize;
+        let cc = char_count.max(0) as usize;
         cumulative += cc;
         if cumulative > protect_chars && cc > min_chars {
             to_compact.push((rowid, char_count));

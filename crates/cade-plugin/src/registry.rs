@@ -29,8 +29,6 @@ pub struct PluginRegistry {
 struct LoadedPlugin {
     manifest: PluginManifest,
     root: PathBuf,
-    #[allow(dead_code)]
-    tools: Vec<Arc<ResolvedPluginTool>>,
 }
 
 // endregion: --- Types
@@ -72,8 +70,6 @@ impl PluginRegistry {
 
     fn load_plugin(&mut self, root: &Path) -> crate::Result<()> {
         let manifest = PluginManifest::load(root)?;
-        let mut tools = Vec::new();
-
         // Load tool schemas from tools/ directory
         let tools_dir = root.join("tools");
         if tools_dir.exists() {
@@ -116,14 +112,12 @@ impl PluginRegistry {
                     plugin_name: manifest.name.clone(),
                 });
                 self.tool_map.insert(name, Arc::clone(&tool));
-                tools.push(tool);
             }
         }
 
         self.plugins.push(LoadedPlugin {
             manifest,
             root: root.to_path_buf(),
-            tools,
         });
         Ok(())
     }

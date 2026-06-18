@@ -1,7 +1,12 @@
 use derive_more::{Display, From};
 
+/// Crate-level result alias.
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Unified error type for the cade-store crate.
+///
+/// Wraps database (`rusqlite`, `r2d2`), I/O, crypto, serialization, and
+/// delegation errors from `cade-core` and `cade-ai`.
 #[derive(Debug, Display, From)]
 #[display("{_0}")]
 pub enum Error {

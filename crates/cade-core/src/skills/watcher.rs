@@ -43,8 +43,6 @@ pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
         watch_dirs.push(project_skills.clone());
     }
 
-
-
     if watch_dirs.is_empty() {
         // No dirs to watch yet — still return the receiver; caller can start
         // without a watcher. The REPL will never receive on this channel.

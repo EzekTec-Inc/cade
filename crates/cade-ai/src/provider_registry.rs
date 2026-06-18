@@ -3,7 +3,13 @@ use std::sync::LazyLock;
 
 static BUNDLED_PROVIDERS: LazyLock<Vec<ProviderDef>> = LazyLock::new(|| {
     let json_data = include_str!("default_providers.json");
-    serde_json::from_str(json_data).expect("Failed to parse default_providers.json")
+    match serde_json::from_str(json_data) {
+        Ok(providers) => providers,
+        Err(e) => {
+            tracing::warn!("Failed to parse default_providers.json: {e}");
+            vec![]
+        }
+    }
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

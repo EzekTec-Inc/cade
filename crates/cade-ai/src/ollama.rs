@@ -37,7 +37,9 @@ impl OllamaProvider {
         let body = match resp.json::<serde_json::Value>().await {
             Ok(b) => b,
             Err(e) => {
-                tracing::warn!("Ollama list_models: failed to parse JSON response body for {url}: {e}");
+                tracing::warn!(
+                    "Ollama list_models: failed to parse JSON response body for {url}: {e}"
+                );
                 return vec![];
             }
         };

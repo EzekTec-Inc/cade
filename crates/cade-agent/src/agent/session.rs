@@ -2,6 +2,10 @@ use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Persisted conversation session metadata.
+///
+/// Tracks the active agent, conversation, and background run state so the
+/// CLI can resume across restarts without losing context.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -18,6 +22,7 @@ pub struct Session {
     pub last_seq_id: Option<i64>,
 }
 
+/// Manages load/save of a [`Session`] to a JSON file on disk.
 pub struct SessionStore {
     path: PathBuf,
     pub session: Session,

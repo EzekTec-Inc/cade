@@ -47,9 +47,17 @@ impl CoreToolAdapter {
     }
 }
 
+/// Type-erased version of [`BuiltInTool`] for dynamic dispatch.
+///
+/// Tools are registered as `Arc<dyn ErasedBuiltInTool>` and called via
+/// `execute_erased` with raw `Value` arguments. The blanket impl converts
+/// to the typed `Args` for each concrete [`BuiltInTool`].
 pub trait ErasedBuiltInTool: Send + Sync {
+    /// Tool name (must match the agent-facing schema name).
     fn name(&self) -> &'static str;
+    /// JSON Schema for the tool's arguments.
     fn schema(&self) -> Value;
+    /// Execute the tool with pre-deserialized JSON arguments.
     fn execute_erased(&self, args: Value) -> Result<Value>;
 }
 

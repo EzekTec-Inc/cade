@@ -7,12 +7,19 @@ use std::time::Duration;
 
 // -- Provider row
 
+/// A provider row as stored in the SQLite `providers` table.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProviderRow {
+    /// Display / lookup name for the provider.
     pub name: String,
-    pub kind: String, // "anthropic" | "openai" | "gemini" | "ollama" | "openai-compatible"
+    /// Provider kind: `"anthropic"`, `"openai"`, `"gemini"`, `"ollama"`,
+    /// or `"openai-compatible"`.
+    pub kind: String,
+    /// Optional API key (encrypted at rest when encryption is enabled).
     pub api_key: Option<String>,
+    /// Optional base URL override (e.g. for self-hosted / compatible APIs).
     pub base_url: Option<String>,
+    /// Whether this provider is currently active.
     pub enabled: bool,
 }
 

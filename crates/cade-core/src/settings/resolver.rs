@@ -35,6 +35,11 @@ fn is_path_trusted(cwd: &Path) -> bool {
     false
 }
 
+/// Merged settings from global, project, and local config layers.
+///
+/// Loads JSON from `~/.cade/settings.json` (global), `<cwd>/.cade/settings.json`
+/// (project), and `<cwd>/.cade/settings.local.json` (local, git-ignored).
+/// Each layer is merged with project overriding global and local overriding project.
 pub struct SettingsManager {
     global_path: PathBuf,
     project_path: PathBuf,
@@ -46,6 +51,10 @@ pub struct SettingsManager {
 }
 
 impl SettingsManager {
+    /// Load all three config layers from disk.
+    ///
+    /// Missing files are silently treated as defaults. Returns an error only
+    /// if the home directory cannot be resolved.
     pub fn new(cwd: &Path) -> Result<Self> {
         let home = dirs::home_dir().ok_or("cannot resolve home dir")?;
         let global_path = home.join(".cade").join("settings.json");
@@ -69,6 +78,10 @@ impl SettingsManager {
         })
     }
 
+    /// Whether the current working directory has been explicitly trusted.
+    ///
+    /// Directories under `$HOME` and `$HOME/.cade` are implicitly trusted.
+    /// All others must be whitelisted via [`trust_directory`](Self::trust_directory).
     pub fn is_trusted(&self) -> bool {
         self.is_trusted
     }

@@ -92,11 +92,11 @@ pub async fn reflect_agent(
     // -- 3. Fetch existing memory blocks to avoid duplication
     let db = state.db.clone();
     let aid = agent_id.to_string();
-    let existing_res = tokio::task::spawn_blocking(move || {
-        sqlite::get_memory_blocks(&db, &aid)
-    })
-    .await;
-    let existing = existing_res.unwrap_or_else(|_| Ok(vec![])).unwrap_or_default();
+    let existing_res =
+        tokio::task::spawn_blocking(move || sqlite::get_memory_blocks(&db, &aid)).await;
+    let existing = existing_res
+        .unwrap_or_else(|_| Ok(vec![]))
+        .unwrap_or_default();
 
     let existing_labels: Vec<&str> = existing.iter().map(|(l, _, _)| l.as_str()).collect();
     let existing_summary = if existing_labels.is_empty() {
@@ -229,7 +229,7 @@ pub async fn reflect_agent(
     let duration_ms = t0.elapsed().as_millis();
     result.duration_ms = duration_ms;
     let log_id = format!("rl-{}", uuid::Uuid::new_v4());
-    
+
     let db = state.db.clone();
     let log_id_to_move = log_id.clone();
     let aid = agent_id.to_string();

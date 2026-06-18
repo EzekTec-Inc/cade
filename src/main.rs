@@ -384,17 +384,23 @@ async fn async_main() -> Result<()> {
     let bg_startup_ready = startup_ready.clone();
     let bg_mcp_boot_status = mcp_boot_status.clone();
     let bg_lazy_mcp = args.lazy_mcp || settings.lazy_mcp();
+    let bg_server_connected = true;
 
     tokio::spawn(async move {
         tracing::warn!(
-            "DEBUG: Starting MCP servers background task... configs count = {}, enabled = {}, lazy = {}",
+            "DEBUG: Starting MCP servers background task... configs count = {}, enabled = {}, lazy = {}, server_connected = {}",
             bg_mcp_configs.len(),
             bg_mcp_enabled,
-            bg_lazy_mcp
+            bg_lazy_mcp,
+            bg_server_connected
         );
-        let mgr = if bg_mcp_configs.is_empty() || !bg_mcp_enabled || bg_lazy_mcp {
+        let mgr = if bg_mcp_configs.is_empty()
+            || !bg_mcp_enabled
+            || bg_lazy_mcp
+            || bg_server_connected
+        {
             tracing::warn!(
-                "DEBUG: Bypassing McpManager::start (lazy or disabled or empty configs)"
+                "DEBUG: Bypassing McpManager::start (lazy or disabled or empty configs or server manages MCP)"
             );
             bg_mcp_boot_status.lock().clear(); // Instantly clear loadings so TUI knows none are pending
             std::sync::Arc::new(McpManager::empty())
@@ -451,6 +457,24 @@ async fn async_main() -> Result<()> {
                     .map(|t| t.id)
                     .collect();
             if !mcp_tool_ids.is_empty() {
+                let _ = bg_client
+                    .attach_agent_tools(&bg_agent.id, &mcp_tool_ids)
+                    .await;
+            }
+        } else if bg_server_connected && !bg_lazy_mcp {
+            // cade-server already started MCP servers and registered their tools.
+            // Find and attach the already-registered tools by name convention.
+            let all_tools = bg_client.list_tools().await.unwrap_or_default();
+            let mcp_tool_ids: Vec<String> = all_tools
+                .into_iter()
+                .filter(|t| t.name.contains("__"))
+                .map(|t| t.id)
+                .collect();
+            if !mcp_tool_ids.is_empty() {
+                tracing::info!(
+                    "Attaching {} MCP tools already registered by cade-server",
+                    mcp_tool_ids.len()
+                );
                 let _ = bg_client
                     .attach_agent_tools(&bg_agent.id, &mcp_tool_ids)
                     .await;

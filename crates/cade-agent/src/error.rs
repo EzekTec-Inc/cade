@@ -1,7 +1,12 @@
 use derive_more::{Display, From};
 
+/// Crate-level result alias.
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Unified error type for the cade-agent crate.
+///
+/// Wraps common external errors and supports ad-hoc string messages via
+/// [`Error::custom`] or [`Error::custom_from_err`].
 #[derive(Debug, Display, From)]
 #[display("{_0}")]
 pub enum Error {

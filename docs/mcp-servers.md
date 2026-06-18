@@ -120,6 +120,17 @@ A minimal Rust MCP server using `rmcp`:
 For a from-scratch MCP server in a new repo, use the
 `rust-mcp-server-generator` skill or follow the `mcp-builder` skill.
 
+## Server-Managed (Centralized) MCP Architecture
+
+In multi-session environments (such as concurrently using the CLI and an IDE extension), CADE avoids spinning up redundant, independent process trees for each stdio-based MCP server. 
+
+Instead, when running alongside the centralized background daemon (`cade-server`):
+1. **Central Management**: `cade-server` starts, monitors, and manages the lifecycle of all configured MCP server processes centrally.
+2. **Tool Sharing**: The background daemon registers and exposes all MCP-derived tools through its central API gateway.
+3. **Session Auto-Discovery**: When a CLI or REPL session connects to the server (`bg_server_connected`), it bypasses local `McpManager::start` execution to prevent port/process conflicts. It then automatically queries the server's central tool registry, conventions-maps, and attaches the active MCP tools dynamically to the active session.
+
+This centralized model eliminates process starvation, port collisions, and cold-start latency across concurrent terminals and editor buffers.
+
 ## Security notes
 
 - MCP servers run with **the agent's privileges**. Trust the binaries

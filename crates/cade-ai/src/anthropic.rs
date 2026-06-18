@@ -38,7 +38,10 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
         }
     };
     if !resp.status().is_success() {
-        tracing::warn!("fetch_anthropic_models: API returned error status: {}", resp.status());
+        tracing::warn!(
+            "fetch_anthropic_models: API returned error status: {}",
+            resp.status()
+        );
         return vec![];
     }
     let Ok(body) = resp.json::<Value>().await else {

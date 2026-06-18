@@ -1,6 +1,4 @@
 use super::Repl;
-use crate::Result;
-use std::io;
 
 impl Repl {
     /// Push a success line (green) to the TUI.
@@ -41,11 +39,5 @@ impl Repl {
     /// Push a blank line to the TUI.
     pub(crate) fn tui_blank(&self) {
         let _ = self.app.lock().push(crate::ui::RenderLine::Blank);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn print_error(&self, _stdout: &mut io::Stdout, msg: &str) -> Result<()> {
-        self.tui_err(format!("Error: {msg}"));
-        Ok(())
     }
 }

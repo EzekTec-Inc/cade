@@ -3,7 +3,13 @@ use std::sync::LazyLock;
 
 static BUNDLED_RULES: LazyLock<Vec<PricingRule>> = LazyLock::new(|| {
     let json_data = include_str!("default_pricing.json");
-    serde_json::from_str(json_data).expect("Failed to parse default_pricing.json")
+    match serde_json::from_str(json_data) {
+        Ok(rules) => rules,
+        Err(e) => {
+            tracing::warn!("Failed to parse default_pricing.json: {e}");
+            vec![]
+        }
+    }
 });
 
 /// Pricing data per 1M tokens.

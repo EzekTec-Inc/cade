@@ -701,7 +701,6 @@ impl McpManager {
         // Redirect server's stderr to a log file for debugging and transparency.
         let stderr_io = std::fs::OpenOptions::new()
             .create(true)
-            .write(true)
             .append(true)
             .open("/tmp/mcp_server_err.log")
             .map(std::process::Stdio::from)

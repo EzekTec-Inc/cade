@@ -31,7 +31,8 @@ impl Repl {
                     if let Some(server) = s.local_settings_mut().mcp_servers.get_mut(&key) {
                         server.disabled = !server.disabled;
                         let _ = s.save_local();
-                    } else if let Some(server) = s.project_settings_mut().mcp_servers.get_mut(&key) {
+                    } else if let Some(server) = s.project_settings_mut().mcp_servers.get_mut(&key)
+                    {
                         server.disabled = !server.disabled;
                         let _ = s.save_project();
                     } else if let Some(server) = s.global_settings_mut().mcp_servers.get_mut(&key) {
