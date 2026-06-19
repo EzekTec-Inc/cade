@@ -3,16 +3,13 @@
  *
  * Implements `InlineCompletionItemProvider` to stream code completions from
  * the local CADE server's stateless `/v1/agents/:id/complete` endpoint.
- *
- * VS Code handles all ghost-text rendering, Tab acceptance, and debouncing
- * natively — this extension only needs to:
- *   1. Gather prefix/suffix context from the active document
- *   2. POST to CADE's SSE endpoint
- *   3. Accumulate streamed tokens into a single completion string
- *   4. Return an InlineCompletionItem
+ * Also integrates the bidirectional TCP socket editor adapter bridge to sync state.
  */
 
 import * as vscode from "vscode";
+import { BridgeConnection } from "./mcp/connection";
+import { StatePublisher } from "./mcp/publisher";
+import { CallbackHandler } from "./mcp/callbacks";
 
 // ── Configuration helpers ────────────────────────────────────────────────────
 
@@ -40,10 +37,6 @@ function getConfig(): CadeConfig {
 
 // ── SSE streaming fetch ──────────────────────────────────────────────────────
 
-/**
- * Calls the CADE `/v1/complete` endpoint and accumulates streamed text.
- * Returns the full completion string, or empty string on error/cancellation.
- */
 async function fetchCompletion(
   prefix: string,
   suffix: string,
@@ -74,7 +67,6 @@ async function fetchCompletion(
       signal,
     });
   } catch {
-    // Network error or abort — silent
     return "";
   }
 
@@ -82,7 +74,6 @@ async function fetchCompletion(
     return "";
   }
 
-  // Read the SSE stream
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let accumulated = "";
@@ -97,9 +88,7 @@ async function fetchCompletion(
 
       buffer += decoder.decode(value, { stream: true });
 
-      // Process complete SSE lines
       const lines = buffer.split("\n");
-      // Keep the last (potentially incomplete) line in the buffer
       buffer = lines.pop() || "";
 
       for (const line of lines) {
@@ -126,7 +115,7 @@ async function fetchCompletion(
       }
     }
   } catch {
-    // Abort or read error — return what we have
+    // Abort or read error
   }
 
   return accumulated;
@@ -148,12 +137,10 @@ class CadeCompletionProvider
       return undefined;
     }
 
-    // Skip non-file schemes (output panels, git diffs, etc.)
     if (document.uri.scheme !== "file" && document.uri.scheme !== "untitled") {
       return undefined;
     }
 
-    // ── Build prefix (lines before cursor + current line up to cursor) ───
     const prefixStartLine = Math.max(0, position.line - cfg.linesBefore);
     const prefixRange = new vscode.Range(
       new vscode.Position(prefixStartLine, 0),
@@ -161,7 +148,6 @@ class CadeCompletionProvider
     );
     const prefix = document.getText(prefixRange);
 
-    // ── Build suffix (rest of current line + lines after cursor) ─────────
     const suffixEndLine = Math.min(
       document.lineCount - 1,
       position.line + cfg.linesAfter
@@ -173,12 +159,10 @@ class CadeCompletionProvider
     );
     const suffix = document.getText(suffixRange);
 
-    // Skip if there's barely any context
     if (prefix.length < 3) {
       return undefined;
     }
 
-    // Wire CancellationToken → AbortController
     const abort = new AbortController();
     token.onCancellationRequested(() => abort.abort());
 
@@ -194,7 +178,6 @@ class CadeCompletionProvider
       return undefined;
     }
 
-    // Return a single inline completion item inserted at the cursor
     const item = new vscode.InlineCompletionItem(
       completion,
       new vscode.Range(position, position)
@@ -207,6 +190,8 @@ class CadeCompletionProvider
 // ── Extension lifecycle ──────────────────────────────────────────────────────
 
 let statusBarItem: vscode.StatusBarItem;
+let connection: BridgeConnection | null = null;
+let publisher: StatePublisher | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the inline completion provider for all languages
@@ -241,6 +226,44 @@ export function activate(context: vscode.ExtensionContext) {
   updateStatusBar(getConfig().enabled);
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
+
+  // Initialize TCP bridge connection to CADE server
+  connection = new BridgeConnection(
+    async (msg) => {
+      if (msg && msg.type === "callback_request") {
+        try {
+          const result = await CallbackHandler.handleCallback(msg.action);
+          connection?.send({
+            type: "callback_response",
+            id: msg.id,
+            result,
+          });
+        } catch (err: any) {
+          connection?.send({
+            type: "callback_response",
+            id: msg.id,
+            result: { err: err.message || "Unknown callback execution error" },
+          });
+        }
+      }
+    },
+    () => {
+      vscode.window.showInformationMessage("CADE Editor Bridge connected.");
+    }
+  );
+
+  publisher = new StatePublisher(connection);
+
+  // Trigger telemetry state publication on workspace/editor changes
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => publisher?.schedulePublish()),
+    vscode.workspace.onDidChangeTextDocument(() => publisher?.schedulePublish()),
+    vscode.window.onDidChangeTextEditorSelection(() => publisher?.schedulePublish()),
+    vscode.languages.onDidChangeDiagnostics(() => publisher?.schedulePublish())
+  );
+
+  // Launch the TCP connection
+  connection.connect();
 }
 
 function updateStatusBar(enabled: boolean) {
@@ -253,4 +276,8 @@ function updateStatusBar(enabled: boolean) {
   }
 }
 
-export function deactivate() {}
+export function deactivate() {
+  if (connection) {
+    connection.dispose();
+  }
+}
