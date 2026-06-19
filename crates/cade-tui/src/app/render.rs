@@ -143,6 +143,31 @@ pub(crate) fn render_frame(
 ) -> (u16, Option<(u16, u16)>) {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
+    if area.width < 40 || area.height < 10 {
+        use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+        use ratatui::layout::Alignment;
+        use crate::colors::ThemeColorsExt;
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(colors.border_muted())
+            .style(colors.style_base());
+        let msg = if area.width >= 34 {
+            "Resize terminal to render CADE"
+        } else if area.width >= 20 {
+            "Resize terminal"
+        } else {
+            "..."
+        };
+        let paragraph = Paragraph::new(msg)
+            .alignment(Alignment::Center)
+            .block(block)
+            .style(colors.text_dim());
+        frame.render_widget(paragraph, area);
+        return (0, None);
+    }
+
     let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT {
         let sidebar_w = SIDEBAR_WIDTH.min(area.width.saturating_sub(24));
         let split =
