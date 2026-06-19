@@ -291,6 +291,14 @@ impl TuiApp {
                 self.draw_dirty = true;
             }
 
+            KeyCode::Char('?') if k.modifiers.contains(KeyModifiers::CONTROL)
+                || (k.code == KeyCode::Char('?') && self.editor.is_empty()) =>
+            {
+                self.overlays
+                    .push(Box::new(crate::app::help_overlay::HelpOverlay::new()));
+                self.draw_dirty = true;
+            }
+
             KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.overlays.push(Box::new(
                     crate::app::command_palette::CommandPaletteState::new(),

@@ -249,7 +249,7 @@ impl AgentModelAutocompleteProvider {
             let mut matches: Vec<String> = self
                 .agents
                 .iter()
-                .filter(|a| a.to_lowercase().starts_with(prefix))
+                .filter(|a| is_subsequence(prefix, &a.to_lowercase()))
                 .cloned()
                 .collect();
 
@@ -270,7 +270,7 @@ impl AgentModelAutocompleteProvider {
             let mut matches: Vec<String> = self
                 .models
                 .iter()
-                .filter(|m| m.to_lowercase().starts_with(prefix))
+                .filter(|m| is_subsequence(prefix, &m.to_lowercase()))
                 .cloned()
                 .collect();
 
@@ -305,7 +305,7 @@ impl AutocompleteProvider for AgentModelAutocompleteProvider {
             return self
                 .agents
                 .iter()
-                .filter(|a| a.to_lowercase().starts_with(prefix))
+                .filter(|a| is_subsequence(prefix, &a.to_lowercase()))
                 .map(|a| Completion {
                     text: format!("@{}", a),
                     description: Some("Agent".to_string()),
@@ -318,7 +318,7 @@ impl AutocompleteProvider for AgentModelAutocompleteProvider {
             return self
                 .models
                 .iter()
-                .filter(|m| m.to_lowercase().starts_with(prefix))
+                .filter(|m| is_subsequence(prefix, &m.to_lowercase()))
                 .map(|m| Completion {
                     text: format!("#{}", m),
                     description: Some("Model".to_string()),
@@ -354,7 +354,7 @@ impl SlashCommandProvider {
         let lower = prefix.to_lowercase();
         self.commands
             .iter()
-            .filter(|c| c.name.to_lowercase().starts_with(&lower))
+            .filter(|c| is_subsequence(&lower, &c.name.to_lowercase()))
             .collect()
     }
 
@@ -363,7 +363,7 @@ impl SlashCommandProvider {
         let lower = prefix.to_lowercase();
         self.at_subagents
             .iter()
-            .filter(|m| m.to_lowercase().starts_with(&lower))
+            .filter(|m| is_subsequence(&lower, &m.to_lowercase()))
             .map(|m| Completion {
                 text: format!("@{}", m),
                 description: Some("Subagent mode".to_string()),
@@ -447,6 +447,23 @@ pub fn common_prefix(words: &[String]) -> String {
         .min()
         .unwrap_or(first.chars().count());
     first.chars().take(len).collect()
+}
+
+pub fn is_subsequence(query: &str, target: &str) -> bool {
+    let mut query_chars = query.chars();
+    let mut current_query_char = match query_chars.next() {
+        Some(c) => c,
+        None => return true,
+    };
+    for c in target.chars() {
+        if c == current_query_char {
+            match query_chars.next() {
+                Some(next_c) => current_query_char = next_c,
+                None => return true,
+            }
+        }
+    }
+    false
 }
 
 // -- ToolAutocompleteProvider
