@@ -1,7 +1,7 @@
 //! File watcher for MCP settings files.
 //!
 //! Watches `~/.cade/settings.json`, `.cade/settings.json`,
-//! `.cade/settings.local.json`, and `.cade/session.json` for writes.
+//! and `.cade/settings.local.json` for writes.
 //! Any change sends `()` on the returned channel so the REPL can trigger
 //! a live MCP reload without restarting.
 //!
@@ -77,7 +77,6 @@ pub fn spawn_mcp_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
                             .map(|n| {
                                 n == "settings.json"
                                     || n == "settings.local.json"
-                                    || n == "session.json"
                             })
                             .unwrap_or(false)
                     });
