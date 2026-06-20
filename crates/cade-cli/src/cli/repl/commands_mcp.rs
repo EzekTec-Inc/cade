@@ -78,7 +78,7 @@ impl Repl {
                 Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
                     let s = self.settings.lock();
                     let config = s
-                        .merged_mcp_servers()
+                        .all_mcp_servers()
                         .get(&key)
                         .cloned()
                         .unwrap_or_default();

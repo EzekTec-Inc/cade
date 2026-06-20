@@ -188,6 +188,23 @@ async fn async_main() -> Result<()> {
         }
     };
 
+    // Live hot-reload watcher for settings changes (toggles, edits)
+    {
+        let mut mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
+        let mcp_clone = Arc::clone(&mcp);
+        let cwd_clone = cwd.clone();
+        tokio::spawn(async move {
+            while mcp_reload_rx.recv().await.is_some() {
+                tracing::info!("Server MCP settings changed — hot-reloading MCP servers...");
+                if let Ok(settings) = SettingsManager::new(&cwd_clone) {
+                    let mcp_configs = settings.merged_mcp_servers();
+                    let _summary = mcp_clone.reload(&mcp_configs, None).await;
+                    tracing::info!("Server MCP hot-reload complete");
+                }
+            }
+        });
+    }
+
     // ── Discover skills at boot ────────────────────────────────────────────
     let cwd = std::env::current_dir().unwrap_or_default();
     let all_skills = cade_core::skills::discover_all_skills(&cwd, None, None);

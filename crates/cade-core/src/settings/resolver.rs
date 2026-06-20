@@ -118,6 +118,29 @@ impl SettingsManager {
     }
 
     /// Merged MCP servers: local > project > global (same key = higher priority wins).
+    /// Disabled servers are included — the caller decides what to do with them.
+    /// Gated by Directory Trust: project-local and local servers are ignored if untrusted.
+    pub fn all_mcp_servers(&self) -> std::collections::HashMap<String, McpServerConfig> {
+        let mut merged = self.global.mcp_servers.clone();
+        if self.is_trusted {
+            for (k, v) in &self.project.mcp_servers {
+                merged.insert(k.clone(), v.clone());
+            }
+            for (k, v) in &self.local.mcp_servers {
+                merged.insert(k.clone(), v.clone());
+            }
+        } else {
+            if !self.project.mcp_servers.is_empty() || !self.local.mcp_servers.is_empty() {
+                tracing::warn!(
+                    "Directory is NOT trusted. Skipping project-local and local MCP servers for safety."
+                );
+            }
+        }
+        merged.retain(|_, v| !v.command.is_empty() || v.url.is_some());
+        merged
+    }
+
+    /// Merged MCP servers: local > project > global (same key = higher priority wins).
     /// Disabled servers are excluded.
     /// Gated by Directory Trust: project-local and local servers are ignored if untrusted.
     pub fn merged_mcp_servers(&self) -> std::collections::HashMap<String, McpServerConfig> {
