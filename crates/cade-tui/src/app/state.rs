@@ -568,4 +568,30 @@ impl TuiApp {
             _ => false,
         }
     }
+
+    /// Toggle the folding/expansion of the most recent collapsible timeline item (Ctrl+G).
+    pub fn toggle_last_collapsible_item(&mut self) {
+        use crate::app::timeline::{build_timeline_entries, TimelineItemKind};
+
+        let entries = build_timeline_entries(&self.lines);
+        for entry in entries.into_iter().rev() {
+            if matches!(
+                entry.key.kind,
+                TimelineItemKind::ToolResult
+                    | TimelineItemKind::Reasoning
+                    | TimelineItemKind::LiveOutput
+            ) {
+                let key = entry.key;
+                if self.expanded_items.contains(&key) {
+                    self.expanded_items.remove(&key);
+                    self.show_toast("Collapsed item details", ToastLevel::Info);
+                } else {
+                    self.expanded_items.insert(key);
+                    self.show_toast("Expanded item details", ToastLevel::Info);
+                }
+                self.draw_dirty = true;
+                break;
+            }
+        }
+    }
 }

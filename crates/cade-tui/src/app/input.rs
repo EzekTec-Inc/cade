@@ -291,6 +291,10 @@ impl TuiApp {
                 self.draw_dirty = true;
             }
 
+            KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_last_collapsible_item();
+            }
+
             KeyCode::Char('?')
                 if k.modifiers.contains(KeyModifiers::CONTROL)
                     || (k.code == KeyCode::Char('?') && self.editor.is_empty()) =>
