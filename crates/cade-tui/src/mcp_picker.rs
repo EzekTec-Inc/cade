@@ -121,7 +121,7 @@ pub fn show_mcp_manager(
                     };
 
                     let status_str = if s.config.disabled {
-                        "Disabled"
+                        "Disconnected"
                     } else if s.tool_count.is_some() {
                         "Connected"
                     } else {
@@ -208,7 +208,7 @@ pub fn show_mcp_manager(
                 meta.push_str(&format!("ID: {}\n", s.key));
 
                 if s.config.disabled {
-                    meta.push_str("Status: Disabled\n");
+                    meta.push_str("Status: Disconnected\n");
                 } else if let Some(tc) = s.tool_count {
                     meta.push_str(&format!("Status: Connected ({} tools)\n", tc));
                 } else {
