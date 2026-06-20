@@ -571,7 +571,7 @@ impl TuiApp {
 
     /// Toggle the folding/expansion of the most recent collapsible timeline item (Ctrl+G).
     pub fn toggle_last_collapsible_item(&mut self) {
-        use crate::app::timeline::{build_timeline_entries, TimelineItemKind};
+        use crate::app::timeline::{TimelineItemKind, build_timeline_entries};
 
         let entries = build_timeline_entries(&self.lines);
         for entry in entries.into_iter().rev() {

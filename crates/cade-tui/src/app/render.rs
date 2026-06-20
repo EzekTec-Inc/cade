@@ -605,7 +605,9 @@ pub(crate) fn render_frame(
     // Live Connection Latency Indicator (Option 3)
     footer.push(Span::styled(
         "  Server: 14ms 🟢",
-        Style::default().fg(colors.c_success()).add_modifier(Modifier::DIM),
+        Style::default()
+            .fg(colors.c_success())
+            .add_modifier(Modifier::DIM),
     ));
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);

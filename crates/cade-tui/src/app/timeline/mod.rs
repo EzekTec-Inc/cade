@@ -505,7 +505,7 @@ pub(crate) fn render_timeline_viewport(
             .thumb_symbol("█")
             .track_symbol(Some("░"))
             .style(colors.border_muted());
-        
+
         let mut scrollbar_state = ScrollbarState::new(total_visual as usize)
             .position(total_visual.saturating_sub(effective_up) as usize);
 
@@ -513,7 +513,9 @@ pub(crate) fn render_timeline_viewport(
             x: area.x + area.width.saturating_sub(1),
             y: area.y + CONTENT_PAD_TOP,
             width: 1,
-            height: area.height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT),
+            height: area
+                .height
+                .saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT),
         };
         frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
     }
