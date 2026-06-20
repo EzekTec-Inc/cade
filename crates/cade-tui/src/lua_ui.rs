@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::ThemeColors;
+use crate::colors::ThemeColorsExt;
 use crate::slots::SlotComponent;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -79,6 +80,7 @@ pub struct LuaUiSlot {
     pub event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
     pub has_clock: bool,
     pub hitboxes: Vec<(String, ratatui::layout::Rect)>,
+    pub is_focused: bool,
 }
 
 impl LuaUiSlot {
@@ -93,6 +95,7 @@ impl LuaUiSlot {
             event_queue,
             has_clock: false,
             hitboxes: Vec::new(),
+            is_focused: false,
         }
     }
 
@@ -162,13 +165,22 @@ impl LuaUiSlot {
 }
 
 impl SlotComponent for LuaUiSlot {
+    fn set_focused(&mut self, focused: bool) {
+        self.is_focused = focused;
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
         let inner_area = if self.is_header {
             area // Header has no borders for now, to save space
         } else {
+            let border_style = if self.is_focused {
+                colors.border_focus()
+            } else {
+                colors.border_base()
+            };
             let block = Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(border_style)
                 .title(" Plugins ");
             let i_area = block.inner(area);
             frame.render_widget(block, area);
@@ -219,10 +231,112 @@ impl SlotComponent for LuaUiSlot {
         }
     }
 
-    fn handle_input(&mut self, _key: KeyEvent) -> bool {
-        // Plugin input capturing is restricted to prevent freezing the main input field.
-        // A proper focus mechanism is required before this can be safely re-enabled.
-        false
+    fn handle_input(&mut self, key: KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        let interactives = self.interactive_ids();
+        if interactives.is_empty() {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Down | KeyCode::Tab => {
+                // Focus next interactive element
+                self.focused_idx = (self.focused_idx + 1) % interactives.len();
+                true
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                // Focus previous interactive element
+                self.focused_idx = self
+                    .focused_idx
+                    .checked_sub(1)
+                    .unwrap_or(interactives.len() - 1);
+                true
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                // Activate/Toggle the currently focused element
+                if let Some(id) = interactives.get(self.focused_idx) {
+                    // Try to toggle if it is a toggle
+                    if let Some(new_state) = self.root.as_mut().and_then(|r| toggle_widget(r, id)) {
+                        let mut args = serde_json::Map::new();
+                        args.insert("state".to_string(), serde_json::Value::Bool(new_state));
+                        self.event_queue
+                            .lock()
+                            .unwrap()
+                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                    } else {
+                        // Treat as general button click / generic action trigger
+                        let mut args = serde_json::Map::new();
+                        args.insert(
+                            "row_offset".to_string(),
+                            serde_json::Value::Number(0.into()),
+                        );
+                        args.insert(
+                            "col_offset".to_string(),
+                            serde_json::Value::Number(0.into()),
+                        );
+                        self.event_queue
+                            .lock()
+                            .unwrap()
+                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            KeyCode::Right => {
+                // If focused item is a list, cycle choice forward
+                if let Some(id) = interactives.get(self.focused_idx) {
+                    if let Some(new_idx) = self
+                        .root
+                        .as_mut()
+                        .and_then(|r| move_list_selection(r, id, true))
+                    {
+                        let mut args = serde_json::Map::new();
+                        args.insert(
+                            "selected".to_string(),
+                            serde_json::Value::Number(new_idx.into()),
+                        );
+                        self.event_queue
+                            .lock()
+                            .unwrap()
+                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            KeyCode::Left => {
+                // If focused item is a list, cycle choice backward
+                if let Some(id) = interactives.get(self.focused_idx) {
+                    if let Some(new_idx) = self
+                        .root
+                        .as_mut()
+                        .and_then(|r| move_list_selection(r, id, false))
+                    {
+                        let mut args = serde_json::Map::new();
+                        args.insert(
+                            "selected".to_string(),
+                            serde_json::Value::Number(new_idx.into()),
+                        );
+                        self.event_queue
+                            .lock()
+                            .unwrap()
+                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
@@ -417,3 +531,72 @@ fn render_widget(
         }
     }
 }
+
+// region:    --- Support
+
+fn toggle_widget(children: &mut [LuaWidget], target_id: &str) -> Option<bool> {
+    for widget in children {
+        match widget {
+            LuaWidget::Toggle { id, state, .. } if id == target_id => {
+                *state = !*state;
+                return Some(*state);
+            }
+            LuaWidget::Layout { children, .. } => {
+                if let Some(s) = toggle_widget(children, target_id) {
+                    return Some(s);
+                }
+            }
+            LuaWidget::Popup { content, .. } => {
+                if let Some(s) = toggle_widget(std::slice::from_mut(content), target_id) {
+                    return Some(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn move_list_selection(
+    children: &mut [LuaWidget],
+    target_id: &str,
+    forward: bool,
+) -> Option<usize> {
+    for widget in children {
+        match widget {
+            LuaWidget::List {
+                id: Some(id),
+                items,
+                selected,
+                ..
+            } if id == target_id => {
+                if !items.is_empty() {
+                    let current = selected.unwrap_or(0);
+                    let next = if forward {
+                        (current + 1) % items.len()
+                    } else {
+                        current.checked_sub(1).unwrap_or(items.len() - 1)
+                    };
+                    *selected = Some(next);
+                    return Some(next);
+                }
+            }
+            LuaWidget::Layout { children, .. } => {
+                if let Some(s) = move_list_selection(children, target_id, forward) {
+                    return Some(s);
+                }
+            }
+            LuaWidget::Popup { content, .. } => {
+                if let Some(s) =
+                    move_list_selection(std::slice::from_mut(content), target_id, forward)
+                {
+                    return Some(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+// endregion: --- Support

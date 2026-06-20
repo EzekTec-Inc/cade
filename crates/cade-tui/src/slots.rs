@@ -40,10 +40,40 @@ use crate::colors::ThemeColors;
 pub enum UiSlot {
     /// Top region — typically a status bar or breadcrumb.
     Header,
-    /// Bottom region — typically a hint line or progress indicator.
+    /// Bottom region — typically a hint line - or progress indicator.
     Footer,
     /// Right-hand sidebar — typically a tree or contextual panel.
     Sidebar,
+}
+
+/// Active focused region in the TUI workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FocusRegion {
+    Input,
+    Header,
+    Footer,
+    Sidebar,
+}
+
+impl FocusRegion {
+    /// Helper to convert a [`UiSlot`] into its corresponding [`FocusRegion`].
+    pub fn from_slot(slot: UiSlot) -> Self {
+        match slot {
+            UiSlot::Header => Self::Header,
+            UiSlot::Footer => Self::Footer,
+            UiSlot::Sidebar => Self::Sidebar,
+        }
+    }
+
+    /// Helper to convert a [`FocusRegion`] back into its corresponding [`UiSlot`], if applicable.
+    pub fn to_slot(self) -> Option<UiSlot> {
+        match self {
+            Self::Input => None,
+            Self::Header => Some(UiSlot::Header),
+            Self::Footer => Some(UiSlot::Footer),
+            Self::Sidebar => Some(UiSlot::Sidebar),
+        }
+    }
 }
 
 /// Host-agnostic widget interface for slot-installed components.
@@ -52,6 +82,9 @@ pub enum UiSlot {
 /// `Vec<RenderedLine>`) because slot widgets draw directly into a
 /// [`ratatui::Frame`], the same surface the rest of the TUI uses.
 pub trait SlotComponent: Send + Sync {
+    /// Inform the component whether its parent slot has keyboard focus.
+    fn set_focused(&mut self, _focused: bool) {}
+
     /// Render the widget into `area` of `frame`.
     fn render(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors);
 
@@ -269,5 +302,18 @@ mod tests {
         m.insert(UiSlot::Footer, "f");
         m.insert(UiSlot::Sidebar, "s");
         assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn test_focus_region_conversions() {
+        assert_eq!(
+            FocusRegion::from_slot(UiSlot::Sidebar),
+            FocusRegion::Sidebar
+        );
+        assert_eq!(FocusRegion::from_slot(UiSlot::Header), FocusRegion::Header);
+        assert_eq!(FocusRegion::from_slot(UiSlot::Footer), FocusRegion::Footer);
+
+        assert_eq!(FocusRegion::Sidebar.to_slot(), Some(UiSlot::Sidebar));
+        assert_eq!(FocusRegion::Input.to_slot(), None);
     }
 }

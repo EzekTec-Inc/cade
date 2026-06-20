@@ -880,6 +880,9 @@ pub struct TuiApp {
     // -- Mouse capture disable mode (for OS text selection)
     pub mouse_capture_disabled: bool,
 
+    /// Currently active focused region in the workspace
+    pub focused_region: crate::slots::FocusRegion,
+
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
     pub file_ac: FileAutocompleteProvider,
@@ -1073,6 +1076,7 @@ impl TuiApp {
             turn_count: 0,
             token_history: Vec::new(),
             mouse_capture_disabled: false,
+            focused_region: crate::slots::FocusRegion::Input,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider::new(
                 vec![],

@@ -194,19 +194,39 @@ impl TuiApp {
         // (summary, command palette, theme picker, file picker) are now
         // handled by the dynamic overlay stack above (Phase 3).
 
-        // -- UI extension slot input (Phase 4)
-        // Give installed slot widgets a chance to consume the key event.
-        // Slots are passive by default (handle_input returns false).
+        // -- UI extension slot focus and input routing (Phase 4)
         {
-            use crate::slots::UiSlot;
-            for slot in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
-                if let Some(widget) = self.slots.get_mut(slot)
-                    && widget.handle_input(k)
-                {
+            use crate::slots::FocusRegion;
+            if self.focused_region != FocusRegion::Input {
+                if k.code == KeyCode::Esc {
+                    self.focused_region = FocusRegion::Input;
+                    use crate::slots::UiSlot;
+                    for s in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
+                        if let Some(w) = self.slots.get_mut(s) {
+                            w.set_focused(false);
+                        }
+                    }
+                    self.show_toast("Focus: Prompt input active", ToastLevel::Info);
                     self.draw_dirty = true;
                     let _ = self.draw();
                     return Ok(None);
                 }
+
+                if k.code == KeyCode::Char('f') && k.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.cycle_focus();
+                    return Ok(None);
+                }
+
+                if let Some(slot) = self.focused_region.to_slot()
+                    && let Some(widget) = self.slots.get_mut(slot)
+                {
+                    widget.handle_input(k);
+                }
+
+                // Consume all input when a slot is focused to protect prompt editor
+                self.draw_dirty = true;
+                let _ = self.draw();
+                return Ok(None);
             }
         }
 
@@ -258,6 +278,10 @@ impl TuiApp {
         }
 
         match k.code {
+            KeyCode::Char('f') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_focus();
+                return Ok(None);
+            }
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(None));
             }
@@ -713,6 +737,84 @@ impl TuiApp {
         };
 
         Ok(None)
+    }
+
+    /// Cycle keyboard focus between the main prompt input and active UI slots (Sidebar, Header, Footer).
+    pub fn cycle_focus(&mut self) {
+        use crate::slots::{FocusRegion, UiSlot};
+
+        let current = self.focused_region;
+        let mut next = FocusRegion::Input;
+
+        // Collect list of focusable occupied slots in preferred order
+        let mut occupied_slots = Vec::new();
+        if self.slots.is_occupied(UiSlot::Sidebar) {
+            occupied_slots.push(FocusRegion::Sidebar);
+        }
+        if self.slots.is_occupied(UiSlot::Header) {
+            occupied_slots.push(FocusRegion::Header);
+        }
+        if self.slots.is_occupied(UiSlot::Footer) {
+            occupied_slots.push(FocusRegion::Footer);
+        }
+
+        if !occupied_slots.is_empty() {
+            match current {
+                FocusRegion::Input => {
+                    next = occupied_slots[0];
+                }
+                FocusRegion::Sidebar => {
+                    if let Some(pos) = occupied_slots
+                        .iter()
+                        .position(|&r| r == FocusRegion::Sidebar)
+                    {
+                        if pos + 1 < occupied_slots.len() {
+                            next = occupied_slots[pos + 1];
+                        } else {
+                            next = FocusRegion::Input;
+                        }
+                    } else {
+                        next = FocusRegion::Input;
+                    }
+                }
+                FocusRegion::Header => {
+                    if let Some(pos) = occupied_slots
+                        .iter()
+                        .position(|&r| r == FocusRegion::Header)
+                    {
+                        if pos + 1 < occupied_slots.len() {
+                            next = occupied_slots[pos + 1];
+                        } else {
+                            next = FocusRegion::Input;
+                        }
+                    } else {
+                        next = FocusRegion::Input;
+                    }
+                }
+                FocusRegion::Footer => {
+                    next = FocusRegion::Input;
+                }
+            }
+        }
+
+        // Inform slots of the change
+        for slot in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
+            if let Some(widget) = self.slots.get_mut(slot) {
+                widget.set_focused(next == FocusRegion::from_slot(slot));
+            }
+        }
+
+        self.focused_region = next;
+
+        // Show a nice toast message
+        let toast_msg = match next {
+            FocusRegion::Input => "Focus: Prompt input active".to_string(),
+            FocusRegion::Sidebar => "Focus: Sidebar active".to_string(),
+            FocusRegion::Header => "Focus: Header active".to_string(),
+            FocusRegion::Footer => "Focus: Footer active".to_string(),
+        };
+        self.show_toast(&toast_msg, ToastLevel::Info);
+        self.draw_dirty = true;
     }
 }
 
