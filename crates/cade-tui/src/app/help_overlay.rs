@@ -1,5 +1,3 @@
-
-
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -18,16 +16,34 @@ pub struct HelpOverlay {
     dismissed: bool,
 }
 
+impl Default for HelpOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HelpOverlay {
     pub fn new() -> Self {
         let items = vec![
             ("Enter", "Send active prompt or run selected slash command"),
             ("Tab", "Trigger autocomplete list / cycle suggestions"),
-            ("Esc", "Close floating help overlay or active autocomplete menu"),
-            ("Ctrl+O", "Toggle timeline expansion (expand/compress long tool outputs)"),
+            (
+                "Esc",
+                "Close floating help overlay or active autocomplete menu",
+            ),
+            (
+                "Ctrl+O",
+                "Toggle timeline expansion (expand/compress long tool outputs)",
+            ),
             ("Ctrl+F", "Trigger timeline keyword search / filter"),
-            ("Ctrl+Y", "Trigger timeline Copy Overlay to select and copy outputs"),
-            ("@", "Open fuzzy File Picker to search and insert project files"),
+            (
+                "Ctrl+Y",
+                "Trigger timeline Copy Overlay to select and copy outputs",
+            ),
+            (
+                "@",
+                "Open fuzzy File Picker to search and insert project files",
+            ),
             ("Up / Down", "Navigate autocomplete or file list selections"),
             ("Ctrl+? / ?", "Display this keyboard shortcut help menu"),
         ];
@@ -100,7 +116,11 @@ impl OverlayComponent for HelpOverlay {
                     Span::styled(
                         format!("{:15}", shortcut),
                         Style::default()
-                            .fg(if is_selected { colors.c_bg_base() } else { colors.c_border_accent() })
+                            .fg(if is_selected {
+                                colors.c_bg_base()
+                            } else {
+                                colors.c_border_accent()
+                            })
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(*desc),

@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn m(role: &str, text: &str) -> (String, String) {

@@ -131,6 +131,8 @@ Instead, when running alongside the centralized background daemon (`cade-server`
 
 This centralized model eliminates process starvation, port collisions, and cold-start latency across concurrent terminals and editor buffers.
 
+4. **Live Hot-Reload Settings Watcher**: To keep the centralized processes strictly synchronized with user actions, `cade-server` runs its own background file-system watcher. When a user toggles a server (via `Space` inside the `/mcp` overlay modal) or manually edits `.cade/settings.json`, the background daemon instantly detects the write, hot-reloads the settings, and starts or stops the running MCP subprocesses centrally. This ensures the central daemon always reflects your active settings without requiring any server or session restarts.
+
 ## Security notes
 
 - MCP servers run with **the agent's privileges**. Trust the binaries

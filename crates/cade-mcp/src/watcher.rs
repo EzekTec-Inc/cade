@@ -74,10 +74,7 @@ pub fn spawn_mcp_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
                     let is_settings = event.paths.iter().any(|p| {
                         p.file_name()
                             .and_then(|n| n.to_str())
-                            .map(|n| {
-                                n == "settings.json"
-                                    || n == "settings.local.json"
-                            })
+                            .map(|n| n == "settings.json" || n == "settings.local.json")
                             .unwrap_or(false)
                     });
                     if relevant && is_settings {

@@ -144,9 +144,9 @@ pub(crate) fn render_frame(
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
     if area.width < 40 || area.height < 10 {
-        use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-        use ratatui::layout::Alignment;
         use crate::colors::ThemeColorsExt;
+        use ratatui::layout::Alignment;
+        use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
         let block = Block::default()
             .borders(Borders::ALL)

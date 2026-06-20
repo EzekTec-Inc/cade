@@ -77,11 +77,7 @@ impl Repl {
                 }
                 Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
                     let s = self.settings.lock();
-                    let config = s
-                        .all_mcp_servers()
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or_default();
+                    let config = s.all_mcp_servers().get(&key).cloned().unwrap_or_default();
                     drop(s);
                     let tmpl = serde_json::json!({ key: config });
                     let mut app = self.app.lock();
