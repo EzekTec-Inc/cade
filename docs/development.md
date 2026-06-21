@@ -219,3 +219,35 @@ This means **both binaries share the same dependency set**. Server-only deps
 (axum, tower-http, cade-ai) are compiled even for the `cade` client binary.
 A future improvement would split binaries into separate crates, but the
 current layout works and the release build uses LTO to eliminate dead code.
+
+## Interactive TUI Focus & Keybindings
+
+CADE supports dynamic focus routing and keyboard controls across its plugin region slots (`Sidebar`, `Header`, `Footer`):
+
+*   **`Ctrl+F`**: Cycles focus between the main prompt input editor and any active, occupied UI slots.
+*   **`Esc`**: Immediately drops slot focus and reverts keyboard target to the main prompt input.
+*   **Focus Highlighting**: Active slots render with a distinct, colored border (`colors.border_focus()`) instead of muted borders.
+*   **Interactive Slot Navigation**: When a slot is focused, all input keystrokes are routed directly to that slot component's `handle_input(k)` before propagating down. The concrete `LuaUiSlot` implementation maps:
+    *   `Up` / `Down` / `Tab` / `BackTab` to navigate interactive widgets.
+    *   `Enter` / `Space` to click buttons or toggle states.
+    *   `Left` / `Right` to cycle choices inside custom Lists.
+
+## TUI State Signals & Extensibility Runtimes
+
+CADE implements reactive, declarative state signals and a dual-sandbox dynamic plugin loader system:
+
+### Declarative Signals (`signals.rs`)
+
+To optimize rendering cycles and minimize CPU load, CADE implements `Signal<T>` backed by thread-safe `tokio::sync::watch` channels. Writing to a signal sets a global dirty flag. The TUI event tick loop selectively draws frames only when this dirty flag is set, reducing idle rendering overhead to near-zero.
+
+### JavaScript / TypeScript Plugin Runtime (`rquickjs`)
+
+CADE integrates a sandboxed QuickJS context (`JsRuntime`) feature-gated behind `plugin-js`. This allows developers to author local plugins in JavaScript/TypeScript using a robust sandboxed runtime that restricts memory consumption to 32MB and exposes native filesystem, globbing, and interactive prompt bindings.
+
+### WebAssembly Sandboxed Runtime (`wasmtime`)
+
+High-performance, cross-language dynamic plugins can be loaded as compiled `.wasm` modules inside a strict WASI container powered by Wasmtime. The WASM runtime automatically parses guest module exports starting with `cade_tool_` to register and dispatch custom tools safely at runtime.
+
+### Active Permission Gating
+
+CADE's `ToolContext` exposes an asynchronous `ask_permission` callback allowing running tools to programmatically request user permissions for nested or sub-actions mid-execution. When a tool invokes this, CADE's parallel execution engine halts the future and pushes a floating `PermissionOverlay` modal onto the TUI stack, resuming execution once the user approves, denies, or selects "always allow for this session."
