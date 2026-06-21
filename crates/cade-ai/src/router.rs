@@ -419,7 +419,7 @@ impl LlmRouter {
                                         provider: n.clone(),
                                         id: full_id.clone(),
                                         display_name: id,
-                                        toolset: "default".into(),
+                                        toolset: catalogue::toolset_for_model(&full_id),
                                         max_tokens: catalogue::max_tokens_for_model(&full_id),
                                         context_window: catalogue::context_window_for_model(
                                             &full_id,

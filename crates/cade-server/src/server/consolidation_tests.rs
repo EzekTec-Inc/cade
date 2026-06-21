@@ -780,9 +780,24 @@ fn default_compaction_gemini_uses_flash() {
 
 #[test]
 fn default_compaction_openrouter_uses_free_glm() {
+    // Paid-tier OpenRouter → cheap compaction model
     assert_eq!(
         default_compaction_model("openrouter/anthropic/claude-sonnet-4"),
         "openrouter/z-ai/glm-4.5-air:free"
+    );
+}
+
+#[test]
+fn default_compaction_openrouter_free_tier_passthrough() {
+    // Free-tier OpenRouter models share the same rate-limit quota.
+    // Using a different free model would just compete for that quota.
+    assert_eq!(
+        default_compaction_model("openrouter/google/gemma-4-26b-a4b-it:free"),
+        "openrouter/google/gemma-4-26b-a4b-it:free"
+    );
+    assert_eq!(
+        default_compaction_model("openrouter/mistral/mistral-small-3.1-24b-instruct:free"),
+        "openrouter/mistral/mistral-small-3.1-24b-instruct:free"
     );
 }
 

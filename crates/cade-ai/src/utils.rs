@@ -1,4 +1,5 @@
 use crate::{Error, Result};
+use rand::Rng;
 use serde_json::{Value, json};
 
 /// Which HTTP status codes are worth retrying (transient / rate-limit errors).
@@ -27,7 +28,13 @@ pub(crate) fn is_retryable_error(e: &Error) -> bool {
     false
 }
 
-/// Retry an async fallible operation with exponential backoff.
+/// Retry an async fallible operation with exponential backoff + jitter.
+///
+/// Jitter (±50% of the computed delay) prevents thundering-herd problems
+/// when multiple requests hit a rate-limited provider simultaneously.
+/// Maximum per-attempt delay is capped at 16s (double the previous 8s cap)
+/// to give rate-limited providers (especially free-tier OpenRouter) more
+/// time to recover.
 pub async fn retry_with_backoff<F, Fut, T>(
     op_name: &str,
     max_attempts: u32,
@@ -45,10 +52,13 @@ where
             Err(e) => {
                 let retryable = is_retryable_error(&e);
                 if attempt < max_attempts && retryable {
-                    let delay = std::cmp::min(
+                    let base = std::cmp::min(
                         base_delay * 2u32.pow(attempt - 1),
-                        std::time::Duration::from_secs(8),
+                        std::time::Duration::from_secs(16),
                     );
+                    // Apply ±50% jitter
+                    let jitter_factor = rand::rng().random_range(0.5f64..1.5);
+                    let delay = base.mul_f64(jitter_factor);
                     tracing::warn!(
                         "{op_name}: attempt {attempt}/{max_attempts} failed ({e:#}), retrying in {}ms…",
                         delay.as_millis()

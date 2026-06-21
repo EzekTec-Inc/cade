@@ -16,8 +16,18 @@ pub enum Toolset {
 
 impl Toolset {
     /// Detect the best toolset from a model identifier string.
+    ///
+    /// Strips optional `openrouter/` prefix before matching so that
+    /// `openrouter/google/gemma-...` is routed to the Gemini toolset
+    /// (consistent with `cade_ai::catalogue::toolset_for_model`).
     pub fn for_model(model: &str) -> Self {
-        let m = model.to_lowercase();
+        // Strip optional provider prefix (e.g. "openrouter/", "preset/")
+        let bare = model
+            .find('/')
+            .map(|pos| &model[pos + 1..])
+            .unwrap_or(model);
+        let m = bare.to_lowercase();
+
         if m.contains("gpt")
             || m.contains("codex")
             || m.contains("o1")
@@ -25,7 +35,7 @@ impl Toolset {
             || m.contains("o4")
         {
             Self::Codex
-        } else if m.contains("gemini") {
+        } else if m.contains("gemini") || m.starts_with("google/") || m.contains("gemma") {
             Self::Gemini
         } else {
             Self::Default // Claude, Llama, Mistral, etc.
@@ -222,6 +232,14 @@ mod tests {
     fn for_model_gemini() {
         assert_eq!(Toolset::for_model("gemini-2.5-pro"), Toolset::Gemini);
         assert_eq!(Toolset::for_model("gemini-1.5-flash"), Toolset::Gemini);
+        assert_eq!(
+            Toolset::for_model("openrouter/google/gemma-4-26b-a4b-it:free"),
+            Toolset::Gemini
+        );
+        assert_eq!(
+            Toolset::for_model("openrouter/google/gemini-2.5-flash"),
+            Toolset::Gemini
+        );
     }
 
     #[test]
@@ -229,6 +247,10 @@ mod tests {
         assert_eq!(Toolset::for_model("llama-3-70b"), Toolset::Default);
         assert_eq!(Toolset::for_model("mistral-large"), Toolset::Default);
         assert_eq!(Toolset::for_model("unknown-model"), Toolset::Default);
+        assert_eq!(
+            Toolset::for_model("openrouter/anthropic/claude-sonnet-4"),
+            Toolset::Default
+        );
     }
 
     // -- Toolset::from_name

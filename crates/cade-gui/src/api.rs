@@ -1,0 +1,258 @@
+use js_sys::Reflect;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response, TextDecoder};
+
+/// Low-level HTTP request to the CADE server.
+pub async fn api_request(
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    api_key: &str,
+) -> Result<String, String> {
+    let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
+    let opts = RequestInit::new();
+    opts.set_method(method);
+    opts.set_mode(RequestMode::Cors);
+
+    if let Some(body_str) = body {
+        let js_body = JsValue::from_str(body_str);
+        opts.set_body(&js_body);
+    }
+
+    let request = Request::new_with_str_and_init(path, &opts).map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Content-Type", "application/json")
+        .map_err(|e| format!("{:?}", e))?;
+
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+    let resp: Response = resp_value.dyn_into().map_err(|e| format!("{:?}", e))?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(format!("HTTP error: {}", status));
+    }
+
+    let text_value = JsFuture::from(resp.text().map_err(|e| format!("{:?}", e))?)
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+    Ok(text_value.as_string().unwrap_or_default())
+}
+
+// ── Typed wrappers ────────────────────────────────────────────────────────
+
+/// Fetch the list of all agents from the server.
+pub async fn list_agents(api_key: &str) -> Result<Vec<cade_api_types::AgentInfo>, String> {
+    let body = api_request("GET", "/v1/agents", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Fetch all messages for a given agent.
+pub async fn get_messages(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<Vec<cade_api_types::ChatMessage>, String> {
+    let path = format!("/v1/agents/{agent_id}/messages");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Send a message via the streaming SSE endpoint and call `on_event` for every
+/// parsed event.  Returns `Ok(())` after the `[DONE]` sentinel.
+pub async fn stream_messages<F>(
+    agent_id: &str,
+    input: &str,
+    api_key: &str,
+    mut on_event: F,
+) -> Result<(), String>
+where
+    F: FnMut(cade_api_types::StreamEvent),
+{
+    let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
+    let path = format!("/v1/agents/{agent_id}/messages/stream");
+    let body_str = serde_json::json!({ "input": input }).to_string();
+
+    let opts = RequestInit::new();
+    opts.set_method("POST");
+    opts.set_mode(RequestMode::Cors);
+    let js_body = JsValue::from_str(&body_str);
+    opts.set_body(&js_body);
+
+    let request = Request::new_with_str_and_init(&path, &opts).map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Content-Type", "application/json")
+        .map_err(|e| format!("{:?}", e))?;
+
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+    let resp: Response = resp_value.dyn_into().map_err(|e| format!("{:?}", e))?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP error: {}", resp.status()));
+    }
+
+    let stream = resp.body().ok_or_else(|| "No response body".to_string())?;
+    let reader: ReadableStreamDefaultReader = stream.get_reader().dyn_into().map_err(|e| format!("{:?}", e))?;
+    let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
+
+    let mut buffer = String::new();
+
+    loop {
+        let result = JsFuture::from(reader.read())
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+
+        let done = Reflect::get(&result, &JsValue::from_str("done"))
+            .map(|v| v.as_bool().unwrap_or(false))
+            .unwrap_or(false);
+
+        if done {
+            break;
+        }
+
+        let value = Reflect::get(&result, &JsValue::from_str("value"))
+            .map_err(|e| format!("{:?}", e))?;
+
+        if value.is_null() || value.is_undefined() {
+            continue;
+        }
+
+        let uint8array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{:?}", e))?;
+        let chunk = decoder
+            .decode_with_buffer_source(&uint8array.into())
+            .map_err(|e| format!("{:?}", e))?;
+
+        buffer.push_str(&chunk);
+
+        // Drain complete SSE events (separated by \n\n)
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_str = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+            dispatch_sse_lines(&event_str, &mut on_event)?;
+        }
+    }
+
+    // Process any remaining data after the stream closes
+    dispatch_sse_lines(&buffer, &mut on_event)?;
+
+    Ok(())
+}
+
+// ── Conversations ─────────────────────────────────────────────────────────
+
+/// Fetch all conversations for an agent.
+pub async fn list_conversations(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<Vec<cade_api_types::ConversationInfo>, String> {
+    let path = format!("/v1/agents/{agent_id}/conversations");
+    let body = api_request("GET", &path, None, api_key).await?;
+    // Server returns { "conversations": [...] }
+    let map: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))?;
+    let arr = map["conversations"]
+        .as_array()
+        .ok_or_else(|| "missing conversations array".to_string())?
+        .clone();
+    serde_json::from_value(serde_json::Value::Array(arr))
+        .map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Create a new conversation for an agent.
+pub async fn create_conversation(
+    agent_id: &str,
+    title: Option<&str>,
+    api_key: &str,
+) -> Result<cade_api_types::ConversationInfo, String> {
+    let path = format!("/v1/agents/{agent_id}/conversations");
+    let mut body = serde_json::json!({});
+    if let Some(t) = title {
+        body["title"] = serde_json::Value::String(t.to_string());
+    }
+    let resp = api_request("POST", &path, Some(&body.to_string()), api_key).await?;
+    serde_json::from_str(&resp).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Delete a conversation.
+pub async fn delete_conversation(
+    agent_id: &str,
+    conv_id: &str,
+    api_key: &str,
+) -> Result<(), String> {
+    let path = format!("/v1/agents/{agent_id}/conversations/{conv_id}");
+    api_request("DELETE", &path, None, api_key).await?;
+    Ok(())
+}
+
+// ── Providers ─────────────────────────────────────────────────────────────
+
+/// Fetch all configured providers (API keys are never returned).
+pub async fn list_providers(api_key: &str) -> Result<serde_json::Value, String> {
+    let body = api_request("GET", "/v1/providers", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Add a new provider.
+pub async fn add_provider(
+    name: &str,
+    kind: &str,
+    api_key_val: Option<&str>,
+    base_url: Option<&str>,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::json!({ "name": name, "kind": kind });
+    if let Some(k) = api_key_val {
+        body["api_key"] = serde_json::Value::String(k.to_string());
+    }
+    if let Some(u) = base_url {
+        body["base_url"] = serde_json::Value::String(u.to_string());
+    }
+    let resp = api_request("POST", "/v1/providers", Some(&body.to_string()), api_key).await?;
+    serde_json::from_str(&resp).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Remove a provider by name.
+pub async fn remove_provider(name: &str, api_key: &str) -> Result<(), String> {
+    let path = format!("/v1/providers/{name}");
+    api_request("DELETE", &path, None, api_key).await?;
+    Ok(())
+}
+
+/// Fetch provider presets (built-in shortcuts like openrouter, groq, etc.).
+pub async fn list_presets(api_key: &str) -> Result<serde_json::Value, String> {
+    let body = api_request("GET", "/v1/providers/presets", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Parse `data: ...` lines from a single SSE event block and dispatch to `on_event`.
+fn dispatch_sse_lines<F>(block: &str, on_event: &mut F) -> Result<(), String>
+where
+    F: FnMut(cade_api_types::StreamEvent),
+{
+    for line in block.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            let trimmed = data.trim();
+            if trimmed == "[DONE]" {
+                return Ok(()); // signal end — let caller decide what to do
+            }
+            if let Ok(event) = serde_json::from_str::<cade_api_types::StreamEvent>(trimmed) {
+                on_event(event);
+            }
+        }
+    }
+    Ok(())
+}

@@ -209,6 +209,20 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
 }
 
 impl OpenAiProvider {
+    /// Return a human-readable label for this provider instance.
+    /// Used in error messages so users see "OpenRouter" instead of "OpenAI".
+    fn provider_label(&self) -> &'static str {
+        if self.base_url.contains("openrouter.ai") {
+            "OpenRouter"
+        } else if self.base_url.contains("api.groq.com") {
+            "Groq"
+        } else if self.base_url != OPENAI_URL {
+            "OpenAI-compatible"
+        } else {
+            "OpenAI"
+        }
+    }
+
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
 
@@ -454,6 +468,8 @@ impl LlmProvider for OpenAiProvider {
                 body["include_reasoning"] = true.into();
             }
 
+            let provider_label = self.provider_label();
+
             retry_with_backoff(
                 "OpenAI::complete",
                 3,
@@ -463,6 +479,7 @@ impl LlmProvider for OpenAiProvider {
                     let base_url = self.base_url.clone();
                     let api_key = self.api_key.clone();
                     let body = body.clone();
+                    let label = provider_label;
                     async move {
                         let mut req = client.post(&base_url).json(&body);
                         if !api_key.is_empty() {
@@ -472,7 +489,7 @@ impl LlmProvider for OpenAiProvider {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let text = resp.text().await.unwrap_or_default();
-                            return Err(provider_error("OpenAI", status, &text));
+                            return Err(provider_error(label, status, &text));
                         }
                         Ok(Self::parse_response(&resp.json::<Value>().await?))
                     }
@@ -530,6 +547,8 @@ impl LlmProvider for OpenAiProvider {
             body["include_reasoning"] = true.into();
         }
 
+        let provider_label = self.provider_label();
+
         let resp = retry_with_backoff(
             "OpenAI::stream",
             3,
@@ -539,6 +558,7 @@ impl LlmProvider for OpenAiProvider {
                 let base_url = self.base_url.clone();
                 let api_key = self.api_key.clone();
                 let body = body.clone();
+                let label = provider_label;
                 async move {
                     let mut req = client.post(&base_url).json(&body);
                     if !api_key.is_empty() {
@@ -548,7 +568,7 @@ impl LlmProvider for OpenAiProvider {
                     if !resp.status().is_success() {
                         let status = resp.status();
                         let text = resp.text().await.unwrap_or_default();
-                        return Err(provider_error("OpenAI", status, &text));
+                        return Err(provider_error(label, status, &text));
                     }
                     Ok(resp)
                 }
@@ -738,6 +758,8 @@ impl LlmProvider for OpenAiProvider {
                 }
             }
 
+            let provider_label = self.provider_label();
+
             let res = retry_with_backoff(
                 "OpenAI::complete_structured",
                 3,
@@ -747,6 +769,7 @@ impl LlmProvider for OpenAiProvider {
                     let base_url = self.base_url.clone();
                     let api_key = self.api_key.clone();
                     let body = body.clone();
+                    let label = provider_label;
                     async move {
                         let mut req = client.post(&base_url).json(&body);
                         if !api_key.is_empty() {
@@ -756,7 +779,7 @@ impl LlmProvider for OpenAiProvider {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let text = resp.text().await.unwrap_or_default();
-                            return Err(provider_error("OpenAI", status, &text));
+                            return Err(provider_error(label, status, &text));
                         }
                         let parsed = Self::parse_response(&resp.json::<Value>().await?);
                         Ok(parsed)

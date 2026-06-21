@@ -36,6 +36,7 @@ parking_lot.workspace  = true
 tiktoken-rs            = "0.11"
 once_cell              = "1.20"
 llm_providers          = "0.6"
+rand                   = "0.9"
 
 [dev-dependencies]
 tempfile.workspace = true

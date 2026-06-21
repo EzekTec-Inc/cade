@@ -16,8 +16,9 @@ serde.workspace      = true
 serde_json.workspace = true
 urlencoding.workspace = true
 wasm-bindgen         = "0.2"
-web-sys              = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "Headers"] }
 wasm-bindgen-futures = "0.4"
+js-sys               = "0.3"
+web-sys              = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "TextDecoder"] }
 gloo-timers          = { version = "0.2", features = ["futures"] }
 
 # Dioxus for full responsive HTML/CSS UI

@@ -56,6 +56,66 @@ pub struct ChatMessage {
     pub conversation_id: Option<String>,
 }
 
+/// A conversation associated with an agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationInfo {
+    pub id: String,
+    pub agent_id: String,
+    pub title: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub message_count: i64,
+}
+
+/// A single event from the server's SSE stream (`POST /v1/agents/:id/messages/stream`).
+///
+/// The `message_type` discriminator identifies the event kind, while `data`
+/// holds all other fields via serde `flatten`:
+///
+/// | `message_type`        | Extra fields                                  |
+/// |-----------------------|-----------------------------------------------|
+/// | `stream_start`        | `conversation_id`, `run_id` (optional)        |
+/// | `assistant_message`   | `content` (string, possibly incremental)      |
+/// | `reasoning_message`   | `reasoning` (string)                          |
+/// | `tool_call_message`   | `tool_call` `{ id, name, arguments }`         |
+/// | `tool_result_message` | `tool_result` `{ id, name, output, is_error }`|
+/// | `usage_statistics`    | `input_tokens`, `output_tokens`, `model`…     |
+/// | `finish_reason`       | `reason` (string)                             |
+/// | `error`               | `error` (string)                              |
+///
+/// The wire format always carries `message_type` as a top-level key; extra
+/// fields are merged into `data` so the GUI can access them without needing
+/// a dedicated variant per type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamEvent {
+    #[serde(default)]
+    pub message_type: String,
+    /// Catch-all for every field other than `message_type`.
+    #[serde(flatten)]
+    pub data: serde_json::Value,
+}
+
+impl StreamEvent {
+    pub fn msg_type(&self) -> &str {
+        self.message_type.as_str()
+    }
+
+    /// Extract `content` from an `assistant_message` (or any event carrying it).
+    pub fn content(&self) -> Option<&str> {
+        self.data.get("content").and_then(|v| v.as_str())
+    }
+
+    /// Extract `reasoning` from a `reasoning_message`.
+    pub fn reasoning(&self) -> Option<&str> {
+        self.data.get("reasoning").and_then(|v| v.as_str())
+    }
+
+    /// Extract the error string from an `error` event.
+    pub fn error(&self) -> Option<&str> {
+        self.data.get("error").and_then(|v| v.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +201,63 @@ mod tests {
         let wire = r#"{"id":"m","role":"tool","content":{"tool":"bash","output":"ok"}}"#;
         let m: ChatMessage = serde_json::from_str(wire).expect("parse structured content");
         assert!(m.content.is_object(), "content should be a JSON object");
+    }
+
+    // -- StreamEvent
+
+    #[test]
+    fn stream_event_parses_assistant_message() {
+        let wire = r#"{"message_type":"assistant_message","content":"Hello, world!"}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), "assistant_message");
+        assert_eq!(e.content(), Some("Hello, world!"));
+    }
+
+    #[test]
+    fn stream_event_parses_stream_start() {
+        let wire = r#"{"message_type":"stream_start","conversation_id":"conv-1","run_id":"run-1"}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), "stream_start");
+        assert_eq!(
+            e.data.get("conversation_id").and_then(|v| v.as_str()),
+            Some("conv-1")
+        );
+        assert_eq!(
+            e.data.get("run_id").and_then(|v| v.as_str()),
+            Some("run-1")
+        );
+    }
+
+    #[test]
+    fn stream_event_parses_reasoning_message() {
+        let wire = r#"{"message_type":"reasoning_message","reasoning":"thinking step..."}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), "reasoning_message");
+        assert_eq!(e.reasoning(), Some("thinking step..."));
+    }
+
+    #[test]
+    fn stream_event_parses_error() {
+        let wire = r#"{"message_type":"error","error":"LLM call failed"}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), "error");
+        assert_eq!(e.error(), Some("LLM call failed"));
+    }
+
+    #[test]
+    fn stream_event_parses_tool_call() {
+        let wire = r#"{"message_type":"tool_call_message","tool_call":{"id":"tc1","name":"bash","arguments":"{}"}}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), "tool_call_message");
+        let tc = e.data.get("tool_call").expect("tool_call present");
+        assert_eq!(tc["name"].as_str(), Some("bash"));
+    }
+
+    #[test]
+    fn stream_event_defaults_message_type() {
+        let wire = r#"{"some":"thing"}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), ""); // default empty
+        assert_eq!(e.data.get("some").and_then(|v| v.as_str()), Some("thing"));
     }
 }

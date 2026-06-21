@@ -91,7 +91,11 @@ const CHARS_PER_TOKEN: usize = 3;
 ///   * `anthropic/*`  → `anthropic/claude-haiku-4-5`
 ///   * `openai/*`     → `openai/gpt-4o-mini`
 ///   * `gemini/*`     → `gemini/gemini-2.5-flash`
-///   * `openrouter/*` → `openrouter/z-ai/glm-4.5-air:free` (free tier)
+///   * `openrouter/*:<free>` → passthrough (free-tier models share the same
+///     strict 20 RPM / 200 RPD rate limit; using a different free model for
+///     compaction would compete with the primary for the same quota).
+///   * `openrouter/*` → `openrouter/z-ai/glm-4.5-air:free` (paid tier — cheap
+///     enough to keep costs low without competing for the primary quota).
 ///   * anything else  → passthrough (e.g. `ollama/*` runs locally; unknown
 ///     providers don't have a guaranteed cheaper variant).
 ///
@@ -100,6 +104,12 @@ const CHARS_PER_TOKEN: usize = 3;
 /// degrading an already-cheap configuration.
 pub(crate) fn default_compaction_model(primary_model: &str) -> String {
     if primary_model.starts_with("openrouter/") {
+        // Free-tier OpenRouter models (ending in `:free`) share a strict
+        // 20 RPM / 200 RPD rate limit.  Using a different free model for
+        // compaction would compete for the same limited quota, so passthrough.
+        if primary_model.ends_with(":free") {
+            return primary_model.to_string();
+        }
         return "openrouter/z-ai/glm-4.5-air:free".to_string();
     }
     if primary_model.starts_with("anthropic/") {
