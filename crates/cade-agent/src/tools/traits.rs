@@ -7,6 +7,43 @@ use crate::Result;
 use serde_json::Value;
 use std::sync::Arc;
 
+/// Runtime context that tools can use to interact with the user and
+/// the CADE host environment.
+///
+/// Provides a channel for tools to request mid-execution user permission
+/// for sensitive sub-operations (Pillar 3.1).
+#[async_trait::async_trait]
+pub trait ToolContext: Send + Sync {
+    /// Ask the user for permission to perform a sensitive operation.
+    ///
+    /// `permission` is a short description of the operation (e.g. "bash.exec")
+    /// `pattern` is the specific target (e.g. a file path or command).
+    ///
+    /// Returns `true` if the user granted permission, `false` if denied.
+    async fn ask_permission(&self, permission: &str, pattern: &str) -> bool;
+}
+
+/// A default no-op implementation that always denies permission.
+/// Used in headless / non-interactive contexts.
+pub struct DenyAllContext;
+
+#[async_trait::async_trait]
+impl ToolContext for DenyAllContext {
+    async fn ask_permission(&self, _permission: &str, _pattern: &str) -> bool {
+        false
+    }
+}
+
+/// A context that always grants permission (/yolo mode).
+pub struct AllowAllContext;
+
+#[async_trait::async_trait]
+impl ToolContext for AllowAllContext {
+    async fn ask_permission(&self, _permission: &str, _pattern: &str) -> bool {
+        true
+    }
+}
+
 /// Strongly-typed, compiler-enforced trait for CADE's core built-in tools.
 pub trait BuiltInTool: Send + Sync {
     type Args: serde::de::DeserializeOwned + Send;

@@ -30,6 +30,7 @@ pub mod overlay;
 pub mod overlay_component;
 pub mod question;
 pub mod session_tree;
+pub mod signals;
 pub mod skills;
 pub mod slots;
 pub mod subagent_tracker;

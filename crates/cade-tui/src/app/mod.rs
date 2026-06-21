@@ -5,6 +5,7 @@ pub mod help_overlay;
 pub mod input;
 pub mod layout;
 pub mod password;
+pub mod permission_overlay;
 pub mod questions;
 pub mod render;
 pub mod state;
@@ -987,6 +988,10 @@ pub struct TuiApp {
     pub mcp_processed: bool,
     /// When true, the MCP Engine Status card has been closed/dismissed after settling.
     pub mcp_closed: bool,
+
+    // -- Declarative signal system (Pillar 1)
+    /// Registry of state signals for declarative render triggers.
+    pub signals: crate::signals::SignalRegistry,
 }
 
 impl TuiApp {
@@ -1107,6 +1112,7 @@ impl TuiApp {
             startup_ready: None,
             mcp_processed: false,
             mcp_closed: false,
+            signals: crate::signals::SignalRegistry::new(),
         }
     }
 

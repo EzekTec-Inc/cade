@@ -23,6 +23,7 @@ impl TuiApp {
             // Increment pending_lines so the "↓ N new" badge appears.
             self.pending_lines += 1;
         }
+        self.signals.content_changed.write(true);
         let scroll_before = self.scroll;
         self.draw()?;
         if is_tool_result && self.scroll != scroll_before {
@@ -71,6 +72,7 @@ impl TuiApp {
     pub fn push_streaming_chunk(&mut self, text: &str) -> Result<()> {
         self.commit_reasoning_inner();
         if !self.streaming_active {
+            self.signals.streaming.write(true);
             // First chunk of a new agent response — always snap to bottom so the
             // analysis is immediately visible.  push(ToolResult) may have scrolled
             // up to show the ToolCall header; that view is correct while the tool
@@ -132,6 +134,7 @@ impl TuiApp {
             is_visible: true,
             scroll_offset: 0,
         });
+        self.signals.plan_changed.write(true);
         self.draw_dirty = true;
     }
 
@@ -142,6 +145,7 @@ impl TuiApp {
             && let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id)
         {
             step.is_done = done;
+            self.signals.plan_changed.write(true);
             self.draw_dirty = true;
             return true;
         }
@@ -176,6 +180,7 @@ impl TuiApp {
     /// Commit any in-progress assistant streaming to `lines`.
     pub fn commit_streaming(&mut self) -> Result<()> {
         self.commit_streaming_inner();
+        self.signals.streaming.write(false);
         // Snap to bottom when streaming commits — the completed response must
         // be visible.  Only mid-stream chunks (push_streaming_chunk) preserve
         // the user's scroll position; once the response is fully committed here
@@ -351,6 +356,7 @@ impl TuiApp {
 
     pub fn update_mode(&mut self, mode: PermissionMode) {
         self.mode = mode;
+        self.signals.mode_changed.write(true);
     }
 
     pub fn update_agent_name(&mut self, name: String) {
@@ -370,6 +376,7 @@ impl TuiApp {
             text: arc.clone(),
             started: Instant::now(),
         });
+        self.signals.thinking.write(true);
         arc
     }
 
@@ -389,6 +396,7 @@ impl TuiApp {
             .map(|ts| ts.started.elapsed().as_secs())
             .unwrap_or(0);
         self.thinking = None;
+        self.signals.thinking.write(false);
         secs
     }
 

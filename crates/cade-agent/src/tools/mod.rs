@@ -3,6 +3,7 @@
 pub mod ask;
 pub mod bash;
 pub mod bash_agent;
+pub mod bash_permission;
 pub mod catalog;
 #[cfg(feature = "desktop")]
 pub mod desktop;

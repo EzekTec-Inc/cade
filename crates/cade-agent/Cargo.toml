@@ -13,6 +13,8 @@ web     = ["dep:cade-web"]
 mcp     = ["dep:cade-mcp"]
 backend-docker = []
 backend-ssh = []
+plugin-js  = ["dep:rquickjs", "dep:glob"]
+plugin-wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 
 [dependencies]
 # -- Workspace crates
@@ -48,6 +50,11 @@ globset.workspace      = true
 ignore.workspace       = true
 walkdir.workspace      = true
 dirs.workspace         = true
+# -- Plugin runtimes (optional, feature-gated)
+rquickjs      = { version = "0.12", optional = true, default-features = false, features = ["macro", "parallel"] }
+wasmtime      = { version = "29", optional = true, default-features = false }
+wasmtime-wasi = { version = "29", optional = true }
+glob          = { version = "0.3", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"

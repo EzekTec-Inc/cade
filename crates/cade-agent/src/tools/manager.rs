@@ -352,6 +352,60 @@ pub async fn is_mcp_write_tool(name: &str, mcp: &McpManager) -> bool {
     false
 }
 
+// -- Plugin tool schema loading (Pillar 2.3)
+
+/// A dynamically loaded plugin tool descriptor.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PluginToolSchema {
+    /// Canonical tool name (e.g. "my_plugin_do_thing").
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// JSON Schema object for the tool's input parameters.
+    #[serde(default)]
+    pub parameters: Value,
+}
+
+impl PluginToolSchema {
+    /// Convert this plugin schema to the same JSON schema format
+    /// used by native tools (the `schemas_for_toolset` output).
+    pub fn to_schema_value(&self) -> Value {
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        })
+    }
+}
+
+/// Parse a JSON array of plugin tool schemas into the standard
+/// CADE schema format.  This is the Zod-to-JsonSchema bridge:
+/// plugin authors write a simple `{name, description, parameters}`
+/// schema, and this function normalises it for the tool registry.
+///
+/// Each entry in the JSON array should be an object with:
+///   - `name` (string, required)
+///   - `description` (string, required)
+///   - `parameters` (object, optional — JSON Schema draft-07)
+///
+/// Returns `Vec<Value>` suitable for appending to the output of
+/// `schemas_for_toolset` or passing to `all_schemas`.
+pub fn parse_plugin_schemas(json_schemas: &str) -> Result<Vec<Value>> {
+    let schemas: Vec<PluginToolSchema> = serde_json::from_str(json_schemas)
+        .map_err(|e| crate::Error::custom(format!("Failed to parse plugin tool schemas: {e}")))?;
+
+    Ok(schemas.iter().map(|s| s.to_schema_value()).collect())
+}
+
+/// Merge a list of plugin tool schemas into an existing schema list.
+/// Plugin schemas are appended after all native schemas.
+pub fn merge_plugin_schemas(mut base: Vec<Value>, plugins: &[PluginToolSchema]) -> Vec<Value> {
+    for plugin in plugins {
+        base.push(plugin.to_schema_value());
+    }
+    base
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
