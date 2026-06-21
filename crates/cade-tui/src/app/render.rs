@@ -457,7 +457,9 @@ pub(crate) fn render_frame(
             input_chunks[0],
         );
 
-        let input_placeholder = if queued_count > 0 {
+        let input_placeholder = if !textarea.is_empty() {
+            String::new()
+        } else if queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
             "Type a message or paste code…".to_string()
