@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CADE Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: #0f1115;
+    color: #e5e7eb;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+</style>
+<!-- Add Tailwind CSS for pixel-perfect design matching CADE -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          cadeDark: '#0f1115',
+          cadeCard: '#16171d',
+          cadeBorder: '#272833',
+          cadeAccent: '#ff7c5c',
+        }
+      }
+    }
+  }
+</script>
+
+<script type="module">
+import init, * as bindings from '/cade-gui-e22a177c4b6f16a6.js';
+const wasm = await init({ module_or_path: '/cade-gui-e22a177c4b6f16a6_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+<link rel="modulepreload" href="/cade-gui-e22a177c4b6f16a6.js" crossorigin="anonymous" integrity="sha384-ndQOoIT4gL1MhVNbuyNCMmwZq9GmsFUeL7rhFsORT6MN5drerrBpqHBwoIUC9Uxy"><link rel="modulepreload" href="/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-RcT1TTE6vM8rs3P3ajvnSF3QdUo20QUCCFsqcYiSSN1twj4RkS3LQdjWHJJF1Xq6"><link rel="modulepreload" href="/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="preload" href="/cade-gui-e22a177c4b6f16a6_bg.wasm" crossorigin="anonymous" integrity="sha384-0dNPxu6oDbqwY+yaE1O3ZkonxnISwYT5Gw6IMaio8ZkgfUFtzrGiJJss0/enUP6D" as="fetch" type="application/wasm"></head>
+<body class="bg-[#0f1115] text-[#e5e7eb]">
+<div id="cade_gui_canvas" class="h-screen w-screen flex"></div>
+</body>
+</html>
