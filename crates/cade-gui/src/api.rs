@@ -55,12 +55,16 @@ pub async fn list_agents(api_key: &str) -> Result<Vec<cade_api_types::AgentInfo>
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 
-/// Fetch all messages for a given agent.
+/// Fetch messages for a given agent, optionally filtered by conversation.
 pub async fn get_messages(
     agent_id: &str,
     api_key: &str,
+    conversation_id: Option<&str>,
 ) -> Result<Vec<cade_api_types::ChatMessage>, String> {
-    let path = format!("/v1/agents/{agent_id}/messages");
+    let path = match conversation_id {
+        Some(cid) => format!("/v1/agents/{agent_id}/messages?conversation_id={cid}"),
+        None => format!("/v1/agents/{agent_id}/messages"),
+    };
     let body = api_request("GET", &path, None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
@@ -71,6 +75,7 @@ pub async fn stream_messages<F>(
     agent_id: &str,
     input: &str,
     api_key: &str,
+    conversation_id: Option<&str>,
     mut on_event: F,
 ) -> Result<(), String>
 where
@@ -78,7 +83,11 @@ where
 {
     let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
     let path = format!("/v1/agents/{agent_id}/messages/stream");
-    let body_str = serde_json::json!({ "input": input }).to_string();
+    let mut body_obj = serde_json::json!({ "input": input });
+    if let Some(cid) = conversation_id {
+        body_obj["conversation_id"] = serde_json::Value::String(cid.to_string());
+    }
+    let body_str = body_obj.to_string();
 
     let opts = RequestInit::new();
     opts.set_method("POST");
@@ -236,6 +245,82 @@ pub async fn remove_provider(name: &str, api_key: &str) -> Result<(), String> {
 pub async fn list_presets(api_key: &str) -> Result<serde_json::Value, String> {
     let body = api_request("GET", "/v1/providers/presets", None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────
+
+/// Fetch a single agent by ID.
+pub async fn get_agent(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<cade_api_types::AgentInfo, String> {
+    let path = format!("/v1/agents/{agent_id}");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+// ── Memory blocks ─────────────────────────────────────────────────────────
+
+/// List memory blocks for an agent.
+pub async fn list_memory_blocks(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let path = format!("/v1/agents/{agent_id}/memory");
+    let body = api_request("GET", &path, None, api_key).await?;
+    let map: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))?;
+    let arr = map["blocks"]
+        .as_array()
+        .ok_or_else(|| "missing blocks array".to_string())?
+        .clone();
+    Ok(arr)
+}
+
+// ── Tools / MCP ───────────────────────────────────────────────────────────
+
+/// List all registered tools.
+pub async fn list_tools(api_key: &str) -> Result<serde_json::Value, String> {
+    let body = api_request("GET", "/v1/tools", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// List MCP servers and their exposed tools.
+pub async fn list_mcp_servers(api_key: &str) -> Result<Vec<serde_json::Value>, String> {
+    let body = api_request("GET", "/v1/mcp", None, api_key).await?;
+    let map: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))?;
+    let arr = map["servers"]
+        .as_array()
+        .ok_or_else(|| "missing servers array".to_string())?
+        .clone();
+    Ok(arr)
+}
+
+// ── Models ────────────────────────────────────────────────────────────────
+
+/// List available models from all configured providers.
+pub async fn list_models(api_key: &str) -> Result<serde_json::Value, String> {
+    let body = api_request("GET", "/v1/models", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+// ── Events ────────────────────────────────────────────────────────────────
+
+/// List events for an agent.
+pub async fn list_events(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let path = format!("/v1/agents/{agent_id}/events?limit=50");
+    let body = api_request("GET", &path, None, api_key).await?;
+    let map: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))?;
+    let arr = map["events"]
+        .as_array()
+        .ok_or_else(|| "missing events array".to_string())?
+        .clone();
+    Ok(arr)
 }
 
 /// Parse `data: ...` lines from a single SSE event block and dispatch to `on_event`.

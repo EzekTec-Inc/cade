@@ -114,6 +114,53 @@ impl StreamEvent {
     pub fn error(&self) -> Option<&str> {
         self.data.get("error").and_then(|v| v.as_str())
     }
+
+    /// Extract `tool_name` from a `tool_call_message` or `tool_result_message`.
+    pub fn tool_name(&self) -> Option<&str> {
+        self.data.get("tool_name").and_then(|v| v.as_str())
+    }
+
+    /// Extract `tool_args` from a `tool_call_message`.
+    pub fn tool_args(&self) -> Option<&str> {
+        self.data.get("tool_args").and_then(|v| v.as_str())
+    }
+
+    /// Extract `tool_call_id` from a `tool_call_message` / `tool_result_message`.
+    pub fn tool_call_id(&self) -> Option<&str> {
+        self.data.get("tool_call_id").and_then(|v| v.as_str())
+    }
+
+    /// Deserialize the `tool_call` object (id, name, arguments).
+    pub fn tool_call(&self) -> Option<ToolCallData> {
+        self.data
+            .get("tool_call")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// Deserialize the `tool_result` object (id, name, output, is_error).
+    pub fn tool_result(&self) -> Option<ToolResultData> {
+        self.data
+            .get("tool_result")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+}
+
+/// A tool call within a `tool_call_message` event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallData {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// A tool result within a `tool_result_message` event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolResultData {
+    pub id: String,
+    pub name: String,
+    pub output: String,
+    #[serde(default)]
+    pub is_error: bool,
 }
 
 #[cfg(test)]

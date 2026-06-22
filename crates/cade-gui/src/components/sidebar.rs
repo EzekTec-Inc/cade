@@ -57,6 +57,7 @@ pub fn Sidebar() -> Element {
                     nav_item { active_page: state.active_page, page: SelectedPage::MemoryBlocks, icon: "\u{1f9e0}", label: "Memory blocks" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Tools, icon: "\u{1f6e0}", label: "Tools" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Models, icon: "\u{2699}", label: "Models" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Providers, icon: "\u{1f4e1}", label: "Providers" }
                     div { class: "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer",
                         div { class: "flex items-center space-x-2.5",
                             span { class: "text-sm", "\u{2022}\u{2022}\u{2022}" }
