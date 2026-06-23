@@ -541,9 +541,47 @@ pub fn search_memory_hybrid(
     let sem_labels: Vec<String> = sem_hits.iter().map(|(_, _, l, _)| l.clone()).collect();
     let fused = super::embedding::reciprocal_rank_fusion(&kw_labels, &sem_labels, 60.0);
 
+    // ── Temporal decay ────────────────────────────────────────────────────
+    // Apply a time-decay factor to each fused result: memories older than
+    // ~7 days (the half-life) score roughly half their original RRF weight.
+    //   decay = 1 / (1 + ln(1 + age_hours / 168))
+    const RRF_K: f64 = 60.0;
+    let now: f64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as f64;
+    let half_life_secs: f64 = 168.0 * 3600.0;
+
+    let mut scores: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+    for (rank, label) in kw_labels.iter().enumerate() {
+        *scores.entry(label.as_str()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+    }
+    for (rank, label) in sem_labels.iter().enumerate() {
+        *scores.entry(label.as_str()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+    }
+
+    let conn = db.get()?;
+    let mut decayed: Vec<(String, f64)> = Vec::new();
+    for label in &fused {
+        let rrf_score = scores.get(label.as_str()).copied().unwrap_or(1.0);
+        let updated_at: f64 = conn
+            .query_row(
+                "SELECT MAX(b.updated_at) FROM shared_memory_blocks b
+                 JOIN agent_memory_blocks amb ON amb.block_id = b.id
+                 WHERE amb.agent_id = ?1 AND b.label = ?2",
+                params![agent_id, label],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(now as i64) as f64;
+        let age_secs = (now - updated_at).max(0.0);
+        let decay = 1.0 / (1.0 + (1.0 + age_secs / half_life_secs).ln());
+        decayed.push((label.clone(), rrf_score * decay));
+    }
+    decayed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
     let mut out: Vec<(String, String, String)> = Vec::new();
-    for label in fused.iter().take(10) {
-        if let Some(row) = by_label.remove(label) {
+    for (label, _) in decayed.iter().take(10) {
+        if let Some(row) = by_label.remove(label.as_str()) {
             out.push(row);
         }
     }

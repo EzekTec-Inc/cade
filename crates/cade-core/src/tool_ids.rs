@@ -98,6 +98,8 @@ pub const UPDATE_MEMORY_TYPED: &str = "update_memory_typed";
 pub const UPDATE_MEMORY_FIELD: &str = "update_memory_field";
 pub const LINK_MEMORY_EVIDENCE: &str = "link_memory_evidence";
 pub const REFLECT: &str = "reflect";
+pub const RECALL: &str = "recall";
+pub const ANSWER: &str = "answer";
 
 // endregion: --- Checkpoints + artifacts (Phase 4)
 
@@ -121,6 +123,8 @@ pub const MEMORY_TOOL_IDS: &[&str] = &[
     ARCHIVAL_MEMORY_INSERT,
     ARCHIVAL_MEMORY_SEARCH,
     UPDATE_MEMORY_FIELD,
+    RECALL,
+    ANSWER,
 ];
 
 // endregion: --- Typed memory / provenance / reflection (Phase 5)
@@ -148,6 +152,8 @@ pub const META_TOOL_IDS: &[&str] = &[
     UPDATE_MEMORY_FIELD,
     LINK_MEMORY_EVIDENCE,
     REFLECT,
+    RECALL,
+    ANSWER,
     BROWSER_SCREENSHOT,
     WEB_SEARCH,
     FETCH_DOC,

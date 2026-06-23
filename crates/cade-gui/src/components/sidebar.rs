@@ -38,13 +38,7 @@ pub fn Sidebar() -> Element {
                     // Dashboard Group
                     div { class: "text-[10px] font-bold text-gray-500 px-3 pt-3 pb-1 tracking-wider uppercase", "Dashboard" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Dashboard, icon: "\u{1f39b}", label: "Dashboard" }
-                    a { href: "#", class: "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer",
-                        div { class: "flex items-center space-x-2.5",
-                            span { class: "text-sm", "\u{2328}" }
-                            span { "Code" }
-                        }
-                        span { class: "text-gray-600 text-xs", "\u{2197}" }
-                    }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Code, icon: "\u{2328}", label: "Code" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Chat, icon: "\u{1f4ac}", label: "Chat" }
 
                     // Development Group
@@ -58,13 +52,6 @@ pub fn Sidebar() -> Element {
                     nav_item { active_page: state.active_page, page: SelectedPage::Tools, icon: "\u{1f6e0}", label: "Tools" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Models, icon: "\u{2699}", label: "Models" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Providers, icon: "\u{1f4e1}", label: "Providers" }
-                    div { class: "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer",
-                        div { class: "flex items-center space-x-2.5",
-                            span { class: "text-sm", "\u{2022}\u{2022}\u{2022}" }
-                            span { "More" }
-                        }
-                        span { class: "text-gray-600 text-[10px]", "\u{25bc}" }
-                    }
                 }
             }
 

@@ -1,7 +1,16 @@
+pub mod agents;
+pub mod api_keys;
 pub mod chat;
+pub mod code;
 pub mod dashboard;
 pub mod login;
+pub mod logs_page;
+pub mod memory;
+pub mod models_page;
 pub mod providers;
+pub mod settings;
 pub mod sidebar;
 pub mod stubs;
 pub mod toast;
+pub mod tools_page;
+pub mod usage;

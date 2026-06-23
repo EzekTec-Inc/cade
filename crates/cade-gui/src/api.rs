@@ -250,6 +250,7 @@ pub async fn list_presets(api_key: &str) -> Result<serde_json::Value, String> {
 // ── Agents ────────────────────────────────────────────────────────────────
 
 /// Fetch a single agent by ID.
+#[allow(dead_code)]
 pub async fn get_agent(
     agent_id: &str,
     api_key: &str,
@@ -280,6 +281,7 @@ pub async fn list_memory_blocks(
 // ── Tools / MCP ───────────────────────────────────────────────────────────
 
 /// List all registered tools.
+#[allow(dead_code)]
 pub async fn list_tools(api_key: &str) -> Result<serde_json::Value, String> {
     let body = api_request("GET", "/v1/tools", None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
@@ -302,6 +304,36 @@ pub async fn list_mcp_servers(api_key: &str) -> Result<Vec<serde_json::Value>, S
 /// List available models from all configured providers.
 pub async fn list_models(api_key: &str) -> Result<serde_json::Value, String> {
     let body = api_request("GET", "/v1/models", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+// ── Metrics / Context Stats ───────────────────────────────────────────────
+
+/// Fetch agent metrics (token usage, costs, etc.).
+pub async fn get_metrics(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let path = format!("/v1/agents/{agent_id}/metrics");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Fetch agent context telemetry (budget, tokens, turns).
+pub async fn get_context_stats(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let path = format!("/v1/agents/{agent_id}/context_stats");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+// ── Server Config ─────────────────────────────────────────────────────────
+
+/// Fetch server configuration (provider, default_model, version).
+pub async fn get_config(api_key: &str) -> Result<serde_json::Value, String> {
+    let body = api_request("GET", "/v1/config", None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 

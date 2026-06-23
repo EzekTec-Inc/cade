@@ -10,6 +10,24 @@ const TYPED_CONFIDENCE_BOOST: f64 = 1.35;
 /// Memory types that receive the initial confidence boost.
 const BOOSTED_TYPES: &[&str] = &["decision", "constraint", "convention"];
 
+/// Memory types that are checked for contradictions.
+const CONFLICT_CHECKED_TYPES: &[&str] = &["decision", "constraint", "convention", "preference"];
+
+/// Negation markers used for contradiction detection.
+const NEGATION_MARKERS: &[&str] = &[
+    "not", "never", "don't", "dont", "doesn't", "doesnt", "won't", "wont",
+    "avoid", "forbid", "forbidden", "prohibit", "prohibited", "disallow",
+    "stop", "no ", "cannot", "can't", "cant", "mustn't", "mustnt",
+];
+
+/// A detected conflict between two memory blocks.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryConflict {
+    pub label_a: String,
+    pub label_b: String,
+    pub reason: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn upsert_memory_block_typed(
     db: &Db,
@@ -21,12 +39,47 @@ pub fn upsert_memory_block_typed(
     memory_type: Option<&str>,
     confidence: Option<f64>,
 ) -> Result<()> {
+    // ── Conflict detection (before upsert) ────────────────────────────────
+    let conflicts = if let Some(mt) = memory_type {
+        detect_memory_conflicts(db, agent_id, label, value, mt).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     // Core upsert first
     upsert_memory_block(db, agent_id, label, value, description, max_chars)?;
 
+    // Ensure the conflict detection table exists
+    let conn = db.get()?;
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            label_a TEXT NOT NULL,
+            label_b TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            resolved INTEGER NOT NULL DEFAULT 0,
+            detected_at INTEGER NOT NULL
+        );"
+    );
+
+    // Persist any detected conflicts
+    for conflict in &conflicts {
+        let _ = conn.execute(
+            "INSERT INTO memory_conflicts (agent_id, label_a, label_b, reason, detected_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                agent_id,
+                conflict.label_a,
+                conflict.label_b,
+                conflict.reason,
+                now_ts(),
+            ],
+        );
+    }
+
     // Update typed columns (safe — ALTER TABLE already ran in migration 14)
     if memory_type.is_some() || confidence.is_some() {
-        let conn = db.get()?;
         if let Some(mt) = memory_type {
             let _ = conn.execute(
                 "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
@@ -50,6 +103,102 @@ pub fn upsert_memory_block_typed(
         }
     }
     Ok(())
+}
+
+/// Check for conflicts between a new memory value and existing blocks.
+///
+/// Returns a list of [`MemoryConflict`] structs describing each detected
+/// conflict.  Currently implements two checks:
+///
+/// 1. **Exact dedup** — SHA-256 hash match with an existing block for this
+///    agent.  If found, the upsert caller can treat this as a no-op.
+/// 2. **Category contradiction** — for `decision`, `constraint`, `convention`,
+///    and `preference` types, check whether the new value negates an existing
+///    block of the same type (or vice versa) using keyword markers.
+pub fn detect_memory_conflicts(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    value: &str,
+    memory_type: &str,
+) -> Result<Vec<MemoryConflict>> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut conflicts = Vec::new();
+    let conn = db.get()?;
+
+    // 1. Exact dedup via hash
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    let new_hash = hasher.finish();
+
+    let existing_blocks: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT b.id, b.label, b.value FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND b.label != ?2 AND b.memory_type = ?3"
+        )?;
+        let rows = stmt.query_map(params![agent_id, label, memory_type], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    for (_existing_id, existing_label, existing_value) in &existing_blocks {
+        let mut h = DefaultHasher::new();
+        existing_value.hash(&mut h);
+        if h.finish() == new_hash {
+            conflicts.push(MemoryConflict {
+                label_a: label.to_string(),
+                label_b: existing_label.clone(),
+                reason: format!("Exact duplicate of block '{}'", existing_label),
+            });
+        }
+    }
+
+    // 2. Category contradiction for decision/constraint/convention/preference types
+    if CONFLICT_CHECKED_TYPES.contains(&memory_type) && value.len() < 1000 {
+        let value_lower = value.to_lowercase();
+        let has_negation = NEGATION_MARKERS.iter().any(|m| value_lower.contains(m));
+
+        for (_existing_id, existing_label, existing_value) in &existing_blocks {
+            let existing_lower = existing_value.to_lowercase();
+            let existing_has_negation =
+                NEGATION_MARKERS.iter().any(|m| existing_lower.contains(m));
+
+            // One says X, the other says not-X
+            if has_negation != existing_has_negation {
+                // Check they share enough key-terms to be about the same topic
+                let new_words: std::collections::HashSet<&str> =
+                    value_lower.split_whitespace().collect();
+                let existing_words: std::collections::HashSet<&str> =
+                    existing_lower.split_whitespace().collect();
+                let overlap: Vec<&&str> = new_words
+                    .iter()
+                    .filter(|w| w.len() > 3 && existing_words.contains(*w))
+                    .collect();
+
+                if overlap.len() >= 2 {
+                    conflicts.push(MemoryConflict {
+                        label_a: label.to_string(),
+                        label_b: existing_label.clone(),
+                        reason: format!(
+                            "Potential contradiction with block '{}' — one statement negates the other on topic '{}'",
+                            existing_label,
+                            overlap[0],
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(conflicts)
 }
 
 /// Insert a memory evidence entry for a block.

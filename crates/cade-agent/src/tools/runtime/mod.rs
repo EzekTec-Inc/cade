@@ -192,6 +192,8 @@ impl ToolRuntime {
             UPDATE_MEMORY_FIELD => self.handle_update_memory_field(args).await,
             LINK_MEMORY_EVIDENCE => self.handle_link_memory_evidence(args).await,
             REFLECT => self.handle_reflect(args).await,
+            RECALL => self.handle_recall(args).await,
+            ANSWER => self.handle_answer(args).await,
 
             // -- Interactive tools — not handled here
             RUN_SUBAGENT | ASK_USER_QUESTION | ENTER_PLAN_MODE | EXIT_PLAN_MODE => {

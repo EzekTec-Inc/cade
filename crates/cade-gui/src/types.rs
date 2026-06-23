@@ -35,6 +35,7 @@ pub struct ToastMessage {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum ToastLevel {
     Info,
     Success,
@@ -47,7 +48,7 @@ pub enum ToastLevel {
 /// Fields are `Signal<T>` — a `Clone`-and-`Copy` smart pointer so the
 /// whole struct derives `Clone` and can be cheaply shared across
 /// components via `use_context`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct AppState {
     pub api_key: Signal<String>,
     pub active_page: Signal<SelectedPage>,

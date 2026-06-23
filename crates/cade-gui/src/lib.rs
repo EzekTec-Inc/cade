@@ -55,33 +55,32 @@ fn App() -> Element {
         let key = api_key;
         let state = app_state;
         let mut selected = selected_agent;
-        let mut msgs = messages;
         let mut convs = conversations;
-        let active_conv = active_conversation;
         spawn(async move {
             // Wait until an API key is configured
             while key().is_empty() {
                 gloo_timers::future::TimeoutFuture::new(200).await;
             }
 
-            // Silently poll — show a toast only for the initial agent fetch
+            // Fetch initial agent + conversations (silent poll; show toast only on failure)
             match api::list_agents(&key()).await {
                 Ok(list) => {
                     if let Some(first) = list.into_iter().next() {
+                        let agent_id = first.id.clone();
                         selected.set(Some(first));
+                        let _ = api::list_conversations(&agent_id, &key()).await.map(|list| convs.set(list));
                     }
                 }
                 Err(e) => add_toast(&state, ToastLevel::Error, "Failed to fetch agents", e),
             }
 
-            // Poll messages and conversations every 1.5s (silent — no toasts on poll errors)
+            // Poll conversations only (every 10s) — messages are loaded reactively
+            // when the user selects a conversation or switches agents (see ChatView).
             loop {
+                gloo_timers::future::TimeoutFuture::new(10000).await;
                 if let Some(agent) = selected() {
                     let _ = api::list_conversations(&agent.id, &key()).await.map(|list| convs.set(list));
-                    let conv_id = active_conv();
-                    let _ = api::get_messages(&agent.id, &key(), conv_id.as_deref()).await.map(|list| msgs.set(list));
                 }
-                gloo_timers::future::TimeoutFuture::new(1500).await;
             }
         });
     });
@@ -113,23 +112,23 @@ fn App() -> Element {
                     } else if (active_page)() == SelectedPage::Providers {
                         components::providers::ProvidersView {}
                     } else if (active_page)() == SelectedPage::Code {
-                        components::stubs::CodeView {}
+                        components::code::CodeView {}
                     } else if (active_page)() == SelectedPage::Agents {
-                        components::stubs::AgentsView {}
+                        components::agents::AgentsView {}
                     } else if (active_page)() == SelectedPage::Logs {
-                        components::stubs::LogsView {}
+                        components::logs_page::LogsView {}
                     } else if (active_page)() == SelectedPage::MemoryBlocks {
-                        components::stubs::MemoryBlocksView {}
+                        components::memory::MemoryBlocksView {}
                     } else if (active_page)() == SelectedPage::Tools {
-                        components::stubs::ToolsView {}
+                        components::tools_page::ToolsView {}
                     } else if (active_page)() == SelectedPage::Models {
-                        components::stubs::ModelsView {}
+                        components::models_page::ModelsView {}
                     } else if (active_page)() == SelectedPage::ApiKeys {
-                        components::stubs::ApiKeysView {}
+                        components::api_keys::ApiKeysView {}
                     } else if (active_page)() == SelectedPage::Usage {
-                        components::stubs::UsageView {}
+                        components::usage::UsageView {}
                     } else if (active_page)() == SelectedPage::Settings {
-                        components::stubs::SettingsView {}
+                        components::settings::SettingsView {}
                     } else {
                         components::dashboard::DashboardView {}
                     }

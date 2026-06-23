@@ -12,6 +12,25 @@ pub fn ChatView() -> Element {
         .map(|a| a.name.clone())
         .unwrap_or_else(|| "deep-thought-research-agent_copy".to_string());
 
+    // Load messages when the active conversation or selected agent changes.
+    // This replaces the old background-polling approach which would overwrite
+    // streaming content mid-stream.
+    use_effect(move || {
+        let conv_id = (state.active_conversation)();
+        let agent_id = (state.selected_agent)()
+            .map(|a| a.id.clone())
+            .unwrap_or_default();
+        let key = (state.api_key)();
+        let mut msgs = state.messages;
+        spawn(async move {
+            if !agent_id.is_empty() {
+                if let Ok(list) = api::get_messages(&agent_id, &key, conv_id.as_deref()).await {
+                    msgs.set(list);
+                }
+            }
+        });
+    });
+
     rsx! {
         div { class: "flex flex-1 h-full overflow-hidden",
             chat_sidebar {
@@ -52,6 +71,7 @@ fn chat_sidebar(
     selected_agent: Signal<Option<cade_api_types::AgentInfo>>,
     api_key: Signal<String>,
 ) -> Element {
+    let state = use_context::<AppState>();
     let mut show_new = use_signal(|| false);
     let mut new_title = use_signal(String::new);
 
@@ -66,7 +86,6 @@ fn chat_sidebar(
         let key = api_key();
         let mut convs = conversations;
         let mut active = active_conversation;
-        let state = use_context::<AppState>();
         spawn(async move {
             match api::create_conversation(&agent_id, Some(&title), &key).await {
                 Ok(conv) => {
@@ -90,7 +109,6 @@ fn chat_sidebar(
         let key = api_key();
         let mut convs = conversations;
         let mut active = active_conversation;
-        let state = use_context::<AppState>();
         spawn(async move {
             match api::delete_conversation(&agent_id, &conv_id, &key).await {
                 Ok(_) => {
@@ -225,9 +243,8 @@ fn messages_panel(
     agent_name: String,
 ) -> Element {
     // Auto-scroll to bottom when messages change
-    let msg_count = messages().len();
     use_effect(move || {
-        let _ = msg_count;
+        let _ = messages();
         if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
             if let Some(el) = doc.get_element_by_id("chat-messages-panel") {
                 el.set_scroll_top(el.scroll_height());

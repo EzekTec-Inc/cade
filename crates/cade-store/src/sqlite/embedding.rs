@@ -258,7 +258,7 @@ pub(crate) fn decode_embedding_blob(bytes: &[u8]) -> Option<Vec<f32>> {
 
 /// Cosine similarity between two equal-length vectors.
 /// Returns `None` if either vector is empty or the lengths differ.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     if a.is_empty() || a.len() != b.len() {
         return None;
     }

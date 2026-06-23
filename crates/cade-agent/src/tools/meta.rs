@@ -59,6 +59,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_link_memory_evidence(),
         schema_update_memory_field(),
         schema_reflect(),
+        schema_answer(),
     ];
 
     // Phase 6: web tools (optional)
@@ -222,6 +223,31 @@ fn schema_recall() -> Value {
                 "limit": { "type": "integer", "description": "Max results to return (default 10)" }
             },
             "required": ["query"]
+        }
+    })
+}
+
+fn schema_answer() -> Value {
+    json!({
+        "name": "answer",
+        "description": "Answer a question using your persistent memory — searches all memory sources (blocks, conversation history, archival) and synthesizes a concise, grounded answer. Use this when you need a direct answer from what you already know, rather than raw search results.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to answer from memory"
+                },
+                "memory_type": {
+                    "type": "string",
+                    "description": "Optional. Filter to a specific memory type (e.g. 'decision', 'fact', 'preference')"
+                },
+                "max_sources": {
+                    "type": "integer",
+                    "description": "Max memory sources to consider (default 5)"
+                }
+            },
+            "required": ["question"]
         }
     })
 }

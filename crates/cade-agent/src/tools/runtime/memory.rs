@@ -316,4 +316,85 @@ impl ToolRuntime {
             Err(e) => (format!("Failed to link evidence: {e}"), true),
         }
     }
+
+    pub(crate) async fn handle_recall(&self, args: &Value) -> (String, bool) {
+        let query = args["query"].as_str().unwrap_or("").trim().to_string();
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+
+        if query.is_empty() {
+            return ("Error: 'query' is required".to_string(), true);
+        }
+
+        match self.storage.recall(&self.agent_id, &query, Some(limit)).await {
+            Ok(results) => {
+                if results.is_empty() {
+                    return ("No results found across any memory source.".to_string(), false);
+                }
+                let mut out = format!(
+                    "Found {} result(s) across all memory sources:\n\n",
+                    results.len()
+                );
+                for (i, item) in results.iter().enumerate() {
+                    let source = item["source"].as_str().unwrap_or("?");
+                    let label = item["label"].as_str().unwrap_or("");
+                    let snippet = item["snippet"].as_str().unwrap_or("");
+                    let preview: String = snippet.chars().take(300).collect();
+                    out.push_str(&format!(
+                        "{}. [{}] {}: {}\n",
+                        i + 1,
+                        source,
+                        label,
+                        preview
+                    ));
+                }
+                (out, false)
+            }
+            Err(e) => (format!("Recall failed: {e}"), true),
+        }
+    }
+
+    pub(crate) async fn handle_answer(&self, args: &Value) -> (String, bool) {
+        let question = args["question"].as_str().unwrap_or("").trim().to_string();
+        let memory_type = args["memory_type"].as_str();
+        let max_sources = args["max_sources"].as_u64().unwrap_or(5) as usize;
+
+        if question.is_empty() {
+            return ("Error: 'question' is required".to_string(), true);
+        }
+
+        // Fetch broader results, then filter and rank
+        let limit = max_sources * 2;
+        let results = match self.storage.recall(&self.agent_id, &question, Some(limit)).await {
+            Ok(r) => r,
+            Err(e) => return (format!("Recall failed: {e}"), true),
+        };
+
+        let filtered: Vec<&Value> = if let Some(mt) = memory_type {
+            results
+                .iter()
+                .filter(|v| v.get("memory_type").and_then(|m| m.as_str()) == Some(mt))
+                .take(max_sources)
+                .collect()
+        } else {
+            results.iter().take(max_sources).collect()
+        };
+
+        if filtered.is_empty() {
+            return (
+                "No relevant memories found to answer your question.".to_string(),
+                false,
+            );
+        }
+
+        let mut answer = format!("Based on my memory, here's what I know about \"{question}\":\n\n");
+        for (i, src) in filtered.iter().enumerate() {
+            let source = src["source"].as_str().unwrap_or("memory");
+            let label = src["label"].as_str().unwrap_or("");
+            let snippet = src["snippet"].as_str().unwrap_or("");
+            let preview: String = snippet.chars().take(500).collect();
+            answer.push_str(&format!("{}. [{}] {}: {}\n", i + 1, source, label, preview));
+        }
+
+        (answer, false)
+    }
 }

@@ -51,8 +51,8 @@ pub fn DashboardView() -> Element {
         div { class: "px-10 pt-6 flex-1",
             // Greeting Heading
             h1 { class: "text-[32px] font-bold text-white mb-8 tracking-tight flex items-center space-x-2",
-                span { "Evening, Stephen" }
-                span { class: "inline-block animate-pulse duration-1000", "\u{1f315}" }
+                span { "CADE Dashboard" }
+                span { class: "inline-block", "\u{2728}" }
             }
 
             // Feature cards grid

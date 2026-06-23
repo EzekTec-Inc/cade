@@ -776,6 +776,95 @@ pub fn recall_chunks(db: &Db, agent_id: &str, query: &str, limit: usize) -> Vec<
         .collect()
 }
 
+/// Hybrid keyword + semantic chunk recall.  Mirrors [`recall_chunks`] but
+/// also embeds the query and searches `memory_chunks.embedding` for
+/// conceptually related chunks when an embedder is available.
+///
+/// Results are fused with reciprocal rank fusion (RRF) and deduplicated by
+/// label.  Falls back to pure keyword recall when `embedder` is `None`.
+pub fn recall_chunks_hybrid(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+    limit: usize,
+    embedder: Option<&dyn super::embedding::Embedder>,
+) -> Vec<RecalledChunk> {
+    // Phase 1: keyword recall (existing logic)
+    let kw: Vec<RecalledChunk> = recall_chunks(db, agent_id, query, limit * 2);
+
+    let Some(emb) = embedder else {
+        return kw.into_iter().take(limit).collect();
+    };
+
+    let q_vec = match emb.embed(query) {
+        Ok(v) if !v.is_empty() => v,
+        _ => return kw.into_iter().take(limit).collect(),
+    };
+
+    // Phase 2: semantic chunk search
+    let conn = match db.get() {
+        Ok(c) => c,
+        Err(_) => return kw.into_iter().take(limit).collect(),
+    };
+
+    let mut sem_chunks: Vec<(RecalledChunk, f64)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT b.label, c.content, c.chunk_index, c.embedding
+         FROM memory_chunks c
+         JOIN shared_memory_blocks b ON b.id = c.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.tier != 'long' AND c.embedding IS NOT NULL
+         LIMIT ?2"
+    ) {
+        if let Ok(rows) = stmt.query_map(params![agent_id, limit as i64 * 5], |row| {
+            let label: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let chunk_index: i64 = row.get(2)?;
+            let blob: Vec<u8> = row.get(3)?;
+            Ok((label, content, chunk_index, blob))
+        }) {
+            for row in rows.filter_map(|r| r.ok()) {
+                let (label, content, chunk_index, blob) = row;
+                if let Some(vec) = super::embedding::decode_embedding_blob(&blob) {
+                    if let Some(sim) = super::embedding::cosine_similarity(&q_vec, &vec) {
+                        if sim > 0.3 {
+                            sem_chunks.push((
+                                RecalledChunk { label, chunk_content: content, chunk_index },
+                                sim as f64,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort semantic results by similarity descending
+    sem_chunks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Phase 3: RRF fusion of keyword and semantic results
+    let kw_ids: Vec<String> = kw.iter().map(|c| c.label.clone()).collect();
+    let sem_ids: Vec<String> = sem_chunks.iter().map(|(c, _)| c.label.clone()).collect();
+    let fused = super::embedding::reciprocal_rank_fusion(&kw_ids, &sem_ids, 60.0);
+
+    // Build lookup maps
+    let mut by_label: std::collections::HashMap<String, RecalledChunk> = std::collections::HashMap::new();
+    for c in kw {
+        by_label.entry(c.label.clone()).or_insert(c);
+    }
+    for (c, _) in sem_chunks {
+        by_label.entry(c.label.clone()).or_insert(c);
+    }
+
+    // Return top-k in fused order
+    let mut seen = std::collections::HashSet::new();
+    fused.into_iter()
+        .filter_map(|l| by_label.remove(&l))
+        .filter(|c| seen.insert(c.label.clone()))
+        .take(limit)
+        .collect()
+}
+
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
     let conn = db.get()?;
     // We only remove the link, not the shared block itself (to avoid orphan issues if shared)

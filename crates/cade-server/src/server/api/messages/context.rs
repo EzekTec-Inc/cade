@@ -1435,8 +1435,9 @@ fn assemble_system_prompt_memory(
             && let Ok(Some(user_msg)) =
                 sqlite::get_latest_user_message(&state.db, agent_id, conversation_id)
         {
-            let recalled = sqlite::memory::recall_chunks(
-                &state.db, agent_id, &user_msg, 3, // top 3 chunks
+            let recalled = sqlite::memory::recall_chunks_hybrid(
+                &state.db, agent_id, &user_msg, 3,
+                state.embedder.as_deref(),
             );
             if !recalled.is_empty() {
                 let mut recall_lines: Vec<String> = Vec::new();

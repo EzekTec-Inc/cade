@@ -251,3 +251,19 @@ High-performance, cross-language dynamic plugins can be loaded as compiled `.was
 ### Active Permission Gating
 
 CADE's `ToolContext` exposes an asynchronous `ask_permission` callback allowing running tools to programmatically request user permissions for nested or sub-actions mid-execution. When a tool invokes this, CADE's parallel execution engine halts the future and pushes a floating `PermissionOverlay` modal onto the TUI stack, resuming execution once the user approves, denies, or selects "always allow for this session."
+
+## Answer Meta-Tool & Memory Evidence Traceability
+
+CADE includes advanced features for grounded question answering and factual evidence traceability:
+
+### Answer Meta-Tool (`answer`)
+
+The `answer` meta-tool enables stateful, grounded reasoning directly over CADE's persistent memory base. Instead of querying raw database tables, the agent uses `answer` to:
+1. Perform multi-source reciprocal rank searches (across active memory blocks, conversation logs, and dynamic archival chunks).
+2. Synthesize a concise, contextual answer grounded directly on known facts.
+
+### Memory Evidence & Citation Tracking
+
+To protect against hallucinations and ensure 100% auditable knowledge, CADE incorporates an evidence-linking registry (`crates/cade-store/src/sqlite/evidence.rs`):
+- **Citations**: Memory blocks can be backed by explicit pieces of evidence (such as files, chat messages, or tool outputs).
+- **Audit Trails**: Whenever an agent learns or modifies a memory block, it stores a cryptographic/structural citation linking the factual assertion directly back to its source of origin, creating a fully traceable provenance chain.
