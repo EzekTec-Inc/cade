@@ -7,45 +7,29 @@ tags: [git, commit, conventional]
 
 # Conventional Commits
 
-When writing git commit messages, always use the Conventional Commits format:
+Always write commit messages using the Conventional Commits format: `<type>[optional scope]: <description>\n\n[optional body]\n\n[optional footer]`.
 
-```
-<type>[optional scope]: <description>
-
-[optional body]
-
-[optional footer]
-```
-
-## Types
-
-- `feat:` — a new feature
-- `fix:` — a bug fix
-- `docs:` — documentation changes only
-- `style:` — formatting, whitespace (no code change)
-- `refactor:` — code restructuring without behaviour change
-- `perf:` — performance improvements
-- `test:` — adding or updating tests
-- `chore:` — build process, tooling, dependencies
-- `ci:` — CI/CD configuration
+| Type | Description |
+|---|---|
+| `feat:` | A new feature |
+| `fix:` | A bug fix |
+| `docs:` | Documentation changes only |
+| `style:` | Formatting, whitespace (no code change) |
+| `refactor:` | Code restructuring without behavior change |
+| `perf:` | Performance improvements |
+| `test:` | Adding or updating tests |
+| `chore:` | Build, tools, dependencies |
+| `ci:` | CI/CD configuration |
 
 ## Rules
 
-1. Description is lowercase, imperative mood ("add" not "added" or "adds")
-2. No period at the end of the description
-3. Body explains *why*, not *what*
-4. Breaking changes: add `!` after type (e.g. `feat!:`) or `BREAKING CHANGE:` in footer
-5. Keep description under 72 characters
-6. **Task Finalization**: Before committing, ensure you have used the `finish_task` tool to summarize your changes and log them to `CADE_AUDIT.md`.
+1. Description: lowercase, imperative mood ("add", no period, under 72 chars).
+2. Body: explains *why*, not *what*.
+3. Breaking changes: append `!` to type (e.g., `feat!:`) or place `BREAKING CHANGE:` in footer.
+4. **Task Finalization**: Before committing, call `finish_task` to log changes to `CADE_AUDIT.md`.
 
 ## Examples
-
-```
-feat(auth): add JWT token refresh endpoint
-
-fix: prevent duplicate tool_result blocks in SSE reconnect
-
-refactor(llm): replace static provider with LlmRouter
-
-docs: update README with /model switching instructions
-```
+* `feat(auth): add JWT token refresh endpoint`
+* `fix: prevent duplicate tool_result blocks in SSE reconnect`
+* `refactor(llm): replace static provider with LlmRouter`
+* `docs: update README with /model switching instructions`
