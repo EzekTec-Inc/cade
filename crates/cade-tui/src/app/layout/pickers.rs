@@ -126,7 +126,7 @@ fn theme_row<'a>(t: &opaline::Theme, is_sel: bool, colors: &ThemeColors) -> Row<
     ));
 
     // Description cell
-    let desc = t.meta.description.as_deref().unwrap_or("").to_string();
+    let desc = t.meta.description.clone().unwrap_or_default();
     let desc_cell = Cell::from(Span::styled(desc, colors.text_muted()));
 
     let row_style = if is_sel {

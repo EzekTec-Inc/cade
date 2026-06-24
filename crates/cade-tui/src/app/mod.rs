@@ -881,6 +881,29 @@ pub struct TuiApp {
     // -- Mouse capture disable mode (for OS text selection)
     pub mouse_capture_disabled: bool,
 
+    /// Area occupied by the scrollable messages viewport in the last draw.
+    /// Used by click-to-copy to map terminal coordinates to RenderLine indices.
+    pub messages_area: Rect,
+
+    /// Line highlight for copy confirmation: (line_index, created_at).
+    /// Cleared after ~400 ms in draw_impl().
+    pub copy_highlight: Option<(usize, std::time::Instant)>,
+
+    /// Visual selection highlight while mouse button is held down.
+    /// Stores the prepared entry index under the cursor.
+    /// Set on MouseDown(Left), cleared on MouseUp or key press.
+    pub mouse_selection: Option<usize>,
+
+    /// Monotonically increasing version counter for conversation content.
+    /// Incremented on every `push()`, `commit_streaming()`, `append_live_output_line()`, `clear()`.
+    /// Used to invalidate the prepared-entries cache.
+    pub content_version: u64,
+
+    /// Cache of fully rendered timeline entries, rebuilt lazily when content
+    /// or layout settings change. Avoids re-parsing markdown and ANSI on
+    /// every frame and on every mouse click for hit-testing.
+    pub(crate) prepared_cache: Option<crate::app::timeline::PreparedCache>,
+
     /// Currently active focused region in the workspace
     pub focused_region: crate::slots::FocusRegion,
 
@@ -1081,6 +1104,11 @@ impl TuiApp {
             turn_count: 0,
             token_history: Vec::new(),
             mouse_capture_disabled: false,
+            messages_area: Rect::default(),
+            copy_highlight: None,
+            mouse_selection: None,
+            content_version: 0,
+            prepared_cache: None,
             focused_region: crate::slots::FocusRegion::Input,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider::new(
@@ -1265,8 +1293,8 @@ impl TuiApp {
     }
 
     pub fn draw_impl(&mut self) -> Result<()> {
-        // Snapshot all rendering data (avoids borrow conflicts).
-        let lines = self.lines.clone();
+        // Borrow rendering data by reference (avoids cloning entire data per frame).
+        let lines: &[RenderLine] = &self.lines;
         let streaming = if self.streaming_active {
             let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
             // Typewriter effect: only reveal up to streaming_reveal_len bytes.
@@ -1308,26 +1336,26 @@ impl TuiApp {
         };
         let input_mode = self.editor_input_mode();
         let mode = self.mode;
-        let agent_name = self.agent_name.clone();
-        let model = self.model.clone();
-        let last_status = self.last_status.clone();
+        let agent_name: &str = &self.agent_name;
+        let model: &str = &self.model;
+        let last_status = &self.last_status;
         let thinking_text = self.thinking.as_ref().map(|ts| ts.text.lock().clone());
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
-        let expanded_items = self.expanded_items.clone();
+        let expanded_items = &self.expanded_items;
         let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
-        let cwd = self.cwd.clone();
+        let cwd: &str = &self.cwd;
         let context_pct = self.context_pct;
         let turn_count = self.turn_count;
-        let token_history = self.token_history.clone();
-        let header_lines = self.header_lines.clone();
+        let token_history: &[u8] = &self.token_history;
+        let header_lines: &[RenderLine] = &self.header_lines;
         let footer_extra = self.footer_extra.clone().or_else(|| {
             self.lua_engine
                 .as_ref()
                 .and_then(|lua| lua.get_footer_text())
         });
-        let reasoning_effort = self.reasoning_effort.clone();
+        let reasoning_effort: Option<&str> = self.reasoning_effort.as_deref();
         let mut active_plan_snap = self.active_plan.clone();
         // Auto-scroll plan panel to keep first incomplete step visible
         if let Some(plan) = &mut active_plan_snap {
@@ -1339,6 +1367,14 @@ impl TuiApp {
                 real_plan.scroll_offset = plan.scroll_offset;
             }
         }
+        // Expire copy highlight after 400 ms.
+        if self
+            .copy_highlight
+            .is_some_and(|(_, t)| t.elapsed() >= std::time::Duration::from_millis(400))
+        {
+            self.copy_highlight = None;
+        }
+
         if self
             .toast
             .as_ref()
@@ -1346,9 +1382,9 @@ impl TuiApp {
         {
             self.toast = None;
         }
-        let toast = self.toast.clone();
+        let toast: Option<&Toast> = self.toast.as_ref();
         let mouse_capture_disabled = self.mouse_capture_disabled;
-        let colors = self.colors.clone();
+        let colors: &ThemeColors = &self.colors;
         let nerd = self.use_nerd_fonts;
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
@@ -1369,19 +1405,20 @@ impl TuiApp {
         let mut overlay_stack = std::mem::take(&mut self.overlays);
         let mut slot_mgr = std::mem::take(&mut self.slots);
 
+        let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
-            let (m_skip, cur_pos) = render_frame(
+            let (m_skip, cur_pos, msg_area) = render_frame(
                 frame,
-                &lines,
+                lines,
                 streaming.as_deref(),
                 scroll,
                 expand_all,
                 &mut textarea,
                 input_mode,
                 mode,
-                &agent_name,
-                &model,
-                &last_status,
+                agent_name,
+                model,
+                last_status,
                 thinking_text.as_deref(),
                 thinking_elapsed,
                 overlay_stack
@@ -1389,26 +1426,29 @@ impl TuiApp {
                     .map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
                 pending_lines,
                 queued_count,
-                &cwd,
+                cwd,
                 context_pct,
                 self.session_tokens,
                 self.session_cost_usd,
                 turn_count,
-                &token_history,
-                &header_lines,
+                token_history,
+                header_lines,
                 footer_extra.as_deref(),
-                reasoning_effort.as_deref(),
+                reasoning_effort,
                 active_plan_snap.as_ref(),
                 mouse_capture_disabled,
-                toast.as_ref(),
-                &expanded_items,
-                &colors,
+                toast,
+                self.copy_highlight,
+                self.mouse_selection,
+                expanded_items,
+                colors,
                 &mut self.last_input_width,
                 nerd,
                 &self.subagent_trackers,
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;
+            messages_area = msg_area;
 
             // -- Dynamic UI extension slots (Phase 4)
             // Slots render into dedicated regions of the frame.
@@ -1427,7 +1467,7 @@ impl TuiApp {
                     let h = hdr.preferred_height().min(full.height / 4).max(1);
                     let area = Rect::new(full.x, full.y, full.width, h);
                     frame.render_widget(Clear, area);
-                    hdr.render(frame, area, &colors);
+                    hdr.render(frame, area, colors);
                 }
 
                 // -- Footer slot: bottom N rows
@@ -1436,7 +1476,7 @@ impl TuiApp {
                     let y = full.y + full.height.saturating_sub(h);
                     let area = Rect::new(full.x, y, full.width, h);
                     frame.render_widget(Clear, area);
-                    ftr.render(frame, area, &colors);
+                    ftr.render(frame, area, colors);
                 }
 
                 // -- Sidebar slot: right edge (only when terminal is wide enough)
@@ -1448,7 +1488,7 @@ impl TuiApp {
                     let x = full.x + full.width.saturating_sub(sb_w);
                     let area = Rect::new(x, full.y, sb_w, full.height);
                     frame.render_widget(Clear, area);
-                    sb.render(frame, area, &colors);
+                    sb.render(frame, area, colors);
                 }
             }
 
@@ -1595,7 +1635,7 @@ impl TuiApp {
             if !overlay_stack.is_empty() {
                 let full_area = frame.area();
                 for overlay in overlay_stack.iter_mut() {
-                    overlay.render_overlay(frame, full_area, &colors);
+                    overlay.render_overlay(frame, full_area, colors);
                 }
                 // When any overlay is open, hide the main cursor
                 // (the overlay is responsible for its own cursor, if any).
@@ -1606,6 +1646,9 @@ impl TuiApp {
         // Restore the overlay stack and slot manager.
         self.overlays = overlay_stack;
         self.slots = slot_mgr;
+
+        // Stash the messages area rect for click-to-copy.
+        self.messages_area = messages_area;
 
         if let Some((x, y)) = input_cursor_pos {
             let _ = crossterm::execute!(
@@ -1636,7 +1679,7 @@ impl TuiApp {
             self.term_width = sz.0;
 
             if !self.follow && self.scroll > 0 {
-                let timeline_entries = crate::app::timeline::build_timeline_entries(&lines);
+                let timeline_entries = crate::app::timeline::build_timeline_entries(lines);
                 let old_timeline_w = (old_width as usize).saturating_sub(4).max(1);
                 let prepared_old = crate::app::timeline::prepare_timeline_entries(
                     &timeline_entries,

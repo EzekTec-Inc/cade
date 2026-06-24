@@ -69,6 +69,7 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
         SlashCommandDef { name: "reload".into(), description: "Reload Lua UI plugins".into() },
         SlashCommandDef { name: "update".into(), description: "Check for CADE updates".into() },
         SlashCommandDef { name: "trust".into(), description: "Trust the current project directory".into() },
+        SlashCommandDef { name: "mouse".into(), description: "Toggle mouse capture for native text selection".into() },
     ]
 }
 
@@ -151,6 +152,8 @@ pub(crate) enum SlashCmd {
     CompactionModel(String),
     /// Manually trigger session_summary consolidation.
     Compact,
+    /// Toggle mouse capture for native text selection.
+    Mouse,
     /// Browse the plugin marketplace.
     Marketplace,
     /// Reload Lua UI plugins.
@@ -238,6 +241,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "backend" => Some(SlashCmd::Backend(arg)),
         "compaction-model" => Some(SlashCmd::CompactionModel(arg.unwrap_or_default())),
         "compact" | "consolidate" => Some(SlashCmd::Compact),
+        "mouse" | "mouse-capture" => Some(SlashCmd::Mouse),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
             Some(SlashCmd::RunSkill(other.to_string()))

@@ -453,6 +453,12 @@ pub const CMD_DEFS: &[CmdDef] = &[
         arg_hint: None,
         category: CmdCategory::Session,
     },
+    CmdDef {
+        trigger: "mouse",
+        description: "Toggle mouse capture for native text selection",
+        arg_hint: None,
+        category: CmdCategory::Display,
+    },
 ];
 
 pub fn parse_palette_input(raw: &str) -> PaletteCmd {

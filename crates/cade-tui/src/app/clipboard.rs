@@ -1,5 +1,28 @@
 use super::*;
 
+/// Write `text` to the system clipboard via OSC 52 escape sequence, falling
+/// back to `arboard` for native access.  Returns `true` if at least one
+/// mechanism succeeded.
+pub(crate) fn write_to_clipboard(text: &str) -> bool {
+    use base64::Engine;
+    use std::io::Write;
+
+    let mut ok = false;
+
+    // 1. OSC 52 universal fallback (works over SSH, tmux, etc.)
+    let b64 = base64::prelude::BASE64_STANDARD.encode(text);
+    print!("\x1b]52;c;{}\x07", b64);
+    let flushed = std::io::stdout().flush().is_ok();
+    ok |= flushed;
+
+    // 2. Native OS clipboard (arboard)
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        ok |= cb.set_text(text).is_ok();
+    }
+
+    ok
+}
+
 impl TuiApp {
     #[cfg(not(feature = "clipboard-images"))]
     pub(crate) fn try_paste_image_file_path(&mut self, _text: &str) -> bool {

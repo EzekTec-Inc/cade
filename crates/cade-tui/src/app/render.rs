@@ -135,13 +135,15 @@ pub(crate) fn render_frame(
     active_plan: Option<&PlanState>,
     mouse_capture_disabled: bool,
     toast: Option<&Toast>,
+    copy_highlight: Option<(usize, std::time::Instant)>,
+    mouse_selection: Option<usize>,
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
     last_input_width: &mut u16,
     nerd: bool,
     subagent_trackers: &[crate::subagent_tracker::SubagentTracker],
-) -> (u16, Option<(u16, u16)>) {
-    // returns max_skip for V-04 scroll clamping
+) -> (u16, Option<(u16, u16)>, ratatui::layout::Rect) {
+    // returns max_skip for V-04 scroll clamping + messages_area for click-to-copy
     let area = frame.area();
     if area.width < 40 || area.height < 10 {
         use crate::colors::ThemeColorsExt;
@@ -165,7 +167,7 @@ pub(crate) fn render_frame(
             .block(block)
             .style(colors.text_dim());
         frame.render_widget(paragraph, area);
-        return (0, None);
+        return (0, None, ratatui::layout::Rect::default());
     }
 
     let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT {
@@ -201,7 +203,7 @@ pub(crate) fn render_frame(
             Paragraph::new("Terminal too small").style(colors.error()),
             main_area,
         );
-        return (0, None);
+        return (0, None, ratatui::layout::Rect::default());
     }
 
     let plan_h = if let Some(plan) = active_plan {
@@ -327,7 +329,15 @@ pub(crate) fn render_frame(
         });
     }
 
-    let max_skip = render_timeline_viewport(frame, messages_area, &prepared, scroll, colors);
+    let max_skip = render_timeline_viewport(
+        frame,
+        messages_area,
+        &prepared,
+        scroll,
+        colors,
+        copy_highlight,
+        mouse_selection,
+    );
 
     // File picker and theme picker overlays are now rendered by the
     // dynamic overlay stack in TuiApp::draw().
@@ -797,5 +807,5 @@ pub(crate) fn render_frame(
         }
     }
 
-    (max_skip, input_cursor_pos) // V-04: returned so draw_impl can clamp self.scroll
+    (max_skip, input_cursor_pos, messages_area) // V-04 + click-to-copy
 }

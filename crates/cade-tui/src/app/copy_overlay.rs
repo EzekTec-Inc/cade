@@ -19,25 +19,89 @@ pub struct CopyOverlay {
     copied_content: Option<String>,
 }
 
+/// Extract plain text from any RenderLine variant.
+/// Used by both the copy overlay and click-to-copy.
+pub fn render_line_plain_text(line: &crate::app::RenderLine) -> String {
+    match line {
+        crate::app::RenderLine::Separator | crate::app::RenderLine::Blank => String::new(),
+        crate::app::RenderLine::UserMessage(t) => t.clone(),
+        crate::app::RenderLine::AssistantText(t) => t.clone(),
+        crate::app::RenderLine::ToolCall { name, preview } => {
+            format!("● {}({})", name, preview)
+        }
+        crate::app::RenderLine::ToolResult { content, .. } => content.clone(),
+        crate::app::RenderLine::Reasoning { content, .. } => content.clone(),
+        crate::app::RenderLine::SystemMsg(s) => s.clone(),
+        crate::app::RenderLine::SuccessMsg(s) => s.clone(),
+        crate::app::RenderLine::InfoHeader(s) => s.clone(),
+        crate::app::RenderLine::DimMsg(s) => s.clone(),
+        crate::app::RenderLine::Pair { label, value } => format!("{}: {}", label, value),
+        crate::app::RenderLine::ErrorMsg(s) => s.clone(),
+        crate::app::RenderLine::Table { headers, rows } => {
+            let mut out = headers.join("\t");
+            for row in rows {
+                out.push('\n');
+                out.push_str(&row.join("\t"));
+            }
+            out
+        }
+        crate::app::RenderLine::HeuristicSummary {
+            intent,
+            safety,
+            directives,
+        } => format!("Intent: {intent}\nSafety: {safety}\nDirectives: {directives}"),
+        crate::app::RenderLine::QuestionResult { header, answer } => {
+            format!("{}: {}", header, answer)
+        }
+        crate::app::RenderLine::LiveOutput { lines, .. } => lines.join("\n"),
+        crate::app::RenderLine::ContextBar {
+            model,
+            window,
+            pct,
+            category_tokens,
+        } => {
+            let total: u64 = category_tokens.iter().sum();
+            format!("Context: {model} {pct}% ({total} / {window} tokens)")
+        }
+    }
+}
+
+/// Label for a RenderLine variant shown in the copy overlay list.
+pub fn render_line_label(line: &crate::app::RenderLine) -> Option<&'static str> {
+    match line {
+        crate::app::RenderLine::Separator | crate::app::RenderLine::Blank => None,
+        crate::app::RenderLine::UserMessage(_) => Some("User Message"),
+        crate::app::RenderLine::AssistantText(_) => Some("Assistant Response"),
+        crate::app::RenderLine::ToolCall { .. } => Some("Tool Call"),
+        crate::app::RenderLine::ToolResult { .. } => Some("Tool Result"),
+        crate::app::RenderLine::Reasoning { .. } => Some("Reasoning Block"),
+        crate::app::RenderLine::SystemMsg(_) => Some("System Message"),
+        crate::app::RenderLine::SuccessMsg(_) => Some("Success"),
+        crate::app::RenderLine::InfoHeader(_) => Some("Info"),
+        crate::app::RenderLine::DimMsg(_) => Some("Hint"),
+        crate::app::RenderLine::Pair { .. } => Some("Key-Value"),
+        crate::app::RenderLine::ErrorMsg(_) => Some("Error"),
+        crate::app::RenderLine::Table { .. } => Some("Table"),
+        crate::app::RenderLine::HeuristicSummary { .. } => Some("Heuristic Summary"),
+        crate::app::RenderLine::QuestionResult { .. } => Some("Question Result"),
+        crate::app::RenderLine::LiveOutput { .. } => Some("Live Output"),
+        crate::app::RenderLine::ContextBar { .. } => None,
+    }
+}
+
 impl CopyOverlay {
     pub fn new(lines: &[crate::app::RenderLine]) -> Self {
         let mut items = Vec::new();
         for line in lines {
-            match line {
-                crate::app::RenderLine::UserMessage(text) => {
-                    items.push(("User Message".to_string(), text.clone()));
-                }
-                crate::app::RenderLine::AssistantText(text) => {
-                    items.push(("Assistant Response".to_string(), text.clone()));
-                }
-                crate::app::RenderLine::ToolResult { content, .. } => {
-                    items.push(("Tool Result".to_string(), content.clone()));
-                }
-                crate::app::RenderLine::Reasoning { content, .. } => {
-                    items.push(("Reasoning Block".to_string(), content.clone()));
-                }
-                _ => {}
+            let label = match render_line_label(line) {
+                Some(l) => l,
+                None => continue,
+            };
+            let text = render_line_plain_text(line);
+            if text.is_empty() {
+                continue;
             }
+            items.push((label.to_string(), text));
         }
 
         let mut state = ListState::default();

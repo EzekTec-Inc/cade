@@ -98,6 +98,7 @@ impl TuiApp {
             }
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    self.mouse_selection = None;
                     let was_empty = self.editor.is_empty();
                     if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
@@ -109,6 +110,7 @@ impl TuiApp {
                     }
                 }
                 Event::Paste(text) => {
+                    self.mouse_selection = None;
                     // Bracketed paste: the terminal wrapped the pasted content
                     // in paste-start / paste-end markers so crossterm delivers
                     // it as a single string.
@@ -132,12 +134,26 @@ impl TuiApp {
                 }
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        self.mouse_selection = None;
                         if !self.slots.handle_mouse(m) {
                             self.handle_scroll_mouse(m.kind);
                             self.draw()?;
                         }
                     }
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                        if !self.slots.handle_mouse(m) {
+                            self.set_mouse_selection(&m);
+                            self.draw()?;
+                        }
+                    }
+                    MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                        self.mouse_selection = None;
+                        if !self.slots.handle_mouse(m) && self.click_to_copy(&m) {
+                            self.draw()?;
+                        }
+                    }
                     _ => {
+                        self.mouse_selection = None;
                         if self.slots.handle_mouse(m) {
                             self.draw()?;
                         }
@@ -346,6 +362,7 @@ impl TuiApp {
 
             KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.lines.clear();
+                self.content_version += 1;
                 self.pending_submit_images.clear();
                 self.pending_paste_images.clear();
                 self.draw_dirty = true;
@@ -646,20 +663,7 @@ impl TuiApp {
             Ok(copy_action) => {
                 let text = copy_action.0;
 
-                // 1. OSC 52 Universal Fallback
-                use base64::Engine;
-                let b64 = base64::prelude::BASE64_STANDARD.encode(&text);
-                print!("\x1b]52;c;{}\x07", b64);
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-
-                // 2. Native OS clipboard
-                #[cfg(feature = "clipboard-images")]
-                {
-                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                        let _ = cb.set_text(&text);
-                    }
-                }
+                crate::app::clipboard::write_to_clipboard(&text);
 
                 self.show_toast(
                     "Content copied to clipboard",

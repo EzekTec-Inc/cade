@@ -9,6 +9,7 @@ impl TuiApp {
         self.commit_reasoning_inner();
         let is_tool_result = matches!(line, RenderLine::ToolResult { .. });
         self.lines.push(line);
+        self.content_version += 1;
 
         if self.follow {
             // User is following — auto-scroll to show new content.
@@ -66,6 +67,7 @@ impl TuiApp {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
         self.lines.push(line);
+        self.content_version += 1;
     }
 
     /// Append a streaming chunk and redraw (throttled — max ~60 FPS).
@@ -242,6 +244,7 @@ impl TuiApp {
         self.lines.clear();
         self.expanded_items.clear();
         self.discard_streaming();
+        self.content_version += 1;
         self.scroll_instant(0);
         self.follow = true;
         self.draw()
@@ -253,6 +256,7 @@ impl TuiApp {
             if !clean.trim().is_empty() {
                 self.lines
                     .push(RenderLine::AssistantText(clean.into_owned()));
+                self.content_version += 1;
             }
             self.streaming_active = false;
             self.streaming_reveal_len = 0;
@@ -272,6 +276,7 @@ impl TuiApp {
                     words,
                     content: clean.into_owned(),
                 });
+                self.content_version += 1;
             }
             self.reasoning_active = false;
         }
@@ -288,6 +293,7 @@ impl TuiApp {
             max_visible,
             done: false,
         });
+        self.content_version += 1;
         self.lines.len() - 1
     }
 
@@ -296,6 +302,7 @@ impl TuiApp {
     pub fn append_live_output_line(&mut self, idx: usize, line: String) -> Result<()> {
         if let Some(RenderLine::LiveOutput { lines, .. }) = self.lines.get_mut(idx) {
             lines.push(line);
+            self.content_version += 1;
         }
         if self.follow {
             self.scroll_instant(0);
@@ -308,6 +315,7 @@ impl TuiApp {
     pub fn finish_live_output(&mut self, idx: usize) -> Result<()> {
         if let Some(RenderLine::LiveOutput { done, .. }) = self.lines.get_mut(idx) {
             *done = true;
+            self.content_version += 1;
         }
         if self.follow {
             self.scroll_instant(0);
@@ -575,6 +583,246 @@ impl TuiApp {
             }
             _ => false,
         }
+    }
+
+    /// Build the prepared-timeline-entry list the same way `render_frame` does.
+    /// Uses a content-version cache to avoid re-parsing markdown/ANSI on every mouse click.
+    fn build_prepared_entries(&mut self) -> Vec<super::timeline::PreparedTimelineEntry> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
+
+        // Derive a stable hash of expanded_items for cache invalidation.
+        let expanded_hash = {
+            let mut h = DefaultHasher::new();
+            let mut items: Vec<_> = self.expanded_items.iter().collect();
+            items.sort();
+            for k in &items {
+                k.hash(&mut h);
+            }
+            h.finish()
+        };
+
+        // Try cache for the non-streaming portion.
+        let mut prepared = if let Some(ref cache) = self.prepared_cache {
+            if cache.version == self.content_version
+                && cache.timeline_w == timeline_w
+                && cache.expand_all == self.expand_all
+                && cache.expanded_hash == expanded_hash
+            {
+                // Cache hit — avoid full rebuild.
+                cache.entries.clone()
+            } else {
+                // Cache miss — rebuild non-streaming entries.
+                let entries = super::timeline::build_timeline_entries(&self.lines);
+                let p = super::timeline::prepare_timeline_entries(
+                    &entries,
+                    timeline_w,
+                    self.expand_all,
+                    &self.expanded_items,
+                    &self.colors,
+                    self.use_nerd_fonts,
+                );
+                self.prepared_cache = Some(super::timeline::PreparedCache {
+                    entries: p.clone(),
+                    version: self.content_version,
+                    timeline_w,
+                    expand_all: self.expand_all,
+                    expanded_hash,
+                });
+                p
+            }
+        } else {
+            let entries = super::timeline::build_timeline_entries(&self.lines);
+            let p = super::timeline::prepare_timeline_entries(
+                &entries,
+                timeline_w,
+                self.expand_all,
+                &self.expanded_items,
+                &self.colors,
+                self.use_nerd_fonts,
+            );
+            self.prepared_cache = Some(super::timeline::PreparedCache {
+                entries: p.clone(),
+                version: self.content_version,
+                timeline_w,
+                expand_all: self.expand_all,
+                expanded_hash,
+            });
+            p
+        };
+
+        // Streaming entry (always rebuilt — changes every tick, not cached).
+        if self.streaming_active {
+            let full =
+                crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
+            let reveal = self.streaming_reveal_len.min(full.len());
+            let visible_streaming = &full[..reveal];
+            let next_index = self.lines.len();
+            let streaming_entry =
+                super::timeline::TimelineEntry::streaming(next_index, visible_streaming);
+            let mut stream_lines = Vec::new();
+            let effective_w = timeline_w.saturating_sub(2);
+            streaming_entry.render_with_state(
+                effective_w,
+                self.expand_all,
+                &self.expanded_items,
+                &mut stream_lines,
+                &self.colors,
+                self.use_nerd_fonts,
+            );
+            let stream_rows: u16 = stream_lines
+                .iter()
+                .map(|l| crate::app::render::count_wrapped_rows(l, effective_w as u16))
+                .sum();
+            prepared.push(super::timeline::PreparedTimelineEntry {
+                lines: stream_lines,
+                rows: stream_rows,
+                card_style: super::timeline::CardStyle::Assistant,
+            });
+        }
+
+        prepared
+    }
+
+    /// Given a mouse position, return the index into the prepared-entries list
+    /// of the entry the cursor is over, or `None`.
+    fn find_entry_idx_at_mouse(
+        &self,
+        _mx: u16,
+        my: u16,
+        inner: ratatui::layout::Rect,
+        prepared: &[super::timeline::PreparedTimelineEntry],
+    ) -> Option<usize> {
+        let total_visual: u16 = prepared
+            .iter()
+            .map(|p| p.rows as u32)
+            .sum::<u32>()
+            .min(u16::MAX as u32) as u16;
+        let visible = inner.height;
+        let max_skip = total_visual.saturating_sub(visible);
+        let effective_up = (self.scroll as u16).min(max_skip);
+        let visible_start = max_skip.saturating_sub(effective_up);
+
+        let clicked_visual_row = my.saturating_sub(inner.y) + visible_start;
+
+        let mut item_start: u16 = 0;
+        prepared.iter().position(|item| {
+            let item_end = item_start.saturating_add(item.rows);
+            let hit = clicked_visual_row >= item_start && clicked_visual_row < item_end;
+            item_start = item_end;
+            hit
+        })
+    }
+
+    /// Called on MouseDown(Left) to store which entry is under the cursor
+    /// so the renderer can highlight it (visual "press to select" feedback).
+    /// Returns `true` if the click was inside the messages area.
+    pub fn set_mouse_selection(&mut self, mouse: &crossterm::event::MouseEvent) -> bool {
+        use ratatui::layout::Rect;
+
+        let inner = Rect {
+            x: self.messages_area.x + 2,
+            y: self.messages_area.y + 1,
+            width: self.messages_area.width.saturating_sub(4),
+            height: self.messages_area.height.saturating_sub(2),
+        };
+
+        if inner.width == 0 || inner.height == 0 {
+            return false;
+        }
+
+        let mx = mouse.column;
+        let my = mouse.row;
+        if mx < inner.x
+            || mx >= inner.x + inner.width
+            || my < inner.y
+            || my >= inner.y + inner.height
+        {
+            self.mouse_selection = None;
+            return false;
+        }
+
+        let prepared = self.build_prepared_entries();
+        let idx = self.find_entry_idx_at_mouse(mx, my, inner, &prepared);
+        self.mouse_selection = idx;
+        self.draw_dirty = true;
+        idx.is_some()
+    }
+
+    /// Handle a left-mouse-up click on the messages viewport.
+    /// Maps the terminal coordinate to a RenderLine and copies its text to clipboard.
+    /// Returns `true` if the click was consumed.
+    pub fn click_to_copy(&mut self, mouse: &crossterm::event::MouseEvent) -> bool {
+        use ratatui::layout::Rect;
+
+        let inner = Rect {
+            x: self.messages_area.x + 2,
+            y: self.messages_area.y + 1,
+            width: self.messages_area.width.saturating_sub(4),
+            height: self.messages_area.height.saturating_sub(2),
+        };
+
+        if inner.width == 0 || inner.height == 0 {
+            return false;
+        }
+
+        let mx = mouse.column;
+        let my = mouse.row;
+        if mx < inner.x
+            || mx >= inner.x + inner.width
+            || my < inner.y
+            || my >= inner.y + inner.height
+        {
+            return false;
+        }
+
+        let prepared = self.build_prepared_entries();
+        let found_index = self.find_entry_idx_at_mouse(mx, my, inner, &prepared);
+
+        let Some(clicked_line_index) = found_index else {
+            self.show_toast(
+                "No content at click position",
+                crate::app::ToastLevel::Warning,
+            );
+            self.draw_dirty = true;
+            return false;
+        };
+
+        let Some(line) = self.lines.get(clicked_line_index) else {
+            self.show_toast(
+                "No content at click position",
+                crate::app::ToastLevel::Warning,
+            );
+            self.draw_dirty = true;
+            return false;
+        };
+        let text = crate::app::copy_overlay::render_line_plain_text(line);
+        if text.is_empty() {
+            self.show_toast(
+                "Nothing to copy on this line",
+                crate::app::ToastLevel::Warning,
+            );
+            self.draw_dirty = true;
+            return false;
+        }
+
+        // Copy to clipboard (OSC 52 + arboard fallback).
+        crate::app::clipboard::write_to_clipboard(&text);
+
+        // Store the clicked line index (in the prepared/timeline-entries list)
+        // so the next render flash-highlights it.
+        self.copy_highlight = Some((clicked_line_index, std::time::Instant::now()));
+
+        let label = crate::app::copy_overlay::render_line_label(line).unwrap_or("Content");
+        self.show_toast(
+            format!("Copied {label} (click to copy)"),
+            crate::app::ToastLevel::Success,
+        );
+        self.draw_dirty = true;
+
+        true
     }
 
     /// Toggle the folding/expansion of the most recent collapsible timeline item (Ctrl+G).

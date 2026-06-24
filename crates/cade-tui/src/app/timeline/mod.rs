@@ -12,7 +12,7 @@ use super::*;
 /// structural layer above that flat representation so rendering, row
 /// measurement, and future per-item behavior can move away from the monolithic
 /// `RenderLine -> Paragraph` path incrementally.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum TimelineItemKind {
     Separator,
     Blank,
@@ -35,7 +35,7 @@ pub(crate) enum TimelineItemKind {
     StreamingAssistant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct TimelineKey {
     pub(crate) index: usize,
     pub(crate) kind: TimelineItemKind,
@@ -54,10 +54,22 @@ pub(crate) enum CardStyle {
     Assistant,
 }
 
+#[derive(Clone)]
 pub(crate) struct PreparedTimelineEntry {
     pub(crate) lines: Vec<Line<'static>>,
     pub(crate) rows: u16,
     pub(crate) card_style: CardStyle,
+}
+
+/// Cache key + value for the prepared-entries cache in [`TuiApp`].
+/// Avoids re-parsing markdown / ANSI on every frame and on every mouse click.
+#[derive(Clone)]
+pub(crate) struct PreparedCache {
+    pub(crate) entries: Vec<PreparedTimelineEntry>,
+    pub(crate) version: u64,
+    pub(crate) timeline_w: usize,
+    pub(crate) expand_all: bool,
+    pub(crate) expanded_hash: u64,
 }
 
 pub(crate) enum TimelineItem<'a> {
@@ -417,6 +429,8 @@ pub(crate) fn render_timeline_viewport(
     prepared: &[PreparedTimelineEntry],
     scroll: usize,
     colors: &ThemeColors,
+    copy_highlight: Option<(usize, std::time::Instant)>,
+    mouse_selection: Option<usize>,
 ) -> u16 {
     // Clear the full messages area so no stale content leaks between frames.
     frame.render_widget(ratatui::widgets::Clear, area);
@@ -444,7 +458,7 @@ pub(crate) fn render_timeline_viewport(
     };
 
     let mut item_start: u16 = 0;
-    for item in prepared {
+    for (entry_idx, item) in prepared.iter().enumerate() {
         let item_end = item_start.saturating_add(item.rows);
         if item_end <= visible_start {
             item_start = item_end;
@@ -453,6 +467,12 @@ pub(crate) fn render_timeline_viewport(
         if item_start >= visible_end {
             break;
         }
+
+        // Determine if this entry should get the highlight background.
+        // Highlighted during copy confirmation flash OR while mouse button is held.
+        let is_highlighted =
+            copy_highlight.is_some_and(|(idx, _)| idx == entry_idx)
+                || mouse_selection.is_some_and(|idx| idx == entry_idx);
 
         let clip_top = visible_start.saturating_sub(item_start);
         let render_start = item_start.max(visible_start);
@@ -468,17 +488,25 @@ pub(crate) fn render_timeline_viewport(
             let mut block = ratatui::widgets::Block::default();
             match item.card_style {
                 CardStyle::User => {
+                    let mut style = colors.text_primary();
+                    if is_highlighted {
+                        style = style.bg(colors.c_bg_surface2());
+                    }
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
                         .border_style(colors.text_dim())
-                        .style(colors.text_primary())
+                        .style(style)
                         .padding(ratatui::widgets::Padding::left(1));
                 }
                 CardStyle::Assistant => {
+                    let mut style = colors.text_primary();
+                    if is_highlighted {
+                        style = style.bg(colors.c_bg_surface2());
+                    }
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
                         .border_style(colors.primary())
-                        .style(colors.text_primary())
+                        .style(style)
                         .padding(ratatui::widgets::Padding::left(1));
                 }
                 CardStyle::None => {}
