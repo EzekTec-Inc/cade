@@ -35,7 +35,7 @@ impl HelpOverlay {
                 "Ctrl+O",
                 "Toggle timeline expansion (expand/compress long tool outputs)",
             ),
-            ("Ctrl+F", "Trigger timeline keyword search / filter"),
+            ("Ctrl+F", "Cycle keyboard focus between prompt and active UI slots (Sidebar/Header/Footer)"),
             (
                 "Ctrl+Y",
                 "Trigger timeline Copy Overlay to select and copy outputs",

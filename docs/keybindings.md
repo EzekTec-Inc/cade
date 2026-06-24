@@ -84,6 +84,7 @@ All scroll keys work identically whether the agent is idle or actively processin
 | **Ctrl+O** | Toggle expand / collapse the focused block *(or all blocks if none is focused)* |
 | **Ctrl+P** | Open command palette |
 | **Ctrl+T** | Toggle plan panel visibility |
+| **Ctrl+F** | Cycle keyboard focus between prompt and active UI slots (Sidebar/Header/Footer) |
 
 ---
 

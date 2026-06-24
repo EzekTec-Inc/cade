@@ -16,12 +16,12 @@ deployment needed.
 ## What it does
 
 - Connects to the same REST API the CLI uses
-- Streams responses via SSE (`POST /v1/agents/:id/run`)
-- Renders the timeline, tool calls, reasoning blocks, subagent cards
-- Edits memory blocks inline
-- Manages MCP servers, skills, checkpoints, artifacts
-- Switches models and execution backends
-- Surfaces full per-token / per-cost telemetry
+- Streams real-time reasoning and tool responses via SSE (`POST /v1/agents/:id/run`)
+- Renders rich timeline representations with collapsible reasoning, tool cards, and error indicators
+- Full Conversation Management: Create, list, switch, and delete chat sessions directly from the sidebar
+- Active CRUD Provider Panel: Live model provider configurations (OpenRouter, Groq, local fallback presets)
+- Native Interactive Pages: Live telemetry logs, active tools & MCP listing, memory block trees, and local configurations (replacing all stubs)
+- Built-in custom Toast Notification container (supporting 4 severity levels)
 
 ## Layout
 
@@ -65,7 +65,9 @@ GUI palettes.
 | Key | Action |
 |---|---|
 | `Ctrl+P` | Open palette |
-| `Esc` | Close current overlay |
+| `Ctrl+N` | Start a new chat session / conversation |
+| `Ctrl+,` | Open global Settings panel |
+| `Esc` | Close current overlay or return focus to prompt |
 | `Enter` | Send / execute |
 | `Shift+Enter` | New line |
 | `↑` `↓` (in palette) | Move selection |
