@@ -438,71 +438,24 @@ impl Repl {
         app.tool_ac.set_mcp_servers(mcp_servers);
         app.tool_ac.set_tools(tools);
 
-        // Populate slash commands
-        use crate::ui::autocomplete::SlashCommandDef;
-        let slash_cmds = vec![
-            SlashCommandDef {
-                name: "init".to_string(),
-                description: "Analyse project + populate memory".to_string(),
-            },
-            SlashCommandDef {
-                name: "remember".to_string(),
-                description: "/remember [text]  — ask agent to update memory".to_string(),
-            },
-            SlashCommandDef {
-                name: "backend".to_string(),
-                description: "/backend [local|docker|ssh|readonly]  — show or switch backend"
-                    .to_string(),
-            },
-            SlashCommandDef {
-                name: "link".to_string(),
-                description: "Register + attach all tools to current agent".to_string(),
-            },
-            SlashCommandDef {
-                name: "unlink".to_string(),
-                description: "Detach all tools from current agent".to_string(),
-            },
-            SlashCommandDef {
-                name: "mcp".to_string(),
-                description: "Show MCP server status + tools".to_string(),
-            },
-            SlashCommandDef {
-                name: "connect".to_string(),
-                description: "Connect a new AI provider interactively".to_string(),
-            },
-            SlashCommandDef {
-                name: "disconnect".to_string(),
-                description: "/disconnect <name>  — remove a provider".to_string(),
-            },
-            SlashCommandDef {
-                name: "providers".to_string(),
-                description: "Show all configured AI providers".to_string(),
-            },
-            SlashCommandDef {
-                name: "model".to_string(),
-                description: "/model [name]  — show or switch active LLM".to_string(),
-            },
-            SlashCommandDef {
-                name: "reasoning".to_string(),
-                description: "/reasoning [low|medium|high]  — set reasoning effort".to_string(),
-            },
-            SlashCommandDef {
-                name: "memory".to_string(),
-                description: "/memory [label]  — view or manage memory blocks".to_string(),
-            },
-            SlashCommandDef {
-                name: "stream".to_string(),
-                description: "Toggle token streaming".to_string(),
-            },
-            SlashCommandDef {
-                name: "help".to_string(),
-                description: "Show help screen".to_string(),
-            },
-            SlashCommandDef {
-                name: "exit".to_string(),
-                description: "Exit CADE".to_string(),
-            },
-        ];
+        // Populate slash commands — dynamically from the canonical list
+        // plus any loaded skill IDs (e.g. /commit, /review).
+        use crate::ui::SlashCommandDef;
+        let mut slash_cmds = all_slash_command_defs();
+        let skill_ids: Vec<String> = self
+            .skills
+            .lock()
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        for sid in &skill_ids {
+            if !slash_cmds.iter().any(|c| c.name == *sid) {
+                slash_cmds.push(SlashCommandDef {
+                    name: sid.clone(),
+                    description: format!("Skill: {sid}"),
+                });
+            }
+        }
         app.slash_ac.set_commands(slash_cmds);
 
         let subagent_names = cade_agent::subagents::discover_all_subagents(&self.cwd)
