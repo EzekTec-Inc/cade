@@ -1170,6 +1170,7 @@ version = "0.2.4"
 dependencies = [
  "aes-gcm",
  "argon2",
+ "async-trait",
  "base64 0.22.1",
  "cade-ai",
  "cade-core",

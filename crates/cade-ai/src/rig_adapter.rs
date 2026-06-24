@@ -3,6 +3,7 @@
 
 use crate::{LlmProvider, CompletionRequest, CompletionResponse, StreamChunk, Result};
 use async_trait::async_trait;
+#[allow(unused_imports)]
 use rig::completion::{CompletionModel, Prompt};
 use std::pin::Pin;
 use tokio_stream::Stream;
