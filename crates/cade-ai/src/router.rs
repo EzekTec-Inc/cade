@@ -124,6 +124,12 @@ impl LlmRouter {
         // when the API key is known, or live model listing will fall back to catalogue.
     }
 
+    /// Add an optional Rig-compatible provider
+    #[cfg(feature = "rig-compat")]
+    pub fn add_rig_provider<M: rig::completion::CompletionModel + rig::completion::Prompt + Send + Sync + 'static>(&mut self, name: String, model: M) {
+        self.add_provider(name, Arc::new(crate::rig_adapter::RigProviderAdapter { model }));
+    }
+
     /// Add a provider with its API key. Prefer this over add_provider whenever the key
     /// is available so that list_dynamic_models() can fetch live model lists.
     pub fn add_provider_with_key(

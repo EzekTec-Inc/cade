@@ -6,6 +6,9 @@ edition = "2024"
 [lib]
 doctest = false
 
+[features]
+rig-compat = ["dep:rig-core"]
+
 [dependencies]
 # -- Error handling
 # -- Others
@@ -37,6 +40,9 @@ tiktoken-rs            = "0.11"
 once_cell              = "1.20"
 llm_providers          = "0.6"
 rand                   = "0.9"
+
+# Rig compatibility
+rig-core               = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

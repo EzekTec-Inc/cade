@@ -8,6 +8,7 @@ default         = ["bundled-sqlite"]
 bundled-sqlite  = ["rusqlite/bundled", "r2d2_sqlite/bundled"]
 # WI-SEMANTIC: opt-in. Default build does NOT pull fastembed/sqlite-vec.
 semantic-search = ["dep:fastembed", "dep:sqlite-vec"]
+rig-compat      = ["dep:rig-core"]
 
 [dependencies]
 cade-core = { path = "../cade-core" }
@@ -33,6 +34,9 @@ machine-uid = { workspace = true }
 getrandom = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
+
+# Rig compatibility
+rig-core = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"

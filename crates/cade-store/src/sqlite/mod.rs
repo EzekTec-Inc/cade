@@ -1,5 +1,8 @@
 use crate::error::Result;
 use r2d2::Pool;
+
+#[cfg(feature = "rig-compat")]
+pub mod rig_store;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;

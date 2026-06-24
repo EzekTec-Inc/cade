@@ -100,6 +100,9 @@ fastembed      = "5"
 sqlite-vec     = "0.1"
 zerocopy       = { version = "0.8", features = ["derive"] }
 
+# Rig Core Compatibility
+rig-core       = "0.6.0"
+
 # MCP
 rmcp           = { version = "1.7", features = [
     "client",
@@ -142,6 +145,9 @@ backend-ssh = ["cade-agent/backend-ssh"]
 # WI-SEMANTIC: opt-in semantic search. Forwards to cade-store/semantic-search
 # which pulls fastembed + sqlite-vec. Default builds DO NOT activate this.
 semantic-search = ["cade-store/semantic-search"]
+
+# Rig compatibility feature gate
+rig-compat = ["cade-ai/rig-compat", "cade-store/rig-compat"]
 
 [dependencies]
 # -- Workspace crates

@@ -13,6 +13,8 @@ pub mod openai;
 pub mod provider_registry;
 pub mod registry;
 pub mod router;
+#[cfg(feature = "rig-compat")]
+pub mod rig_adapter;
 pub mod tokenizer;
 pub mod types;
 pub mod utils;
