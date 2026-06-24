@@ -4,7 +4,7 @@ mod types;
 
 use dioxus::prelude::*;
 
-use types::{add_toast, AppState, SelectedPage, ToastLevel};
+use types::{AppState, SelectedPage};
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
@@ -25,6 +25,9 @@ fn App() -> Element {
     let conversations = use_signal(Vec::<cade_api_types::ConversationInfo>::new);
     let active_conversation = use_signal(|| Option::<String>::None);
     let toasts = use_signal(Vec::<types::ToastMessage>::new);
+    let mut global_error = use_signal(|| Option::<String>::None);
+    let active_stream_id = use_signal(|| Option::<String>::None);
+    let active_stream = use_signal(types::SafeAbortHandle::default);
 
     // Provide individual signals and composite state to all children
     use_context_provider(|| api_key);
@@ -36,6 +39,9 @@ fn App() -> Element {
     use_context_provider(|| conversations);
     use_context_provider(|| active_conversation);
     use_context_provider(|| toasts);
+    use_context_provider(|| global_error);
+    use_context_provider(|| active_stream_id);
+    use_context_provider(|| active_stream);
 
     let app_state = AppState {
         api_key,
@@ -47,13 +53,16 @@ fn App() -> Element {
         conversations,
         active_conversation,
         toasts,
+        global_error,
+        active_stream_id,
+        active_stream,
     };
     use_context_provider(|| app_state);
 
     // ── Startup: fetch first agent + start message polling ─────────────────
     use_effect(move || {
         let key = api_key;
-        let state = app_state;
+        let _state = app_state;
         let mut selected = selected_agent;
         let mut convs = conversations;
         spawn(async move {
@@ -71,15 +80,33 @@ fn App() -> Element {
                         let _ = api::list_conversations(&agent_id, &key()).await.map(|list| convs.set(list));
                     }
                 }
-                Err(e) => add_toast(&state, ToastLevel::Error, "Failed to fetch agents", e),
+                Err(e) => {
+                    global_error.set(Some(e.clone()));
+                }
             }
 
-            // Poll conversations only (every 10s) — messages are loaded reactively
+            // Poll conversations only — messages are loaded reactively
             // when the user selects a conversation or switches agents (see ChatView).
             loop {
-                gloo_timers::future::TimeoutFuture::new(10000).await;
-                if let Some(agent) = selected() {
-                    let _ = api::list_conversations(&agent.id, &key()).await.map(|list| convs.set(list));
+                if global_error().is_some() {
+                    gloo_timers::future::TimeoutFuture::new(3000).await;
+                    if let Ok(list) = api::list_agents(&key()).await {
+                        global_error.set(None);
+                        if let Some(first) = list.into_iter().next() {
+                            let agent_id = first.id.clone();
+                            selected.set(Some(first));
+                            let _ = api::list_conversations(&agent_id, &key()).await.map(|list| convs.set(list));
+                        }
+                    }
+                } else {
+                    gloo_timers::future::TimeoutFuture::new(10000).await;
+                    if let Some(agent) = selected() {
+                        if let Ok(list) = api::list_conversations(&agent.id, &key()).await {
+                            convs.set(list);
+                        } else {
+                            global_error.set(Some("Server connection lost".to_string()));
+                        }
+                    }
                 }
             }
         });
@@ -105,6 +132,19 @@ fn App() -> Element {
             if (api_key)().is_empty() {
                 components::login::LoginScreen {}
             } else {
+                if let Some(err) = (global_error)() {
+                    div { class: "fixed inset-0 bg-[#0f1115]/95 z-50 flex flex-col items-center justify-center p-6 text-center select-none",
+                        div { class: "bg-[#16171d] border border-red-500/50 rounded-2xl p-10 max-w-md mx-auto shadow-2xl",
+                            div { class: "text-red-500 text-5xl mb-6", "⚠️" }
+                            h2 { class: "text-white font-semibold text-xl mb-3", "CADE Server Offline" }
+                            p { class: "text-gray-400 text-sm mb-6", "{err}" }
+                            div { class: "flex items-center justify-center gap-3 text-sm text-[#5d6175]",
+                                span { class: "w-4 h-4 rounded-full border-2 border-t-[#00c8ff] border-[#272833] animate-spin" }
+                                span { "Attempting to reconnect..." }
+                            }
+                        }
+                    }
+                }
                 components::sidebar::Sidebar {}
                 main { class: "flex-1 bg-[#0f1115] overflow-y-auto flex flex-col justify-between h-full select-text pb-8",
                     if (active_page)() == SelectedPage::Chat {

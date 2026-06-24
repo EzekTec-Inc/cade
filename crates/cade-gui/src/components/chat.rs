@@ -22,6 +22,12 @@ pub fn ChatView() -> Element {
             .unwrap_or_default();
         let key = (state.api_key)();
         let mut msgs = state.messages;
+        let mut active_stream = state.active_stream;
+
+        // Abort the previous stream on conversation/agent switch
+        active_stream().0.store(true, std::sync::atomic::Ordering::Release);
+        active_stream.set(crate::types::SafeAbortHandle::default());
+
         spawn(async move {
             if !agent_id.is_empty() {
                 if let Ok(list) = api::get_messages(&agent_id, &key, conv_id.as_deref()).await {
@@ -425,7 +431,7 @@ fn input_area(
     api_key: Signal<String>,
     active_conversation: Signal<Option<String>>,
 ) -> Element {
-    let state = use_context::<AppState>();
+    let mut state = use_context::<AppState>();
     let mut do_send = move || {
         let text = input_text().trim().to_string();
         if text.is_empty() || is_loading() {
@@ -436,6 +442,10 @@ fn input_area(
 
         let stream_id = format!("streaming-{}", js_sys::Date::now() as u64);
         let timestamp = js_sys::Date::now() as u64;
+
+        // Abort controller setup for the active stream (safe atomic bool cancel token)
+        let cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        state.active_stream.set(crate::types::SafeAbortHandle(cancel_token.clone()));
 
         // Optimistically insert user message + placeholder assistant message
         let mut current_msgs = messages();
@@ -467,7 +477,8 @@ fn input_area(
                 &text,
                 &key,
                 conv_id.as_deref(),
-                |event| {
+                Some(cancel_token),
+                |event: cade_api_types::StreamEvent| {
                     match event.msg_type() {
                         "assistant_message" => {
                             if let Some(delta) = event.content() {

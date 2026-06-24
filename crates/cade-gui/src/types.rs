@@ -48,6 +48,17 @@ pub enum ToastLevel {
 /// Fields are `Signal<T>` — a `Clone`-and-`Copy` smart pointer so the
 /// whole struct derives `Clone` and can be cheaply shared across
 /// components via `use_context`.
+
+
+#[derive(Clone, Default)]
+pub struct SafeAbortHandle(pub std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl PartialEq for SafeAbortHandle {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct AppState {
     pub api_key: Signal<String>,
@@ -59,6 +70,9 @@ pub struct AppState {
     pub conversations: Signal<Vec<cade_api_types::ConversationInfo>>,
     pub active_conversation: Signal<Option<String>>,
     pub toasts: Signal<Vec<ToastMessage>>,
+    pub global_error: Signal<Option<String>>,
+    pub active_stream_id: Signal<Option<String>>,
+    pub active_stream: Signal<SafeAbortHandle>,
 }
 
 /// Helper: push a toast notification into global state.

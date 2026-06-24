@@ -76,6 +76,7 @@ pub async fn stream_messages<F>(
     input: &str,
     api_key: &str,
     conversation_id: Option<&str>,
+    cancel_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     mut on_event: F,
 ) -> Result<(), String>
 where
@@ -94,6 +95,7 @@ where
     opts.set_mode(RequestMode::Cors);
     let js_body = JsValue::from_str(&body_str);
     opts.set_body(&js_body);
+
 
     let request = Request::new_with_str_and_init(&path, &opts).map_err(|e| format!("{:?}", e))?;
     request
@@ -121,6 +123,11 @@ where
     let mut buffer = String::new();
 
     loop {
+        if let Some(token) = &cancel_token {
+            if token.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("aborted".to_string());
+            }
+        }
         let result = JsFuture::from(reader.read())
             .await
             .map_err(|e| format!("{:?}", e))?;
