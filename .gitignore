@@ -2,11 +2,15 @@ PLAN.md
 /target
 .cade-db.key
 .cade/
+.cade
 .fastembed_cache/
 .cargo/
 .env
 .gemini/
 .abacusai/
+.pi/**.*
+.letta/
+.letta
 conductor/
 CHANGELOG.md
 CLAUDE.md
