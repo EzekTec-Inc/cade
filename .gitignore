@@ -8,7 +8,8 @@ PLAN.md
 .env
 .gemini/
 .abacusai/
-.pi/**.*
+.pi/
+.pi
 .letta/
 .letta
 conductor/
