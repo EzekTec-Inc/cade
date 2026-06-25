@@ -132,6 +132,34 @@ pub trait ExecutionBackend: Send + Sync {
 
 // endregion: --- ExecutionBackend trait
 
+// region:    --- SandboxManager
+
+/// A high-level sandbox execution manager that wraps backend drivers.
+pub struct SandboxManager {
+    backend: Box<dyn ExecutionBackend>,
+}
+
+impl SandboxManager {
+    /// Create a new SandboxManager initialized with the given profile.
+    pub fn new(profile: &ExecutionProfile) -> Self {
+        Self {
+            backend: backend_from_profile(profile),
+        }
+    }
+
+    /// Execute a command securely using the managed backend.
+    pub async fn execute(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+        self.backend.exec_bash(command, cwd, timeout_secs).await
+    }
+
+    /// Human-readable active sandbox name.
+    pub fn name(&self) -> &'static str {
+        self.backend.name()
+    }
+}
+
+// endregion: --- SandboxManager
+
 // region:    --- Factory
 
 use cade_core::settings::ExecutionProfile;

@@ -608,8 +608,8 @@ impl TuiApp {
                     }
                     EditorAction::Submit(text) => {
                         if !text.trim().is_empty() {
+                            self.dispatch(crate::app::reducer::TuiAction::SendMessage(text.clone()));
                             self.editor.clear();
-                            self.draw_dirty = true;
                             return Ok(Some(Some(text)));
                         } else {
                             self.editor.clear();
@@ -662,14 +662,7 @@ impl TuiApp {
         let action = match action.downcast::<crate::app::copy_overlay::CopyAction>() {
             Ok(copy_action) => {
                 let text = copy_action.0;
-
-                crate::app::clipboard::write_to_clipboard(&text);
-
-                self.show_toast(
-                    "Content copied to clipboard",
-                    crate::app::ToastLevel::Success,
-                );
-                self.draw_dirty = true;
+                self.dispatch(crate::app::reducer::TuiAction::CopyBlock(text));
                 return Ok(None);
             }
             Err(action) => action,

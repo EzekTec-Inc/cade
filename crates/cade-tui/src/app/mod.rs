@@ -7,6 +7,7 @@ pub mod layout;
 pub mod password;
 pub mod permission_overlay;
 pub mod questions;
+pub mod reducer;
 pub mod render;
 pub mod state;
 pub mod timeline;
@@ -50,6 +51,7 @@ use cade_core::permissions::PermissionMode;
 
 use layout::helpers::{abbreviate_cwd, display_tool_name};
 pub use layout::helpers::{cycle_mode, cycle_mode_back, truncate_str};
+pub use reducer::TuiAction;
 use render::{count_wrapped_rows, render_frame};
 
 // -- Constants
