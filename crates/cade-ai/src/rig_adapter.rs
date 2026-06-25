@@ -42,9 +42,16 @@ impl<M: CompletionModel + rig::completion::Prompt + Send + Sync> LlmProvider for
 
     async fn stream(
         &self,
-        _req: &CompletionRequest,
+        req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
-        Err(crate::Error::custom("Streaming is not yet implemented for the Rig Adapter"))
+        let res = self.complete(req).await?;
+        let content = res.content.unwrap_or_default();
+        
+        let s = async_stream::stream! {
+            yield Ok(StreamChunk::Text(content));
+            yield Ok(StreamChunk::Done);
+        };
+        Ok(Box::pin(s))
     }
 }
 

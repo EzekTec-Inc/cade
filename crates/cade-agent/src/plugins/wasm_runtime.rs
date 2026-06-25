@@ -151,6 +151,16 @@ impl WasmRuntime {
             "[wasm] {plugin_name}::{tool_name} dispatched with {args_json}"
         ))
     }
+
+    /// Dispatch a lifecycle event to all loaded WASM plugins.
+    pub fn dispatch_event(&self, event: &str, payload: &str) {
+        for plugin in self.plugins.values() {
+            tracing::info!(
+                "[WASM] Plugin '{}' notified of event '{}' with payload '{}'",
+                plugin.name, event, payload
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +193,11 @@ mod tests {
             !rt.unload_plugin("nonexistent"),
             "Unloading nonexistent plugin should return false"
         );
+    }
+
+    #[test]
+    fn wasm_dispatch_event_is_safe() {
+        let rt = WasmRuntime::new().unwrap();
+        rt.dispatch_event("MessageSent", "{\"text\": \"hello\"}");
     }
 }

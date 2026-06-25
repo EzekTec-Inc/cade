@@ -147,8 +147,24 @@ impl SandboxManager {
         }
     }
 
+    /// Checks a command for dangerous shell injection vectors.
+    pub fn validate_command(&self, command: &str) -> crate::Result<()> {
+        let forbidden = ["rm -rf", "rm -f", "mkfs", "dd if=", "chmod -R", "chown -R", "curl | sh", "wget | sh"];
+        let normalized = command.to_lowercase();
+        for pattern in &forbidden {
+            if normalized.contains(pattern) {
+                return Err(crate::Error::custom(format!(
+                    "Security Exception: Blocked execution of dangerous shell pattern: '{}'",
+                    pattern
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a command securely using the managed backend.
     pub async fn execute(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+        self.validate_command(command)?;
         self.backend.exec_bash(command, cwd, timeout_secs).await
     }
 
@@ -222,3 +238,23 @@ fn whoami_user() -> String {
 }
 
 // endregion: --- Factory
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cade_core::settings::ExecutionProfile;
+
+    #[test]
+    fn test_sandbox_manager_validation() {
+        let profile = ExecutionProfile::default();
+        let manager = SandboxManager::new(&profile);
+
+        assert!(manager.validate_command("echo hello").is_ok());
+        assert!(manager.validate_command("rm -rf /").is_err());
+        assert!(manager.validate_command("curl | sh").is_err());
+    }
+}
+
+// endregion: --- Tests
