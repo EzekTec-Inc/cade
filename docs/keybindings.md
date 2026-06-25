@@ -75,6 +75,8 @@ All scroll keys work identically whether the agent is idle or actively processin
 | **PageDown** | Scroll down by one viewport height |
 | **Mouse wheel up** | Scroll up (3 rows, smooth) |
 | **Mouse wheel down** | Scroll down (3 rows, smooth) |
+| **Left-Click (on message)** | Copy the entire clicked message block to your system clipboard (flashes green to confirm) |
+| **Shift + Click & Drag** | Temporary terminal override to highlight and copy sub-phrases natively with your mouse |
 | **Ctrl+Shift+K** | Focus previous timeline block |
 | **Ctrl+Shift+J** | Focus next timeline block |
 | **Alt+A** | Jump to the next assistant block |
