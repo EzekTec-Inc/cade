@@ -158,11 +158,6 @@ impl Repl {
                     }
                     let mut names = vec![];
                     for skill in &new_skills {
-                        let label = format!("skill:{}", skill.id);
-                        let _ = self
-                            .client
-                            .upsert_memory(&agent_id, &label, &skill.to_context_block(), None)
-                            .await;
                         names.push(skill.name.clone());
                     }
 
@@ -181,7 +176,7 @@ impl Repl {
                     if new_count > 0 {
                         let list = names.join(", ");
                         let notify = format!(
-                            "[System: Skills reloaded. Now active: {list}. \
+                            "[System: Skills reloaded. Available skills: {list}. \
                                          Use load_skill(id) to load any skill's full content.]"
                         );
                         self.agent_turn(stdout, &notify).await?;
