@@ -909,6 +909,11 @@ pub struct TuiApp {
     /// Currently active focused region in the workspace
     pub focused_region: crate::slots::FocusRegion,
 
+    /// Last received keypress timestamp for flood throttling.
+    pub last_keypress: std::time::Instant,
+    /// Stored state indicating whether high-velocity simulated pasting is active.
+    pub is_pasting: bool,
+
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
     pub file_ac: FileAutocompleteProvider,
@@ -1112,6 +1117,8 @@ impl TuiApp {
             content_version: 0,
             prepared_cache: None,
             focused_region: crate::slots::FocusRegion::Input,
+            last_keypress: std::time::Instant::now(),
+            is_pasting: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider::new(
                 vec![],

@@ -1,5 +1,28 @@
 use super::*;
 
+/// Read raw image pixels from the OS clipboard (arboard) and encode to base64 PNG.
+pub(crate) fn read_clipboard_image() -> Option<(String, u32, u32, String)> {
+    let mut cb = arboard::Clipboard::new().ok()?;
+    let img = cb.get_image().ok()?;
+    
+    let mut png_bytes = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+    use image::ImageEncoder;
+    if encoder.write_image(&img.bytes, img.width as u32, img.height as u32, image::ColorType::Rgba8.into()).is_ok() {
+        use base64::Engine;
+        let b64 = base64::prelude::BASE64_STANDARD.encode(&png_bytes);
+        Some(("image/png".to_string(), img.width as u32, img.height as u32, b64))
+    } else {
+        None
+    }
+}
+
+/// Read text content from the OS clipboard (arboard).
+pub(crate) fn read_clipboard_text() -> Option<String> {
+    let mut cb = arboard::Clipboard::new().ok()?;
+    cb.get_text().ok()
+}
+
 /// Write `text` to the system clipboard via OSC 52 escape sequence, falling
 /// back to `arboard` for native access.  Returns `true` if at least one
 /// mechanism succeeded.

@@ -106,7 +106,9 @@ impl TuiApp {
                         if was_empty && !self.editor.is_empty() {
                             self.last_status = None;
                         }
-                        self.draw()?;
+                        if !self.is_pasting {
+                            self.draw()?;
+                        }
                     }
                 }
                 Event::Paste(text) => {
@@ -170,6 +172,17 @@ impl TuiApp {
         history: &mut [String],
         hist_idx: &mut Option<usize>,
     ) -> Result<Option<Option<String>>> {
+        // Track key event velocity for simulated paste flood throttling (TUI-6)
+        let now = std::time::Instant::now();
+        let delta = now.duration_since(self.last_keypress);
+        self.last_keypress = now;
+
+        if delta.as_millis() < 3 {
+            self.is_pasting = true;
+        } else if delta.as_millis() >= 100 {
+            self.is_pasting = false;
+        }
+
         // Some(None)        = Ctrl+D (exit)
         // Some(Some(s))     = line submitted
         // None              = continue reading
@@ -333,6 +346,20 @@ impl TuiApp {
                         &self.lines,
                     )));
                 self.draw_dirty = true;
+            }
+
+            KeyCode::Char('v') | KeyCode::Char('V')
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image() {
+                    self.handle_image_paste(&media_type, b64, w, h);
+                    self.show_toast("Pasted image from clipboard", ToastLevel::Success);
+                } else if let Some(text) = crate::app::clipboard::read_clipboard_text() {
+                    self.editor.handle_paste(&text);
+                    self.draw_dirty = true;
+                }
+                return Ok(None);
             }
 
             KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -568,6 +595,7 @@ impl TuiApp {
                             .and_then(|a| {
                                 a.downcast_mut::<crate::autocomplete::AutocompleteOverlay>()
                             })
+                            && !self.is_pasting
                         {
                             ac.update_suggestions(
                                 &self.editor.text(),
@@ -581,28 +609,30 @@ impl TuiApp {
                             }
                         }
 
-                        if let KeyCode::Char('/') = k.code {
-                            let input_text = self.editor.text();
-                            let cursor_pos = self.editor.cursor_pos();
-                            let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
-                            if !suggestions.is_empty() {
-                                self.overlays.push(Box::new(
-                                    crate::autocomplete::AutocompleteOverlay::new(
-                                        suggestions,
-                                        cursor_pos.saturating_sub(1),
-                                        cursor_pos,
-                                    ),
-                                ));
+                        if !self.is_pasting {
+                            if let KeyCode::Char('/') = k.code {
+                                let input_text = self.editor.text();
+                                let cursor_pos = self.editor.cursor_pos();
+                                let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
+                                if !suggestions.is_empty() {
+                                    self.overlays.push(Box::new(
+                                        crate::autocomplete::AutocompleteOverlay::new(
+                                            suggestions,
+                                            cursor_pos.saturating_sub(1),
+                                            cursor_pos,
+                                        ),
+                                    ));
+                                }
                             }
-                        }
-                        if let KeyCode::Char('@') = k.code {
-                            let cursor_pos = self.editor.cursor_pos();
-                            let at_pos = cursor_pos.saturating_sub(1);
-                            self.overlays.push(Box::new(crate::app::PickerState::new(
-                                at_pos,
-                                String::new(),
-                                &self.file_ac,
-                            )));
+                            if let KeyCode::Char('@') = k.code {
+                                let cursor_pos = self.editor.cursor_pos();
+                                let at_pos = cursor_pos.saturating_sub(1);
+                                self.overlays.push(Box::new(crate::app::PickerState::new(
+                                    at_pos,
+                                    String::new(),
+                                    &self.file_ac,
+                                )));
+                            }
                         }
                         return Ok(None);
                     }
