@@ -61,3 +61,13 @@ A centralized, thread-safe service that coordinates exclusive write locks on abs
 
 #### Ephemeral Branch Sandboxing (Workspace Isolation)
 A workflow isolation strategy where concurrent **Subagents** execute inside cloned, temporary workspace folders. This isolates compilation and file mutation, merging all changes back into the primary workspace as a unified, conflict-resolved merge request.
+
+---
+
+### 5. Client Integration & Human-In-The-Loop
+
+#### Approval Requested Event
+An asynchronous Server-Sent Event (SSE) pushed by the server to notify the client instantly that a background **Subagent** has suspended execution and is awaiting user permission on a mutating tool call.
+
+#### /approvals, /approve, /deny
+Interactive REPL slash commands that enable the user to view the active pending approvals queue, authorize executing a blocked tool call, or deny it to redirect the subagent's plan.
