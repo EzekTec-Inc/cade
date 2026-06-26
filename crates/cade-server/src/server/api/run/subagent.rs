@@ -274,18 +274,25 @@ impl SubagentEventEmitter for SseEventEmitter {
     }
 }
 
-pub struct SubagentExecutor<'a> {
-    pub state: &'a AppState,
-    pub parent_agent_id: &'a str,
-    pub tool_call_id: &'a str,
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait SubagentExecutor: Send + Sync {
+    async fn execute(self: Box<Self>, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult;
+}
+
+pub struct CadeSubagentExecutor {
+    pub state: AppState,
+    pub parent_agent_id: String,
+    pub tool_call_id: String,
     pub emitter: Box<dyn SubagentEventEmitter>,
 }
 
-impl<'a> SubagentExecutor<'a> {
+impl CadeSubagentExecutor {
     pub fn new(
-        state: &'a AppState,
-        parent_agent_id: &'a str,
-        tool_call_id: &'a str,
+        state: AppState,
+        parent_agent_id: String,
+        tool_call_id: String,
         emitter: Box<dyn SubagentEventEmitter>,
     ) -> Self {
         Self {
@@ -295,12 +302,15 @@ impl<'a> SubagentExecutor<'a> {
             emitter,
         }
     }
+}
 
-    pub async fn execute(self, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult {
+#[async_trait]
+impl SubagentExecutor for CadeSubagentExecutor {
+    async fn execute(self: Box<Self>, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult {
         handle_run_subagent_tool_inner(
-            self.state,
-            self.parent_agent_id,
-            self.tool_call_id,
+            &self.state,
+            &self.parent_agent_id,
+            &self.tool_call_id,
             args,
             self.emitter,
         )
@@ -315,12 +325,12 @@ pub(super) async fn handle_run_subagent_tool(
     args: &serde_json::Value,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
-    let executor = SubagentExecutor::new(
-        state,
-        parent_agent_id,
-        tool_call_id,
+    let executor: Box<dyn SubagentExecutor> = Box::new(CadeSubagentExecutor::new(
+        state.clone(),
+        parent_agent_id.to_string(),
+        tool_call_id.to_string(),
         Box::new(SseEventEmitter { tx: sse_tx }),
-    );
+    ));
     executor.execute(args).await
 }
 

@@ -74,3 +74,6 @@ Interactive REPL slash commands that enable the user to view the active pending 
 
 #### Adaptive Typewriter Governor
 A rendering governor in `cade-tui` that evaluates the unrevealed streaming backlog and dynamically scales the character reveal rate up to an instant snap-to-bottom bypass, eliminating latency during large data dumps.
+
+#### Subagent Executor Trait
+An asynchronous, trait-based seam in CADE's server that decouples subagent execution, database persistence, and LLM routes from downstream HTTP endpoints, enabling high modularity and mockable testability.
