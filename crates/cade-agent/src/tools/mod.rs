@@ -1,5 +1,6 @@
 // region:    --- Modules
 
+pub mod file_lock;
 pub mod ask;
 pub mod bash;
 pub mod bash_agent;

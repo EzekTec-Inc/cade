@@ -200,6 +200,11 @@ impl WriteTool {
             .as_str()
             .ok_or_else(|| crate::Error::custom("write_file: missing 'content'".to_string()))?;
 
+        // Acquire exclusive write lock for file path to prevent concurrent write clobbering (ADR 6)
+        let _lock = crate::tools::file_lock::FileLockManager::global()
+            .acquire_lock(Path::new(path))
+            .await;
+
         if let Some(parent) = Path::new(path).parent()
             && !parent.as_os_str().is_empty()
         {
@@ -248,6 +253,11 @@ impl EditTool {
             .as_str()
             .ok_or_else(|| crate::Error::custom("edit_file: missing 'new_string'".to_string()))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+        // Acquire exclusive write lock for file path to prevent concurrent write clobbering (ADR 6)
+        let _lock = crate::tools::file_lock::FileLockManager::global()
+            .acquire_lock(Path::new(path))
+            .await;
 
         let content = std::fs::read_to_string(path)
             .map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
@@ -342,6 +352,35 @@ fn validate_patch_paths(patch_str: &str) -> Result<()> {
     Ok(())
 }
 
+fn extract_patch_paths(patch_str: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in patch_str.lines() {
+        let path_opt = if let Some(rest) = line.strip_prefix("--- ") {
+            rest.split_whitespace().next()
+        } else if let Some(rest) = line.strip_prefix("+++ ") {
+            rest.split_whitespace().next()
+        } else {
+            None
+        };
+
+        let Some(path) = path_opt else { continue };
+        let p = path.trim();
+        if p.is_empty() || p == "/dev/null" {
+            continue;
+        }
+        let clean_path = if p.starts_with("a/") || p.starts_with("b/") {
+            &p[2..]
+        } else {
+            p
+        };
+        let pbuf = PathBuf::from(clean_path);
+        if !paths.contains(&pbuf) {
+            paths.push(pbuf);
+        }
+    }
+    paths
+}
+
 impl ApplyPatchTool {
     pub async fn run(args: &Value) -> Result<String> {
         let patch_str = args["patch"]
@@ -349,6 +388,16 @@ impl ApplyPatchTool {
             .ok_or_else(|| crate::Error::custom("apply_patch: missing 'patch'".to_string()))?;
 
         validate_patch_paths(patch_str)?;
+
+        // Acquire exclusive write locks on all patch target paths to prevent concurrent write clobbering (ADR 6)
+        let patch_paths = extract_patch_paths(patch_str);
+        let mut _locks = Vec::new();
+        for path in &patch_paths {
+            let lock = crate::tools::file_lock::FileLockManager::global()
+                .acquire_lock(path)
+                .await;
+            _locks.push(lock);
+        }
 
         // On Windows, the `patch` utility is not available natively.
         // Users need Git for Windows (which bundles patch) or WSL.
