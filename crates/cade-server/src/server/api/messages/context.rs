@@ -1178,7 +1178,8 @@ fn assemble_system_prompt_memory(
     };
 
     // 2. Promote stale short blocks to long.
-    let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, STALE_THRESHOLD);
+    let stale_threshold = MemoryBudgets::stale_threshold_for_model(&agent.model);
+    let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, stale_threshold);
 
     // 3. A1: Unified adaptive packing — priority-ordered greedy fill.
     //
@@ -1473,7 +1474,7 @@ fn assemble_system_prompt_memory(
             }
         }
 
-        dynamic_core.push_str(MEMORY_AWARENESS_FOOTER);
+        dynamic_core.push_str(&memory_awareness_footer(&agent.model));
 
         (static_core, dynamic_core)
     }

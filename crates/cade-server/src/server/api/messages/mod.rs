@@ -31,8 +31,7 @@ pub(crate) const PINNED_BUDGET_MIN: usize = 10_000;
 pub(crate) const SHORT_BUDGET_MIN: usize = 25_000;
 /// Minimum character budget for the long-term archived index (label + 80-char excerpt).
 pub(crate) const LONG_BUDGET_MIN: usize = 5_000;
-/// Turns of inactivity before a short-term block is promoted to long-term.
-pub(crate) const STALE_THRESHOLD: i64 = 80;
+
 
 /// Fraction of the message budget at which `build_context` proactively
 /// signals the Sleeptime consolidation task.  Lowered from 80% → 70% as
@@ -91,14 +90,34 @@ impl MemoryBudgets {
         let obs_chars = ((window_tokens as f64 / 32_000.0) * 2_000.0).round() as usize;
         (obs_count.clamp(30, 200), obs_chars.clamp(2_000, 16_000))
     }
+
+    /// Compute the dynamic archiving idle turn threshold based on the model's context window.
+    pub fn stale_threshold_for_model(model: &str) -> i64 {
+        let window_tokens = catalogue::context_window_for_model(model) as f64;
+        let threshold = (window_tokens / 2500.0).round() as i64;
+        threshold.clamp(15, 500)
+    }
+
+    /// Compute the dynamic decay idle turn threshold based on the model's context window.
+    /// Typically scales proportionally with the archiving threshold.
+    pub fn decay_threshold_for_model(model: &str) -> i64 {
+        let archiving_threshold = Self::stale_threshold_for_model(model);
+        (archiving_threshold / 4).max(3)
+    }
 }
 /// Awareness footer appended to system prompt when any memory tier is present.
-pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 80+ turns are \
-archived. The Archived Memory section above lists them with label + excerpt only. \
-To retrieve a full archived block, call the `search_memory` tool with a keyword — \
-matched blocks are automatically promoted back to active memory. \
-To search dropped conversation history, use the `conversation_search` tool. \
-To keep a critical block permanently active, ask the user to run `/memory pin <label>`.";
+pub(crate) fn memory_awareness_footer(model: &str) -> String {
+    let stale_threshold = MemoryBudgets::stale_threshold_for_model(model);
+    format!(
+        "\n\nMemory system: blocks idle for {}+ turns are \
+         archived. The Archived Memory section above lists them with label + excerpt only. \
+         To retrieve a full archived block, call the `search_memory` tool with a keyword — \
+         matched blocks are automatically promoted back to active memory. \
+         To search dropped conversation history, use the `conversation_search` tool. \
+         To keep a critical block permanently active, ask the user to run `/memory pin <label>`.",
+        stale_threshold
+    )
+}
 /// Cap on a single tool-result content string (chars). ~2k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
 /// 8 192 chars covers the vast majority of useful tool outputs (diffs, file
