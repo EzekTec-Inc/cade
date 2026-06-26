@@ -300,6 +300,18 @@ impl Repl {
                             let _ = app.push(cade_tui::RenderLine::ErrorMsg(err.to_string()));
                         }
                     }
+                    "approval_requested" => {
+                        let subagent = msg.data["subagent_id"].as_str().unwrap_or("subagent");
+                        let tool = msg.data["tool_name"].as_str().unwrap_or("tool");
+                        let text = format!("⚠️ Background Subagent [{}] requests permission to run {}. Type /approvals to review.", subagent, tool);
+                        let mut app = app_arc.lock();
+                        app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
+                        let _ = app.push(RenderLine::SystemMsg(text));
+                        // Ring terminal bell
+                        print!("\x07");
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
                     _ => {}
                 }
             }
