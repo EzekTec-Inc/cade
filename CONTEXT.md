@@ -77,3 +77,6 @@ A rendering governor in `cade-tui` that evaluates the unrevealed streaming backl
 
 #### Subagent Executor Trait
 An asynchronous, trait-based seam in CADE's server that decouples subagent execution, database persistence, and LLM routes from downstream HTTP endpoints, enabling high modularity and mockable testability.
+
+#### Permission Service
+An asynchronous, trait-based security seam in `cade-core` that unifies CADE's human-in-the-loop authorization boundaries, delegating prompting and approval actions to pluggable, context-specific adapters.

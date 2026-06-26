@@ -975,69 +975,20 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     let is_yolo = std::env::var("CADE_YOLO").map(|v| v == "true").unwrap_or(false)
                         || cfg!(test);
                     if !is_yolo {
-                        let approval_id = format!("app-{}", uuid::Uuid::new_v4());
-                        let args_str = tc.arguments.to_string();
-                        if let Err(e) = cade_store::sqlite::create_pending_approval(
-                            &state.db,
-                            &approval_id,
-                            parent_agent_id,
-                            Some(&subagent_id),
-                            &tc.name,
-                            &args_str,
-                        ) {
-                            tracing::warn!("Failed to create pending approval: {e}");
-                        } else {
-                            // Trigger native desktop notification
-                            let title = "CADE Approval Request";
-                            let body = format!("Subagent [{}] requests permission to run {}.", subagent_id, tc.name);
-                            #[cfg(target_os = "linux")]
-                            {
-                                let _ = std::process::Command::new("notify-send")
-                                    .arg(title)
-                                    .arg(&body)
-                                    .spawn();
-                            }
-                            #[cfg(target_os = "macos")]
-                            {
-                                let apple_script = format!(
-                                    "display notification \"{}\" with title \"{}\"",
-                                    body.replace("\"", "\\\""),
-                                    title
-                                );
-                                let _ = std::process::Command::new("osascript")
-                                    .arg("-e")
-                                    .arg(&apple_script)
-                                    .spawn();
-                            }
-
-                            // Wait for approval
-                            let timeout_secs = 600;
-                            let start_time = std::time::Instant::now();
-                            let mut poll_interval = std::time::Duration::from_millis(200);
-                            let mut approved = false;
-
-                            loop {
-                                if start_time.elapsed().as_secs() > timeout_secs {
-                                    permission_error_msg = "Approval request timed out after 10 minutes.".to_string();
-                                    break;
-                                }
-
-                                if let Ok(Some(status)) = cade_store::sqlite::get_approval_status(&state.db, &approval_id) {
-                                    if status == "approved" {
-                                        approved = true;
-                                        break;
-                                    } else if status == "denied" {
-                                        permission_error_msg = format!("Permission Denied: User denied execution of tool '{}'.", tc.name);
-                                        break;
-                                    }
-                                }
-
-                                tokio::time::sleep(poll_interval).await;
-                                poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
-                            }
-
-                            if !approved {
+                        let service = HeadlessQueueAdapter {
+                            db: state.db.clone(),
+                            parent_agent_id: parent_agent_id.to_string(),
+                            subagent_id: subagent_id.clone(),
+                        };
+                        use cade_core::permissions::PermissionService;
+                        match service.request_permission(&tc.name, &tc.arguments).await {
+                            Ok(true) => {}
+                            Ok(false) => {
                                 permission_denied = true;
+                            }
+                            Err(e) => {
+                                permission_denied = true;
+                                permission_error_msg = e;
                             }
                         }
                     }
@@ -1739,5 +1690,79 @@ mod tests {
         assert_eq!(fs::read_to_string(src.path().join("new.txt"))?, "fresh file");
 
         Ok(())
+    }
+}
+
+pub struct HeadlessQueueAdapter {
+    pub db: cade_store::sqlite::Db,
+    pub parent_agent_id: String,
+    pub subagent_id: String,
+}
+
+#[async_trait]
+impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
+    async fn request_permission(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<bool, String> {
+        let approval_id = format!("app-{}", uuid::Uuid::new_v4());
+        let args_str = args.to_string();
+        if let Err(e) = cade_store::sqlite::create_pending_approval(
+            &self.db,
+            &approval_id,
+            &self.parent_agent_id,
+            Some(&self.subagent_id),
+            tool_name,
+            &args_str,
+        ) {
+            tracing::warn!("Failed to create pending approval: {e}");
+            return Ok(false);
+        }
+
+        // Trigger native desktop notification
+        let title = "CADE Approval Request";
+        let body = format!("Subagent [{}] requests permission to run {}.", self.subagent_id, tool_name);
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("notify-send")
+                .arg(title)
+                .arg(&body)
+                .spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let apple_script = format!(
+                "display notification \"{}\" with title \"{}\"",
+                body.replace("\"", "\\\""),
+                title
+            );
+            let _ = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(&apple_script)
+                .spawn();
+        }
+
+        // Wait for approval
+        let timeout_secs = 600;
+        let start_time = std::time::Instant::now();
+        let mut poll_interval = std::time::Duration::from_millis(200);
+
+        loop {
+            if start_time.elapsed().as_secs() > timeout_secs {
+                return Err("Approval request timed out after 10 minutes.".to_string());
+            }
+
+            if let Ok(Some(status)) = cade_store::sqlite::get_approval_status(&self.db, &approval_id) {
+                if status == "approved" {
+                    return Ok(true);
+                } else if status == "denied" {
+                    return Ok(false);
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+            poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
+        }
     }
 }
