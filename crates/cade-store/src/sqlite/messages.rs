@@ -137,33 +137,33 @@ pub fn list_messages_since_last_compaction(
     let sql = if conversation_id.is_some() {
         "WITH boundary AS (
              SELECT COALESCE(
-                 (SELECT rowid FROM messages
+                 (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
                  0
-             ) AS marker_rowid
+             ) AS marker_ts
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
          FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2
            AND role != 'compaction'
-           AND rowid > (SELECT marker_rowid FROM boundary)
+           AND created_at > (SELECT marker_ts FROM boundary)
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?3"
     } else {
         "WITH boundary AS (
              SELECT COALESCE(
-                 (SELECT rowid FROM messages
+                 (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
                  0
-             ) AS marker_rowid
+             ) AS marker_ts
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
          FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL
            AND role != 'compaction'
-           AND rowid > (SELECT marker_rowid FROM boundary)
+           AND created_at > (SELECT marker_ts FROM boundary)
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?3"
     };
@@ -260,18 +260,18 @@ pub fn get_context_window(
 ) -> Result<Vec<MessageRow>> {
     let conn = db.get()?;
 
-    // The CTE `boundary` finds the rowid of the most recent compaction marker.
+    // The CTE `boundary` finds the created_at of the most recent compaction marker.
     // If none exists, COALESCE falls back to 0 (scan all messages).
-    // The `ranked` CTE then only considers messages with rowid > boundary
+    // The `ranked` CTE then only considers messages with created_at > boundary
     // and role != 'compaction', applying the usual char_budget windowing.
     let sql = if conversation_id.is_some() {
         "WITH boundary AS (
              SELECT COALESCE(
-                 (SELECT rowid FROM messages
+                 (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
                  0
-             ) AS marker_rowid
+             ) AS marker_ts
          ),
          ranked AS (
              SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,
@@ -279,7 +279,7 @@ pub fn get_context_window(
              FROM messages
              WHERE agent_id = ?1 AND conversation_id = ?2
                AND role != 'compaction'
-               AND rowid > (SELECT marker_rowid FROM boundary)
+               AND created_at > (SELECT marker_ts FROM boundary)
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
          FROM ranked
@@ -288,11 +288,11 @@ pub fn get_context_window(
     } else {
         "WITH boundary AS (
              SELECT COALESCE(
-                 (SELECT rowid FROM messages
+                 (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
                  0
-             ) AS marker_rowid
+             ) AS marker_ts
          ),
          ranked AS (
              SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,
@@ -300,7 +300,7 @@ pub fn get_context_window(
              FROM messages
              WHERE agent_id = ?1 AND conversation_id IS NULL
                AND role != 'compaction'
-               AND rowid > (SELECT marker_rowid FROM boundary)
+               AND created_at > (SELECT marker_ts FROM boundary)
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
          FROM ranked
