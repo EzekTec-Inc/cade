@@ -90,3 +90,27 @@ Memory Blocks:
         }
     }
 }
+
+pub async fn defragment_database(state: &AppState) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let retention_period = 7 * 24 * 3600; // 7 days retention
+    let cut_off = now - retention_period;
+
+    let conn_res = state.db.get();
+    if let Ok(conn) = conn_res {
+        // 1. Delete older runs (ON DELETE CASCADE will automatically clean up run_events)
+        let _ = conn.execute("DELETE FROM runs WHERE created_at < ?1", rusqlite::params![cut_off]);
+        
+        // 2. Delete older event logs
+        let _ = conn.execute("DELETE FROM event_log WHERE created_at < ?1", rusqlite::params![cut_off]);
+
+        // 3. Execute VACUUM to reclaim disk space
+        let _ = conn.execute("VACUUM", []);
+        tracing::info!("Database defragmentation and GC completed successfully.");
+    } else {
+        tracing::warn!("Failed to obtain db connection for database defragmentation.");
+    }
+}

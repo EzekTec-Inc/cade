@@ -68,6 +68,7 @@ pub fn router(state: AppState) -> Router {
         // Health + server config
         .route("/v1/health", get(health::get_health))
         .route("/v1/config", get(health::get_config))
+        .route("/v1/defragment", post(health::defragment_database_handler))
         .route("/v1/approvals", get(approvals::list_approvals))
         .route("/v1/approvals/{id}/action", post(approvals::action_approval))
         .route(

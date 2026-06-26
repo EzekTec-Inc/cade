@@ -411,6 +411,23 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let task_preview: String = cfg.prompt.chars().take(80).collect();
     let prompt = cfg.prompt_with_test_command();
 
+    let use_isolation = std::env::var("CADE_ISOLATION").map(|v| v == "true").unwrap_or(false);
+    let temp_workspace = if use_isolation {
+        let root = std::env::current_dir().unwrap_or_default();
+        match clone_workspace_to_temp(&root) {
+            Ok(tmp) => {
+                tracing::info!("Subagent [{}] running inside isolated workspace sandbox at {:?}", subagent_id, tmp.path());
+                Some(tmp)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to clone workspace for subagent [{}]: {e}. Falling back to live host.", subagent_id);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Resolve subagent definition + model via shared helpers
     let cwd_for_defs = std::env::current_dir().unwrap_or_default();
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
@@ -1050,11 +1067,16 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     .await
                 } else {
                     let storage_backend = std::sync::Arc::new(super::storage_impl::ServerStorageBackend { state: state.clone() });
+                    let run_dir = if let Some(ref tw) = temp_workspace {
+                        tw.path().to_path_buf()
+                    } else {
+                        std::env::current_dir().unwrap_or_default()
+                    };
                     let mut runtime = cade_agent::tools::runtime::ToolRuntime::new(
                         storage_backend,
                         std::sync::Arc::clone(&state.mcp),
                         subagent_id.clone(),
-                        std::env::current_dir().unwrap_or_default(),
+                        run_dir,
                     );
                     runtime.allowed_paths = allowed_paths.clone();
 
@@ -1118,7 +1140,17 @@ ui_resource_uri: None,
 
     let (output, is_error) = match llm_err {
         Some(e) => (format!("Subagent error: {e}"), true),
-        None => (last_text, false),
+        None => {
+            if let Some(ref tw) = temp_workspace {
+                let root = std::env::current_dir().unwrap_or_default();
+                if let Err(e) = copy_back_temp_workspace(tw.path(), &root) {
+                    tracing::warn!("Failed to copy back isolated files for subagent [{}]: {e}", subagent_id);
+                } else {
+                    tracing::info!("Successfully merged isolated files back for subagent [{}]", subagent_id);
+                }
+            }
+            (last_text, false)
+        }
     };
 
     let result_preview: String = output.chars().take(200).collect();
@@ -1418,4 +1450,94 @@ fn is_mutating_tool(name: &str) -> bool {
         name,
         "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file"
     ) || name.contains("__")
+}
+
+fn clone_workspace_to_temp(src_dir: &std::path::Path) -> std::io::Result<tempfile::TempDir> {
+    let tmp = tempfile::tempdir()?;
+    let walker = ignore::WalkBuilder::new(src_dir)
+        .standard_filters(true)
+        .hidden(false)
+        .build();
+
+    for entry in walker {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(rel_path) = path.strip_prefix(src_dir) {
+                    let dest_path = tmp.path().join(rel_path);
+                    if let Some(parent) = dest_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::copy(path, dest_path)?;
+                }
+            }
+        }
+    }
+    Ok(tmp)
+}
+
+fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::path::Path) -> std::io::Result<()> {
+    let walker = ignore::WalkBuilder::new(temp_dir)
+        .standard_filters(true)
+        .hidden(false)
+        .build();
+
+    for entry in walker {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(rel_path) = path.strip_prefix(temp_dir) {
+                    let dest_path = src_dir.join(rel_path);
+                    
+                    // Check if file content differs
+                    let temp_bytes = std::fs::read(path)?;
+                    let host_bytes_opt = std::fs::read(&dest_path).ok();
+                    
+                    if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
+                        if let Some(parent) = dest_path.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        std::fs::write(&dest_path, &temp_bytes)?;
+                        tracing::info!("Copy back isolated file: {:?}", rel_path);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_workspace_cloning_and_copy_back() -> std::io::Result<()> {
+        let src = tempfile::tempdir()?;
+
+        // Create some mock source files
+        fs::write(src.path().join("a.txt"), "hello")?;
+        fs::create_dir(src.path().join("sub"))?;
+        fs::write(src.path().join("sub/b.txt"), "world")?;
+
+        // Clone it
+        let clone_dir = clone_workspace_to_temp(src.path())?;
+        assert!(clone_dir.path().join("a.txt").exists());
+        assert!(clone_dir.path().join("sub/b.txt").exists());
+
+        // Modify in clone
+        fs::write(clone_dir.path().join("a.txt"), "hello modified")?;
+        fs::write(clone_dir.path().join("sub/b.txt"), "world modified")?;
+        fs::write(clone_dir.path().join("new.txt"), "fresh file")?;
+
+        // Copy back
+        copy_back_temp_workspace(clone_dir.path(), src.path())?;
+
+        assert_eq!(fs::read_to_string(src.path().join("a.txt"))?, "hello modified");
+        assert_eq!(fs::read_to_string(src.path().join("sub/b.txt"))?, "world modified");
+        assert_eq!(fs::read_to_string(src.path().join("new.txt"))?, "fresh file");
+
+        Ok(())
+    }
 }
