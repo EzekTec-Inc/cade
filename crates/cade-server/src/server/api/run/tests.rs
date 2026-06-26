@@ -1193,4 +1193,13 @@ mod advanced_execution_tests {
         assert!(seq_result.0.output.contains("Step 0: bash ->\nhello"));
         assert!(seq_result.0.output.contains("Step 1: bash ->\nworld"));
     }
+
+    #[test]
+    fn test_team_mode_parsing_basic() {
+        use cade_agent::team::TeamMode;
+        assert_eq!(TeamMode::from_str("route"), Some(TeamMode::Route));
+        assert_eq!(TeamMode::from_str("tasks"), Some(TeamMode::Tasks));
+        assert_eq!(TeamMode::from_str("coordinate"), Some(TeamMode::Coordinate));
+        assert_eq!(TeamMode::from_str("broadcast"), Some(TeamMode::Broadcast));
+    }
 }

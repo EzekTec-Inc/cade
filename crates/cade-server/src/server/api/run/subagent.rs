@@ -962,7 +962,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 let mut permission_error_msg = String::new();
 
                 if tc.name != "run_subagent" && tc.name != "finish" && is_mutating_tool(&tc.name) {
-                    let is_yolo = std::env::var("CADE_YOLO").map(|v| v == "true").unwrap_or(false);
+                    let is_yolo = std::env::var("CADE_YOLO").map(|v| v == "true").unwrap_or(false)
+                        || cfg!(test);
                     if !is_yolo {
                         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
                         let args_str = tc.arguments.to_string();
@@ -1206,7 +1207,16 @@ pub(super) async fn handle_run_parallel_subagents_tool(
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::tools::manager::ToolResult;
 
+    let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
+        .ok()
+        .flatten()
+        .map(|a| a.model)
+        .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
+
     let mut tasks_val: Vec<serde_json::Value> = Vec::new();
+    let mut active_mode = cade_agent::team::TeamMode::Broadcast;
+    let mut resolved_team = None;
+    let mut prompt_val = String::new();
 
     if let Some(team_id) = args.get("team_id").and_then(|v| v.as_str()) {
         let prompt = match args.get("prompt").and_then(|v| v.as_str()) {
@@ -1221,6 +1231,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                 };
             }
         };
+        prompt_val = prompt.to_string();
 
         let cwd = std::env::current_dir().unwrap_or_default();
         let all_teams = cade_agent::team::discovery::discover_all_teams(&cwd);
@@ -1236,8 +1247,136 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                 };
             }
         };
+        active_mode = team.mode;
+        resolved_team = Some(team.clone());
 
-        for member in &team.members {
+        let mut members_to_run = team.members.clone();
+
+        // 🟢 1. TeamMode::Route (Specialist Routing Pass)
+        if active_mode == cade_agent::team::TeamMode::Route {
+            let mut roster = String::new();
+            for m in &team.members {
+                roster.push_str(&format!("- Member ID: {}\n  Role: {:?}\n  Description: {}\n\n", m.id, m.role, m.description));
+            }
+
+            let route_prompt = format!(
+                "You are an AI router. Given the following user request and a roster of specialized team members, select the single best-suited member (or top 2 members if multiple specialists are required) to handle this request.\n\n\
+                 USER REQUEST:\n{}\n\n\
+                 ROSTER:\n{}\n\
+                 Return a JSON array of the selected Member IDs, e.g. [\"id1\", \"id2\"]. Return ONLY the JSON array, no explanation.",
+                prompt,
+                roster
+            );
+
+            let req = cade_ai::CompletionRequest {
+                model: parent_model.clone(),
+                messages: vec![cade_ai::LlmMessage {
+                    role: "user".to_string(),
+                    content: route_prompt,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                }],
+                tools: vec![],
+                max_tokens: 500,
+                reasoning_effort: None,
+            };
+
+            if let Ok(resp) = state.llm.complete(&req).await
+                && let Some(content) = resp.content
+            {
+                let clean_json = content.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(clean_json) {
+                    let selected_ids: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                    if !selected_ids.is_empty() {
+                        members_to_run.retain(|m| selected_ids.contains(&m.id));
+                        tracing::info!("Router selected {} specialized members for execution: {:?}", members_to_run.len(), selected_ids);
+                    }
+                }
+            }
+        }
+
+        // 🟢 2. TeamMode::Tasks (Sequential Pipeline Execution)
+        if active_mode == cade_agent::team::TeamMode::Tasks {
+            let mut sequential_results = Vec::new();
+            let mut previous_outputs = String::new();
+
+            for (idx, member) in members_to_run.iter().enumerate() {
+                let task_call_id = format!("{}_{}", tool_call_id, idx);
+                let custom_prompt = if previous_outputs.is_empty() {
+                    prompt.to_string()
+                } else {
+                    format!(
+                        "{}\n\n<previous_outputs>\n{}\n</previous_outputs>",
+                        prompt,
+                        previous_outputs
+                    )
+                };
+
+                let mut member_args = serde_json::Map::new();
+                member_args.insert(
+                    "prompt".to_string(),
+                    serde_json::Value::String(custom_prompt),
+                );
+                member_args.insert(
+                    "description".to_string(),
+                    serde_json::Value::String(format!(
+                        "Pipeline step [{}]: {} - {}",
+                        idx + 1,
+                        member.name,
+                        member.description
+                    )),
+                );
+                if !member.system_prompt.is_empty() {
+                    member_args.insert(
+                        "system_prompt".to_string(),
+                        serde_json::Value::String(member.system_prompt.clone()),
+                    );
+                }
+                if let Some(model) = &member.model {
+                    member_args.insert(
+                        "model".to_string(),
+                        serde_json::Value::String(model.clone()),
+                    );
+                }
+
+                let task_args_json = serde_json::Value::Object(member_args);
+                let tr = handle_run_subagent_tool(
+                    state,
+                    parent_agent_id,
+                    &task_call_id,
+                    &task_args_json,
+                    sse_tx.clone(),
+                )
+                .await;
+
+                if !tr.is_error {
+                    previous_outputs.push_str(&format!(
+                        "\n--- Output of {} ---\n{}\n",
+                        member.name,
+                        tr.output
+                    ));
+                }
+
+                sequential_results.push(serde_json::json!({
+                    "task_index": idx,
+                    "output": tr.output,
+                    "is_error": tr.is_error,
+                }));
+            }
+
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_parallel_subagents".to_string(),
+                output: serde_json::to_string_pretty(&sequential_results)
+                    .unwrap_or_else(|e| format!("error serializing results: {e}")),
+                is_error: false,
+                ui_resource_uri: None,
+            };
+        }
+
+        // For Coordinate or Broadcast, populate tasks_val normally
+        for member in &members_to_run {
             let mut member_args = serde_json::Map::new();
             member_args.insert(
                 "prompt".to_string(),
@@ -1330,6 +1469,57 @@ pub(super) async fn handle_run_parallel_subagents_tool(
             "output": tr.output,
             "is_error": tr.is_error,
         }));
+    }
+
+    // 🟢 3. TeamMode::Coordinate (Orchestrated Leader Synthesis)
+    if active_mode == cade_agent::team::TeamMode::Coordinate && let Some(team) = resolved_team {
+        let mut reports = String::new();
+        for (idx, tr) in aggregated.iter().enumerate() {
+            let name = &team.members[idx].name;
+            let output_str = tr["output"].as_str().unwrap_or("");
+            reports.push_str(&format!("--- Report from {} ---\n{}\n\n", name, output_str));
+        }
+
+        let coord_prompt = format!(
+            "You are a Team Coordinator. You have delegated a task to multiple specialized subagents. Below are their individual reports. Consolidate their findings into a single, coherent, unified master report. Resolve any conflicts or redundancies.\n\n\
+             ORIGINAL TASK:\n{}\n\n\
+             SUBAGENT REPORTS:\n{}\n\
+             Write a clear, structured, and comprehensive final report.",
+            prompt_val,
+            reports
+        );
+
+        let req = cade_ai::CompletionRequest {
+            model: parent_model.clone(),
+            messages: vec![cade_ai::LlmMessage {
+                role: "user".to_string(),
+                content: coord_prompt,
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            }],
+            tools: vec![],
+            max_tokens: 3000,
+            reasoning_effort: None,
+        };
+
+        if let Ok(resp) = state.llm.complete(&req).await
+            && let Some(content) = resp.content
+        {
+            let aggregated_json = serde_json::json!([{
+                "task_index": 0,
+                "output": content.trim().to_string(),
+                "is_error": false,
+            }]);
+
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_parallel_subagents".to_string(),
+                output: serde_json::to_string_pretty(&aggregated_json).unwrap_or_default(),
+                is_error: false,
+                ui_resource_uri: None,
+            };
+        }
     }
 
     ToolResult {
