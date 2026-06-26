@@ -823,6 +823,29 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 17", [])?;
     }
 
+    if current_version < 18 {
+        let r1 = conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_approvals (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                subagent_id TEXT,
+                tool_name TEXT NOT NULL,
+                arguments TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        );
+        let r2 = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON pending_approvals(status)",
+            [],
+        );
+        if let Err(e) = r1.and(r2) {
+            tracing::warn!("Migration 18 CREATE TABLE pending_approvals failed: {e}");
+        }
+        conn.execute("PRAGMA user_version = 18", [])?;
+    }
+
     Ok(())
 }
 
@@ -859,6 +882,7 @@ pub struct AgentRow {
     pub active_plan_json: Option<String>,
 }
 
+pub mod approvals;
 pub mod agents;
 pub mod conversations;
 pub mod embedding;
@@ -874,6 +898,7 @@ pub mod runs;
 pub mod skills;
 pub mod tools;
 
+pub use approvals::*;
 pub use agents::*;
 pub use conversations::*;
 pub use evidence::*;

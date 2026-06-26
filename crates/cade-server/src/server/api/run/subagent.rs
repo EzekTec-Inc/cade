@@ -941,7 +941,93 @@ pub(super) async fn handle_run_subagent_tool_inner(
             }
 
             for tc in &resp.tool_calls {
-                let tool_result = if tc.name == "run_subagent" {
+                let mut permission_denied = false;
+                let mut permission_error_msg = String::new();
+
+                if tc.name != "run_subagent" && tc.name != "finish" && is_mutating_tool(&tc.name) {
+                    let is_yolo = std::env::var("CADE_YOLO").map(|v| v == "true").unwrap_or(false);
+                    if !is_yolo {
+                        let approval_id = format!("app-{}", uuid::Uuid::new_v4());
+                        let args_str = tc.arguments.to_string();
+                        if let Err(e) = cade_store::sqlite::create_pending_approval(
+                            &state.db,
+                            &approval_id,
+                            parent_agent_id,
+                            Some(&subagent_id),
+                            &tc.name,
+                            &args_str,
+                        ) {
+                            tracing::warn!("Failed to create pending approval: {e}");
+                        } else {
+                            // Trigger native desktop notification
+                            let title = "CADE Approval Request";
+                            let body = format!("Subagent [{}] requests permission to run {}.", subagent_id, tc.name);
+                            #[cfg(target_os = "linux")]
+                            {
+                                let _ = std::process::Command::new("notify-send")
+                                    .arg(title)
+                                    .arg(&body)
+                                    .spawn();
+                            }
+                            #[cfg(target_os = "macos")]
+                            {
+                                let apple_script = format!(
+                                    "display notification \"{}\" with title \"{}\"",
+                                    body.replace("\"", "\\\""),
+                                    title
+                                );
+                                let _ = std::process::Command::new("osascript")
+                                    .arg("-e")
+                                    .arg(&apple_script)
+                                    .spawn();
+                            }
+
+                            // Wait for approval
+                            let timeout_secs = 600;
+                            let start_time = std::time::Instant::now();
+                            let mut poll_interval = std::time::Duration::from_millis(200);
+                            let mut approved = false;
+
+                            loop {
+                                if start_time.elapsed().as_secs() > timeout_secs {
+                                    permission_error_msg = "Approval request timed out after 10 minutes.".to_string();
+                                    break;
+                                }
+
+                                if let Ok(Some(status)) = cade_store::sqlite::get_approval_status(&state.db, &approval_id) {
+                                    if status == "approved" {
+                                        approved = true;
+                                        break;
+                                    } else if status == "denied" {
+                                        permission_error_msg = format!("Permission Denied: User denied execution of tool '{}'.", tc.name);
+                                        break;
+                                    }
+                                }
+
+                                tokio::time::sleep(poll_interval).await;
+                                poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
+                            }
+
+                            if !approved {
+                                permission_denied = true;
+                            }
+                        }
+                    }
+                }
+
+                let tool_result = if permission_denied {
+                    cade_agent::tools::manager::ToolResult {
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.name.clone(),
+                        output: if permission_error_msg.is_empty() {
+                            format!("Permission Denied: User denied execution of tool '{}'.", tc.name)
+                        } else {
+                            permission_error_msg
+                        },
+                        is_error: true,
+                        ui_resource_uri: None,
+                    }
+                } else if tc.name == "run_subagent" {
                     let mut nested_args = tc.arguments.clone();
                     if let Some(obj) = nested_args.as_object_mut() {
                         obj.insert(
@@ -1325,4 +1411,11 @@ pub(super) async fn smart_memory_merge(
             Some(confidence),
         );
     }
+}
+
+fn is_mutating_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file"
+    ) || name.contains("__")
 }

@@ -1,5 +1,6 @@
 // region:    --- Modules
 
+pub mod approvals;
 pub mod agents;
 pub mod artifacts;
 pub mod auth;
@@ -67,6 +68,8 @@ pub fn router(state: AppState) -> Router {
         // Health + server config
         .route("/v1/health", get(health::get_health))
         .route("/v1/config", get(health::get_config))
+        .route("/v1/approvals", get(approvals::list_approvals))
+        .route("/v1/approvals/{id}/action", post(approvals::action_approval))
         .route(
             "/v1/workflows/{workflow_name}",
             post(workflows::dispatch_workflow),
