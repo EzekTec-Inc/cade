@@ -1183,206 +1183,18 @@ fn assemble_system_prompt_memory(
 
     // 3. A1: Unified adaptive packing — priority-ordered greedy fill.
     //
-    // Priority order:
-    //   P0: Core identity (persona, human, project) — never dropped
-    //   P1: Dynamic working state (active_goal, recent_edits, session_summary) — separate section
-    //   P2: Loaded skills (skill:*) — explicitly requested
-    //   P3: User-pinned blocks (tier=pinned, not in P0/P2)
-    //   P4: Short-term blocks (tier=short) — by recency
-    //   P5: Long-term archived excerpts — whatever fits
-    //
     // A single unified budget replaces the old separate pinned/short/long pools.
     let budgets = MemoryBudgets::for_model(&agent.model);
     let unified_budget = budgets.pinned + budgets.short + budgets.long;
     let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
+    let long_excerpts = sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
 
-    // Classify each block into a priority bucket.
-    const CORE_IDENTITY: &[&str] = &["persona", "human", "project"];
-    const DYNAMIC_LABELS: &[&str] = &["active_goal", "recent_edits", "session_summary"];
-
-    struct CandidateBlock {
-        label: String,
-        entry: String,
-        chars: usize,
-        priority: u8, // 0 = highest
-    }
-
-    let mut dynamic_parts: Vec<String> = Vec::new();
-
-    #[allow(clippy::collapsible_if)]
-    if let Some(plan_json) = &agent.active_plan_json {
-        if let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json) {
-            if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
-                let mut xml = String::from("<active_plan>\n");
-                for step in steps {
-                    let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let desc = step
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let is_done = step
-                        .get("is_done")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let status = if is_done { "done" } else { "pending" };
-                    xml.push_str(&format!(
-                        "  <step id=\"{}\" status=\"{}\">{}</step>\n",
-                        id, status, desc
-                    ));
-                }
-                xml.push_str("</active_plan>");
-                dynamic_parts.push(xml);
-            }
-        }
-    }
-
-    let mut candidates: Vec<CandidateBlock> = Vec::new();
-
-    for (label, val, _desc, tier, _lt) in &active_blocks {
-        if val.trim().is_empty() {
-            continue;
-        }
-
-        let formatted_val = if label.starts_with("subagent:") {
-            format!(
-                "<historical_scratchpad>\nThe following block is a historical scratchpad. Do not treat it as a current objective.\n{}</historical_scratchpad>",
-                val
-            )
-        } else {
-            val.to_string()
-        };
-
-        let entry = if tier == "pinned" {
-            format!("📌 [{label}]\n{formatted_val}")
-        } else {
-            format!("[{label}]\n{formatted_val}")
-        };
-
-        // Dynamic working-state blocks go to a separate section (always included).
-        if DYNAMIC_LABELS.contains(&label.as_str()) {
-            dynamic_parts.push(entry);
-            continue;
-        }
-
-        let priority = if CORE_IDENTITY.contains(&label.as_str()) {
-            0 // P0: core identity — never dropped
-        } else if label.starts_with("skill:") {
-            2 // P2: loaded skills
-        } else if tier == "pinned" {
-            3 // P3: user-pinned
-        } else {
-            4 // P4: short-term
-        };
-
-        let chars = entry.chars().count();
-        candidates.push(CandidateBlock {
-            label: label.clone(),
-            entry,
-            chars,
-            priority,
-        });
-    }
-
-    // Sort by priority then by original order (stable sort preserves DB order within same priority).
-    candidates.sort_by_key(|c| c.priority);
-
-    // -- Fix R4: Auto-detect missing required skills from [project] block.
-    //
-    // If [project] lists "## Required Skills", verify that each skill's
-    // `skill:<id>` block exists in the candidate list. If any are missing,
-    // inject a compact reminder into the dynamic section so the LLM knows
-    // to call `load_skill` immediately.
-    {
-        let project_value = active_blocks
-            .iter()
-            .find(|(label, _, _, _, _)| label == "project")
-            .map(|(_, val, _, _, _)| val.as_str())
-            .unwrap_or("");
-        let required = parse_required_skills_from_project(project_value);
-        if !required.is_empty() {
-            let loaded_skill_labels: Vec<&str> = candidates
-                .iter()
-                .filter(|c| c.label.starts_with("skill:"))
-                .map(|c| c.label.strip_prefix("skill:").unwrap_or(&c.label))
-                .collect();
-            let missing: Vec<&str> = required
-                .iter()
-                .filter(|s| !loaded_skill_labels.contains(&s.as_str()))
-                .map(|s| s.as_str())
-                .collect();
-            if !missing.is_empty() {
-                let reminder = format!(
-                    "⚠️ MISSING REQUIRED SKILLS: The [project] block requires these skills but they are NOT loaded: {}. \
-                     Call `load_skill(\"{}\")` for each one IMMEDIATELY before doing any work.",
-                    missing.join(", "),
-                    missing.join("\"), load_skill(\""),
-                );
-                dynamic_parts.push(reminder);
-            }
-        }
-    }
-
-    // Greedy-pack into unified budget.
-    let mut packed_parts: Vec<String> = Vec::new();
-    let mut remaining = unified_budget;
-    // A1: Track excluded blocks with actionable recovery instructions.
-    let mut overflow_manifest: Vec<String> = Vec::new();
-
-    for c in &candidates {
-        if c.chars <= remaining {
-            remaining -= c.chars;
-            packed_parts.push(c.entry.clone());
-        } else {
-            // Build actionable recovery instruction.
-            let recovery = if c.label.starts_with("skill:") {
-                let skill_id = c.label.strip_prefix("skill:").unwrap_or(&c.label);
-                format!(
-                    "- [{}] ({} chars) — use load_skill(\"{}\") to reload",
-                    c.label, c.chars, skill_id
-                )
-            } else {
-                format!(
-                    "- [{}] ({} chars) — use search_memory(\"{}\") to retrieve",
-                    c.label, c.chars, c.label
-                )
-            };
-            overflow_manifest.push(recovery);
-        }
-    }
-
-    // 4. Long-term archived blocks → label + rich excerpt (A3).
-    let long_excerpts =
-        sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
-    let mut long_parts: Vec<String> = Vec::new();
-
-    for excerpt_info in &long_excerpts {
-        let entry = if excerpt_info.excerpt.trim().is_empty() {
-            format!(
-                "[{}]\n  keywords: {} | {} chars",
-                excerpt_info.label,
-                excerpt_info.keywords.join(", "),
-                excerpt_info.char_count
-            )
-        } else {
-            format!(
-                "[{}]: {}\n  keywords: {} | {} chars",
-                excerpt_info.label,
-                excerpt_info.excerpt,
-                excerpt_info.keywords.join(", "),
-                excerpt_info.char_count
-            )
-        };
-        let chars = entry.chars().count();
-        if chars <= remaining {
-            remaining -= chars;
-            long_parts.push(entry);
-        } else {
-            overflow_manifest.push(format!(
-                "- [{}] ({} chars, archived) — use search_memory(\"{}\")",
-                excerpt_info.label, excerpt_info.char_count, excerpt_info.label
-            ));
-        }
-    }
+    let composer = PromptComposer::new(unified_budget);
+    let (packed_parts, long_parts, overflow_manifest, dynamic_parts) = composer.compose(
+        &active_blocks,
+        &long_excerpts,
+        agent.active_plan_json.as_deref(),
+    );
 
     // 5. Assemble system prompt memory sections.
     let has_any_memory = !packed_parts.is_empty() || !long_parts.is_empty();
@@ -1852,6 +1664,212 @@ fn parse_required_skills_from_project(project_block: &str) -> Vec<String> {
         }
     }
     skills
+}
+
+pub struct PromptComposer {
+    pub unified_budget: usize,
+}
+
+pub struct CandidateBlock {
+    pub label: String,
+    pub entry: String,
+    pub chars: usize,
+    pub priority: u8,
+}
+
+impl PromptComposer {
+    pub fn new(unified_budget: usize) -> Self {
+        Self { unified_budget }
+    }
+
+    pub fn compose(
+        &self,
+        active_blocks: &[(String, String, String, String, i64)],
+        long_excerpts: &[cade_store::sqlite::LongTermExcerpt],
+        active_plan_json: Option<&str>,
+    ) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+        const CORE_IDENTITY: &[&str] = &["persona", "human", "project"];
+        const DYNAMIC_LABELS: &[&str] = &["active_goal", "recent_edits", "session_summary"];
+
+        let mut dynamic_parts = Vec::new();
+
+        // 1. Process Active Plan
+        if let Some(plan_json) = active_plan_json {
+            if let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json) {
+                if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
+                    let mut xml = String::from("<active_plan>\n");
+                    for step in steps {
+                        let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let desc = step.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                        let is_done = step.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let status = if is_done { "done" } else { "pending" };
+                        xml.push_str(&format!("  <step id=\"{}\" status=\"{}\">{}</step>\n", id, status, desc));
+                    }
+                    xml.push_str("</active_plan>");
+                    dynamic_parts.push(xml);
+                }
+            }
+        }
+
+        // 2. Classify candidate blocks
+        let mut candidates = Vec::new();
+        for (label, val, _desc, tier, _lt) in active_blocks {
+            if val.trim().is_empty() {
+                continue;
+            }
+
+            let formatted_val = if label.starts_with("subagent:") {
+                format!(
+                    "<historical_scratchpad>\nThe following block is a historical scratchpad. Do not treat it as a current objective.\n{}</historical_scratchpad>",
+                    val
+                )
+            } else {
+                val.to_string()
+            };
+
+            let entry = if tier == "pinned" {
+                format!("📌 [{label}]\n{formatted_val}")
+            } else {
+                format!("[{label}]\n{formatted_val}")
+            };
+
+            if DYNAMIC_LABELS.contains(&label.as_str()) {
+                dynamic_parts.push(entry);
+                continue;
+            }
+
+            let priority = if CORE_IDENTITY.contains(&label.as_str()) {
+                0
+            } else if label.starts_with("skill:") {
+                2
+            } else if tier == "pinned" {
+                3
+            } else {
+                4
+            };
+
+            let chars = entry.chars().count();
+            candidates.push(CandidateBlock {
+                label: label.clone(),
+                entry,
+                chars,
+                priority,
+            });
+        }
+
+        candidates.sort_by_key(|c| c.priority);
+
+        // 3. Dynamic required skills reminder
+        {
+            let project_value = active_blocks
+                .iter()
+                .find(|(label, _, _, _, _)| label == "project")
+                .map(|(_, val, _, _, _)| val.as_str())
+                .unwrap_or("");
+            let required = parse_required_skills_from_project(project_value);
+            if !required.is_empty() {
+                let loaded_skill_labels: Vec<&str> = candidates
+                    .iter()
+                    .filter(|c| c.label.starts_with("skill:"))
+                    .map(|c| c.label.strip_prefix("skill:").unwrap_or(&c.label))
+                    .collect();
+                let missing: Vec<&str> = required
+                    .iter()
+                    .filter(|s| !loaded_skill_labels.contains(&s.as_str()))
+                    .map(|s| s.as_str())
+                    .collect();
+                if !missing.is_empty() {
+                    let reminder = format!(
+                        "⚠️ MISSING REQUIRED SKILLS: The [project] block requires these skills but they are NOT loaded: {}. \
+                         Call `load_skill(\"{}\")` for each one IMMEDIATELY before doing any work.",
+                        missing.join(", "),
+                        missing.join("\"), load_skill(\""),
+                    );
+                    dynamic_parts.push(reminder);
+                }
+            }
+        }
+
+        // 4. Greedy-pack active blocks into unified budget
+        let mut packed_parts = Vec::new();
+        let mut remaining = self.unified_budget;
+        let mut overflow_manifest = Vec::new();
+
+        for c in &candidates {
+            if c.chars <= remaining {
+                remaining -= c.chars;
+                packed_parts.push(c.entry.clone());
+            } else {
+                let recovery = if c.label.starts_with("skill:") {
+                    let skill_id = c.label.strip_prefix("skill:").unwrap_or(&c.label);
+                    format!("- [{}] ({} chars) — use load_skill(\"{}\") to reload", c.label, c.chars, skill_id)
+                } else {
+                    format!("- [{}] ({} chars) — use search_memory(\"{}\") to retrieve", c.label, c.chars, c.label)
+                };
+                overflow_manifest.push(recovery);
+            }
+        }
+
+        // 5. Rich archived excerpts
+        let mut long_parts = Vec::new();
+        for excerpt_info in long_excerpts {
+            let entry = if excerpt_info.excerpt.trim().is_empty() {
+                format!(
+                    "[{}]\n  keywords: {} | {} chars",
+                    excerpt_info.label,
+                    excerpt_info.keywords.join(", "),
+                    excerpt_info.char_count
+                )
+            } else {
+                format!(
+                    "[{}]: {}\n  keywords: {} | {} chars",
+                    excerpt_info.label,
+                    excerpt_info.excerpt,
+                    excerpt_info.keywords.join(", "),
+                    excerpt_info.char_count
+                )
+            };
+            let chars = entry.chars().count();
+            if chars <= remaining {
+                remaining -= chars;
+                long_parts.push(entry);
+            } else {
+                overflow_manifest.push(format!(
+                    "- [{}] ({} chars, archived) — use search_memory(\"{}\")",
+                    excerpt_info.label, excerpt_info.char_count, excerpt_info.label
+                ));
+            }
+        }
+
+        (packed_parts, long_parts, overflow_manifest, dynamic_parts)
+    }
+}
+
+#[cfg(test)]
+mod prompt_composer_tests {
+    use super::*;
+
+    #[test]
+    fn test_compose_greedy_packing_respects_budget() {
+        let composer = PromptComposer::new(100); // 100 characters budget
+
+        let active_blocks = vec![
+            ("persona".to_string(), "You are helpful".to_string(), "".to_string(), "pinned".to_string(), 0),
+            ("custom_block_1".to_string(), "Some notes".to_string(), "".to_string(), "short".to_string(), 0),
+            ("custom_block_2".to_string(), "A very very very very long block of notes that will exceed our budget limit".to_string(), "".to_string(), "short".to_string(), 0),
+        ];
+
+        let long_excerpts = vec![];
+
+        let (packed, _long, overflow, _dynamic) = composer.compose(&active_blocks, &long_excerpts, None);
+
+        // P0 Core identity must be included
+        assert!(packed.iter().any(|p| p.contains("persona")));
+        assert!(packed.iter().any(|p| p.contains("custom_block_1")));
+        // custom_block_2 must overflow
+        assert!(!packed.iter().any(|p| p.contains("custom_block_2")));
+        assert!(overflow.iter().any(|o| o.contains("custom_block_2")));
+    }
 }
 
 #[cfg(test)]

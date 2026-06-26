@@ -140,7 +140,7 @@ pub fn list_messages_since_last_compaction(
                  (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 0
+                 -1
              ) AS marker_ts
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
@@ -156,7 +156,7 @@ pub fn list_messages_since_last_compaction(
                  (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 0
+                 -1
              ) AS marker_ts
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
@@ -270,7 +270,7 @@ pub fn get_context_window(
                  (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 0
+                 -1
              ) AS marker_ts
          ),
          ranked AS (
@@ -291,7 +291,7 @@ pub fn get_context_window(
                  (SELECT created_at FROM messages
                   WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
                   ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 0
+                 -1
              ) AS marker_ts
          ),
          ranked AS (
