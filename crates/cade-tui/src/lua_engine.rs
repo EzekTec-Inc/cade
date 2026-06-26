@@ -13,6 +13,34 @@ impl LuaEngine {
     pub fn new() -> LuaResult<Self> {
         let lua = Lua::new();
 
+        // 🟢 Sandboxing (Bypass / Poison dangerous native standard libraries) (ADR 9)
+        {
+            let globals = lua.globals();
+            // Remove dangerous os functions
+            if let Ok(os) = globals.get::<mlua::Table>("os") {
+                let _ = os.set("execute", mlua::Value::Nil);
+                let _ = os.set("exit", mlua::Value::Nil);
+                let _ = os.set("remove", mlua::Value::Nil);
+                let _ = os.set("rename", mlua::Value::Nil);
+            }
+            // Remove entire io and debug modules for strict sandboxing
+            let _ = globals.set("io", mlua::Value::Nil);
+            let _ = globals.set("debug", mlua::Value::Nil);
+        }
+
+        // 🟢 Execution Governor (Instruction Hook Limiter to prevent TUI thread freezes)
+        lua.set_hook(
+            mlua::HookTriggers {
+                every_line: false,
+                every_nth_instruction: Some(50_000),
+                on_calls: false,
+                on_returns: false,
+            },
+            move |_, _| {
+                Err(mlua::Error::RuntimeError("Runaway script: instruction limit (50,000) exceeded.".to_string()))
+            },
+        )?;
+
         // Inject global state container
         let cade_state = lua.create_table()?;
         lua.globals().set("CADE_STATE", cade_state)?;
@@ -386,5 +414,35 @@ mod additional_tests {
 
         let header = engine.get_header_ui();
         assert!(header.is_some(), "Header was None!");
+    }
+
+    #[test]
+    fn test_lua_runaway_loop_prevented() {
+        let engine = LuaEngine::new().unwrap();
+        // Execute an infinite runaway loop — must trigger an instruction limit error
+        let res = engine.lua.load("while true do end").exec();
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("instruction limit") || err_msg.contains("limit"));
+    }
+
+    #[test]
+    fn test_lua_sandboxed_environment() {
+        let engine = LuaEngine::new().unwrap();
+        
+        // io and debug must be nill
+        let io_val: mlua::Value = engine.lua.globals().get("io").unwrap();
+        assert!(matches!(io_val, mlua::Value::Nil));
+
+        let debug_val: mlua::Value = engine.lua.globals().get("debug").unwrap();
+        assert!(matches!(debug_val, mlua::Value::Nil));
+
+        // os.execute and os.exit must be nil
+        let os: mlua::Table = engine.lua.globals().get("os").unwrap();
+        let exec_val: mlua::Value = os.get("execute").unwrap();
+        assert!(matches!(exec_val, mlua::Value::Nil));
+        
+        let exit_val: mlua::Value = os.get("exit").unwrap();
+        assert!(matches!(exit_val, mlua::Value::Nil));
     }
 }
