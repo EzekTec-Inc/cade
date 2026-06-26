@@ -649,6 +649,16 @@ impl Repl {
                 }
             }
 
+            SlashCmd::Approvals => {
+                return self.cmd_approvals().await;
+            }
+            SlashCmd::Approve(id) => {
+                return self.cmd_approve(id).await;
+            }
+            SlashCmd::Deny(id) => {
+                return self.cmd_deny(id).await;
+            }
+
             SlashCmd::Providers => {
                 return self.cmd_providers().await;
             }
@@ -704,6 +714,64 @@ impl Repl {
                 self.tui_hdr("  Report issues or give feedback:");
                 self.tui_sys("  https://github.com/EzekTec-Inc/CADE/issues");
             }
+        }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_approvals(&self) -> Result<bool> {
+        match self.client.raw_get("/approvals").await {
+            Ok(v) => {
+                let approvals = v["approvals"].as_array();
+                if approvals.is_none() || approvals.unwrap().is_empty() {
+                    self.tui_dim("  No pending approvals found.".to_string());
+                    return Ok(false);
+                }
+                self.tui_blank();
+                self.tui_hdr("  Pending approvals queue:");
+                for app in approvals.unwrap() {
+                    let id = app["id"].as_str().unwrap_or("?");
+                    let subagent = app["subagent_id"].as_str().unwrap_or("?");
+                    let tool = app["tool_name"].as_str().unwrap_or("?");
+                    let args = app["arguments"].as_str().unwrap_or("{}");
+                    self.tui_sys(format!("  [{id}] Subagent: {} -> tool: {}", subagent, tool));
+                    self.tui_dim(format!("    arguments: {}", args));
+                }
+                self.tui_blank();
+                self.tui_dim("  Tip: Use /approve <id> or /deny <id> to take action.".to_string());
+            }
+            Err(e) => self.tui_err(format!("Failed to list approvals: {e}")),
+        }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_approve(&self, id: String) -> Result<bool> {
+        let trimmed_id = id.trim();
+        if trimmed_id.is_empty() {
+            self.tui_err("Usage: /approve <id>".to_string());
+            return Ok(false);
+        }
+        let body = serde_json::json!({ "action": "approve" });
+        match self.client.raw_post(&format!("/approvals/{trimmed_id}/action"), &body).await {
+            Ok(_) => {
+                self.tui_ok(format!("  ✓ Request '{trimmed_id}' APPROVED successfully. Subagent resumed."));
+            }
+            Err(e) => self.tui_err(format!("Failed to approve request: {e}")),
+        }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_deny(&self, id: String) -> Result<bool> {
+        let trimmed_id = id.trim();
+        if trimmed_id.is_empty() {
+            self.tui_err("Usage: /deny <id>".to_string());
+            return Ok(false);
+        }
+        let body = serde_json::json!({ "action": "deny" });
+        match self.client.raw_post(&format!("/approvals/{trimmed_id}/action"), &body).await {
+            Ok(_) => {
+                self.tui_ok(format!("  ✗ Request '{trimmed_id}' DENIED successfully. Subagent notified."));
+            }
+            Err(e) => self.tui_err(e.to_string()),
         }
         Ok(false)
     }
