@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub struct FileLockManager {
-    locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl FileLockManager {
@@ -14,11 +14,23 @@ impl FileLockManager {
         })
     }
 
-    pub async fn acquire_lock(&self, path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+    /// Normalize a path to a workspace-relative string key for cross-backend lock safety (ADR 6).
+    pub fn normalize_key(path: &Path) -> String {
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Ok(cwd) = std::env::current_dir() {
+            let abs_cwd = cwd.canonicalize().unwrap_or(cwd);
+            if let Ok(relative) = abs_path.strip_prefix(&abs_cwd) {
+                return relative.to_string_lossy().to_string();
+            }
+        }
+        abs_path.to_string_lossy().to_string()
+    }
+
+    pub async fn acquire_lock(&self, path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+        let key = Self::normalize_key(path);
         let lock = {
             let mut guard = self.locks.lock().unwrap();
-            guard.entry(abs_path).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
+            guard.entry(key).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
         };
         lock.clone().lock_owned().await
     }
