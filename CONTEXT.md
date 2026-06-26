@@ -80,3 +80,6 @@ An asynchronous, trait-based seam in CADE's server that decouples subagent execu
 
 #### Permission Service
 An asynchronous, trait-based security seam in `cade-core` that unifies CADE's human-in-the-loop authorization boundaries, delegating prompting and approval actions to pluggable, context-specific adapters.
+
+#### Token Counter
+A polymorphic, pluggable trait in `cade-ai` that enables precise, provider-aware token counting by delegating queries to dedicated adapters (such as Tiktoken, Anthropic, or FallbackChar).

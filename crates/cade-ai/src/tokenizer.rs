@@ -25,10 +25,57 @@ static CL100K: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::cl100k_base().o
 /// Lazily-initialised o200k_base encoder (GPT-4o, o-series).
 static O200K: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::o200k_base().ok());
 
+pub trait TokenCounter: Send + Sync {
+    fn count(&self, text: &str) -> usize;
+}
+
+pub struct TiktokenAdapter {
+    pub encoder: &'static CoreBPE,
+}
+
+impl TokenCounter for TiktokenAdapter {
+    fn count(&self, text: &str) -> usize {
+        self.encoder.encode_with_special_tokens(text).len()
+    }
+}
+
+pub struct AnthropicAdapter {
+    pub encoder: &'static CoreBPE,
+}
+
+impl TokenCounter for AnthropicAdapter {
+    fn count(&self, text: &str) -> usize {
+        // cl100k_base over-counts Claude slightly, which is our safe headroom boundary (WI-SEMANTIC)
+        self.encoder.encode_with_special_tokens(text).len()
+    }
+}
+
+pub struct GeminiAdapter {
+    pub encoder: &'static CoreBPE,
+}
+
+impl TokenCounter for GeminiAdapter {
+    fn count(&self, text: &str) -> usize {
+        // Gemini uses a different vocab but fits cl100k_base approximation safely
+        self.encoder.encode_with_special_tokens(text).len()
+    }
+}
+
+pub struct FallbackCharAdapter {
+    pub chars_per_token: usize,
+}
+
+impl TokenCounter for FallbackCharAdapter {
+    fn count(&self, text: &str) -> usize {
+        text.chars().count() / self.chars_per_token.max(1)
+    }
+}
+
 /// Pick the most accurate available tokenizer for a given model id.
 ///
 /// Returns `None` only when the encoder failed to load (corrupt BPE table,
 /// out-of-memory, etc.) — callers must fall back to a char-based estimate.
+#[allow(dead_code)]
 fn encoder_for(model_id: &str) -> Option<&'static CoreBPE> {
     let lower = model_id.to_ascii_lowercase();
 
@@ -49,6 +96,35 @@ fn encoder_for(model_id: &str) -> Option<&'static CoreBPE> {
     CL100K.as_ref()
 }
 
+pub fn resolve_token_counter(model_id: &str) -> Box<dyn TokenCounter> {
+    let lower = model_id.to_ascii_lowercase();
+
+    let is_o200k = lower.contains("gpt-4o")
+        || lower.contains("gpt-4.5")
+        || lower.contains("gpt-5")
+        || lower.contains("/o1")
+        || lower.contains("/o3")
+        || lower.contains("/o4");
+
+    if is_o200k {
+        if let Some(enc) = O200K.as_ref() {
+            return Box::new(TiktokenAdapter { encoder: enc });
+        }
+    }
+
+    if let Some(enc) = CL100K.as_ref() {
+        if lower.contains("anthropic") || lower.contains("claude") {
+            return Box::new(AnthropicAdapter { encoder: enc });
+        }
+        if lower.contains("gemini") || lower.contains("google") {
+            return Box::new(GeminiAdapter { encoder: enc });
+        }
+        return Box::new(TiktokenAdapter { encoder: enc });
+    }
+
+    Box::new(FallbackCharAdapter { chars_per_token: FALLBACK_CHARS_PER_TOKEN })
+}
+
 /// Count tokens in `text` using the best available encoder for `model_id`.
 ///
 /// On any error path (encoder unavailable) falls back to
@@ -58,10 +134,8 @@ pub fn count_tokens(model_id: &str, text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
-    if let Some(enc) = encoder_for(model_id) {
-        return enc.encode_with_special_tokens(text).len();
-    }
-    text.chars().count() / FALLBACK_CHARS_PER_TOKEN.max(1)
+    let counter = resolve_token_counter(model_id);
+    counter.count(text)
 }
 
 /// Convert a desired *token* count into an upper-bound *character* count
