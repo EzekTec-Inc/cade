@@ -71,3 +71,6 @@ An asynchronous Server-Sent Event (SSE) pushed by the server to notify the clien
 
 #### /approvals, /approve, /deny
 Interactive REPL slash commands that enable the user to view the active pending approvals queue, authorize executing a blocked tool call, or deny it to redirect the subagent's plan.
+
+#### Adaptive Typewriter Governor
+A rendering governor in `cade-tui` that evaluates the unrevealed streaming backlog and dynamically scales the character reveal rate up to an instant snap-to-bottom bypass, eliminating latency during large data dumps.

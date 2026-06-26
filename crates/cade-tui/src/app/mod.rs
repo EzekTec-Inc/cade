@@ -1274,8 +1274,11 @@ impl TuiApp {
         if self.streaming_reveal_len < target {
             // Reveal rate: adaptive — faster when we're far behind, slower when close.
             let behind = target - self.streaming_reveal_len;
-            let step = if behind > 200 {
-                // Very far behind: catch up quickly (whole chunks at a time)
+            let step = if behind > 500 {
+                // Extremely far behind (backlog spike): snap instantly to catch up and prevent lags (ADR 4/6)
+                behind
+            } else if behind > 150 {
+                // Very far behind: catch up quickly
                 behind / 2
             } else if behind > 50 {
                 // Moderately behind: reveal ~20 chars per tick
