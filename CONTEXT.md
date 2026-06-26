@@ -51,3 +51,13 @@ An automated background process triggered when an Agent's context window utiliza
 
 #### Artifact
 A content-addressed storage entity used to offload extremely large, non-conversational text segments (e.g., compiler logs, massive code diffs, or downloaded reference documents) out of the active context window.
+
+---
+
+### 4. Workspace Safety & Concurrent Guardrails
+
+#### File Lock Manager
+A centralized, thread-safe service that coordinates exclusive write locks on absolute file paths, preventing race conditions when multiple parallel **Subagents** attempt to mutate the same source files.
+
+#### Ephemeral Branch Sandboxing (Workspace Isolation)
+A workflow isolation strategy where concurrent **Subagents** execute inside cloned, temporary workspace folders. This isolates compilation and file mutation, merging all changes back into the primary workspace as a unified, conflict-resolved merge request.
