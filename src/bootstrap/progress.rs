@@ -67,6 +67,12 @@ impl StartupProgress {
         self.add_spinner("Resolving agent…")
     }
 
+    /// "Booting MCP server <name>…"
+    #[allow(dead_code)]
+    pub fn start_mcp_server(&self, name: &str) -> ProgressBar {
+        self.add_spinner(format!("Booting MCP server '{name}'…"))
+    }
+
     // ------------------------------------------------------------------
     // Finish helpers
     // ------------------------------------------------------------------
@@ -77,6 +83,15 @@ impl StartupProgress {
             .unwrap_or_else(|_| ProgressStyle::default_spinner());
         pb.set_style(done_style);
         pb.finish_with_message(format!("✔ {}", msg.into()));
+    }
+
+    /// Mark a spinner as skipped or timed out (grey/dim styling) with a yellow warning check.
+    #[allow(dead_code)]
+    pub fn finish_skip(pb: &ProgressBar, msg: impl Into<String>) {
+        let skip_style = ProgressStyle::with_template("  {msg:.dim}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner());
+        pb.set_style(skip_style);
+        pb.finish_with_message(format!("⚠ {}", msg.into()));
     }
 
     /// Clear the entire multi-progress display so the terminal is clean
