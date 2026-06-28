@@ -76,8 +76,8 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
 #[derive(Debug)]
 pub(crate) enum SlashCmd {
     Help,
-    /// Invoke a loaded skill by its id (e.g. /commit → RunSkill("commit"))
-    RunSkill(String),
+    /// Invoke a loaded skill by its id (e.g. /commit → RunSkill("commit", Some("custom prompt")))
+    RunSkill(String, Option<String>),
     Exit,
     Clear,
     Agent,
@@ -250,7 +250,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "mouse" | "mouse-capture" => Some(SlashCmd::Mouse),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
-            Some(SlashCmd::RunSkill(other.to_string()))
+            Some(SlashCmd::RunSkill(other.to_string(), arg))
         }
         _ => None,
     }

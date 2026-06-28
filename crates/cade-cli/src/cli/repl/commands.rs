@@ -140,7 +140,7 @@ impl Repl {
                 return Ok(true);
             }
             // SlashCmd::Clear is handled below (with context clearing)
-            SlashCmd::RunSkill(skill_id) => {
+            SlashCmd::RunSkill(skill_id, user_prompt) => {
                 // Find the skill, build a prompt that injects its content,
                 // and send it as an agent turn so the agent follows the skill.
                 let skill_body = self
@@ -150,9 +150,17 @@ impl Repl {
                     .find(|s| s.id == skill_id)
                     .map(|s| s.to_context_block());
                 if let Some(body) = skill_body {
-                    let prompt =
+                    let mut prompt =
                         format!("[Skill invoked: /{skill_id}]\n\nFollow this skill:\n\n{body}");
-                    self.tui_sys(format!("  Running skill: /{skill_id}"));
+                    if let Some(prompt_str) = &user_prompt {
+                        prompt.push_str("\n\nUser request:\n\n");
+                        prompt.push_str(prompt_str);
+                    }
+                    if let Some(prompt_str) = &user_prompt {
+                        self.tui_sys(format!("  Running skill: /{skill_id} with prompt: {prompt_str}"));
+                    } else {
+                        self.tui_sys(format!("  Running skill: /{skill_id}"));
+                    }
                     self.agent_turn(stdout, &prompt).await?;
                 } else {
                     self.tui_err(format!(
