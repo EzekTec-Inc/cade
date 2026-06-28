@@ -58,6 +58,8 @@ Same-name conflict resolution: project > global > built-in.
 ```bash
 /skills              # browse all available
 /skills <filter>     # filtered search
+/<skill_id>          # invoke a loaded skill (e.g. /conventional-commits)
+/<skill_id> <prompt> # run a loaded skill with a custom prompt appended to its context block
 ```
 
 ### From the LLM (tool calls)
