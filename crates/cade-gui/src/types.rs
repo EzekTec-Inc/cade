@@ -87,3 +87,53 @@ pub fn add_toast(state: &AppState, level: ToastLevel, title: impl Into<String>, 
     });
     toasts.set(list);
 }
+
+#[derive(Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub struct AppSessionStore {
+    pub state: AppState,
+}
+
+#[allow(dead_code)]
+impl AppSessionStore {
+    pub fn new(state: AppState) -> Self {
+        Self { state }
+    }
+
+    pub fn add_toast(&self, level: ToastLevel, title: impl Into<String>, detail: impl Into<String>) {
+        let mut toasts = self.state.toasts;
+        let mut list = toasts();
+        list.push(ToastMessage {
+            id: js_sys::Date::now() as u64,
+            level,
+            title: title.into(),
+            detail: detail.into(),
+        });
+        toasts.set(list);
+    }
+
+    pub fn set_api_key(&self, key: String) {
+        let mut sig = self.state.api_key;
+        sig.set(key);
+    }
+
+    pub fn set_active_page(&self, page: SelectedPage) {
+        let mut sig = self.state.active_page;
+        sig.set(page);
+    }
+
+    pub fn set_selected_agent(&self, agent: Option<cade_api_types::AgentInfo>) {
+        let mut sig = self.state.selected_agent;
+        sig.set(agent);
+    }
+
+    pub fn set_active_conversation(&self, conv_id: Option<String>) {
+        let mut sig = self.state.active_conversation;
+        sig.set(conv_id);
+    }
+
+    pub fn set_input_text(&self, text: String) {
+        let mut sig = self.state.input_text;
+        sig.set(text);
+    }
+}

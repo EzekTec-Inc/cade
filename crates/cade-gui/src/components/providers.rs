@@ -1,13 +1,13 @@
 use dioxus::prelude::*;
 
-use crate::api;
+
 use crate::types::{add_toast, AppState, ToastLevel};
 
 /// Provider management page — list, add, delete providers.
 #[component]
 pub fn ProvidersView() -> Element {
     let state = use_context::<AppState>();
-    let api_key = state.api_key;
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
 
     let providers = use_signal(Vec::<serde_json::Value>::new);
     let presets = use_signal(Vec::<serde_json::Value>::new);
@@ -22,14 +22,13 @@ pub fn ProvidersView() -> Element {
 
     // Fetch providers + presets on mount
     use_effect(move || {
-        let key = api_key;
         let st = state;
+        let api_client = client();
         let mut provs = providers;
         let mut pres = presets;
         let mut busy = fetching;
         spawn(async move {
-            let k = key();
-            match api::list_providers(&k).await {
+            match api_client.list_providers().await {
                 Ok(data) => {
                     if let Some(arr) = data.get("providers").and_then(|v| v.as_array()) {
                         provs.set(arr.clone());
@@ -37,7 +36,7 @@ pub fn ProvidersView() -> Element {
                 }
                 Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch providers", e),
             }
-            match api::list_presets(&k).await {
+            match api_client.list_presets().await {
                 Ok(data) => {
                     if let Some(arr) = data.get("presets").and_then(|v| v.as_array()) {
                         pres.set(arr.clone());
@@ -64,22 +63,21 @@ pub fn ProvidersView() -> Element {
             let v = form_base_url();
             if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
         };
-        let key = api_key();
+        let api_client = client();
         let mut provs = providers;
         let st = state;
 
         spawn(async move {
-            match api::add_provider(
+            match api_client.add_provider(
                 &name,
                 &kind,
                 api_key_val.as_deref(),
                 base_url.as_deref(),
-                &key,
             )
             .await
             {
                 Ok(_) => {
-                    match api::list_providers(&key).await {
+                    match api_client.list_providers().await {
                         Ok(data) => {
                             if let Some(arr) = data.get("providers").and_then(|v| v.as_array()) {
                                 provs.set(arr.clone());
@@ -105,11 +103,11 @@ pub fn ProvidersView() -> Element {
     };
 
     let remove_provider = move |name: String| {
-        let key = api_key();
+        let api_client = client();
         let mut provs = providers;
         let st = state;
         spawn(async move {
-            match api::remove_provider(&name, &key).await {
+            match api_client.remove_provider(&name).await {
                 Ok(_) => {
                     add_toast(&st, ToastLevel::Success, "Provider removed", &name);
                 }
@@ -117,7 +115,7 @@ pub fn ProvidersView() -> Element {
                     add_toast(&st, ToastLevel::Error, "Failed to remove provider", e);
                 }
             }
-            match api::list_providers(&key).await {
+            match api_client.list_providers().await {
                 Ok(data) => {
                     if let Some(arr) = data.get("providers").and_then(|v| v.as_array()) {
                         provs.set(arr.clone());

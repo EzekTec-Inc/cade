@@ -59,6 +59,16 @@ fn App() -> Element {
     };
     use_context_provider(|| app_state);
 
+    let client = use_memo(move || {
+        crate::api::CadeApiClient::new(api_key())
+    });
+    use_context_provider(|| client);
+
+    let store = use_memo(move || {
+        crate::types::AppSessionStore::new(app_state)
+    });
+    use_context_provider(|| store);
+
     // ── Startup: fetch first agent + start message polling ─────────────────
     use_effect(move || {
         let key = api_key;

@@ -380,3 +380,103 @@ where
     }
     Ok(())
 }
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CadeApiClient {
+    pub api_key: String,
+}
+
+#[allow(dead_code)]
+impl CadeApiClient {
+    pub fn new(api_key: String) -> Self {
+        Self { api_key }
+    }
+
+    pub async fn list_agents(&self) -> Result<Vec<cade_api_types::AgentInfo>, String> {
+        let res = api_request("GET", "/v1/agents", None, &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn list_conversations(&self, agent_id: &str) -> Result<Vec<cade_api_types::ConversationInfo>, String> {
+        let path = format!("/v1/agents/{}/conversations", agent_id);
+        let res = api_request("GET", &path, None, &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn create_conversation(&self, agent_id: &str, title: Option<&str>) -> Result<cade_api_types::ConversationInfo, String> {
+        create_conversation(agent_id, title, &self.api_key).await
+    }
+
+    pub async fn delete_conversation(&self, agent_id: &str, conv_id: &str) -> Result<(), String> {
+        delete_conversation(agent_id, conv_id, &self.api_key).await
+    }
+
+    pub async fn get_messages(&self, agent_id: &str, conversation_id: Option<&str>) -> Result<Vec<cade_api_types::ChatMessage>, String> {
+        get_messages(agent_id, &self.api_key, conversation_id).await
+    }
+
+    pub async fn stream_messages<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        conversation_id: Option<&str>,
+        cancel_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        on_event: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(cade_api_types::StreamEvent),
+    {
+        stream_messages(agent_id, input, &self.api_key, conversation_id, cancel_token, on_event).await
+    }
+
+    pub async fn list_providers(&self) -> Result<serde_json::Value, String> {
+        list_providers(&self.api_key).await
+    }
+
+    pub async fn add_provider(
+        &self,
+        name: &str,
+        kind: &str,
+        api_key_val: Option<&str>,
+        base_url: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        add_provider(name, kind, api_key_val, base_url, &self.api_key).await
+    }
+
+    pub async fn remove_provider(&self, name: &str) -> Result<(), String> {
+        remove_provider(name, &self.api_key).await
+    }
+
+    pub async fn list_presets(&self) -> Result<serde_json::Value, String> {
+        list_presets(&self.api_key).await
+    }
+
+    pub async fn list_memory_blocks(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        list_memory_blocks(agent_id, &self.api_key).await
+    }
+
+    pub async fn list_mcp_servers(&self) -> Result<Vec<serde_json::Value>, String> {
+        list_mcp_servers(&self.api_key).await
+    }
+
+    pub async fn list_models(&self) -> Result<serde_json::Value, String> {
+        list_models(&self.api_key).await
+    }
+
+    pub async fn get_metrics(&self, agent_id: &str) -> Result<serde_json::Value, String> {
+        get_metrics(agent_id, &self.api_key).await
+    }
+
+    pub async fn get_context_stats(&self, agent_id: &str) -> Result<serde_json::Value, String> {
+        get_context_stats(agent_id, &self.api_key).await
+    }
+
+    pub async fn get_config(&self) -> Result<serde_json::Value, String> {
+        get_config(&self.api_key).await
+    }
+
+    pub async fn list_events(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        list_events(agent_id, &self.api_key).await
+    }
+}

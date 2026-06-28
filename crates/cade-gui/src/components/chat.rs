@@ -1,12 +1,13 @@
 use dioxus::prelude::*;
 
-use crate::api;
+
 use crate::types::{add_toast, AppState, ToastLevel};
 
 /// Full chat view with message history and input area.
 #[component]
 pub fn ChatView() -> Element {
     let state = use_context::<AppState>();
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let agent_name = (state
         .selected_agent)()
         .map(|a| a.name.clone())
@@ -20,7 +21,7 @@ pub fn ChatView() -> Element {
         let agent_id = (state.selected_agent)()
             .map(|a| a.id.clone())
             .unwrap_or_default();
-        let key = (state.api_key)();
+        let api_client = client();
         let mut msgs = state.messages;
         let mut active_stream = state.active_stream;
 
@@ -30,7 +31,7 @@ pub fn ChatView() -> Element {
 
         spawn(async move {
             if !agent_id.is_empty() {
-                if let Ok(list) = api::get_messages(&agent_id, &key, conv_id.as_deref()).await {
+                if let Ok(list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await {
                     msgs.set(list);
                 }
             }
@@ -78,6 +79,7 @@ fn chat_sidebar(
     api_key: Signal<String>,
 ) -> Element {
     let state = use_context::<AppState>();
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let mut show_new = use_signal(|| false);
     let mut new_title = use_signal(String::new);
 
@@ -89,11 +91,11 @@ fn chat_sidebar(
         let agent_id = selected_agent()
             .map(|a| a.id.clone())
             .unwrap_or_default();
-        let key = api_key();
+        let api_client = client();
         let mut convs = conversations;
         let mut active = active_conversation;
         spawn(async move {
-            match api::create_conversation(&agent_id, Some(&title), &key).await {
+            match api_client.create_conversation(&agent_id, Some(&title)).await {
                 Ok(conv) => {
                     let mut list = convs();
                     list.push(conv.clone());
@@ -112,11 +114,11 @@ fn chat_sidebar(
         let agent_id = selected_agent()
             .map(|a| a.id.clone())
             .unwrap_or_default();
-        let key = api_key();
+        let api_client = client();
         let mut convs = conversations;
         let mut active = active_conversation;
         spawn(async move {
-            match api::delete_conversation(&agent_id, &conv_id, &key).await {
+            match api_client.delete_conversation(&agent_id, &conv_id).await {
                 Ok(_) => {
                     let mut list = convs();
                     list.retain(|c| c.id != conv_id);
@@ -432,6 +434,7 @@ fn input_area(
     active_conversation: Signal<Option<String>>,
 ) -> Element {
     let mut state = use_context::<AppState>();
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let mut do_send = move || {
         let text = input_text().trim().to_string();
         if text.is_empty() || is_loading() {
@@ -466,16 +469,15 @@ fn input_area(
         let agent_id = selected_agent()
             .map(|a| a.id.clone())
             .unwrap_or_default();
-        let key = api_key();
+        let api_client = client();
         let conv_id = active_conversation();
 
         spawn(async move {
             let mut reasoning_acc = String::new();
 
-            let result = api::stream_messages(
+            let result = api_client.stream_messages(
                 &agent_id,
                 &text,
-                &key,
                 conv_id.as_deref(),
                 Some(cancel_token),
                 |event: cade_api_types::StreamEvent| {
