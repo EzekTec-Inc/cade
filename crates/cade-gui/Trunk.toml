@@ -9,3 +9,6 @@ public_url = "/dashboard/"
 # support bulk-memory ops emitted by recent Rust.  The .wasm is already
 # compiled with opt-level = "s" via the release profile.
 minify     = "never"
+
+[[proxy]]
+backend = "http://127.0.0.1:8000"
