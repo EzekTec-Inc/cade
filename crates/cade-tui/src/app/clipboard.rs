@@ -32,15 +32,36 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
 
     let mut ok = false;
 
-    // 1. OSC 52 universal fallback (works over SSH, tmux, etc.)
+    // 1. OSC 52 universal fallback (with TMUX / Screen passthrough wrapping)
     let b64 = base64::prelude::BASE64_STANDARD.encode(text);
-    print!("\x1b]52;c;{}\x07", b64);
-    let flushed = std::io::stdout().flush().is_ok();
-    ok |= flushed;
+    let sequence = if std::env::var("TMUX").is_ok() {
+        // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
+        format!("\x1bPtmux;\x1b\x1b]52;c;{}\x07\x1b\\", b64)
+    } else if std::env::var("TERM").map(|t| t.contains("screen")).unwrap_or(false) {
+        // GNU Screen passthrough wrapping
+        format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
+    } else {
+        // Standard OSC 52 escape sequence
+        format!("\x1b]52;c;{}\x07", b64)
+    };
+
+    let mut stdout = std::io::stdout().lock();
+    if stdout.write_all(sequence.as_bytes()).is_ok() {
+        ok |= stdout.flush().is_ok();
+    }
 
     // 2. Native OS clipboard (arboard)
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        ok |= cb.set_text(text).is_ok();
+    // Headless safety: on Linux, skip arboard if no display server is running
+    // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
+    #[cfg(target_os = "linux")]
+    let should_try_native = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+    #[cfg(not(target_os = "linux"))]
+    let should_try_native = true;
+
+    if should_try_native {
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            ok |= cb.set_text(text).is_ok();
+        }
     }
 
     ok

@@ -30,18 +30,7 @@ impl TuiApp {
                 self.draw_dirty = true;
             }
             TuiAction::CopyBlock(text) => {
-                // 1. OSC 52 Universal Sequence
-                use base64::Engine;
-                let b64 = base64::prelude::BASE64_STANDARD.encode(&text);
-                print!("\x1b]52;c;{}\x07", b64);
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-
-                // 2. Native clipboard fallback (arboard)
-                if let Ok(mut cb) = arboard::Clipboard::new() {
-                    let _ = cb.set_text(&text);
-                }
-
+                crate::app::clipboard::write_to_clipboard(&text);
                 self.show_toast("Content copied to clipboard", ToastLevel::Success);
                 self.draw_dirty = true;
             }
