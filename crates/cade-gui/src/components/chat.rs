@@ -83,6 +83,25 @@ fn chat_sidebar(
     let mut show_new = use_signal(|| false);
     let mut new_title = use_signal(String::new);
 
+    let checkpoints = use_signal(Vec::<serde_json::Value>::new);
+    let agent_id_for_cp = selected_agent()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
+    
+    let cp_api_client = client;
+    use_effect(move || {
+        let a_id = agent_id_for_cp.clone();
+        let api = cp_api_client;
+        let mut cps = checkpoints;
+        spawn(async move {
+            if !a_id.is_empty() {
+                if let Ok(data) = api().list_checkpoints(&a_id).await {
+                    cps.set(data);
+                }
+            }
+        });
+    });
+
     let mut create_conv = move || {
         let title = new_title().trim().to_string();
         if title.is_empty() {
@@ -232,6 +251,54 @@ fn chat_sidebar(
                             }
                         }
                     })}
+                }
+
+                // Checkpoints Timeline List
+                div { class: "flex flex-col space-y-1 pt-4 border-t border-[#272833]/30 overflow-y-auto max-h-[180px] hide-scrollbar",
+                    div { class: "text-[10px] font-bold text-gray-500 px-3 tracking-wider uppercase mb-1.5", "Checkpoints Timeline" }
+                    if checkpoints().is_empty() {
+                        div { class: "text-[10px] text-gray-500 px-3 italic select-none", "No checkpoints recorded." }
+                    } else {
+                        {checkpoints().into_iter().map(|cp| {
+                            let cp_id = cp.get("id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                            let cp_label = cp.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let cp_desc = cp.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let title = if cp_label.is_empty() { cp_id.clone() } else { cp_label };
+                            let agent_id_act = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
+                            let cp_id_act = cp_id.clone();
+                            let api = client;
+                            let st_toast = state;
+                            rsx! {
+                                div { class: "group flex flex-col p-2 rounded-md hover:bg-[#1f212a]/40 text-gray-400 hover:text-white transition duration-150 relative",
+                                    div { class: "flex items-start justify-between min-w-0 gap-2",
+                                        div { class: "flex items-center space-x-2 min-w-0",
+                                            span { class: "text-xs select-none", "⏱" }
+                                            span { class: "text-xs font-medium truncate", "{title}" }
+                                        }
+                                        button {
+                                            class: "text-[9px] bg-[#ff7c5c]/10 text-[#ff7c5c] hover:bg-[#ff7c5c]/20 border border-[#ff7c5c]/10 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition shrink-0 select-none",
+                                            onclick: move |e| {
+                                                e.stop_propagation();
+                                                let api_act = api();
+                                                let a_id = agent_id_act.clone();
+                                                let c_id = cp_id_act.clone();
+                                                spawn(async move {
+                                                    match api_act.restore_checkpoint(&a_id, &c_id).await {
+                                                        Ok(_) => add_toast(&st_toast, ToastLevel::Success, "Fork requested", format!("Forking checkpoint {c_id}")),
+                                                        Err(e) => add_toast(&st_toast, ToastLevel::Error, "Fork failed", e),
+                                                    }
+                                                });
+                                            },
+                                            "Fork"
+                                        }
+                                    }
+                                    if !cp_desc.is_empty() {
+                                        div { class: "text-[9px] text-gray-500 mt-0.5 line-clamp-1 truncate font-medium", "{cp_desc}" }
+                                    }
+                                }
+                            }
+                        })}
+                    }
                 }
             }
 
@@ -559,6 +626,11 @@ fn input_area(
                                     ));
                                 messages.set(msgs);
                             }
+                        }
+                        "approval_requested" => {
+                            let subagent = event.data.get("subagent_id").and_then(|v| v.as_str()).unwrap_or("subagent");
+                            let tool = event.data.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+                            add_toast(&state, ToastLevel::Warning, "Approval Requested", format!("Background Subagent [{subagent}] requests permission to run {tool}. See Tools page to authorize."));
                         }
                         _ => {
                             // stream_start, finish_reason, tool_result_message,

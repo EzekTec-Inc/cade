@@ -479,4 +479,28 @@ impl CadeApiClient {
     pub async fn list_events(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
         list_events(agent_id, &self.api_key).await
     }
+
+    pub async fn list_checkpoints(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let path = format!("/v1/agents/{}/checkpoints", agent_id);
+        let res = api_request("GET", &path, None, &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn restore_checkpoint(&self, agent_id: &str, cp_id: &str) -> Result<serde_json::Value, String> {
+        let path = format!("/v1/agents/{}/checkpoints/{}/restore", agent_id, cp_id);
+        let res = api_request("POST", &path, None, &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn list_approvals(&self) -> Result<serde_json::Value, String> {
+        let res = api_request("GET", "/v1/approvals", None, &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn action_approval(&self, id: &str, action: &str) -> Result<serde_json::Value, String> {
+        let path = format!("/v1/approvals/{}/action", id);
+        let body = serde_json::json!({ "action": action });
+        let res = api_request("POST", &path, Some(&body.to_string()), &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
 }
