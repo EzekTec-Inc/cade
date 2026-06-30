@@ -26,7 +26,7 @@ pub fn ChatView() -> Element {
         let mut active_stream = state.active_stream;
 
         // Abort the previous stream on conversation/agent switch
-        active_stream().0.store(true, std::sync::atomic::Ordering::Release);
+        active_stream.peek().0.store(true, std::sync::atomic::Ordering::Release);
         active_stream.set(crate::types::SafeAbortHandle::default());
 
         spawn(async move {
