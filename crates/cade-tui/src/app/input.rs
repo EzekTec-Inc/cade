@@ -145,13 +145,28 @@ impl TuiApp {
                     MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
                         if !self.slots.handle_mouse(m) {
                             self.set_mouse_selection(&m);
+                            self.selection_start = Some((m.column, m.row));
+                            self.selection_current = Some((m.column, m.row));
+                            self.selection_active = true;
+                            self.draw()?;
+                        }
+                    }
+                    MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                        if !self.slots.handle_mouse(m) && self.selection_active {
+                            self.selection_current = Some((m.column, m.row));
                             self.draw()?;
                         }
                     }
                     MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
                         self.mouse_selection = None;
-                        if !self.slots.handle_mouse(m) && self.click_to_copy(&m) {
-                            self.draw()?;
+                        if !self.slots.handle_mouse(m) {
+                            if !self.copy_selected_text() {
+                                if self.click_to_copy(&m) {
+                                    self.draw()?;
+                                }
+                            } else {
+                                self.draw()?;
+                            }
                         }
                     }
                     _ => {
