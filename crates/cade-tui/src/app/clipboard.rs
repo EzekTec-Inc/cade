@@ -64,7 +64,127 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
         }
     }
 
+    // 3. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
+    if !ok {
+        ok |= copy_via_shell_commands(text);
+    }
+
     ok
+}
+
+/// Fallback for headless or remote servers: write copied content to ~/.cade/clipboard.txt
+#[allow(dead_code)]
+pub(crate) fn write_to_file_fallback(text: &str) {
+    if let Some(home) = dirs::home_dir() {
+        let cade_dir = home.join(".cade");
+        if !cade_dir.exists() {
+            let _ = std::fs::create_dir_all(&cade_dir);
+        }
+        let file_path = cade_dir.join("clipboard.txt");
+        let _ = std::fs::write(&file_path, text);
+    }
+}
+
+/// Try to copy text via platform-native command line tools (pbcopy, xclip, wl-copy, clip.exe)
+fn copy_via_shell_commands(text: &str) -> bool {
+    use std::process::{Command, Stdio};
+    use std::io::Write;
+
+    // macOS pbcopy
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(mut child) = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    return child.wait().map(|s| s.success()).unwrap_or(false);
+                }
+            }
+        }
+    }
+
+    // Linux wl-copy, xclip, xsel, clip.exe
+    #[cfg(target_os = "linux")]
+    {
+        // Try wl-copy (Wayland)
+        if let Ok(mut child) = Command::new("wl-copy")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Try xclip (X11)
+        if let Ok(mut child) = Command::new("xclip")
+            .arg("-selection")
+            .arg("clipboard")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Try xsel
+        if let Ok(mut child) = Command::new("xsel")
+            .arg("--clipboard")
+            .arg("--input")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Try clip.exe (WSL)
+        if let Ok(mut child) = Command::new("clip.exe")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Windows native clip
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(mut child) = Command::new("clip")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    return child.wait().map(|s| s.success()).unwrap_or(false);
+                }
+            }
+        }
+    }
+
+    false
 }
 
 impl TuiApp {
