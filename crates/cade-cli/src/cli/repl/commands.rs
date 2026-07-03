@@ -371,11 +371,7 @@ impl Repl {
                 }
                 return Ok(false);
             }
-            SlashCmd::Mouse => {
-                self.app.lock().toggle_mouse_capture();
-                let _ = self.app.lock().draw();
-                return Ok(false);
-            }
+
             SlashCmd::Reasoning(r) => {
                 let r = if r.is_empty() {
                     match self

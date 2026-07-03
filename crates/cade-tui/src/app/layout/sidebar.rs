@@ -21,7 +21,6 @@ pub(crate) struct SidebarState<'a> {
     pub thinking_text: Option<&'a str>,
     pub thinking_elapsed: Option<std::time::Duration>,
     pub active_plan: Option<&'a PlanState>,
-    pub mouse_capture_disabled: bool,
     pub session_cost_usd: f64,
 }
 
@@ -187,21 +186,7 @@ pub(crate) fn render_sidebar(
             Span::styled(" turns   ", colors.text_muted()),
             Span::styled(state.turn_count.to_string(), colors.text_primary()),
         ]),
-        Line::from(vec![
-            Span::styled(" mouse   ", colors.text_muted()),
-            Span::styled(
-                if state.mouse_capture_disabled {
-                    "FREE"
-                } else {
-                    "CAPTURED"
-                },
-                Style::default().fg(if state.mouse_capture_disabled {
-                    colors.c_success()
-                } else {
-                    colors.c_text_dim()
-                }),
-            ),
-        ]),
+
         if let Some(reason) = state.reasoning_effort {
             Line::from(vec![
                 Span::styled(" reason  ", colors.text_muted()),
@@ -307,7 +292,6 @@ mod tests {
             thinking_text: None,
             thinking_elapsed: None,
             active_plan: None,
-            mouse_capture_disabled: true,
             session_cost_usd: 0.14,
         }
     }

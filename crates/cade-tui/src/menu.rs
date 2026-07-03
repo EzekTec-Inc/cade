@@ -308,10 +308,7 @@ const SECTIONS: &[Section] = &[
     Section {
         name: "Misc",
         items: &[
-            CmdEntry {
-                cmd: "/mouse",
-                desc: "Toggle scroll-wheel capture on/off (text selection always works)",
-            },
+
             CmdEntry {
                 cmd: "/export",
                 desc: "/export [file.json]  — export agent to JSON",

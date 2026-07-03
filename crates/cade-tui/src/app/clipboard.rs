@@ -58,11 +58,10 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
     #[cfg(not(target_os = "linux"))]
     let should_try_native = true;
 
-    if should_try_native {
-        if let Ok(mut cb) = arboard::Clipboard::new() {
+    if should_try_native
+        && let Ok(mut cb) = arboard::Clipboard::new() {
             ok |= cb.set_text(text).is_ok();
         }
-    }
 
     // 3. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
     if !ok {
@@ -112,15 +111,11 @@ fn copy_via_shell_commands(text: &str) -> bool {
         if let Ok(mut child) = Command::new("wl-copy")
             .stdin(Stdio::piped())
             .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
-                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+            && let Some(mut stdin) = child.stdin.take()
+                && stdin.write_all(text.as_bytes()).is_ok()
+                    && child.wait().map(|s| s.success()).unwrap_or(false) {
                         return true;
                     }
-                }
-            }
-        }
 
         // Try xclip (X11)
         if let Ok(mut child) = Command::new("xclip")
@@ -128,15 +123,11 @@ fn copy_via_shell_commands(text: &str) -> bool {
             .arg("clipboard")
             .stdin(Stdio::piped())
             .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
-                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+            && let Some(mut stdin) = child.stdin.take()
+                && stdin.write_all(text.as_bytes()).is_ok()
+                    && child.wait().map(|s| s.success()).unwrap_or(false) {
                         return true;
                     }
-                }
-            }
-        }
 
         // Try xsel
         if let Ok(mut child) = Command::new("xsel")
@@ -144,29 +135,21 @@ fn copy_via_shell_commands(text: &str) -> bool {
             .arg("--input")
             .stdin(Stdio::piped())
             .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
-                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+            && let Some(mut stdin) = child.stdin.take()
+                && stdin.write_all(text.as_bytes()).is_ok()
+                    && child.wait().map(|s| s.success()).unwrap_or(false) {
                         return true;
                     }
-                }
-            }
-        }
 
         // Try clip.exe (WSL)
         if let Ok(mut child) = Command::new("clip.exe")
             .stdin(Stdio::piped())
             .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
-                    if child.wait().map(|s| s.success()).unwrap_or(false) {
+            && let Some(mut stdin) = child.stdin.take()
+                && stdin.write_all(text.as_bytes()).is_ok()
+                    && child.wait().map(|s| s.success()).unwrap_or(false) {
                         return true;
                     }
-                }
-            }
-        }
     }
 
     // Windows native clip

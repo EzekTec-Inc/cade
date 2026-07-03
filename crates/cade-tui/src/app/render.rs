@@ -133,7 +133,6 @@ pub(crate) fn render_frame(
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
     active_plan: Option<&PlanState>,
-    mouse_capture_disabled: bool,
     toast: Option<&Toast>,
     copy_highlight: Option<(usize, std::time::Instant)>,
     mouse_selection: Option<usize>,
@@ -656,7 +655,6 @@ pub(crate) fn render_frame(
             thinking_text,
             thinking_elapsed,
             active_plan,
-            mouse_capture_disabled,
             session_cost_usd,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);

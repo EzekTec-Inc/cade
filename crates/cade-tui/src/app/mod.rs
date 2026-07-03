@@ -857,10 +857,7 @@ pub struct TuiApp {
     /// Up/Down cursor navigation uses the real column width.
     term_width: u16,
 
-    // -- Visual Selection state
-    pub selection_start: Option<(u16, u16)>,
-    pub selection_current: Option<(u16, u16)>,
-    pub selection_active: bool,
+
 
     // -- Status / thinking
     pub thinking: Option<ThinkingState>,
@@ -896,20 +893,12 @@ pub struct TuiApp {
     /// Cleared after ~400 ms in draw_impl().
     pub copy_highlight: Option<(usize, std::time::Instant)>,
 
-    /// Visual selection highlight while mouse button is held down.
-    /// Stores the prepared entry index under the cursor.
-    /// Set on MouseDown(Left), cleared on MouseUp or key press.
-    pub mouse_selection: Option<usize>,
+
 
     /// Monotonically increasing version counter for conversation content.
     /// Incremented on every `push()`, `commit_streaming()`, `append_live_output_line()`, `clear()`.
     /// Used to invalidate the prepared-entries cache.
     pub content_version: u64,
-
-    /// Cache of fully rendered timeline entries, rebuilt lazily when content
-    /// or layout settings change. Avoids re-parsing markdown and ANSI on
-    /// every frame and on every mouse click for hit-testing.
-    pub(crate) prepared_cache: Option<crate::app::timeline::PreparedCache>,
 
     /// Currently active focused region in the workspace
     pub focused_region: crate::slots::FocusRegion,
@@ -1063,8 +1052,7 @@ impl TuiApp {
         let _ = crossterm::execute!(
             std::io::stdout(),
             EnableBracketedPaste,
-            EnableFocusChange,
-            crossterm::event::EnableMouseCapture
+            EnableFocusChange
         );
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
@@ -1118,12 +1106,7 @@ impl TuiApp {
             mouse_capture_disabled: false,
             messages_area: Rect::default(),
             copy_highlight: None,
-            mouse_selection: None,
-            selection_start: None,
-            selection_current: None,
-            selection_active: false,
             content_version: 0,
-            prepared_cache: None,
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
             is_pasting: false,
@@ -1403,7 +1386,6 @@ impl TuiApp {
             self.toast = None;
         }
         let toast: Option<&Toast> = self.toast.as_ref();
-        let mouse_capture_disabled = self.mouse_capture_disabled;
         let colors: &ThemeColors = &self.colors;
         let nerd = self.use_nerd_fonts;
 
@@ -1456,10 +1438,9 @@ impl TuiApp {
                 footer_extra.as_deref(),
                 reasoning_effort,
                 active_plan_snap.as_ref(),
-                mouse_capture_disabled,
                 toast,
                 self.copy_highlight,
-                self.mouse_selection,
+                None,
                 expanded_items,
                 colors,
                 &mut self.last_input_width,
@@ -1666,7 +1647,6 @@ impl TuiApp {
         // Restore the overlay stack and slot manager.
         self.overlays = overlay_stack;
         self.slots = slot_mgr;
-        apply_selection_highlight(self.selection_active, self.selection_start, self.selection_current, &mut self.terminal);
 
         // Stash the messages area rect for click-to-copy.
         self.messages_area = messages_area;
@@ -1759,125 +1739,6 @@ impl TuiApp {
         }
         Ok(())
     }
-
-    /// Extract highlighted character range from active buffer, copy it, and clear state
-    pub fn copy_selected_text(&mut self) -> bool {
-        if !self.selection_active {
-            return false;
-        }
-
-        let Some((x1, y1)) = self.selection_start else { return false; };
-        let Some((x2, y2)) = self.selection_current else { return false; };
-
-        // If it's a single click (no drag), don't trigger selection copy
-        if x1 == x2 && y1 == y2 {
-            self.selection_active = false;
-            self.selection_start = None;
-            self.selection_current = None;
-            return false;
-        }
-
-        let size = self.terminal.size().unwrap_or_default();
-        let width = size.width;
-        let height = size.height;
-        if width == 0 || height == 0 {
-            return false;
-        }
-
-        // Sort start and end coordinates
-        let (start_x, start_y, end_x, end_y) = if y1 < y2 || (y1 == y2 && x1 <= x2) {
-            (x1, y1, x2, y2)
-        } else {
-            (x2, y2, x1, y1)
-        };
-
-        let buffer = self.terminal.current_buffer_mut();
-        let mut selected_text = String::new();
-
-        for y in start_y..=end_y {
-            if y >= height {
-                continue;
-            }
-            let min_x = if y == start_y { start_x } else { 0 };
-            let max_x = if y == end_y { end_x } else { width.saturating_sub(1) };
-            
-            let mut row_text = String::new();
-            for x in min_x..=max_x {
-                if x >= width {
-                    continue;
-                }
-                let cell = &buffer[(x, y)];
-                row_text.push_str(cell.symbol());
-            }
-            
-            let trimmed = row_text.trim_end().to_string();
-            if !selected_text.is_empty() {
-                selected_text.push('\n');
-            }
-            selected_text.push_str(&trimmed);
-        }
-
-        self.selection_active = false;
-        self.selection_start = None;
-        self.selection_current = None;
-
-        if !selected_text.is_empty() {
-            crate::app::clipboard::write_to_clipboard(&selected_text);
-            self.show_toast("Copied highlighted selection to clipboard", crate::app::ToastLevel::Success);
-            self.draw_dirty = true;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-/// Highlight the currently selected visual terminal cells (called after draw)
-fn apply_selection_highlight(
-    selection_active: bool,
-    selection_start: Option<(u16, u16)>,
-    selection_current: Option<(u16, u16)>,
-    terminal: &mut DefaultTerminal,
-) {
-    if selection_active {
-        if let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current) {
-            let size = terminal.size().unwrap_or_default();
-            let width = size.width;
-            let height = size.height;
-            if width == 0 || height == 0 {
-                return;
-            }
-
-            // Sort start and end coordinates
-            let (start_x, start_y, end_x, end_y) = if y1 < y2 || (y1 == y2 && x1 <= x2) {
-                (x1, y1, x2, y2)
-            } else {
-                (x2, y2, x1, y1)
-            };
-
-            let buffer = terminal.current_buffer_mut();
-            for y in start_y..=end_y {
-                if y >= height {
-                    continue;
-                }
-                let min_x = if y == start_y { start_x } else { 0 };
-                let max_x = if y == end_y { end_x } else { width.saturating_sub(1) };
-                for x in min_x..=max_x {
-                    if x >= width {
-                        continue;
-                    }
-                    let cell = &mut buffer[(x, y)];
-                    // Invert colors to highlight perfectly across any theme!
-                    let fg = cell.fg;
-                    let bg = cell.bg;
-                    cell.set_fg(bg);
-                    cell.set_bg(fg);
-                    let current_style = cell.style();
-                    cell.set_style(current_style.add_modifier(ratatui::style::Modifier::REVERSED));
-                }
-            }
-        }
-    }
 }
 
 /// Called from repl.rs after each usage_statistics SSE event.
@@ -1886,10 +1747,6 @@ impl TuiApp {}
 impl Drop for TuiApp {
     fn drop(&mut self) {
         let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        // Only disable mouse capture if it was enabled via /mouse.
-        if !self.mouse_capture_disabled {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-        }
         let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
         ratatui::restore();
     }

@@ -61,16 +61,7 @@ pub(crate) struct PreparedTimelineEntry {
     pub(crate) card_style: CardStyle,
 }
 
-/// Cache key + value for the prepared-entries cache in [`TuiApp`].
-/// Avoids re-parsing markdown / ANSI on every frame and on every mouse click.
-#[derive(Clone)]
-pub(crate) struct PreparedCache {
-    pub(crate) entries: Vec<PreparedTimelineEntry>,
-    pub(crate) version: u64,
-    pub(crate) timeline_w: usize,
-    pub(crate) expand_all: bool,
-    pub(crate) expanded_hash: u64,
-}
+
 
 pub(crate) enum TimelineItem<'a> {
     Separator,
