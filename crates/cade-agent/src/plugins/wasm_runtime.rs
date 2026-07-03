@@ -145,11 +145,54 @@ impl WasmRuntime {
                 crate::Error::custom(format!("Failed to get function '{export_name}': {e}"))
             })?;
 
-        // TODO: Implement proper linear memory read/write for argument passing.
-        // For now, dispatch returns a placeholder indicating the tool was found.
-        Ok(format!(
-            "[wasm] {plugin_name}::{tool_name} dispatched with {args_json}"
-        ))
+        // Get the memory exported by the WASM module
+        let memory = instance
+            .get_memory(&mut store, "memory")
+            .map_err(|_| crate::Error::custom(format!("WASM plugin '{plugin_name}' must export 'memory'")))?;
+
+        let arg_len = args_json.len() as i32;
+        // If malloc is exported, allocate dynamic buffer. Otherwise fallback to static offset 0.
+        let arg_ptr = if let Ok(malloc) = instance.get_typed_func::<i32, i32>(&mut store, "malloc") {
+            malloc.call(&mut store, arg_len).await.unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Write args_json to the WASM linear memory
+        if arg_ptr >= 0 {
+            memory
+                .write(&mut store, arg_ptr as usize, args_json.as_bytes())
+                .map_err(|e| crate::Error::custom(format!("Failed to write to WASM memory: {e}")))?;
+        }
+
+        // Call the tool function, passing pointer and length
+        let result_packed = func.call(&mut store, (arg_ptr, arg_len)).await.map_err(|e| {
+            crate::Error::custom(format!("WASM function execution failed: {e}"))
+        })?;
+
+        // Unpack (ptr, len) from the 64-bit result value
+        let res_ptr = (result_packed >> 32) as usize;
+        let res_len = (result_packed & 0xffffffff) as usize;
+
+        if res_len == 0 {
+            return Ok(String::new());
+        }
+
+        // Read the result string out of WASM linear memory
+        let mut res_bytes = vec![0u8; res_len];
+        memory
+            .read(&store, res_ptr, &mut res_bytes)
+            .map_err(|e| crate::Error::custom(format!("Failed to read from WASM memory: {e}")))?;
+
+        let result_str = String::from_utf8(res_bytes)
+            .map_err(|e| crate::Error::custom(format!("Invalid UTF-8 from WASM plugin: {e}")))?;
+
+        // Free the returned buffer inside the WASM module (free)
+        if let Ok(free) = instance.get_typed_func::<i32, ()>(&mut store, "free") {
+            let _ = free.call(&mut store, res_ptr as i32).await;
+        }
+
+        Ok(result_str)
     }
 
     /// Dispatch a lifecycle event to all loaded WASM plugins.

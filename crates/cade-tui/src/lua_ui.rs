@@ -234,6 +234,11 @@ impl SlotComponent for LuaUiSlot {
     fn handle_input(&mut self, key: KeyEvent) -> bool {
         use crossterm::event::KeyCode;
 
+        // If the slot is not currently focused by the user/TUI, do not intercept input (TUI-6 focus fix)
+        if !self.is_focused {
+            return false;
+        }
+
         let interactives = self.interactive_ids();
         if interactives.is_empty() {
             return false;
