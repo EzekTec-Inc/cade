@@ -1105,7 +1105,7 @@ ui_resource_uri: None,
         None => {
             if let Some(ref tw) = temp_workspace {
                 let root = std::env::current_dir().unwrap_or_default();
-                if let Err(e) = copy_back_temp_workspace(tw.path(), &root) {
+                if let Err(e) = copy_back_temp_workspace(tw.path(), &root).await {
                     tracing::warn!("Failed to copy back isolated files for subagent [{}]: {e}", subagent_id);
                 } else {
                     tracing::info!("Successfully merged isolated files back for subagent [{}]", subagent_id);
@@ -1627,7 +1627,7 @@ fn clone_workspace_to_temp(src_dir: &std::path::Path) -> std::io::Result<tempfil
     Ok(tmp)
 }
 
-fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::path::Path) -> std::io::Result<()> {
+async fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::path::Path) -> std::io::Result<()> {
     let walker = ignore::WalkBuilder::new(temp_dir)
         .standard_filters(true)
         .hidden(false)
@@ -1648,6 +1648,11 @@ fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::path::Pat
                         if let Some(parent) = dest_path.parent() {
                             std::fs::create_dir_all(parent)?;
                         }
+                        
+                        // Acquire global lock during final copy back step to prevent concurrent overwrites (ADR 6)
+                        let lock_manager = cade_agent::tools::file_lock::FileLockManager::global();
+                        let _lock = lock_manager.acquire_lock(&dest_path).await;
+                        
                         std::fs::write(&dest_path, &temp_bytes)?;
                         tracing::info!("Copy back isolated file: {:?}", rel_path);
                     }
@@ -1663,8 +1668,8 @@ mod tests {
     use super::*;
     use std::fs;
 
-    #[test]
-    fn test_workspace_cloning_and_copy_back() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn test_workspace_cloning_and_copy_back() -> std::io::Result<()> {
         let src = tempfile::tempdir()?;
 
         // Create some mock source files
@@ -1683,7 +1688,7 @@ mod tests {
         fs::write(clone_dir.path().join("new.txt"), "fresh file")?;
 
         // Copy back
-        copy_back_temp_workspace(clone_dir.path(), src.path())?;
+        copy_back_temp_workspace(clone_dir.path(), src.path()).await?;
 
         assert_eq!(fs::read_to_string(src.path().join("a.txt"))?, "hello modified");
         assert_eq!(fs::read_to_string(src.path().join("sub/b.txt"))?, "world modified");
