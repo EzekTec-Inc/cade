@@ -274,6 +274,18 @@ fn code_panel(
                 button {
                     class: "text-gray-500 hover:text-white transition duration-150 flex items-center space-x-1.5",
                     onclick: move |_| {
+                        let mut full_text = String::new();
+                        for (kw, val) in &code_content {
+                            if !full_text.is_empty() {
+                                full_text.push('\n');
+                            }
+                            if !kw.is_empty() {
+                                full_text.push_str(kw);
+                                full_text.push(' ');
+                            }
+                            full_text.push_str(val);
+                        }
+                        crate::api::copyText(&full_text);
                         copied_code.set(true);
                         spawn(async move {
                             gloo_timers::future::TimeoutFuture::new(2000).await;

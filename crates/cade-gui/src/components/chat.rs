@@ -422,11 +422,26 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#1a1d24] border {border_class} p-4 rounded-xl text-sm",
+                div { class: "flex flex-col bg-[#1a1d24] border {border_class} p-4 rounded-xl text-sm group relative",
                     div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1",
                         "tool \u{2014} {tool_name}"
                     }
                     p { class: "text-gray-300 mt-1 whitespace-pre-wrap text-xs font-mono", "{result_content}" }
+                    div { class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition duration-150 select-none",
+                        button {
+                            class: "text-gray-500 hover:text-white transition duration-150 p-1 bg-[#1e2029] border border-[#2d313f] rounded",
+                            title: "Copy content",
+                            onclick: {
+                                let text = result_content.to_string();
+                                move |_| {
+                                    crate::api::copyText(&text);
+                                }
+                            },
+                            svg { class: "w-3.5 h-3.5", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", "stroke-width": "2",
+                                path { "stroke-linecap": "round", "stroke-linejoin": "round", d: "M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -442,9 +457,24 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm",
+                div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm group relative",
                     div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
                     p { class: "text-gray-200 mt-1 whitespace-pre-wrap break-words", "{content_val}" }
+                    div { class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition duration-150 select-none",
+                        button {
+                            class: "text-gray-500 hover:text-white transition duration-150 p-1 bg-[#1e2029] border border-[#2d313f] rounded",
+                            title: "Copy content",
+                            onclick: {
+                                let text = content_val.to_string();
+                                move |_| {
+                                    crate::api::copyText(&text);
+                                }
+                            },
+                            svg { class: "w-3.5 h-3.5", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", "stroke-width": "2",
+                                path { "stroke-linecap": "round", "stroke-linejoin": "round", d: "M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -467,7 +497,7 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm",
+                div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm group relative",
                     div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
                     if let Some((ref reasoning, _)) = reasoning_parts {
                         details { class: "mb-2",
@@ -481,6 +511,21 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
                         "{display_text}"
                         if is_streaming {
                             span { class: "animate-pulse text-gray-500", "\u{2502}" }
+                        }
+                    }
+                    div { class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition duration-150 select-none",
+                        button {
+                            class: "text-gray-500 hover:text-white transition duration-150 p-1 bg-[#1e2029] border border-[#2d313f] rounded",
+                            title: "Copy content",
+                            onclick: {
+                                let text = content_val.to_string();
+                                move |_| {
+                                    crate::api::copyText(&text);
+                                }
+                            },
+                            svg { class: "w-3.5 h-3.5", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", "stroke-width": "2",
+                                path { "stroke-linecap": "round", "stroke-linejoin": "round", d: "M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" }
+                            }
                         }
                     }
                 }

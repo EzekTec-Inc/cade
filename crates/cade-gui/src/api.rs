@@ -1,5 +1,18 @@
 use js_sys::Reflect;
 use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(inline_js = "
+    export function copyText(text) {
+        if (navigator && navigator.clipboard) {
+            navigator.clipboard.writeText(text).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+        }
+    }
+")]
+extern "C" {
+    pub fn copyText(text: &str);
+}
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response, TextDecoder};
