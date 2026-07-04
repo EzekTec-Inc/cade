@@ -187,16 +187,10 @@ impl Repl {
                                                 app.draw_dirty = true;
                                             }
                                         } else {
-                                            match (k.code, k.modifiers) {
-                                                    // -- Scroll: delegate to shared handler
-                                                    // (Shift+K, Shift+J, PageUp, PageDown)
-                                                    (KeyCode::Char('K'), _)
-                                                    | (KeyCode::Char('J'), _)
-                                                    | (KeyCode::PageUp, _)
-                                                    | (KeyCode::PageDown, _) => {
-                                                        app.handle_scroll_key(k.code, k.modifiers);
-                                                        let _ = app.draw();
-                                                    }
+                                            if app.handle_scroll_key(k.code, k.modifiers) {
+                                                let _ = app.draw();
+                                            } else {
+                                                match (k.code, k.modifiers) {
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
                                                     (KeyCode::Tab, _) => {
                                                         let next_mode = cade_tui::app::cycle_mode(app.mode);
@@ -367,6 +361,7 @@ impl Repl {
                                                     }
                                                     _ => {}
                                                 }
+                                                }
                                             }
                                             break;
                                         }
@@ -379,10 +374,18 @@ impl Repl {
                             }
                         } else if let Some(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
-                            if let Event::Mouse(m) = evt
-                                && app.handle_scroll_mouse(m.kind)
-                            {
-                                let _ = app.draw();
+                            if let Event::Mouse(m) = evt {
+                                if app.slots.handle_mouse(m) {
+                                    let _ = app.draw();
+                                } else {
+                                    let is_inside_messages = m.column >= app.messages_area.x
+                                        && m.column < app.messages_area.x + app.messages_area.width
+                                        && m.row >= app.messages_area.y
+                                        && m.row < app.messages_area.y + app.messages_area.height;
+                                    if is_inside_messages && app.handle_scroll_mouse(m.kind) {
+                                        let _ = app.draw();
+                                    }
+                                }
                             }
                         }
                     }

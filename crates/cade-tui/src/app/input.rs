@@ -132,10 +132,19 @@ impl TuiApp {
                 Event::Resize(_, _) => {
                     self.draw()?;
                 }
-                Event::Mouse(m)
-                    if self.slots.handle_mouse(m) => {
+                Event::Mouse(m) => {
+                    if self.slots.handle_mouse(m) {
                         self.draw()?;
+                    } else {
+                        let is_inside_messages = m.column >= self.messages_area.x
+                            && m.column < self.messages_area.x + self.messages_area.width
+                            && m.row >= self.messages_area.y
+                            && m.row < self.messages_area.y + self.messages_area.height;
+                        if is_inside_messages && self.handle_scroll_mouse(m.kind) {
+                            self.draw()?;
+                        }
                     }
+                }
                 _ => {}
             }
         }
@@ -225,10 +234,19 @@ impl TuiApp {
                     return Ok(None);
                 }
 
+                let mut consumed = false;
                 if let Some(slot) = self.focused_region.to_slot()
                     && let Some(widget) = self.slots.get_mut(slot)
                 {
-                    widget.handle_input(k);
+                    consumed = widget.handle_input(k);
+                }
+
+                if !consumed {
+                    // Check if it's a scroll key and handle it
+                    if self.handle_scroll_key(k.code, k.modifiers) {
+                        let _ = self.draw();
+                        return Ok(None);
+                    }
                 }
 
                 // Consume all input when a slot is focused to protect prompt editor

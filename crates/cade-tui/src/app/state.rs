@@ -497,9 +497,10 @@ impl TuiApp {
     pub fn handle_scroll_key(
         &mut self,
         code: crossterm::event::KeyCode,
-        _modifiers: crossterm::event::KeyModifiers,
+        modifiers: crossterm::event::KeyModifiers,
     ) -> bool {
         use crossterm::event::KeyCode;
+        use crossterm::event::KeyModifiers;
 
         match code {
             // Shift+K — scroll up 10 lines
@@ -539,6 +540,30 @@ impl TuiApp {
                     self.follow = true;
                     self.pending_lines = 0;
                 }
+                self.draw_dirty = true;
+                true
+            }
+            // Shift+Up or Ctrl+Up — scroll up 3 lines
+            KeyCode::Up if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::CONTROL) => {
+                self.follow = false;
+                self.scroll_target = self.scroll_target.saturating_add(3);
+                self.draw_dirty = true;
+                true
+            }
+            // Shift+Down or Ctrl+Down — scroll down 3 lines
+            KeyCode::Down if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_target = self.scroll_target.saturating_sub(3);
+                if self.scroll_target == 0 {
+                    self.follow = true;
+                    self.pending_lines = 0;
+                }
+                self.draw_dirty = true;
+                true
+            }
+            // Ctrl+u — scroll up 10 lines
+            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.follow = false;
+                self.scroll_target = self.scroll_target.saturating_add(10);
                 self.draw_dirty = true;
                 true
             }
