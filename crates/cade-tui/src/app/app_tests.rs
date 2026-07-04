@@ -114,7 +114,8 @@ fn test_prepare_timeline_entries_row_sum() {
     let entries = build_timeline_entries(&lines);
     let colors = ThemeColors::default();
     let expanded = std::collections::HashSet::new();
-    let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors, true);
+    let mut temp_cache = std::collections::HashMap::new();
+    let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors, true, &mut temp_cache);
     assert_eq!(prepared.len(), 3);
     let total: u16 = prepared.iter().map(|p| p.rows).sum();
     assert!(total >= 3, "at least 1 row per item; got {total}");

@@ -2,11 +2,14 @@ use mlua::prelude::*;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::colors::ThemeColors;
+
 pub struct LuaEngine {
     pub lua: Lua,
     pub command_queue: Arc<Mutex<VecDeque<String>>>,
     pub tool_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
     pub ui_event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
+    pub active_colors: Arc<Mutex<ThemeColors>>,
 }
 
 impl LuaEngine {
@@ -55,6 +58,15 @@ impl LuaEngine {
         let command_queue = Arc::new(Mutex::new(VecDeque::new()));
         let tool_queue = Arc::new(Mutex::new(VecDeque::new()));
         let ui_event_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let active_colors = Arc::new(Mutex::new(ThemeColors::default()));
+
+        let colors_ref = active_colors.clone();
+        let get_style_fn = lua.create_function(move |lua_ctx, token: String| {
+            let colors = colors_ref.lock().expect("active_colors lock").clone();
+            let style = resolve_token_to_style(&colors, &token);
+            style_to_lua_table(lua_ctx, style)
+        })?;
+        lua.globals().set("_CADE_get_style", get_style_fn)?;
 
         let cmd_q = command_queue.clone();
         let exec_cmd = lua.create_function(move |_, cmd: String| {
