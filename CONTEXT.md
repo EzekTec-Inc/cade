@@ -95,3 +95,9 @@ The security and performance design pattern where embedded Lua UI extensions in 
 
 #### Lua UI Event Loop
 The asynchronous event loop callback mechanism where background completions processed by the host are serialized as JSON and dispatched back to active Lua extension widgets via a thread-safe `ui_event_queue`, invoking callbacks off the main rendering thread.
+
+#### Declarative Theme Schema
+A standardized, machine-readable JSON Schema for CADE color themes. It allows custom themes to be declared, validated, and loaded dynamically at runtime from `~/.cade/themes/` without recompiling the codebase.
+
+#### Unified Lua Style Bindings
+The style API exposed to the TUI plugin environment as `CADE_UI.get_style(token_name)`. It allows Lua scripts to query and apply active user-selected theme styles (colors and text modifiers) dynamically to custom widgets.
