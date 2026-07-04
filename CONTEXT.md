@@ -89,3 +89,9 @@ The architectural boundary constraint where the terminal user interface (`cade-t
 
 #### PreparedCache
 A localized rendering cache in `cade-tui` that stores pre-wrapped visual layout spans and calculated line heights for individual timeline entries. This eliminates redundant, heavy CPU text-wrapping computations during continuous draw cycles, scrolling, or streaming updates.
+
+#### Asynchronous Queue-Decoupled Plugins
+The security and performance design pattern where embedded Lua UI extensions in `cade-tui` are prohibited from executing synchronous, blocking operations on the terminal thread. Instead, plugins push native requests to asynchronous, non-blocking `command_queue` and `tool_queue` pipelines.
+
+#### Lua UI Event Loop
+The asynchronous event loop callback mechanism where background completions processed by the host are serialized as JSON and dispatched back to active Lua extension widgets via a thread-safe `ui_event_queue`, invoking callbacks off the main rendering thread.
