@@ -16,6 +16,9 @@ impl LuaEngine {
     pub fn new() -> LuaResult<Self> {
         let lua = Lua::new();
 
+        // 🟢 Sandbox Memory Limit (Limit RAM usage of plugins to prevent OOM crashes)
+        lua.set_memory_limit(32 * 1024 * 1024)?; // 32 MB limit
+
         // 🟢 Sandboxing (Bypass / Poison dangerous native standard libraries) (ADR 9)
         {
             let globals = lua.globals();

@@ -2012,8 +2012,8 @@ fn apply_selection_highlight(
     selection_current: Option<(u16, u16)>,
     terminal: &mut DefaultTerminal,
 ) {
-    if selection_active {
-        if let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current) {
+    if selection_active
+        && let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current) {
             let size = terminal.size().unwrap_or_default();
             let width = size.width;
             let height = size.height;
@@ -2049,7 +2049,6 @@ fn apply_selection_highlight(
                 }
             }
         }
-    }
 }
 
 /// Called from repl.rs after each usage_statistics SSE event.

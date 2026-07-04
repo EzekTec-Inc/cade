@@ -1610,19 +1610,16 @@ fn clone_workspace_to_temp(src_dir: &std::path::Path) -> std::io::Result<tempfil
         .hidden(false)
         .build();
 
-    for entry in walker {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.is_file() {
-                if let Ok(rel_path) = path.strip_prefix(src_dir) {
-                    let dest_path = tmp.path().join(rel_path);
-                    if let Some(parent) = dest_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    std::fs::copy(path, dest_path)?;
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && let Ok(rel_path) = path.strip_prefix(src_dir) {
+                let dest_path = tmp.path().join(rel_path);
+                if let Some(parent) = dest_path.parent() {
+                    std::fs::create_dir_all(parent)?;
                 }
+                std::fs::copy(path, dest_path)?;
             }
-        }
     }
     Ok(tmp)
 }
@@ -1636,8 +1633,8 @@ async fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::pat
     for entry in walker {
         if let Ok(entry) = entry {
             let path = entry.path();
-            if path.is_file() {
-                if let Ok(rel_path) = path.strip_prefix(temp_dir) {
+            if path.is_file()
+                && let Ok(rel_path) = path.strip_prefix(temp_dir) {
                     let dest_path = src_dir.join(rel_path);
                     
                     // Check if file content differs
@@ -1657,7 +1654,6 @@ async fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::pat
                         tracing::info!("Copy back isolated file: {:?}", rel_path);
                     }
                 }
-            }
         }
     }
     Ok(())

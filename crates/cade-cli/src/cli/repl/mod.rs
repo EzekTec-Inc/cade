@@ -925,6 +925,60 @@ impl Repl {
                 }
             }
 
+            // Process Lua tool queue (ADR 17)
+            {
+                let app = self.app.lock();
+                if let Some(lua) = &app.lua_engine {
+                    let mut t_q = lua.tool_queue.lock().expect("LuaEngine tool_queue");
+                    while let Some((tool_name, args)) = t_q.pop_front() {
+                        let mcp = self.mcp.clone();
+                        let hooks = self.hooks.clone();
+                        let app_ref = self.app.clone();
+                        let stats = self.session_stats.clone();
+                        let t_name = tool_name.clone();
+                        let ui_event_q = lua.ui_event_queue.clone();
+
+                        let runtime = std::sync::Arc::new(
+                            cade_agent::tools::ToolRuntime::new(
+                                std::sync::Arc::new(self.client.clone()),
+                                std::sync::Arc::clone(&self.mcp),
+                                self.agent_id(),
+                                self.cwd.clone(),
+                            )
+                            .with_conversation(self.conversation_id())
+                            .with_backend(std::sync::Arc::clone(&self.exec_backend)),
+                        );
+
+                        tokio::spawn(async move {
+                            let call_id = uuid::Uuid::new_v4().to_string();
+                            let result = Self::run_tool_inner(
+                                &call_id,
+                                &t_name,
+                                &args,
+                                &mcp,
+                                &hooks,
+                                &app_ref,
+                                &runtime,
+                                None,
+                                None,
+                                &stats,
+                            )
+                            .await;
+
+                            let payload = serde_json::json!({
+                                "tool_name": t_name,
+                                "is_error": result.is_error,
+                                "content": result.output,
+                            });
+                            ui_event_q
+                                .lock()
+                                .expect("LuaEngine ui_event_queue")
+                                .push_back(("tool_complete".to_string(), payload));
+                        });
+                    }
+                }
+            }
+
             // Process Lua UI events
             {
                 let mut app = self.app.lock();

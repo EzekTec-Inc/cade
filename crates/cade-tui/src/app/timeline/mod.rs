@@ -252,6 +252,7 @@ impl<'a> TimelineItem<'a> {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn visual_rows(
         &self,
         content_w: u16,
@@ -327,6 +328,7 @@ impl<'a> TimelineEntry<'a> {
         );
     }
 
+    #[allow(dead_code)]
     pub(crate) fn visual_rows_with_state(
         &self,
         content_w: u16,
@@ -355,6 +357,7 @@ impl<'a> TimelineEntry<'a> {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_tool_call(&self) -> bool {
         self.key.kind == TimelineItemKind::ToolCall
     }

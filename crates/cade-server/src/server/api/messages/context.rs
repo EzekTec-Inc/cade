@@ -406,12 +406,29 @@ pub(crate) async fn build_context(
     is_tool_return: bool,
 ) -> core::result::Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
     let build_started = std::time::Instant::now();
-    let agent = sqlite::get_agent(&state.db, agent_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    let (mut system_static, system_dynamic) =
-        assemble_system_prompt_memory(state, &agent, agent_id, conversation_id, is_tool_return);
+    let db_pool = state.db.clone();
+    let agent_id_clone = agent_id.to_string();
+    let conv_id_clone = conversation_id.map(String::from);
+    let state_clone = state.clone();
+
+    let (agent, mut system_static, system_dynamic) = tokio::task::spawn_blocking(move || {
+        let agent = sqlite::get_agent(&db_pool, &agent_id_clone)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Agent '{agent_id_clone}' not found"))?;
+
+        let (system_static, system_dynamic) = assemble_system_prompt_memory(
+            &state_clone,
+            &agent,
+            &agent_id_clone,
+            conv_id_clone.as_deref(),
+            is_tool_return,
+        );
+
+        Ok::<_, String>((agent, system_static, system_dynamic))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join error: {e}"))??;
 
     // Skill-counters for Phase-4 telemetry; updated when we render the
     // skills section below.
@@ -449,11 +466,16 @@ pub(crate) async fn build_context(
                 .collect();
 
             // Phase B: load per-agent disabled-skill blacklist from DB.
-            let disabled: std::collections::HashSet<String> =
-                cade_store::sqlite::skills::get_disabled_skills(&state.db, agent_id)
+            let db_pool = state.db.clone();
+            let agent_id_clone = agent_id.to_string();
+            let disabled: std::collections::HashSet<String> = tokio::task::spawn_blocking(move || {
+                cade_store::sqlite::skills::get_disabled_skills(&db_pool, &agent_id_clone)
                     .unwrap_or_default()
                     .into_iter()
-                    .collect();
+                    .collect()
+            })
+            .await
+            .unwrap_or_default();
 
             let skills_section = render_skills_section_filtered(
                 &loaded,
@@ -510,7 +532,14 @@ pub(crate) async fn build_context(
         entry.1.clone()
     };
 
-    let max_rowid = sqlite::get_max_rowid(&state.db, agent_id, conversation_id).unwrap_or(0);
+    let db_pool2 = state.db.clone();
+    let agent_id_clone2 = agent_id.to_string();
+    let conv_id_clone2 = conversation_id.map(String::from);
+    let max_rowid = tokio::task::spawn_blocking(move || {
+        sqlite::get_max_rowid(&db_pool2, &agent_id_clone2, conv_id_clone2.as_deref()).unwrap_or(0)
+    })
+    .await
+    .unwrap_or(0);
     let cache_key = format!("{agent_id}:{conversation_id:?}");
     let state_hash = {
         use std::hash::{Hash, Hasher};
@@ -827,6 +856,14 @@ pub(crate) async fn build_context(
         // block. In continuous interactive sessions the timer may never fire
         // between turns, so we also trigger an eager consolidation when the
         // turn counter has advanced enough since the last run (see M3).
+        let db_pool = state.db.clone();
+        let agent_id_clone = agent_id.to_string();
+        let current_turn = tokio::task::spawn_blocking(move || {
+            sqlite::get_turn_counter(&db_pool, &agent_id_clone).unwrap_or(0)
+        })
+        .await
+        .unwrap_or(0);
+
         let eager_snapshot = {
             let mut activity = state.agent_activity.write().await;
             let entry = activity.entry(agent_id.to_string()).or_insert(
@@ -844,7 +881,6 @@ pub(crate) async fn build_context(
 
             // Eager-consolidation decision is made under the same lock so two
             // racing requests cannot both cross the threshold and double-fire.
-            let current_turn = sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
             if crate::server::consolidation::should_eager_consolidate(
                 current_turn,
                 entry.last_consolidation_turn,
@@ -881,14 +917,22 @@ pub(crate) async fn build_context(
         if omitted_turns > 0 {
             const PRUNE_PROTECT_CHARS: usize = 120_000; // ~40k tokens × 3 chars/token
             const PRUNE_MIN_CHARS: usize = 200; // only compact outputs > 200 chars
-            match sqlite::compact_old_tool_outputs(
-                &state.db,
-                agent_id,
-                conversation_id,
-                PRUNE_PROTECT_CHARS,
-                PRUNE_MIN_CHARS,
-            ) {
-                Ok(n) if n > 0 => {
+            let db_pool = state.db.clone();
+            let agent_id_clone = agent_id.to_string();
+            let conv_id_clone = conversation_id.map(String::from);
+            let prune_res = tokio::task::spawn_blocking(move || {
+                sqlite::compact_old_tool_outputs(
+                    &db_pool,
+                    &agent_id_clone,
+                    conv_id_clone.as_deref(),
+                    PRUNE_PROTECT_CHARS,
+                    PRUNE_MIN_CHARS,
+                )
+            })
+            .await;
+
+            match prune_res {
+                Ok(Ok(n)) if n > 0 => {
                     tracing::info!(
                         "build_context [{}]: pruned {} old tool outputs",
                         agent_id,
@@ -902,9 +946,16 @@ pub(crate) async fn build_context(
                         .tool_outputs_compacted
                         .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(
                         "build_context [{}]: tool-output pruning failed: {}",
+                        agent_id,
+                        e,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "build_context [{}]: tool-output pruning join failed: {}",
                         agent_id,
                         e,
                     );
@@ -1694,9 +1745,9 @@ impl PromptComposer {
         let mut dynamic_parts = Vec::new();
 
         // 1. Process Active Plan
-        if let Some(plan_json) = active_plan_json {
-            if let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json) {
-                if let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
+        if let Some(plan_json) = active_plan_json
+            && let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json)
+                && let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
                     let mut xml = String::from("<active_plan>\n");
                     for step in steps {
                         let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -1708,8 +1759,6 @@ impl PromptComposer {
                     xml.push_str("</active_plan>");
                     dynamic_parts.push(xml);
                 }
-            }
-        }
 
         // 2. Classify candidate blocks
         let mut candidates = Vec::new();

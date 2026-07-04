@@ -14,7 +14,8 @@ impl TuiApp {
         if self.follow {
             // User is following — auto-scroll to show new content.
             if is_tool_result {
-                self.scroll_instant(self.rows_from_last_tool_call());
+                let rows = self.rows_from_last_tool_call();
+                self.scroll_instant(rows);
             } else {
                 self.scroll_instant(0);
             }
@@ -37,25 +38,14 @@ impl TuiApp {
     /// the end of `self.lines`.  The result is used as the scroll offset so
     /// that the ToolCall header appears at the top of the viewport when the
     /// corresponding ToolResult is pushed.
-    pub(crate) fn rows_from_last_tool_call(&self) -> usize {
-        let main_w = if self.term_width >= crate::app::SIDEBAR_BREAKPOINT {
-            let sidebar_w = crate::app::SIDEBAR_WIDTH.min(self.term_width.saturating_sub(24));
-            self.term_width.saturating_sub(sidebar_w)
-        } else {
-            self.term_width
-        };
-        let cw = main_w.saturating_sub(4).max(1);
-
+    pub(crate) fn rows_from_last_tool_call(&mut self) -> usize {
+        let prepared = self.build_prepared_entries();
         let mut total: u16 = 0;
-        for entry in build_timeline_entries(&self.lines).into_iter().rev() {
-            total = total.saturating_add(entry.visual_rows_with_state(
-                cw,
-                self.expand_all,
-                &self.expanded_items,
-                &self.colors,
-                self.use_nerd_fonts,
-            ));
-            if entry.is_tool_call() {
+        for (idx, line) in self.lines.iter().enumerate().rev() {
+            if idx < prepared.len() {
+                total = total.saturating_add(prepared[idx].rows);
+            }
+            if matches!(line, RenderLine::ToolCall { .. }) {
                 return total as usize;
             }
         }
