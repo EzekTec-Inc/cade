@@ -285,6 +285,12 @@ impl TuiApp {
             }
         }
 
+        // Delegate scroll keys (Shift+K, Shift+J, PageUp, PageDown) to unified handler
+        if self.handle_scroll_key(k.code, k.modifiers) {
+            let _ = self.draw();
+            return Ok(None);
+        }
+
         match k.code {
             KeyCode::Char('f') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cycle_focus();
@@ -488,21 +494,7 @@ impl TuiApp {
                 }
             }
 
-            // PageUp / PageDown
-            KeyCode::PageUp => {
-                let viewport = self.terminal.size()?.height.saturating_sub(6); // Approx prompt height
-                self.scroll = scroll_page_up(self.scroll, viewport);
-                self.draw_dirty = true;
-            }
-            KeyCode::PageDown => {
-                let viewport = self.terminal.size()?.height.saturating_sub(6);
-                let (new_scroll, should_follow) = scroll_page_down(self.scroll, viewport);
-                self.scroll = new_scroll;
-                if should_follow {
-                    self.follow = true;
-                }
-                self.draw_dirty = true;
-            }
+
 
             KeyCode::Up if !k.modifiers.contains(KeyModifiers::SHIFT) => {
                 let text = self.editor.text();
