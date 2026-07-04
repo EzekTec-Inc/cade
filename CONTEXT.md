@@ -83,3 +83,9 @@ An asynchronous, trait-based security seam in `cade-core` that unifies CADE's hu
 
 #### Token Counter
 A polymorphic, pluggable trait in `cade-ai` that enables precise, provider-aware token counting by delegating queries to dedicated adapters (such as Tiktoken, Anthropic, or FallbackChar).
+
+#### Server-Driven TUI Compaction
+The architectural boundary constraint where the terminal user interface (`cade-tui`) avoids localized visual line truncation or independent buffer-pruning. Instead, compaction of the visible chat timeline is driven by the server's background Consolidation/Compaction process, maintaining a unified client-server source of truth.
+
+#### PreparedCache
+A localized rendering cache in `cade-tui` that stores pre-wrapped visual layout spans and calculated line heights for individual timeline entries. This eliminates redundant, heavy CPU text-wrapping computations during continuous draw cycles, scrolling, or streaming updates.
