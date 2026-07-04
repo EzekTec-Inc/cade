@@ -84,3 +84,72 @@ my-awesome-plugin/
 ```
 
 In your Lua script, you have access to the global `CADE_UI` object, which allows you to hook into tool results and push native TUI overlays, such as transpiling HTML resource URIs returned by your custom MCP servers into native `LuaWidget` trees!
+
+### Asynchronous & Queue-Decoupled Interaction (ADR 17)
+
+To preserve peak responsiveness in the Terminal UI (TUI) render loop, CADE strictly enforces an **Asynchronous Queue-Decoupled Architecture** for all embedded Lua UI extensions. Lua scripts must **never** execute blocking, synchronous operations (such as synchronous network requests, intensive CPU calculations, or blocking file I/O) on the primary main thread.
+
+Instead, heavy actions are offloaded to background native threads using thread-safe, non-blocking queues:
+- **`command_queue`**: Allows Lua to register slash commands to run in the background via:
+  ```lua
+  CADE.execute_slash_command("/my_slash_command arg1 arg2")
+  ```
+- **`tool_queue`**: Allows Lua to request host or MCP tool execution asynchronously via:
+  ```lua
+  CADE.call_tool("tool_name", { arg1 = "val1" })
+  ```
+
+#### Non-blocking Event Callbacks
+When an asynchronous host tool or background task finishes running, the Rust host serializes its results and sends them to the client's `ui_event_queue`. CADE's event loop automatically invokes the corresponding Lua event callback.
+
+For example, when a tool finishes executing, it triggers a `tool_complete` event:
+```lua
+CADE.bind_ui_callback("tool_complete", function(result)
+    -- result is a table containing:
+    --   result.tool_name  (string)
+    --   result.is_error   (boolean)
+    --   result.content    (string) - the raw text output from the tool
+    
+    if not result.is_error then
+        cade_log("Tool " .. result.tool_name .. " completed successfully!")
+    else
+        cade_log("Tool " .. result.tool_name .. " failed with output: " .. result.content)
+    end
+end)
+```
+
+---
+
+### Unified Style & Theme Bindings (ADR 18)
+
+To ensure seamless visual cohesion with whatever active colorscheme or TextMate theme the user is currently previewing, Lua widgets must avoid using hardcoded hex values or raw ANSI color codes.
+
+Instead, plugins should dynamically retrieve active colors and text modifiers using the global style retriever:
+```lua
+local style = CADE_UI.get_style("accent.primary")
+```
+
+#### Exposed Tokens
+You can query standard UI tokens representing different semantic roles in the active theme:
+- `"bg.base"` — Core terminal background
+- `"bg.surface0"`, `"bg.surface1"`, `"bg.surface2"` — Surfaces with increasing elevated backdrops (cards, sidebars)
+- `"text.primary"`, `"text.muted"`, `"text.dim"` — Body, secondary, and de-emphasized text hierarchy
+- `"accent.primary"`, `"accent.primary_bold"` — Focal/accent actions (buttons, headers)
+- `"success"`, `"error"`, `"warning"` — Semantic indicators (green, red, yellow)
+- `"border.base"`, `"border.focus"`, `"border.muted"`, `"border.accent"` — Border hierarchies
+
+#### Serialized Style Structure
+`CADE_UI.get_style` returns a serialized representation of the style:
+```json
+{
+  "fg": "#ff8800",       // Foreground color (hex or named color, optional)
+  "bg": "#111111",       // Background color (hex or named color, optional)
+  "bold": true,          // Text modifier: bold (boolean)
+  "italic": false,       // Text modifier: italic (boolean)
+  "underlined": false,   // Text modifier: underlined (boolean)
+  "dim": false,          // Text modifier: dim (boolean)
+  "reversed": false      // Text modifier: reversed (boolean)
+}
+```
+
+By querying style values dynamically, custom sidebar overlays and widgets will naturally fit perfectly into dark, light, or community-authored TextMate themes.
