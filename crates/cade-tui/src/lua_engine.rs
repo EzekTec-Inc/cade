@@ -133,6 +133,7 @@ impl LuaEngine {
             command_queue,
             tool_queue,
             ui_event_queue,
+            active_colors,
         })
     }
 
@@ -336,6 +337,70 @@ impl LuaEngine {
             }
         }
         None
+    }
+}
+
+fn resolve_token_to_style(colors: &ThemeColors, token: &str) -> ratatui::style::Style {
+    use crate::colors::ThemeColorsExt;
+    match token {
+        "bg.base" => colors.style_base(),
+        "bg.surface0" | "bg.panel" => colors.style_surface0(),
+        "bg.surface1" | "bg.elevated" => colors.style_surface1(),
+        "bg.surface2" => colors.style_surface2(),
+        "text.primary" | "text" => colors.text_primary(),
+        "text.muted" => colors.text_muted(),
+        "text.dim" => colors.text_dim(),
+        "accent.primary" | "primary" => colors.primary(),
+        "accent.primary_bold" | "primary_bold" => colors.primary_bold(),
+        "success" => colors.success(),
+        "error" => colors.error(),
+        "warning" => colors.warning(),
+        "border.base" => colors.border_base(),
+        "border.focus" => colors.border_focus(),
+        "border.muted" => colors.border_muted(),
+        "border.accent" => colors.border_accent(),
+        _ => colors.text_primary(),
+    }
+}
+
+fn style_to_lua_table(lua: &mlua::Lua, style: ratatui::style::Style) -> mlua::Result<mlua::Table> {
+    use ratatui::style::Modifier;
+    let table = lua.create_table()?;
+    if let Some(fg) = style.fg {
+        table.set("fg", color_to_string(fg))?;
+    }
+    if let Some(bg) = style.bg {
+        table.set("bg", color_to_string(bg))?;
+    }
+    table.set("bold", style.add_modifier.contains(Modifier::BOLD))?;
+    table.set("italic", style.add_modifier.contains(Modifier::ITALIC))?;
+    table.set("underlined", style.add_modifier.contains(Modifier::UNDERLINED))?;
+    table.set("dim", style.add_modifier.contains(Modifier::DIM))?;
+    table.set("reversed", style.add_modifier.contains(Modifier::REVERSED))?;
+    Ok(table)
+}
+
+fn color_to_string(color: ratatui::style::Color) -> String {
+    match color {
+        ratatui::style::Color::Reset => "reset".to_string(),
+        ratatui::style::Color::Black => "black".to_string(),
+        ratatui::style::Color::Red => "red".to_string(),
+        ratatui::style::Color::Green => "green".to_string(),
+        ratatui::style::Color::Yellow => "yellow".to_string(),
+        ratatui::style::Color::Blue => "blue".to_string(),
+        ratatui::style::Color::Magenta => "magenta".to_string(),
+        ratatui::style::Color::Cyan => "cyan".to_string(),
+        ratatui::style::Color::Gray => "gray".to_string(),
+        ratatui::style::Color::DarkGray => "dark_gray".to_string(),
+        ratatui::style::Color::LightRed => "light_red".to_string(),
+        ratatui::style::Color::LightGreen => "light_green".to_string(),
+        ratatui::style::Color::LightYellow => "light_yellow".to_string(),
+        ratatui::style::Color::LightBlue => "light_blue".to_string(),
+        ratatui::style::Color::LightMagenta => "light_magenta".to_string(),
+        ratatui::style::Color::LightCyan => "light_cyan".to_string(),
+        ratatui::style::Color::White => "white".to_string(),
+        ratatui::style::Color::Indexed(i) => format!("indexed({})", i),
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
     }
 }
 

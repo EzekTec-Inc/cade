@@ -901,6 +901,7 @@ pub struct TuiApp {
     // -- Prepared Entries cache
     pub(crate) prepared_cache: Option<PreparedCache>,
     pub(crate) item_cache: std::collections::HashMap<(crate::app::timeline::TimelineKey, bool), crate::app::timeline::PreparedTimelineEntry>,
+    pub(crate) last_timeline_w: usize,
 
 
 
@@ -1120,6 +1121,7 @@ impl TuiApp {
             selection_active: false,
             prepared_cache: None,
             item_cache: std::collections::HashMap::new(),
+            last_timeline_w: 0,
             content_version: 0,
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
@@ -1421,6 +1423,7 @@ impl TuiApp {
         let mut overlay_stack = std::mem::take(&mut self.overlays);
         let mut slot_mgr = std::mem::take(&mut self.slots);
         let item_cache = &mut self.item_cache;
+        let last_timeline_w = &mut self.last_timeline_w;
 
         let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
@@ -1462,6 +1465,7 @@ impl TuiApp {
                 nerd,
                 &self.subagent_trackers,
                 item_cache,
+                last_timeline_w,
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;

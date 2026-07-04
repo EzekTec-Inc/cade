@@ -142,6 +142,7 @@ pub(crate) fn render_frame(
     nerd: bool,
     subagent_trackers: &[crate::subagent_tracker::SubagentTracker],
     item_cache: &mut std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
+    last_timeline_w: &mut usize,
 ) -> (u16, Option<(u16, u16)>, ratatui::layout::Rect) {
     // returns max_skip for V-04 scroll clamping + messages_area for click-to-copy
     let area = frame.area();
@@ -293,6 +294,10 @@ pub(crate) fn render_frame(
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
+    if timeline_w != *last_timeline_w {
+        item_cache.clear();
+        *last_timeline_w = timeline_w;
+    }
     let timeline_entries = build_timeline_entries(lines);
     let mut prepared = prepare_timeline_entries(
         &timeline_entries,
