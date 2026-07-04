@@ -900,6 +900,7 @@ pub struct TuiApp {
 
     // -- Prepared Entries cache
     pub(crate) prepared_cache: Option<PreparedCache>,
+    pub(crate) item_cache: std::collections::HashMap<(crate::app::timeline::TimelineKey, bool), crate::app::timeline::PreparedTimelineEntry>,
 
 
 
@@ -1118,6 +1119,7 @@ impl TuiApp {
             selection_current: None,
             selection_active: false,
             prepared_cache: None,
+            item_cache: std::collections::HashMap::new(),
             content_version: 0,
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
@@ -1418,6 +1420,7 @@ impl TuiApp {
         // closure (which already borrows self.terminal mutably).
         let mut overlay_stack = std::mem::take(&mut self.overlays);
         let mut slot_mgr = std::mem::take(&mut self.slots);
+        let item_cache = &mut self.item_cache;
 
         let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
@@ -1458,6 +1461,7 @@ impl TuiApp {
                 &mut self.last_input_width,
                 nerd,
                 &self.subagent_trackers,
+                item_cache,
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;
@@ -1695,6 +1699,7 @@ impl TuiApp {
             if !self.follow && self.scroll > 0 {
                 let timeline_entries = crate::app::timeline::build_timeline_entries(lines);
                 let old_timeline_w = (old_width as usize).saturating_sub(4).max(1);
+                let mut temp_cache = std::collections::HashMap::new();
                 let prepared_old = crate::app::timeline::prepare_timeline_entries(
                     &timeline_entries,
                     old_timeline_w,
@@ -1702,6 +1707,7 @@ impl TuiApp {
                     &self.expanded_items,
                     &self.colors,
                     self.use_nerd_fonts,
+                    &mut temp_cache,
                 );
 
                 let total_visual_old: u16 = prepared_old.iter().map(|p| p.rows).sum();
@@ -1732,6 +1738,7 @@ impl TuiApp {
                     &self.expanded_items,
                     &self.colors,
                     self.use_nerd_fonts,
+                    &mut self.item_cache,
                 );
                 let total_visual_new: u16 = prepared_new.iter().map(|p| p.rows).sum();
                 let mut new_item_start = 0u16;
@@ -1757,6 +1764,7 @@ impl TuiApp {
 #[derive(Clone)]
 pub(crate) struct PreparedCache {
     pub(crate) entries: Vec<crate::app::timeline::PreparedTimelineEntry>,
+    pub(crate) item_cache: std::collections::HashMap<(crate::app::timeline::TimelineKey, bool), crate::app::timeline::PreparedTimelineEntry>,
     pub version: u64,
     pub timeline_w: usize,
     pub expand_all: bool,
@@ -1784,7 +1792,7 @@ impl TuiApp {
         };
 
         // Try cache for the non-streaming portion.
-        let mut prepared = if let Some(ref cache) = self.prepared_cache {
+        let mut prepared = if let Some(ref mut cache) = self.prepared_cache {
             if cache.version == self.content_version
                 && cache.timeline_w == timeline_w
                 && cache.expand_all == self.expand_all
@@ -1794,6 +1802,9 @@ impl TuiApp {
                 cache.entries.clone()
             } else {
                 // Cache miss — rebuild non-streaming entries.
+                if cache.timeline_w != timeline_w {
+                    cache.item_cache.clear();
+                }
                 let entries = crate::app::timeline::build_timeline_entries(&self.lines);
                 let p = crate::app::timeline::prepare_timeline_entries(
                     &entries,
@@ -1802,18 +1813,18 @@ impl TuiApp {
                     &self.expanded_items,
                     &self.colors,
                     self.use_nerd_fonts,
+                    &mut cache.item_cache,
                 );
-                self.prepared_cache = Some(PreparedCache {
-                    entries: p.clone(),
-                    version: self.content_version,
-                    timeline_w,
-                    expand_all: self.expand_all,
-                    expanded_hash,
-                });
+                cache.entries = p.clone();
+                cache.version = self.content_version;
+                cache.timeline_w = timeline_w;
+                cache.expand_all = self.expand_all;
+                cache.expanded_hash = expanded_hash;
                 p
             }
         } else {
             let entries = crate::app::timeline::build_timeline_entries(&self.lines);
+            let mut item_cache = std::collections::HashMap::new();
             let p = crate::app::timeline::prepare_timeline_entries(
                 &entries,
                 timeline_w,
@@ -1821,9 +1832,11 @@ impl TuiApp {
                 &self.expanded_items,
                 &self.colors,
                 self.use_nerd_fonts,
+                &mut item_cache,
             );
             self.prepared_cache = Some(PreparedCache {
                 entries: p.clone(),
+                item_cache,
                 version: self.content_version,
                 timeline_w,
                 expand_all: self.expand_all,

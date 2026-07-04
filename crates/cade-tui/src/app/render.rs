@@ -141,6 +141,7 @@ pub(crate) fn render_frame(
     last_input_width: &mut u16,
     nerd: bool,
     subagent_trackers: &[crate::subagent_tracker::SubagentTracker],
+    item_cache: &mut std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
 ) -> (u16, Option<(u16, u16)>, ratatui::layout::Rect) {
     // returns max_skip for V-04 scroll clamping + messages_area for click-to-copy
     let area = frame.area();
@@ -300,6 +301,7 @@ pub(crate) fn render_frame(
         expanded_items,
         colors,
         nerd,
+        item_cache,
     );
     if let Some(s) = streaming {
         let next_index = timeline_entries

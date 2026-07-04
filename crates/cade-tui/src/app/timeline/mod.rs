@@ -465,10 +465,16 @@ pub(crate) fn prepare_timeline_entries(
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
     nerd: bool,
+    item_cache: &mut std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
 ) -> Vec<PreparedTimelineEntry> {
     entries
         .iter()
         .map(|entry| {
+            let is_expanded = expand_all || expanded_items.contains(&entry.key);
+            if let Some(cached) = item_cache.get(&(entry.key, is_expanded)) {
+                return cached.clone();
+            }
+
             let card_style = match entry.key.kind {
                 TimelineItemKind::User => CardStyle::User,
                 TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
@@ -498,11 +504,14 @@ pub(crate) fn prepare_timeline_entries(
             }
 
             let rows = pre_wrapped_lines.len() as u16;
-            PreparedTimelineEntry {
+            let prepared = PreparedTimelineEntry {
                 lines: pre_wrapped_lines,
                 rows,
                 card_style,
-            }
+            };
+
+            item_cache.insert((entry.key, is_expanded), prepared.clone());
+            prepared
         })
         .collect()
 }
