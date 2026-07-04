@@ -547,6 +547,11 @@ fn input_area(
 ) -> Element {
     let mut state = use_context::<AppState>();
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
+
+    let mut show_suggestions = use_signal(|| false);
+    let mut suggestions = use_signal(Vec::<String>::new);
+    let mut active_index = use_signal(|| 0usize);
+
     let mut do_send = move || {
         let text = input_text().trim().to_string();
         if text.is_empty() || is_loading() {
@@ -554,6 +559,7 @@ fn input_area(
         }
         is_loading.set(true);
         input_text.set(String::new());
+        show_suggestions.set(false);
 
         let stream_id = format!("streaming-{}", js_sys::Date::now() as u64);
         let timestamp = js_sys::Date::now() as u64;
@@ -717,13 +723,122 @@ fn input_area(
     rsx! {
         div { class: "p-6 bg-[#0f1115] border-t border-[#111218]",
             div { class: "relative border border-[#272833] bg-[#16171d] rounded-xl p-4 flex flex-col space-y-2",
+                if show_suggestions() && !suggestions().is_empty() {
+                    div { class: "absolute bottom-full left-0 right-0 mb-2 bg-[#16171d] border border-[#272833] rounded-xl overflow-hidden shadow-2xl z-50 max-h-48 overflow-y-auto select-none",
+                        {suggestions().into_iter().enumerate().map(|(idx, s)| {
+                            let is_active = active_index() == idx;
+                            let row_class = if is_active {
+                                "px-4 py-2 bg-[#ff7c5c]/10 text-white font-medium text-xs cursor-pointer flex items-center justify-between"
+                            } else {
+                                "px-4 py-2 hover:bg-[#1f212a] text-gray-400 text-xs cursor-pointer flex items-center justify-between"
+                            };
+                            let s_click = s.clone();
+                            rsx! {
+                                div {
+                                    key: "{s_click}",
+                                    class: "{row_class}",
+                                    onclick: move |_| {
+                                        let text = input_text();
+                                        if text.starts_with('/') {
+                                            input_text.set(format!("{} ", s_click));
+                                        } else if let Some(pos) = text.rfind('@') {
+                                            let prefix = &text[..pos];
+                                            input_text.set(format!("{}@{} ", prefix, s_click));
+                                        }
+                                        show_suggestions.set(false);
+                                    },
+                                    div { class: "flex items-center space-x-2",
+                                        span { class: "text-gray-500 font-mono", if s_click.starts_with('/') { "⚡" } else { "📄" } }
+                                        span { class: "font-mono", "{s_click}" }
+                                    }
+                                    if is_active {
+                                        span { class: "text-[10px] text-gray-500 font-semibold uppercase tracking-wider", "Enter to select" }
+                                    }
+                                }
+                            }
+                        })}
+                    }
+                }
                 textarea {
                     class: "bg-transparent text-gray-200 placeholder-gray-500 outline-none w-full text-sm resize-none h-12",
                     placeholder: "Ask anything, @ to add files, / for commands",
                     value: "{input_text}",
-                    oninput: move |e| input_text.set(e.value().clone()),
+                    prevent_default: "onkeydown",
+                    oninput: move |e| {
+                        let val = e.value();
+                        input_text.set(val.clone());
+                        if val.starts_with('/') {
+                            let query = &val[1..];
+                            let cmds = vec![
+                                "/help".to_string(),
+                                "/memory".to_string(),
+                                "/clear_context".to_string(),
+                                "/compact".to_string(),
+                                "/approvals".to_string(),
+                                "/settings".to_string(),
+                            ];
+                            let filtered: Vec<String> = cmds.into_iter().filter(|c| c.contains(query)).collect();
+                            if !filtered.is_empty() {
+                                suggestions.set(filtered);
+                                show_suggestions.set(true);
+                                active_index.set(0);
+                            } else {
+                                show_suggestions.set(false);
+                            }
+                        } else if let Some(pos) = val.rfind('@') {
+                            let query = &val[pos+1..];
+                            let files = vec![
+                                "src/main.rs".to_string(),
+                                "Cargo.toml".to_string(),
+                                "README.md".to_string(),
+                                "CONTEXT.md".to_string(),
+                                "PLAN.md".to_string(),
+                                "crates/cade-core/src/lib.rs".to_string(),
+                                "crates/cade-tui/src/lib.rs".to_string(),
+                                "crates/cade-gui/src/lib.rs".to_string(),
+                            ];
+                            let filtered: Vec<String> = files.into_iter().filter(|f| f.contains(query)).collect();
+                            if !filtered.is_empty() {
+                                suggestions.set(filtered);
+                                show_suggestions.set(true);
+                                active_index.set(0);
+                            } else {
+                                show_suggestions.set(false);
+                            }
+                        } else {
+                            show_suggestions.set(false);
+                        }
+                    },
                     onkeydown: move |e| {
-                        if e.key() == Key::Enter && !e.modifiers().shift() {
+                        if show_suggestions() && !suggestions().is_empty() {
+                            match e.key() {
+                                Key::ArrowDown => {
+                                    e.stop_propagation();
+                                    active_index.set((active_index() + 1) % suggestions().len());
+                                }
+                                Key::ArrowUp => {
+                                    e.stop_propagation();
+                                    active_index.set((active_index() + suggestions().len() - 1) % suggestions().len());
+                                }
+                                Key::Enter => {
+                                    e.stop_propagation();
+                                    let s_val = suggestions()[active_index()].clone();
+                                    let text = input_text();
+                                    if text.starts_with('/') {
+                                        input_text.set(format!("{} ", s_val));
+                                    } else if let Some(pos) = text.rfind('@') {
+                                        let prefix = &text[..pos];
+                                        input_text.set(format!("{}@{} ", prefix, s_val));
+                                    }
+                                    show_suggestions.set(false);
+                                }
+                                Key::Escape => {
+                                    e.stop_propagation();
+                                    show_suggestions.set(false);
+                                }
+                                _ => {}
+                            }
+                        } else if e.key() == Key::Enter && !e.modifiers().shift() {
                             e.stop_propagation();
                             do_send();
                         }
