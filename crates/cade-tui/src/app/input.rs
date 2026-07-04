@@ -309,6 +309,12 @@ impl TuiApp {
             return Ok(None);
         }
 
+        // Delegate scroll keys (Shift+K, Shift+J, PageUp, PageDown) to unified handler
+        if self.handle_scroll_key(k.code, k.modifiers) {
+            let _ = self.draw();
+            return Ok(None);
+        }
+
         match k.code {
             KeyCode::Char('f') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cycle_focus();

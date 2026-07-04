@@ -893,6 +893,14 @@ pub struct TuiApp {
     /// Cleared after ~400 ms in draw_impl().
     pub copy_highlight: Option<(usize, std::time::Instant)>,
 
+    // -- Visual Selection state
+    pub selection_start: Option<(u16, u16)>,
+    pub selection_current: Option<(u16, u16)>,
+    pub selection_active: bool,
+
+    // -- Prepared Entries cache
+    pub(crate) prepared_cache: Option<PreparedCache>,
+
 
 
     /// Monotonically increasing version counter for conversation content.
@@ -1106,6 +1114,10 @@ impl TuiApp {
             mouse_capture_disabled: false,
             messages_area: Rect::default(),
             copy_highlight: None,
+            selection_start: None,
+            selection_current: None,
+            selection_active: false,
+            prepared_cache: None,
             content_version: 0,
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
@@ -1647,6 +1659,7 @@ impl TuiApp {
         // Restore the overlay stack and slot manager.
         self.overlays = overlay_stack;
         self.slots = slot_mgr;
+        apply_selection_highlight(self.selection_active, self.selection_start, self.selection_current, &mut self.terminal);
 
         // Stash the messages area rect for click-to-copy.
         self.messages_area = messages_area;
@@ -1738,6 +1751,287 @@ impl TuiApp {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparedCache {
+    pub(crate) entries: Vec<crate::app::timeline::PreparedTimelineEntry>,
+    pub version: u64,
+    pub timeline_w: usize,
+    pub expand_all: bool,
+    pub expanded_hash: u64,
+}
+
+impl TuiApp {
+    /// Build the prepared-timeline-entry list the same way `render_frame` does.
+    /// Uses a content-version cache to avoid re-parsing markdown / ANSI on every frame and on every mouse click.
+    pub(crate) fn build_prepared_entries(&mut self) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
+
+        // Derive a stable hash of expanded_items for cache invalidation.
+        let expanded_hash = {
+            let mut h = DefaultHasher::new();
+            let mut items: Vec<_> = self.expanded_items.iter().collect();
+            items.sort();
+            for k in &items {
+                k.hash(&mut h);
+            }
+            h.finish()
+        };
+
+        // Try cache for the non-streaming portion.
+        let mut prepared = if let Some(ref cache) = self.prepared_cache {
+            if cache.version == self.content_version
+                && cache.timeline_w == timeline_w
+                && cache.expand_all == self.expand_all
+                && cache.expanded_hash == expanded_hash
+            {
+                // Cache hit — avoid full rebuild.
+                cache.entries.clone()
+            } else {
+                // Cache miss — rebuild non-streaming entries.
+                let entries = crate::app::timeline::build_timeline_entries(&self.lines);
+                let p = crate::app::timeline::prepare_timeline_entries(
+                    &entries,
+                    timeline_w,
+                    self.expand_all,
+                    &self.expanded_items,
+                    &self.colors,
+                    self.use_nerd_fonts,
+                );
+                self.prepared_cache = Some(PreparedCache {
+                    entries: p.clone(),
+                    version: self.content_version,
+                    timeline_w,
+                    expand_all: self.expand_all,
+                    expanded_hash,
+                });
+                p
+            }
+        } else {
+            let entries = crate::app::timeline::build_timeline_entries(&self.lines);
+            let p = crate::app::timeline::prepare_timeline_entries(
+                &entries,
+                timeline_w,
+                self.expand_all,
+                &self.expanded_items,
+                &self.colors,
+                self.use_nerd_fonts,
+            );
+            self.prepared_cache = Some(PreparedCache {
+                entries: p.clone(),
+                version: self.content_version,
+                timeline_w,
+                expand_all: self.expand_all,
+                expanded_hash,
+            });
+            p
+        };
+
+        // Streaming entry (always rebuilt — changes every tick, not cached).
+        if self.streaming_active {
+            let full =
+                crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
+            let reveal = self.streaming_reveal_len.min(full.len());
+            let visible_streaming = &full[..reveal];
+            let next_index = self.lines.len();
+            let streaming_entry =
+                crate::app::timeline::TimelineEntry::streaming(next_index, visible_streaming);
+            let mut stream_lines = Vec::new();
+            let effective_w = timeline_w.saturating_sub(2);
+            streaming_entry.render_with_state(
+                effective_w,
+                self.expand_all,
+                &self.expanded_items,
+                &mut stream_lines,
+                &self.colors,
+                self.use_nerd_fonts,
+            );
+            let stream_rows: u16 = stream_lines
+                .iter()
+                .map(|l| crate::app::render::count_wrapped_rows(l, effective_w as u16))
+                .sum();
+            prepared.push(crate::app::timeline::PreparedTimelineEntry {
+                lines: stream_lines,
+                rows: stream_rows,
+                card_style: crate::app::timeline::CardStyle::Assistant,
+            });
+        }
+
+        prepared
+    }
+
+    /// Extract highlighted character range from active buffer, copy it, and clear state
+    pub fn copy_selected_text(&mut self) -> bool {
+        if !self.selection_active {
+            return false;
+        }
+
+        let Some((x1, y1)) = self.selection_start else { return false; };
+        let Some((x2, y2)) = self.selection_current else { return false; };
+
+        // If it's a single click (no drag), don't trigger selection copy
+        if x1 == x2 && y1 == y2 {
+            self.selection_active = false;
+            self.selection_start = None;
+            self.selection_current = None;
+            return false;
+        }
+
+        // Bounding box of message viewport
+        use ratatui::layout::Rect;
+        let inner = Rect {
+            x: self.messages_area.x + 2,
+            y: self.messages_area.y + 1,
+            width: self.messages_area.width.saturating_sub(4),
+            height: self.messages_area.height.saturating_sub(2),
+        };
+
+        if inner.width == 0 || inner.height == 0 {
+            self.selection_active = false;
+            self.selection_start = None;
+            self.selection_current = None;
+            return false;
+        }
+
+        // Check if selection starts within messages area
+        if x1 < inner.x || x1 >= inner.x + inner.width || y1 < inner.y || y1 >= inner.y + inner.height {
+            self.selection_active = false;
+            self.selection_start = None;
+            self.selection_current = None;
+            return false;
+        }
+
+        // Clip end coordinate to messages area
+        let cx2 = x2.max(inner.x).min(inner.x + inner.width - 1);
+        let cy2 = y2.max(inner.y).min(inner.y + inner.height - 1);
+
+        // Sort coordinates
+        let (start_col, start_row, end_col, end_row) = if y1 < cy2 || (y1 == cy2 && x1 <= cx2) {
+            (x1, y1, cx2, cy2)
+        } else {
+            (cx2, cy2, x1, y1)
+        };
+
+        let prepared = self.build_prepared_entries();
+        let total_visual: u16 = prepared
+            .iter()
+            .map(|p| p.rows as u32)
+            .sum::<u32>()
+            .min(u16::MAX as u32) as u16;
+        let visible = inner.height;
+        let max_skip = total_visual.saturating_sub(visible);
+        let effective_up = (self.scroll as u16).min(max_skip);
+        let visible_start = max_skip.saturating_sub(effective_up);
+
+        let start_visual_row = start_row.saturating_sub(inner.y) + visible_start;
+        let end_visual_row = end_row.saturating_sub(inner.y) + visible_start;
+
+        let mut selected_text = String::new();
+        let mut current_row: u16 = 0;
+
+        for entry in &prepared {
+            let entry_rows = entry.rows;
+            let entry_start = current_row;
+            let entry_end = entry_start + entry_rows;
+
+            if entry_end > start_visual_row && entry_start <= end_visual_row {
+                for (i, line) in entry.lines.iter().enumerate() {
+                    let line_row = entry_start + i as u16;
+                    if line_row >= start_visual_row && line_row <= end_visual_row {
+                        let mut line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                        
+                        if line_row == start_visual_row {
+                            let slice_start = start_col.saturating_sub(inner.x) as usize;
+                            if slice_start < line_text.len() {
+                                line_text = line_text[slice_start..].to_string();
+                            } else {
+                                line_text = String::new();
+                            }
+                        }
+
+                        if line_row == end_visual_row {
+                            let slice_end = (end_col.saturating_sub(inner.x) + 1) as usize;
+                            if slice_end < line_text.len() {
+                                line_text.truncate(slice_end);
+                            }
+                        }
+
+                        let trimmed = line_text.trim_end().to_string();
+                        if !selected_text.is_empty() {
+                            selected_text.push('\n');
+                        }
+                        selected_text.push_str(&trimmed);
+                    }
+                }
+            }
+            current_row = entry_end;
+        }
+
+        self.selection_active = false;
+        self.selection_start = None;
+        self.selection_current = None;
+
+        if !selected_text.is_empty() {
+            crate::app::clipboard::write_to_clipboard(&selected_text);
+            crate::app::clipboard::write_to_file_fallback(&selected_text);
+            self.show_toast("Copied selection to clipboard", crate::app::ToastLevel::Success);
+            self.draw_dirty = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Highlight the currently selected visual terminal cells (called after draw)
+fn apply_selection_highlight(
+    selection_active: bool,
+    selection_start: Option<(u16, u16)>,
+    selection_current: Option<(u16, u16)>,
+    terminal: &mut DefaultTerminal,
+) {
+    if selection_active {
+        if let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current) {
+            let size = terminal.size().unwrap_or_default();
+            let width = size.width;
+            let height = size.height;
+            if width == 0 || height == 0 {
+                return;
+            }
+
+            // Sort start and end coordinates
+            let (start_x, start_y, end_x, end_y) = if y1 < y2 || (y1 == y2 && x1 <= x2) {
+                (x1, y1, x2, y2)
+            } else {
+                (x2, y2, x1, y1)
+            };
+
+            let buffer = terminal.current_buffer_mut();
+            for y in start_y..=end_y {
+                if y >= height {
+                    continue;
+                }
+                let min_x = if y == start_y { start_x } else { 0 };
+                let max_x = if y == end_y { end_x } else { width.saturating_sub(1) };
+                for x in min_x..=max_x {
+                    if x >= width {
+                        continue;
+                    }
+                    let cell = &mut buffer[(x, y)];
+                    let fg = cell.fg;
+                    let bg = cell.bg;
+                    cell.set_fg(bg);
+                    cell.set_bg(fg);
+                    let current_style = cell.style();
+                    cell.set_style(current_style.add_modifier(ratatui::style::Modifier::REVERSED));
+                }
+            }
+        }
     }
 }
 

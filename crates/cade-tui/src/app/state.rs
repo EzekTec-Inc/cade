@@ -502,6 +502,11 @@ impl TuiApp {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyModifiers;
 
+        // Block all keyboard scrolling while an active drag-selection is in-progress (ADR 9)
+        if self.selection_active {
+            return false;
+        }
+
         match code {
             // Shift+K — scroll up 10 lines
             KeyCode::Char('K') => {
@@ -575,15 +580,31 @@ impl TuiApp {
     pub fn handle_scroll_mouse(&mut self, kind: crossterm::event::MouseEventKind) -> bool {
         use crossterm::event::MouseEventKind;
 
+        // Block all mouse scrolling while an active drag-selection is in-progress (ADR 9)
+        if self.selection_active {
+            return false;
+        }
+
         match kind {
             MouseEventKind::ScrollUp => {
                 self.follow = false;
-                self.scroll_target = self.scroll_target.saturating_add(3);
+                
+                // Velocity Governor: cap maximum scrolling acceleration to 15 rows ahead of active view
+                let diff = self.scroll_target.saturating_sub(self.scroll);
+                if diff < 15 {
+                    self.scroll_target = self.scroll_target.saturating_add(3);
+                }
+                
                 self.draw_dirty = true;
                 true
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_target = self.scroll_target.saturating_sub(3);
+                // Velocity Governor: cap maximum scrolling acceleration
+                let diff = self.scroll.saturating_sub(self.scroll_target);
+                if diff < 15 {
+                    self.scroll_target = self.scroll_target.saturating_sub(3);
+                }
+                
                 if self.scroll_target == 0 {
                     self.follow = true;
                     self.pending_lines = 0;
