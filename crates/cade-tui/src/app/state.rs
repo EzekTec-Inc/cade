@@ -586,10 +586,12 @@ impl TuiApp {
         }
 
         // Calculate dynamic viewport height and maximum ahead-buffer cap (Option A - Elastic Governor)
+        // We use a highly generous buffer limit ((vh * 4).max(100)) to ensure scrolling remains
+        // incredibly responsive, smooth, and free of artificial "stuck/sticky" boundaries.
         let vh = crossterm::terminal::size()
             .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
             .unwrap_or(20) as usize;
-        let max_buffer = (vh / 2).max(10); // cap max buffer at half the viewport height, but at least 10
+        let max_buffer = (vh * 4).max(100);
 
         match kind {
             MouseEventKind::ScrollUp => {
@@ -617,7 +619,7 @@ impl TuiApp {
                     let increment = if diff < max_buffer / 2 { 3 } else { 1 };
                     self.scroll_target = self.scroll_target.saturating_sub(increment);
                     
-                    // Clamp to max buffer boundary
+                    // Clamp to max buffer boundary (bugfix: clamp target relative to scroll, not target itself)
                     if self.scroll.saturating_sub(self.scroll_target) > max_buffer {
                         self.scroll_target = self.scroll.saturating_sub(max_buffer);
                     }
