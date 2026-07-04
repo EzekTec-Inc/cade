@@ -585,24 +585,42 @@ impl TuiApp {
             return false;
         }
 
+        // Calculate dynamic viewport height and maximum ahead-buffer cap (Option A - Elastic Governor)
+        let vh = crossterm::terminal::size()
+            .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+            .unwrap_or(20) as usize;
+        let max_buffer = (vh / 2).max(10); // cap max buffer at half the viewport height, but at least 10
+
         match kind {
             MouseEventKind::ScrollUp => {
                 self.follow = false;
                 
-                // Velocity Governor: cap maximum scrolling acceleration to 15 rows ahead of active view
                 let diff = self.scroll_target.saturating_sub(self.scroll);
-                if diff < 15 {
-                    self.scroll_target = self.scroll_target.saturating_add(3);
+                if diff < max_buffer {
+                    // Elastic scaling: reduce increment from +3 to +1 as we approach the max buffer cap
+                    let increment = if diff < max_buffer / 2 { 3 } else { 1 };
+                    self.scroll_target = self.scroll_target.saturating_add(increment);
+                    
+                    // Clamp to max buffer boundary
+                    if self.scroll_target.saturating_sub(self.scroll) > max_buffer {
+                        self.scroll_target = self.scroll.saturating_add(max_buffer);
+                    }
                 }
                 
                 self.draw_dirty = true;
                 true
             }
             MouseEventKind::ScrollDown => {
-                // Velocity Governor: cap maximum scrolling acceleration
                 let diff = self.scroll.saturating_sub(self.scroll_target);
-                if diff < 15 {
-                    self.scroll_target = self.scroll_target.saturating_sub(3);
+                if diff < max_buffer {
+                    // Elastic scaling: reduce decrement from 3 to 1 as we approach the max buffer cap
+                    let increment = if diff < max_buffer / 2 { 3 } else { 1 };
+                    self.scroll_target = self.scroll_target.saturating_sub(increment);
+                    
+                    // Clamp to max buffer boundary
+                    if self.scroll.saturating_sub(self.scroll_target) > max_buffer {
+                        self.scroll_target = self.scroll.saturating_sub(max_buffer);
+                    }
                 }
                 
                 if self.scroll_target == 0 {
