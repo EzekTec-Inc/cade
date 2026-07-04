@@ -61,8 +61,6 @@ pub(crate) struct PreparedTimelineEntry {
     pub(crate) card_style: CardStyle,
 }
 
-
-
 pub(crate) enum TimelineItem<'a> {
     Separator,
     Blank,
@@ -370,6 +368,96 @@ pub(crate) fn build_timeline_entries<'a>(lines: &'a [RenderLine]) -> Vec<Timelin
         .collect()
 }
 
+pub(crate) fn wrap_line(
+    line: ratatui::text::Line<'static>,
+    width: u16,
+) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::text::{Line, Span};
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    if width == 0 {
+        return vec![line];
+    }
+    let max_w = width as usize;
+    let mut wrapped = Vec::new();
+    let mut current_line = Line::default();
+    let mut current_w = 0;
+
+    for span in line.spans {
+        let style = span.style;
+        let text = span.content;
+
+        let segments: Vec<&str> = text.split('\n').collect();
+        for (i, segment) in segments.iter().enumerate() {
+            if i > 0 {
+                wrapped.push(std::mem::take(&mut current_line));
+                current_w = 0;
+            }
+
+            if segment.is_empty() {
+                continue;
+            }
+
+            for word in segment.split_inclusive([' ', '\t']) {
+                let word_w = UnicodeWidthStr::width(word);
+
+                if current_w > 0 && current_w + word_w > max_w {
+                    wrapped.push(std::mem::take(&mut current_line));
+                    current_w = 0;
+                }
+
+                if word_w > max_w {
+                    let mut temp_word = word;
+                    while !temp_word.is_empty() {
+                        let mut take_chars = 0;
+                        let mut take_w = 0;
+                        for c in temp_word.chars() {
+                            let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+                            if take_w + cw > max_w {
+                                if take_w == 0 {
+                                    take_w += cw;
+                                    take_chars += c.len_utf8();
+                                }
+                                break;
+                            }
+                            take_w += cw;
+                            take_chars += c.len_utf8();
+                        }
+
+                        if current_w > 0 && current_w + take_w > max_w {
+                            wrapped.push(std::mem::take(&mut current_line));
+                            current_w = 0;
+                        }
+
+                        let chunk = &temp_word[..take_chars];
+                        current_line
+                            .spans
+                            .push(Span::styled(chunk.to_string(), style));
+                        current_w += take_w;
+
+                        temp_word = &temp_word[take_chars..];
+                    }
+                } else {
+                    current_line
+                        .spans
+                        .push(Span::styled(word.to_string(), style));
+                    current_w += word_w;
+                }
+            }
+        }
+    }
+
+    if !current_line.spans.is_empty() {
+        wrapped.push(current_line);
+    }
+
+    if wrapped.is_empty() {
+        wrapped.push(Line::default());
+    }
+
+    wrapped
+}
+
 pub(crate) fn prepare_timeline_entries(
     entries: &[TimelineEntry<'_>],
     width: usize,
@@ -401,12 +489,17 @@ pub(crate) fn prepare_timeline_entries(
                 colors,
                 nerd,
             );
-            let rows = lines
-                .iter()
-                .map(|l| count_wrapped_rows(l, effective_width as u16))
-                .sum();
+
+            // Pre-wrap lines so that ratatui Paragraph does not have to dynamically wrap,
+            // which breaks scroll alignment for multi-line wrapped lines.
+            let mut pre_wrapped_lines = Vec::new();
+            for l in lines {
+                pre_wrapped_lines.extend(wrap_line(l, effective_width as u16));
+            }
+
+            let rows = pre_wrapped_lines.len() as u16;
             PreparedTimelineEntry {
-                lines,
+                lines: pre_wrapped_lines,
                 rows,
                 card_style,
             }
@@ -461,9 +554,8 @@ pub(crate) fn render_timeline_viewport(
 
         // Determine if this entry should get the highlight background.
         // Highlighted during copy confirmation flash OR while mouse button is held.
-        let is_highlighted =
-            copy_highlight.is_some_and(|(idx, _)| idx == entry_idx)
-                || mouse_selection.is_some_and(|idx| idx == entry_idx);
+        let is_highlighted = copy_highlight.is_some_and(|(idx, _)| idx == entry_idx)
+            || mouse_selection.is_some_and(|idx| idx == entry_idx);
 
         let clip_top = visible_start.saturating_sub(item_start);
         let render_start = item_start.max(visible_start);
@@ -504,7 +596,6 @@ pub(crate) fn render_timeline_viewport(
             }
             frame.render_widget(
                 Paragraph::new(item.lines.clone())
-                    .wrap(Wrap { trim: false })
                     .scroll((clip_top, 0))
                     .block(block),
                 rect,

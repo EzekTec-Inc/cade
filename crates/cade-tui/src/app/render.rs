@@ -317,12 +317,13 @@ pub(crate) fn render_frame(
             colors,
             nerd,
         );
-        let rows = lines
-            .iter()
-            .map(|l| count_wrapped_rows(l, effective_w as u16))
-            .sum();
+        let mut pre_wrapped_lines = Vec::new();
+        for l in lines {
+            pre_wrapped_lines.extend(crate::app::timeline::wrap_line(l, effective_w as u16));
+        }
+        let rows = pre_wrapped_lines.len() as u16;
         prepared.push(PreparedTimelineEntry {
-            lines,
+            lines: pre_wrapped_lines,
             rows,
             card_style: crate::app::timeline::CardStyle::Assistant,
         });

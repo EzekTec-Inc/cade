@@ -187,13 +187,13 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
         ExecutionBackendKind::Docker => {
             #[cfg(feature = "backend-docker")]
             {
-                Box::new(DockerBackend {
-                    image: profile
+                Box::new(DockerBackend::new(
+                    profile
                         .docker_image
                         .clone()
                         .unwrap_or_else(|| "ubuntu:22.04".to_string()),
-                    extra_flags: profile.docker_flags.clone(),
-                })
+                    profile.docker_flags.clone(),
+                ))
             }
             #[cfg(not(feature = "backend-docker"))]
             {
