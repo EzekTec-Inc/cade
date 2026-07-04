@@ -317,3 +317,51 @@ fn set_plan_initializes_scroll_offset_zero() {
     app.set_plan(vec!["a".into(), "b".into(), "c".into()]);
     assert_eq!(app.active_plan.as_ref().unwrap().scroll_offset, 0);
 }
+
+#[test]
+#[ignore = "requires tty"]
+fn test_scrolling_constraints_and_velocity_governor() {
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test".into(),
+        "test-model".into(),
+        None,
+    );
+
+    // Initial state
+    assert_eq!(app.scroll, 0);
+    assert_eq!(app.scroll_target, 0);
+    assert!(!app.selection_active);
+
+    // 1. Verify ScrollUp increments scroll_target (elastic governor Option A)
+    // At scroll_target = 0, scroll = 0, diff = 0 < max_buffer / 2 (which is 50), so increment should be 3
+    let consumed = app.handle_scroll_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    assert!(consumed);
+    assert_eq!(app.scroll_target, 3);
+    assert!(!app.follow);
+
+    // 2. Verify lock scrolling during drag (active selection)
+    app.selection_active = true;
+    let consumed_during_drag = app.handle_scroll_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    assert!(!consumed_during_drag);
+    assert_eq!(app.scroll_target, 3); // unchanged
+
+    // Key scrolling should also be blocked during drag
+    let consumed_key_during_drag = app.handle_scroll_key(crossterm::event::KeyCode::PageUp, crossterm::event::KeyModifiers::empty());
+    assert!(!consumed_key_during_drag);
+    assert_eq!(app.scroll_target, 3); // unchanged
+
+    // Disable selection/drag
+    app.selection_active = false;
+
+    // 3. Verify restrict to Scroll-Keys only
+    // Non-scroll keys should not be consumed and should not modify scroll_target
+    let consumed_non_scroll = app.handle_scroll_key(crossterm::event::KeyCode::Char('a'), crossterm::event::KeyModifiers::empty());
+    assert!(!consumed_non_scroll);
+    assert_eq!(app.scroll_target, 3); // unchanged
+
+    // Valid scroll keys (e.g. PageUp) should be consumed and modify scroll_target
+    let consumed_scroll_key = app.handle_scroll_key(crossterm::event::KeyCode::PageUp, crossterm::event::KeyModifiers::empty());
+    assert!(consumed_scroll_key);
+    assert!(app.scroll_target > 3);
+}

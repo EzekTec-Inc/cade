@@ -140,8 +140,34 @@ impl TuiApp {
                             && m.column < self.messages_area.x + self.messages_area.width
                             && m.row >= self.messages_area.y
                             && m.row < self.messages_area.y + self.messages_area.height;
-                        if is_inside_messages && self.handle_scroll_mouse(m.kind) {
-                            self.draw()?;
+                        
+                        match m.kind {
+                            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                                if is_inside_messages {
+                                    self.selection_active = true;
+                                    self.selection_start = Some((m.column, m.row));
+                                    self.selection_current = Some((m.column, m.row));
+                                    self.draw()?;
+                                }
+                            }
+                            crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                                if self.selection_active {
+                                    self.selection_current = Some((m.column, m.row));
+                                    self.draw()?;
+                                }
+                            }
+                            crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                                if self.selection_active {
+                                    self.selection_current = Some((m.column, m.row));
+                                    self.copy_selected_text();
+                                    self.draw()?;
+                                }
+                            }
+                            _ => {
+                                if is_inside_messages && self.handle_scroll_mouse(m.kind) {
+                                    self.draw()?;
+                                }
+                            }
                         }
                     }
                 }
@@ -301,12 +327,6 @@ impl TuiApp {
                 }
                 return Ok(None); // event consumed
             }
-        }
-
-        // Delegate scroll keys (Shift+K, Shift+J, PageUp, PageDown) to unified handler
-        if self.handle_scroll_key(k.code, k.modifiers) {
-            let _ = self.draw();
-            return Ok(None);
         }
 
         // Delegate scroll keys (Shift+K, Shift+J, PageUp, PageDown) to unified handler
