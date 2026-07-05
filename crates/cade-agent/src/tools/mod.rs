@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod desktop;
 pub mod file_lock;
 pub mod fs;
+pub mod isolation;
 pub mod fs_agent;
 pub mod git_checkpoint;
 pub mod manager;
@@ -29,5 +30,6 @@ pub use plan::{
     EnterPlanModeTool, ExitPlanModeTool, FinishTaskTool, SetPlanTool, TodoWriteTool, UpdatePlanTool,
 };
 pub use runtime::{RuntimeToolResult, ToolRuntime};
+pub use isolation::IsolatedWorkspace;
 
 // endregion: --- Modules

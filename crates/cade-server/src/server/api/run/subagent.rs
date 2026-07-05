@@ -432,7 +432,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         .unwrap_or(false);
     let temp_workspace = if use_isolation {
         let root = std::env::current_dir().unwrap_or_default();
-        match clone_workspace_to_temp(&root) {
+        match cade_agent::tools::IsolatedWorkspace::clone_from(&root) {
             Ok(tmp) => {
                 tracing::info!(
                     "Subagent [{}] running inside isolated workspace sandbox at {:?}",
@@ -1119,8 +1119,7 @@ ui_resource_uri: None,
         Some(e) => (format!("Subagent error: {e}"), true),
         None => {
             if let Some(ref tw) = temp_workspace {
-                let root = std::env::current_dir().unwrap_or_default();
-                if let Err(e) = copy_back_temp_workspace(tw.path(), &root).await {
+                if let Err(e) = tw.merge_back().await {
                     tracing::warn!(
                         "Failed to copy back isolated files for subagent [{}]: {e}",
                         subagent_id
@@ -1636,70 +1635,8 @@ fn is_mutating_tool(name: &str) -> bool {
     ) || name.contains("__")
 }
 
-fn clone_workspace_to_temp(src_dir: &std::path::Path) -> std::io::Result<tempfile::TempDir> {
-    let tmp = tempfile::tempdir()?;
-    let walker = ignore::WalkBuilder::new(src_dir)
-        .standard_filters(true)
-        .hidden(false)
-        .build();
-
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if path.is_file()
-            && let Ok(rel_path) = path.strip_prefix(src_dir)
-        {
-            let dest_path = tmp.path().join(rel_path);
-            if let Some(parent) = dest_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(path, dest_path)?;
-        }
-    }
-    Ok(tmp)
-}
-
-async fn copy_back_temp_workspace(
-    temp_dir: &std::path::Path,
-    src_dir: &std::path::Path,
-) -> std::io::Result<()> {
-    let walker = ignore::WalkBuilder::new(temp_dir)
-        .standard_filters(true)
-        .hidden(false)
-        .build();
-
-    for entry in walker {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.is_file()
-                && let Ok(rel_path) = path.strip_prefix(temp_dir)
-            {
-                let dest_path = src_dir.join(rel_path);
-
-                // Check if file content differs
-                let temp_bytes = std::fs::read(path)?;
-                let host_bytes_opt = std::fs::read(&dest_path).ok();
-
-                if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
-                    if let Some(parent) = dest_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-
-                    // Acquire global lock during final copy back step to prevent concurrent overwrites (ADR 6)
-                    let lock_manager = cade_agent::tools::file_lock::FileLockManager::global();
-                    let _lock = lock_manager.acquire_lock(&dest_path).await;
-
-                    std::fs::write(&dest_path, &temp_bytes)?;
-                    tracing::info!("Copy back isolated file: {:?}", rel_path);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
 
     #[tokio::test]
@@ -1712,7 +1649,7 @@ mod tests {
         fs::write(src.path().join("sub/b.txt"), "world")?;
 
         // Clone it
-        let clone_dir = clone_workspace_to_temp(src.path())?;
+        let clone_dir = cade_agent::tools::IsolatedWorkspace::clone_from(src.path())?;
         assert!(clone_dir.path().join("a.txt").exists());
         assert!(clone_dir.path().join("sub/b.txt").exists());
 
@@ -1722,7 +1659,7 @@ mod tests {
         fs::write(clone_dir.path().join("new.txt"), "fresh file")?;
 
         // Copy back
-        copy_back_temp_workspace(clone_dir.path(), src.path()).await?;
+        clone_dir.merge_back().await?;
 
         assert_eq!(
             fs::read_to_string(src.path().join("a.txt"))?,
