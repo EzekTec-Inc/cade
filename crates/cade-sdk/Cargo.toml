@@ -10,6 +10,7 @@ doctest = false
 # -- Workspace crates
 cade-core.path  = "../cade-core"
 cade-agent = { path = "../cade-agent", default-features = false, features = ["mcp"] }
+cade-api-types = { path = "../cade-api-types" }
 # -- Error handling
 derive_more.workspace = true
 # -- Serialisation
@@ -20,9 +21,20 @@ tracing.workspace    = true
 # -- Async
 tokio.workspace      = true
 futures.workspace    = true
+futures-util         = "0.3"
 # -- Misc
 uuid.workspace       = true
 dirs.workspace       = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true, features = ["json"] }
+reqwest-eventsource = "0.6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen         = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys               = "0.3"
+web-sys              = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "TextDecoder"] }
 
 [lints.rust]
 unsafe_code = "forbid"
