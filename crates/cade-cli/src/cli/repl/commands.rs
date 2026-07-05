@@ -123,6 +123,37 @@ impl Repl {
         pending_input: &mut Option<String>,
     ) -> Result<bool> {
         match cmd {
+            SlashCmd::Gui => {
+                let server_url = self.client.base_url();
+                let agent_id = self.agent_id();
+                let conv_id = self.conversation_id().unwrap_or_default();
+                let api_key = self.client.api_key().to_string();
+
+                let url = format!(
+                    "{}/dashboard?agent_id={}&conversation_id={}&api_key={}",
+                    server_url, agent_id, conv_id, api_key
+                );
+
+                let mut app = self.app.lock();
+                let _ = app.push(RenderLine::SystemMsg(
+                    "  Opening CADE Web GUI Dashboard in default browser…".to_string(),
+                ));
+
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open").arg(&url).spawn();
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn();
+                }
+
+                return Ok(false);
+            }
             SlashCmd::Exit => {
                 use std::sync::atomic::Ordering;
                 let in_tok = self.session_input_tokens.load(Ordering::SeqCst);

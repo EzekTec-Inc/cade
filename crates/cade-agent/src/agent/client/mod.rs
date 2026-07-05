@@ -174,6 +174,14 @@ impl HttpTransport {
         })
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}/v1{}", self.base_url.trim_end_matches('/'), path)
     }

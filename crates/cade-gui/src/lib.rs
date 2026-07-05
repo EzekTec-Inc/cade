@@ -15,15 +15,51 @@ pub fn start() {
 
 #[component]
 fn App() -> Element {
+    // ── Extract query parameters from window.location (Cross-Frontend Sync) ──
+    let mut initial_key = String::new();
+    let mut initial_agent_id = Option::<String>::None;
+    let mut initial_conv_id = Option::<String>::None;
+
+    if let Some(window) = web_sys::window() {
+        if let Ok(search) = window.location().search() {
+            if !search.is_empty() {
+                let query = search.trim_start_matches('?');
+                for pair in query.split('&') {
+                    let parts: Vec<&str> = pair.split('=').collect();
+                    if parts.len() == 2 {
+                        let key = parts[0];
+                        let val = urlencoding::decode(parts[1]).unwrap_or_default().into_owned();
+                        match key {
+                            "api_key" => initial_key = val,
+                            "agent_id" => initial_agent_id = Some(val),
+                            "conversation_id" => initial_conv_id = Some(val),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let initial_page = if initial_agent_id.is_some() { SelectedPage::Chat } else { SelectedPage::Dashboard };
+
     // ── Shared state ────────────────────────────────────────────────────────
-    let api_key = use_signal(String::new);
-    let mut active_page = use_signal(|| SelectedPage::Dashboard);
-    let selected_agent: Signal<Option<cade_api_types::AgentInfo>> = use_signal(|| None);
+    let api_key = use_signal(|| initial_key);
+    let mut active_page = use_signal(|| initial_page);
+    let selected_agent: Signal<Option<cade_api_types::AgentInfo>> = use_signal(|| {
+        initial_agent_id.map(|id| cade_api_types::AgentInfo {
+            id,
+            name: "Agent".to_string(),
+            model: Some("unknown".to_string()),
+            provider: None,
+            theme: None,
+        })
+    });
     let messages = use_signal(Vec::<cade_api_types::ChatMessage>::new);
     let input_text = use_signal(String::new);
     let is_loading = use_signal(|| false);
     let conversations = use_signal(Vec::<cade_api_types::ConversationInfo>::new);
-    let active_conversation = use_signal(|| Option::<String>::None);
+    let active_conversation = use_signal(|| initial_conv_id);
     let toasts = use_signal(Vec::<types::ToastMessage>::new);
     let mut global_error = use_signal(|| Option::<String>::None);
     let active_stream_id = use_signal(|| Option::<String>::None);
@@ -80,9 +116,15 @@ fn App() -> Element {
             // Fetch initial agent + conversations (silent poll; show toast only on failure)
             match api::list_agents(&key()).await {
                 Ok(list) => {
-                    if let Some(first) = list.into_iter().next() {
-                        let agent_id = first.id.clone();
-                        selected.set(Some(first));
+                    let matched = if let Some(ref initial_agent) = *selected.peek() {
+                        list.iter().find(|a| a.id == initial_agent.id).cloned()
+                    } else {
+                        None
+                    };
+
+                    if let Some(agent) = matched.or_else(|| list.into_iter().next()) {
+                        let agent_id = agent.id.clone();
+                        selected.set(Some(agent));
                         let _ = api::list_conversations(&agent_id, &key())
                             .await
                             .map(|list| convs.set(list));
