@@ -645,10 +645,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let next_depth = cfg.depth + 1;
     let allowed_paths = cfg.resolve_allowed_paths(def_opt);
 
-    // G1/REC-2: Rolling fingerprint window for stagnation detection.
-    // Stores hashes of (tool_name + args_json) for the last 4 dispatches.
-    let mut tool_fingerprints: std::collections::VecDeque<u64> =
-        std::collections::VecDeque::with_capacity(5);
+    // G1/REC-2: Deep DoomLoopDetector for stagnation protection (ADR 17)
+    let mut doom_loop_detector = cade_agent::agent::DoomLoopDetector::default();
 
     // G5: Per-call dedup cache — maps fingerprint → first iter it was seen.
     let mut tool_dedup: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
@@ -908,8 +906,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             }
 
             let mut stagnation_detected = false;
-            let mut stagnated_tool = String::new();
-            let mut stagnated_repeat_count = 0;
+            let mut stagnated_intervention_message = String::new();
 
             // G8/REC-5: Emit per-iteration observability event for each tool call.
             for tc in &resp.tool_calls {
@@ -943,20 +940,18 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     tool_dedup.insert(fp, iter);
                 }
 
-                // G1/REC-2: Stagnation detection — rolling window of last 4 fingerprints.
-                tool_fingerprints.push_back(fp);
-                if tool_fingerprints.len() > 4 {
-                    tool_fingerprints.pop_front();
-                }
-                let repeat_count = tool_fingerprints.iter().filter(|&&x| x == fp).count();
-                if repeat_count >= 3 {
+                // G1/REC-2: Stagnation detection using deep DoomLoopDetector module (ADR 17)
+                if let cade_agent::agent::StagnationResult::Stagnated {
+                    tool_name,
+                    repeat_count,
+                    intervention_message,
+                } = doom_loop_detector.record_call(&tc.name, &tc.arguments) {
                     tracing::warn!(
                         "Stagnation detected for subagent {}: tool '{}' called with identical arguments {} times. Injecting intervention.",
-                        subagent_id, tc.name, repeat_count
+                        subagent_id, tool_name, repeat_count
                     );
                     stagnation_detected = true;
-                    stagnated_tool = tc.name.clone();
-                    stagnated_repeat_count = repeat_count;
+                    stagnated_intervention_message = intervention_message;
                     break;
                 }
             }
@@ -973,7 +968,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 for tc in &resp.tool_calls {
                     messages.push(LlmMessage {
                         role: "tool".to_string(),
-                        content: format!("SYSTEM INTERVENTION: Stagnation detected. You have called '{}' with identical arguments {} times in the last 4 iterations. You are stuck in a doom-loop. Do NOT repeat this call. You MUST immediately call `update_memory(label='active_goal', value=...)` to explicitly rewrite your strategy and outline a new approach in your Core memory, or call the `finish` tool with status='blocked' if you are unable to proceed.", stagnated_tool, stagnated_repeat_count),
+                        content: stagnated_intervention_message.clone(),
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                         images: None,
