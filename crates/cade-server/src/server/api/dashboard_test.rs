@@ -251,8 +251,12 @@ fn mime_for_returns_correct_types() {
 #[tokio::test]
 async fn dashboard_existing_asset_returns_200() {
     let app = make_app(make_state(None));
+    // Dynamically retrieve an actual asset name to verify serving is active
+    let asset_path = super::DashboardAssets::iter()
+        .next()
+        .expect("there must be at least one asset in the dashboard folder (e.g. index.html)");
     let req = Request::builder()
-        .uri("/dashboard/cade-gui-ee9a23395c7c3ad2.js")
+        .uri(&format!("/dashboard/{}", asset_path))
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();

@@ -42,26 +42,34 @@ impl DockerBackend {
             .unwrap_or(false);
         if !is_running {
             return Err(crate::Error::custom(
-                "Docker is not available. Install Docker or switch to local backend."
+                "Docker is not available. Install Docker or switch to local backend.",
             ));
         }
 
-        tracing::info!("Spawning persistent background Docker container from image '{}'...", self.image);
+        tracing::info!(
+            "Spawning persistent background Docker container from image '{}'...",
+            self.image
+        );
         let mut cmd = Command::new("docker");
         cmd.args(["run", "-d", "--rm"]);
         for flag in &self.extra_flags {
             cmd.arg(flag);
         }
         cmd.args([&self.image, "tail", "-f", "/dev/null"]);
-        
-        let out = cmd.output().await.map_err(|e| crate::Error::custom(format!("failed to spawn docker container: {e}")))?;
+
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| crate::Error::custom(format!("failed to spawn docker container: {e}")))?;
         if !out.status.success() {
             let err_msg = String::from_utf8_lossy(&out.stderr).to_string();
-            return Err(crate::Error::custom(format!("docker run -d failed: {err_msg}")));
+            return Err(crate::Error::custom(format!(
+                "docker run -d failed: {err_msg}"
+            )));
         }
 
         let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        
+
         // Ensure /workspace directory exists inside the container
         let _ = Command::new("docker")
             .args(["exec", &id, "mkdir", "-p", "/workspace"])
@@ -83,7 +91,7 @@ impl ExecutionBackend for DockerBackend {
         timeout_secs: u64,
     ) -> crate::Result<BashOutput> {
         let container_id = self.get_or_start_container().await?;
-        
+
         let mut cmd = Command::new("docker");
         cmd.args([
             "exec",
@@ -113,7 +121,8 @@ impl ExecutionBackend for DockerBackend {
 
     async fn read_file(&self, path: &Path) -> crate::Result<String> {
         let container_id = self.get_or_start_container().await?;
-        let temp_file = tempfile::NamedTempFile::new().map_err(|e| crate::Error::custom(e.to_string()))?;
+        let temp_file =
+            tempfile::NamedTempFile::new().map_err(|e| crate::Error::custom(e.to_string()))?;
 
         let src = format!("{}:/workspace/{}", container_id, path.to_string_lossy());
 
@@ -136,8 +145,10 @@ impl ExecutionBackend for DockerBackend {
 
     async fn write_file(&self, path: &Path, content: &str) -> crate::Result<()> {
         let container_id = self.get_or_start_container().await?;
-        let temp_file = tempfile::NamedTempFile::new().map_err(|e| crate::Error::custom(e.to_string()))?;
-        std::fs::write(temp_file.path(), content).map_err(|e| crate::Error::custom(e.to_string()))?;
+        let temp_file =
+            tempfile::NamedTempFile::new().map_err(|e| crate::Error::custom(e.to_string()))?;
+        std::fs::write(temp_file.path(), content)
+            .map_err(|e| crate::Error::custom(e.to_string()))?;
 
         let dest = format!("{}:/workspace/{}", container_id, path.to_string_lossy());
 
@@ -160,20 +171,26 @@ impl ExecutionBackend for DockerBackend {
             Ok(id) => id,
             Err(_) => return false,
         };
-        
+
         let path_str = path.to_string_lossy();
         let out_check = Command::new("docker")
-            .args(["exec", &container_id, "sh", "-c", &format!("test -e /workspace/{}", path_str)])
+            .args([
+                "exec",
+                &container_id,
+                "sh",
+                "-c",
+                &format!("test -e /workspace/{}", path_str),
+            ])
             .output()
             .await;
-            
+
         out_check.map(|out| out.status.success()).unwrap_or(false)
     }
 
     async fn list_dir(&self, path: &Path) -> crate::Result<Vec<DirEntry>> {
         let container_id = self.get_or_start_container().await?;
         let path_str = path.to_string_lossy();
-        
+
         let py_cmd = format!(
             "python3 -c \"import os, json; print(json.dumps([{{'name': e.name, 'is_dir': e.is_dir(), 'size': e.stat().st_size}} for e in os.scandir('/workspace/{}')]))\"",
             path_str
@@ -181,13 +198,25 @@ impl ExecutionBackend for DockerBackend {
 
         let mut cmd = Command::new("docker");
         cmd.args(["exec", &container_id, "sh", "-c", &py_cmd]);
-        
-        let out = cmd.output().await.map_err(|e| crate::Error::custom(format!("docker list_dir failed: {e}")))?;
+
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| crate::Error::custom(format!("docker list_dir failed: {e}")))?;
         if !out.status.success() {
             // Fallback to simple ls -1 if python is missing
             let mut fallback_cmd = Command::new("docker");
-            fallback_cmd.args(["exec", &container_id, "ls", "-1", &format!("/workspace/{}", path_str)]);
-            let fallback_out = fallback_cmd.output().await.map_err(|e| crate::Error::custom(e.to_string()))?;
+            fallback_cmd.args([
+                "exec",
+                &container_id,
+                "ls",
+                "-1",
+                &format!("/workspace/{}", path_str),
+            ]);
+            let fallback_out = fallback_cmd
+                .output()
+                .await
+                .map_err(|e| crate::Error::custom(e.to_string()))?;
             let stdout_str = String::from_utf8_lossy(&fallback_out.stdout);
             let mut entries = Vec::new();
             for line in stdout_str.lines() {

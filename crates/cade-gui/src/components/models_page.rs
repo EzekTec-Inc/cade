@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
 pub fn ModelsView() -> Element {

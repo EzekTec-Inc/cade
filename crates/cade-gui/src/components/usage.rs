@@ -1,13 +1,17 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
 pub fn UsageView() -> Element {
     let state = use_context::<AppState>();
-    let agent_id = (state.selected_agent)().map(|a| a.id.clone()).unwrap_or_default();
-    let agent_name = (state.selected_agent)().map(|a| a.name.clone()).unwrap_or_else(|| "—".to_string());
+    let agent_id = (state.selected_agent)()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
+    let agent_name = (state.selected_agent)()
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "—".to_string());
 
     let metrics_data = use_signal(|| Option::<serde_json::Value>::None);
     let context_data = use_signal(|| Option::<serde_json::Value>::None);
@@ -23,7 +27,9 @@ pub fn UsageView() -> Element {
         let mut busy = fetching;
         spawn(async move {
             let actual = if aid.is_empty() {
-                api::list_agents(&k()).await.ok()
+                api::list_agents(&k())
+                    .await
+                    .ok()
                     .and_then(|list| list.into_iter().next())
                     .map(|a| a.id)
                     .unwrap_or_default()

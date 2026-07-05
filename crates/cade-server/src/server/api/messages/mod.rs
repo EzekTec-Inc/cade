@@ -32,7 +32,6 @@ pub(crate) const SHORT_BUDGET_MIN: usize = 25_000;
 /// Minimum character budget for the long-term archived index (label + 80-char excerpt).
 pub(crate) const LONG_BUDGET_MIN: usize = 5_000;
 
-
 /// Fraction of the message budget at which `build_context` proactively
 /// signals the Sleeptime consolidation task.  Lowered from 80% → 70% as
 /// F4 of the 2026-04-30 memory-system refactor: consolidation costs an

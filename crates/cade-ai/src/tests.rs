@@ -1167,7 +1167,6 @@ fn debug_prices_claude_variants() {
     }
 }
 
-
 #[test]
 fn test_llm_router_openrouter_failover_mapping() {
     let config = AiConfig {
@@ -1177,15 +1176,19 @@ fn test_llm_router_openrouter_failover_mapping() {
         ollama_base_url: "http://localhost:11434".to_string(),
         llm_provider: "anthropic".to_string(),
     };
-    
+
     let router = LlmRouter::build(&config);
-    
+
     // Test mapping translations
-    let (prov, model) = router.map_openrouter_to_native("anthropic/claude-3-5-sonnet-20241022").unwrap();
+    let (prov, model) = router
+        .map_openrouter_to_native("anthropic/claude-3-5-sonnet-20241022")
+        .unwrap();
     assert_eq!(prov, "anthropic");
     assert_eq!(model, "claude-3-5-sonnet-20241022");
 
-    let (prov2, model2) = router.map_openrouter_to_native("openai/gpt-4o-mini").unwrap();
+    let (prov2, model2) = router
+        .map_openrouter_to_native("openai/gpt-4o-mini")
+        .unwrap();
     assert_eq!(prov2, "openai");
     assert_eq!(model2, "gpt-4o-mini");
 }

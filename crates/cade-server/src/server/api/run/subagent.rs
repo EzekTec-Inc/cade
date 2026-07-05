@@ -278,7 +278,10 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait SubagentExecutor: Send + Sync {
-    async fn execute(self: Box<Self>, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult;
+    async fn execute(
+        self: Box<Self>,
+        args: &serde_json::Value,
+    ) -> cade_agent::tools::manager::ToolResult;
 }
 
 pub struct CadeSubagentExecutor {
@@ -306,7 +309,10 @@ impl CadeSubagentExecutor {
 
 #[async_trait]
 impl SubagentExecutor for CadeSubagentExecutor {
-    async fn execute(self: Box<Self>, args: &serde_json::Value) -> cade_agent::tools::manager::ToolResult {
+    async fn execute(
+        self: Box<Self>,
+        args: &serde_json::Value,
+    ) -> cade_agent::tools::manager::ToolResult {
         handle_run_subagent_tool_inner(
             &self.state,
             &self.parent_agent_id,
@@ -421,16 +427,25 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let task_preview: String = cfg.prompt.chars().take(80).collect();
     let prompt = cfg.prompt_with_test_command();
 
-    let use_isolation = std::env::var("CADE_ISOLATION").map(|v| v == "true").unwrap_or(false);
+    let use_isolation = std::env::var("CADE_ISOLATION")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let temp_workspace = if use_isolation {
         let root = std::env::current_dir().unwrap_or_default();
         match clone_workspace_to_temp(&root) {
             Ok(tmp) => {
-                tracing::info!("Subagent [{}] running inside isolated workspace sandbox at {:?}", subagent_id, tmp.path());
+                tracing::info!(
+                    "Subagent [{}] running inside isolated workspace sandbox at {:?}",
+                    subagent_id,
+                    tmp.path()
+                );
                 Some(tmp)
             }
             Err(e) => {
-                tracing::warn!("Failed to clone workspace for subagent [{}]: {e}. Falling back to live host.", subagent_id);
+                tracing::warn!(
+                    "Failed to clone workspace for subagent [{}]: {e}. Falling back to live host.",
+                    subagent_id
+                );
                 None
             }
         }
@@ -1106,9 +1121,15 @@ ui_resource_uri: None,
             if let Some(ref tw) = temp_workspace {
                 let root = std::env::current_dir().unwrap_or_default();
                 if let Err(e) = copy_back_temp_workspace(tw.path(), &root).await {
-                    tracing::warn!("Failed to copy back isolated files for subagent [{}]: {e}", subagent_id);
+                    tracing::warn!(
+                        "Failed to copy back isolated files for subagent [{}]: {e}",
+                        subagent_id
+                    );
                 } else {
-                    tracing::info!("Successfully merged isolated files back for subagent [{}]", subagent_id);
+                    tracing::info!(
+                        "Successfully merged isolated files back for subagent [{}]",
+                        subagent_id
+                    );
                 }
             }
             (last_text, false)
@@ -1217,7 +1238,10 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         if active_mode == cade_agent::team::TeamMode::Route {
             let mut roster = String::new();
             for m in &team.members {
-                roster.push_str(&format!("- Member ID: {}\n  Role: {:?}\n  Description: {}\n\n", m.id, m.role, m.description));
+                roster.push_str(&format!(
+                    "- Member ID: {}\n  Role: {:?}\n  Description: {}\n\n",
+                    m.id, m.role, m.description
+                ));
             }
 
             let route_prompt = format!(
@@ -1225,8 +1249,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                  USER REQUEST:\n{}\n\n\
                  ROSTER:\n{}\n\
                  Return a JSON array of the selected Member IDs, e.g. [\"id1\", \"id2\"]. Return ONLY the JSON array, no explanation.",
-                prompt,
-                roster
+                prompt, roster
             );
 
             let req = cade_ai::CompletionRequest {
@@ -1246,12 +1269,23 @@ pub(super) async fn handle_run_parallel_subagents_tool(
             if let Ok(resp) = state.llm.complete(&req).await
                 && let Some(content) = resp.content
             {
-                let clean_json = content.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                let clean_json = content
+                    .trim()
+                    .trim_start_matches("```json")
+                    .trim_end_matches("```")
+                    .trim();
                 if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(clean_json) {
-                    let selected_ids: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                    let selected_ids: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
                     if !selected_ids.is_empty() {
                         members_to_run.retain(|m| selected_ids.contains(&m.id));
-                        tracing::info!("Router selected {} specialized members for execution: {:?}", members_to_run.len(), selected_ids);
+                        tracing::info!(
+                            "Router selected {} specialized members for execution: {:?}",
+                            members_to_run.len(),
+                            selected_ids
+                        );
                     }
                 }
             }
@@ -1269,8 +1303,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                 } else {
                     format!(
                         "{}\n\n<previous_outputs>\n{}\n</previous_outputs>",
-                        prompt,
-                        previous_outputs
+                        prompt, previous_outputs
                     )
                 };
 
@@ -1314,8 +1347,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
                 if !tr.is_error {
                     previous_outputs.push_str(&format!(
                         "\n--- Output of {} ---\n{}\n",
-                        member.name,
-                        tr.output
+                        member.name, tr.output
                     ));
                 }
 
@@ -1433,7 +1465,9 @@ pub(super) async fn handle_run_parallel_subagents_tool(
     }
 
     // 🟢 3. TeamMode::Coordinate (Orchestrated Leader Synthesis)
-    if active_mode == cade_agent::team::TeamMode::Coordinate && let Some(team) = resolved_team {
+    if active_mode == cade_agent::team::TeamMode::Coordinate
+        && let Some(team) = resolved_team
+    {
         let mut reports = String::new();
         for (idx, tr) in aggregated.iter().enumerate() {
             let name = &team.members[idx].name;
@@ -1446,8 +1480,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
              ORIGINAL TASK:\n{}\n\n\
              SUBAGENT REPORTS:\n{}\n\
              Write a clear, structured, and comprehensive final report.",
-            prompt_val,
-            reports
+            prompt_val, reports
         );
 
         let req = cade_ai::CompletionRequest {
@@ -1613,18 +1646,22 @@ fn clone_workspace_to_temp(src_dir: &std::path::Path) -> std::io::Result<tempfil
     for entry in walker.flatten() {
         let path = entry.path();
         if path.is_file()
-            && let Ok(rel_path) = path.strip_prefix(src_dir) {
-                let dest_path = tmp.path().join(rel_path);
-                if let Some(parent) = dest_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::copy(path, dest_path)?;
+            && let Ok(rel_path) = path.strip_prefix(src_dir)
+        {
+            let dest_path = tmp.path().join(rel_path);
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
             }
+            std::fs::copy(path, dest_path)?;
+        }
     }
     Ok(tmp)
 }
 
-async fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::path::Path) -> std::io::Result<()> {
+async fn copy_back_temp_workspace(
+    temp_dir: &std::path::Path,
+    src_dir: &std::path::Path,
+) -> std::io::Result<()> {
     let walker = ignore::WalkBuilder::new(temp_dir)
         .standard_filters(true)
         .hidden(false)
@@ -1634,26 +1671,27 @@ async fn copy_back_temp_workspace(temp_dir: &std::path::Path, src_dir: &std::pat
         if let Ok(entry) = entry {
             let path = entry.path();
             if path.is_file()
-                && let Ok(rel_path) = path.strip_prefix(temp_dir) {
-                    let dest_path = src_dir.join(rel_path);
-                    
-                    // Check if file content differs
-                    let temp_bytes = std::fs::read(path)?;
-                    let host_bytes_opt = std::fs::read(&dest_path).ok();
-                    
-                    if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
-                        if let Some(parent) = dest_path.parent() {
-                            std::fs::create_dir_all(parent)?;
-                        }
-                        
-                        // Acquire global lock during final copy back step to prevent concurrent overwrites (ADR 6)
-                        let lock_manager = cade_agent::tools::file_lock::FileLockManager::global();
-                        let _lock = lock_manager.acquire_lock(&dest_path).await;
-                        
-                        std::fs::write(&dest_path, &temp_bytes)?;
-                        tracing::info!("Copy back isolated file: {:?}", rel_path);
+                && let Ok(rel_path) = path.strip_prefix(temp_dir)
+            {
+                let dest_path = src_dir.join(rel_path);
+
+                // Check if file content differs
+                let temp_bytes = std::fs::read(path)?;
+                let host_bytes_opt = std::fs::read(&dest_path).ok();
+
+                if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
+                    if let Some(parent) = dest_path.parent() {
+                        std::fs::create_dir_all(parent)?;
                     }
+
+                    // Acquire global lock during final copy back step to prevent concurrent overwrites (ADR 6)
+                    let lock_manager = cade_agent::tools::file_lock::FileLockManager::global();
+                    let _lock = lock_manager.acquire_lock(&dest_path).await;
+
+                    std::fs::write(&dest_path, &temp_bytes)?;
+                    tracing::info!("Copy back isolated file: {:?}", rel_path);
                 }
+            }
         }
     }
     Ok(())
@@ -1686,9 +1724,18 @@ mod tests {
         // Copy back
         copy_back_temp_workspace(clone_dir.path(), src.path()).await?;
 
-        assert_eq!(fs::read_to_string(src.path().join("a.txt"))?, "hello modified");
-        assert_eq!(fs::read_to_string(src.path().join("sub/b.txt"))?, "world modified");
-        assert_eq!(fs::read_to_string(src.path().join("new.txt"))?, "fresh file");
+        assert_eq!(
+            fs::read_to_string(src.path().join("a.txt"))?,
+            "hello modified"
+        );
+        assert_eq!(
+            fs::read_to_string(src.path().join("sub/b.txt"))?,
+            "world modified"
+        );
+        assert_eq!(
+            fs::read_to_string(src.path().join("new.txt"))?,
+            "fresh file"
+        );
 
         Ok(())
     }
@@ -1723,7 +1770,10 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
 
         // Trigger native desktop notification
         let title = "CADE Approval Request";
-        let body = format!("Subagent [{}] requests permission to run {}.", self.subagent_id, tool_name);
+        let body = format!(
+            "Subagent [{}] requests permission to run {}.",
+            self.subagent_id, tool_name
+        );
         #[cfg(target_os = "linux")]
         {
             let _ = std::process::Command::new("notify-send")
@@ -1754,7 +1804,9 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
                 return Err("Approval request timed out after 10 minutes.".to_string());
             }
 
-            if let Ok(Some(status)) = cade_store::sqlite::get_approval_status(&self.db, &approval_id) {
+            if let Ok(Some(status)) =
+                cade_store::sqlite::get_approval_status(&self.db, &approval_id)
+            {
                 if status == "approved" {
                     return Ok(true);
                 } else if status == "denied" {

@@ -1,8 +1,6 @@
 //! User input loop — read_input and handle_key_input.
 
-use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::Result;
 
@@ -140,9 +138,11 @@ impl TuiApp {
                             && m.column < self.messages_area.x + self.messages_area.width
                             && m.row >= self.messages_area.y
                             && m.row < self.messages_area.y + self.messages_area.height;
-                        
+
                         match m.kind {
-                            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                            crossterm::event::MouseEventKind::Down(
+                                crossterm::event::MouseButton::Left,
+                            ) => {
                                 if is_inside_messages {
                                     self.selection_active = true;
                                     self.selection_start = Some((m.column, m.row));
@@ -150,13 +150,17 @@ impl TuiApp {
                                     self.draw()?;
                                 }
                             }
-                            crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                            crossterm::event::MouseEventKind::Drag(
+                                crossterm::event::MouseButton::Left,
+                            ) => {
                                 if self.selection_active {
                                     self.selection_current = Some((m.column, m.row));
                                     self.draw()?;
                                 }
                             }
-                            crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                            crossterm::event::MouseEventKind::Up(
+                                crossterm::event::MouseButton::Left,
+                            ) => {
                                 if self.selection_active {
                                     self.selection_current = Some((m.column, m.row));
                                     self.copy_selected_text();
@@ -377,7 +381,8 @@ impl TuiApp {
                 if k.modifiers.contains(KeyModifiers::CONTROL)
                     || k.modifiers.contains(KeyModifiers::ALT) =>
             {
-                if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image() {
+                if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image()
+                {
                     self.handle_image_paste(&media_type, b64, w, h);
                     self.show_toast("Pasted image from clipboard", ToastLevel::Success);
                 } else if let Some(text) = crate::app::clipboard::read_clipboard_text() {
@@ -538,8 +543,6 @@ impl TuiApp {
                 }
             }
 
-
-
             KeyCode::Up if !k.modifiers.contains(KeyModifiers::SHIFT) => {
                 let text = self.editor.text();
                 let pos = self.editor.cursor_pos();
@@ -624,7 +627,8 @@ impl TuiApp {
                             if let KeyCode::Char('/') = k.code {
                                 let input_text = self.editor.text();
                                 let cursor_pos = self.editor.cursor_pos();
-                                let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
+                                let suggestions =
+                                    self.slash_ac.completions(&input_text, cursor_pos);
                                 if !suggestions.is_empty() {
                                     self.overlays.push(Box::new(
                                         crate::autocomplete::AutocompleteOverlay::new(
@@ -649,7 +653,9 @@ impl TuiApp {
                     }
                     EditorAction::Submit(text) => {
                         if !text.trim().is_empty() {
-                            self.dispatch(crate::app::reducer::TuiAction::SendMessage(text.clone()));
+                            self.dispatch(crate::app::reducer::TuiAction::SendMessage(
+                                text.clone(),
+                            ));
                             self.editor.clear();
                             return Ok(Some(Some(text)));
                         } else {

@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 fn save_agent_name(
     edit_name: Signal<String>,
@@ -97,7 +97,7 @@ pub fn SettingsView() -> Element {
 
     let key_val = (state.api_key)();
     let masked = if key_val.len() > 8 {
-        format!("{}\u{2026}{}", &key_val[..4], &key_val[key_val.len()-4..])
+        format!("{}\u{2026}{}", &key_val[..4], &key_val[key_val.len() - 4..])
     } else {
         "(not set)".to_string()
     };

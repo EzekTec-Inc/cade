@@ -629,7 +629,8 @@ pub(crate) fn render_timeline_viewport(
             .style(colors.border_muted());
 
         let mut scrollbar_state = ScrollbarState::new(total_visual as usize)
-            .position(total_visual.saturating_sub(effective_up) as usize);
+            .position(visible_start as usize)
+            .viewport_content_length(visible as usize);
 
         let scrollbar_area = Rect {
             x: area.x + area.width.saturating_sub(1),

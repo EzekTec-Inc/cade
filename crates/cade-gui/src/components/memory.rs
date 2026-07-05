@@ -1,14 +1,16 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
 pub fn MemoryBlocksView() -> Element {
     let state = use_context::<AppState>();
     let blocks = use_signal(Vec::<serde_json::Value>::new);
     let fetching = use_signal(|| true);
-    let agent_id = (state.selected_agent)().map(|a| a.id.clone()).unwrap_or_default();
+    let agent_id = (state.selected_agent)()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
 
     let key = state.api_key;
     use_effect(move || {
@@ -19,7 +21,9 @@ pub fn MemoryBlocksView() -> Element {
         let mut busy = fetching;
         spawn(async move {
             let actual = if aid.is_empty() {
-                api::list_agents(&k()).await.ok()
+                api::list_agents(&k())
+                    .await
+                    .ok()
                     .and_then(|list| list.into_iter().next())
                     .map(|a| a.id)
                     .unwrap_or_default()

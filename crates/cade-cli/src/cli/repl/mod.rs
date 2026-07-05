@@ -442,12 +442,7 @@ impl Repl {
         // plus any loaded skill IDs (e.g. /commit, /review).
         use crate::ui::SlashCommandDef;
         let mut slash_cmds = all_slash_command_defs();
-        let skill_ids: Vec<String> = self
-            .skills
-            .lock()
-            .iter()
-            .map(|s| s.id.clone())
-            .collect();
+        let skill_ids: Vec<String> = self.skills.lock().iter().map(|s| s.id.clone()).collect();
         for sid in &skill_ids {
             if !slash_cmds.iter().any(|c| c.name == *sid) {
                 slash_cmds.push(SlashCommandDef {
@@ -952,16 +947,8 @@ impl Repl {
                         tokio::spawn(async move {
                             let call_id = uuid::Uuid::new_v4().to_string();
                             let result = Self::run_tool_inner(
-                                &call_id,
-                                &t_name,
-                                &args,
-                                &mcp,
-                                &hooks,
-                                &app_ref,
-                                &runtime,
-                                None,
-                                None,
-                                &stats,
+                                &call_id, &t_name, &args, &mcp, &hooks, &app_ref, &runtime, None,
+                                None, &stats,
                             )
                             .await;
 

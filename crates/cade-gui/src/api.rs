@@ -15,7 +15,9 @@ extern "C" {
 }
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response, TextDecoder};
+use web_sys::{
+    ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response, TextDecoder,
+};
 
 /// Low-level HTTP request to the CADE server.
 pub async fn api_request(
@@ -109,7 +111,6 @@ where
     let js_body = JsValue::from_str(&body_str);
     opts.set_body(&js_body);
 
-
     let request = Request::new_with_str_and_init(&path, &opts).map_err(|e| format!("{:?}", e))?;
     request
         .headers()
@@ -130,7 +131,10 @@ where
     }
 
     let stream = resp.body().ok_or_else(|| "No response body".to_string())?;
-    let reader: ReadableStreamDefaultReader = stream.get_reader().dyn_into().map_err(|e| format!("{:?}", e))?;
+    let reader: ReadableStreamDefaultReader = stream
+        .get_reader()
+        .dyn_into()
+        .map_err(|e| format!("{:?}", e))?;
     let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
 
     let mut buffer = String::new();
@@ -153,8 +157,8 @@ where
             break;
         }
 
-        let value = Reflect::get(&result, &JsValue::from_str("value"))
-            .map_err(|e| format!("{:?}", e))?;
+        let value =
+            Reflect::get(&result, &JsValue::from_str("value")).map_err(|e| format!("{:?}", e))?;
 
         if value.is_null() || value.is_undefined() {
             continue;
@@ -197,8 +201,7 @@ pub async fn list_conversations(
         .as_array()
         .ok_or_else(|| "missing conversations array".to_string())?
         .clone();
-    serde_json::from_value(serde_json::Value::Array(arr))
-        .map_err(|e| format!("JSON parse: {e}"))
+    serde_json::from_value(serde_json::Value::Array(arr)).map_err(|e| format!("JSON parse: {e}"))
 }
 
 /// Create a new conversation for an agent.
@@ -271,10 +274,7 @@ pub async fn list_presets(api_key: &str) -> Result<serde_json::Value, String> {
 
 /// Fetch a single agent by ID.
 #[allow(dead_code)]
-pub async fn get_agent(
-    agent_id: &str,
-    api_key: &str,
-) -> Result<cade_api_types::AgentInfo, String> {
+pub async fn get_agent(agent_id: &str, api_key: &str) -> Result<cade_api_types::AgentInfo, String> {
     let path = format!("/v1/agents/{agent_id}");
     let body = api_request("GET", &path, None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
@@ -330,20 +330,14 @@ pub async fn list_models(api_key: &str) -> Result<serde_json::Value, String> {
 // ── Metrics / Context Stats ───────────────────────────────────────────────
 
 /// Fetch agent metrics (token usage, costs, etc.).
-pub async fn get_metrics(
-    agent_id: &str,
-    api_key: &str,
-) -> Result<serde_json::Value, String> {
+pub async fn get_metrics(agent_id: &str, api_key: &str) -> Result<serde_json::Value, String> {
     let path = format!("/v1/agents/{agent_id}/metrics");
     let body = api_request("GET", &path, None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 
 /// Fetch agent context telemetry (budget, tokens, turns).
-pub async fn get_context_stats(
-    agent_id: &str,
-    api_key: &str,
-) -> Result<serde_json::Value, String> {
+pub async fn get_context_stats(agent_id: &str, api_key: &str) -> Result<serde_json::Value, String> {
     let path = format!("/v1/agents/{agent_id}/context_stats");
     let body = api_request("GET", &path, None, api_key).await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
@@ -360,10 +354,7 @@ pub async fn get_config(api_key: &str) -> Result<serde_json::Value, String> {
 // ── Events ────────────────────────────────────────────────────────────────
 
 /// List events for an agent.
-pub async fn list_events(
-    agent_id: &str,
-    api_key: &str,
-) -> Result<Vec<serde_json::Value>, String> {
+pub async fn list_events(agent_id: &str, api_key: &str) -> Result<Vec<serde_json::Value>, String> {
     let path = format!("/v1/agents/{agent_id}/events?limit=50");
     let body = api_request("GET", &path, None, api_key).await?;
     let map: serde_json::Value =
@@ -411,13 +402,20 @@ impl CadeApiClient {
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
 
-    pub async fn list_conversations(&self, agent_id: &str) -> Result<Vec<cade_api_types::ConversationInfo>, String> {
+    pub async fn list_conversations(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<cade_api_types::ConversationInfo>, String> {
         let path = format!("/v1/agents/{}/conversations", agent_id);
         let res = api_request("GET", &path, None, &self.api_key).await?;
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
 
-    pub async fn create_conversation(&self, agent_id: &str, title: Option<&str>) -> Result<cade_api_types::ConversationInfo, String> {
+    pub async fn create_conversation(
+        &self,
+        agent_id: &str,
+        title: Option<&str>,
+    ) -> Result<cade_api_types::ConversationInfo, String> {
         create_conversation(agent_id, title, &self.api_key).await
     }
 
@@ -425,7 +423,11 @@ impl CadeApiClient {
         delete_conversation(agent_id, conv_id, &self.api_key).await
     }
 
-    pub async fn get_messages(&self, agent_id: &str, conversation_id: Option<&str>) -> Result<Vec<cade_api_types::ChatMessage>, String> {
+    pub async fn get_messages(
+        &self,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<Vec<cade_api_types::ChatMessage>, String> {
         get_messages(agent_id, &self.api_key, conversation_id).await
     }
 
@@ -440,7 +442,15 @@ impl CadeApiClient {
     where
         F: FnMut(cade_api_types::StreamEvent),
     {
-        stream_messages(agent_id, input, &self.api_key, conversation_id, cancel_token, on_event).await
+        stream_messages(
+            agent_id,
+            input,
+            &self.api_key,
+            conversation_id,
+            cancel_token,
+            on_event,
+        )
+        .await
     }
 
     pub async fn list_providers(&self) -> Result<serde_json::Value, String> {
@@ -465,7 +475,10 @@ impl CadeApiClient {
         list_presets(&self.api_key).await
     }
 
-    pub async fn list_memory_blocks(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
+    pub async fn list_memory_blocks(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
         list_memory_blocks(agent_id, &self.api_key).await
     }
 
@@ -499,7 +512,11 @@ impl CadeApiClient {
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
 
-    pub async fn restore_checkpoint(&self, agent_id: &str, cp_id: &str) -> Result<serde_json::Value, String> {
+    pub async fn restore_checkpoint(
+        &self,
+        agent_id: &str,
+        cp_id: &str,
+    ) -> Result<serde_json::Value, String> {
         let path = format!("/v1/agents/{}/checkpoints/{}/restore", agent_id, cp_id);
         let res = api_request("POST", &path, None, &self.api_key).await?;
         serde_json::from_str(&res).map_err(|e| e.to_string())
@@ -510,7 +527,11 @@ impl CadeApiClient {
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
 
-    pub async fn action_approval(&self, id: &str, action: &str) -> Result<serde_json::Value, String> {
+    pub async fn action_approval(
+        &self,
+        id: &str,
+        action: &str,
+    ) -> Result<serde_json::Value, String> {
         let path = format!("/v1/approvals/{}/action", id);
         let body = serde_json::json!({ "action": action });
         let res = api_request("POST", &path, Some(&body.to_string()), &self.api_key).await?;

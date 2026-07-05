@@ -269,10 +269,7 @@ mod tests {
             e.data.get("conversation_id").and_then(|v| v.as_str()),
             Some("conv-1")
         );
-        assert_eq!(
-            e.data.get("run_id").and_then(|v| v.as_str()),
-            Some("run-1")
-        );
+        assert_eq!(e.data.get("run_id").and_then(|v| v.as_str()), Some("run-1"));
     }
 
     #[test]

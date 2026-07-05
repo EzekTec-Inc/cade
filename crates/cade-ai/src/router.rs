@@ -126,8 +126,17 @@ impl LlmRouter {
 
     /// Add an optional Rig-compatible provider
     #[cfg(feature = "rig-compat")]
-    pub fn add_rig_provider<M: rig::completion::CompletionModel + rig::completion::Prompt + Send + Sync + 'static>(&mut self, name: String, model: M) {
-        self.add_provider(name, Arc::new(crate::rig_adapter::RigProviderAdapter { model }));
+    pub fn add_rig_provider<
+        M: rig::completion::CompletionModel + rig::completion::Prompt + Send + Sync + 'static,
+    >(
+        &mut self,
+        name: String,
+        model: M,
+    ) {
+        self.add_provider(
+            name,
+            Arc::new(crate::rig_adapter::RigProviderAdapter { model }),
+        );
     }
 
     /// Add a provider with its API key. Prefer this over add_provider whenever the key
@@ -568,7 +577,7 @@ impl LlmRouter {
         let slash_idx = openrouter_bare.find('/')?;
         let provider = &openrouter_bare[..slash_idx];
         let model = &openrouter_bare[slash_idx + 1..];
-        
+
         if !self.providers.contains_key(provider) {
             return None;
         }
@@ -586,9 +595,12 @@ impl LlmRouter {
         }
 
         let final_model_id = matched_id.unwrap_or_else(|| format!("{}/{}", provider, clean_model));
-        
+
         let (native_provider, native_bare) = if let Some(idx) = final_model_id.find('/') {
-            (final_model_id[..idx].to_string(), final_model_id[idx + 1..].to_string())
+            (
+                final_model_id[..idx].to_string(),
+                final_model_id[idx + 1..].to_string(),
+            )
         } else {
             (provider.to_string(), clean_model.to_string())
         };
@@ -605,16 +617,19 @@ impl LlmProvider for LlmRouter {
             model: bare_model.clone(),
             ..req.clone()
         };
-        
+
         match provider.complete(&routed).await {
             Ok(res) => Ok(res),
             Err(e) => {
                 if req.model.starts_with("openrouter/") {
-                    if let Some((native_provider_name, native_bare)) = self.map_openrouter_to_native(&bare_model) {
+                    if let Some((native_provider_name, native_bare)) =
+                        self.map_openrouter_to_native(&bare_model)
+                    {
                         if let Some(native_provider) = self.providers.get(&native_provider_name) {
                             tracing::warn!(
                                 "OpenRouter call failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
-                                native_provider_name, native_bare
+                                native_provider_name,
+                                native_bare
                             );
                             let failover_req = CompletionRequest {
                                 model: native_bare,
@@ -638,17 +653,21 @@ impl LlmProvider for LlmRouter {
             model: bare_model.clone(),
             ..req.clone()
         };
-        
+
         match routed.model.as_str() {
             _ => match provider.stream(&routed).await {
                 Ok(stream) => Ok(stream),
                 Err(e) => {
                     if req.model.starts_with("openrouter/") {
-                        if let Some((native_provider_name, native_bare)) = self.map_openrouter_to_native(&bare_model) {
-                            if let Some(native_provider) = self.providers.get(&native_provider_name) {
+                        if let Some((native_provider_name, native_bare)) =
+                            self.map_openrouter_to_native(&bare_model)
+                        {
+                            if let Some(native_provider) = self.providers.get(&native_provider_name)
+                            {
                                 tracing::warn!(
                                     "OpenRouter streaming connection failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
-                                    native_provider_name, native_bare
+                                    native_provider_name,
+                                    native_bare
                                 );
                                 let failover_req = CompletionRequest {
                                     model: native_bare,
@@ -660,7 +679,7 @@ impl LlmProvider for LlmRouter {
                     }
                     Err(e)
                 }
-            }
+            },
         }
     }
 }

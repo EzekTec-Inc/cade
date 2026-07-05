@@ -1,6 +1,5 @@
 // region:    --- Modules
 
-pub mod file_lock;
 pub mod ask;
 pub mod bash;
 pub mod bash_agent;
@@ -8,6 +7,7 @@ pub mod bash_permission;
 pub mod catalog;
 #[cfg(feature = "desktop")]
 pub mod desktop;
+pub mod file_lock;
 pub mod fs;
 pub mod fs_agent;
 pub mod git_checkpoint;

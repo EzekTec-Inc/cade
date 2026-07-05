@@ -15,9 +15,27 @@ const CONFLICT_CHECKED_TYPES: &[&str] = &["decision", "constraint", "convention"
 
 /// Negation markers used for contradiction detection.
 const NEGATION_MARKERS: &[&str] = &[
-    "not", "never", "don't", "dont", "doesn't", "doesnt", "won't", "wont",
-    "avoid", "forbid", "forbidden", "prohibit", "prohibited", "disallow",
-    "stop", "no ", "cannot", "can't", "cant", "mustn't", "mustnt",
+    "not",
+    "never",
+    "don't",
+    "dont",
+    "doesn't",
+    "doesnt",
+    "won't",
+    "wont",
+    "avoid",
+    "forbid",
+    "forbidden",
+    "prohibit",
+    "prohibited",
+    "disallow",
+    "stop",
+    "no ",
+    "cannot",
+    "can't",
+    "cant",
+    "mustn't",
+    "mustnt",
 ];
 
 /// A detected conflict between two memory blocks.
@@ -60,7 +78,7 @@ pub fn upsert_memory_block_typed(
             reason TEXT NOT NULL,
             resolved INTEGER NOT NULL DEFAULT 0,
             detected_at INTEGER NOT NULL
-        );"
+        );",
     );
 
     // Persist any detected conflicts
@@ -137,7 +155,7 @@ pub fn detect_memory_conflicts(
         let mut stmt = conn.prepare(
             "SELECT b.id, b.label, b.value FROM shared_memory_blocks b
              JOIN agent_memory_blocks amb ON amb.block_id = b.id
-             WHERE amb.agent_id = ?1 AND b.label != ?2 AND b.memory_type = ?3"
+             WHERE amb.agent_id = ?1 AND b.label != ?2 AND b.memory_type = ?3",
         )?;
         let rows = stmt.query_map(params![agent_id, label, memory_type], |row| {
             Ok((
@@ -168,8 +186,7 @@ pub fn detect_memory_conflicts(
 
         for (_existing_id, existing_label, existing_value) in &existing_blocks {
             let existing_lower = existing_value.to_lowercase();
-            let existing_has_negation =
-                NEGATION_MARKERS.iter().any(|m| existing_lower.contains(m));
+            let existing_has_negation = NEGATION_MARKERS.iter().any(|m| existing_lower.contains(m));
 
             // One says X, the other says not-X
             if has_negation != existing_has_negation {

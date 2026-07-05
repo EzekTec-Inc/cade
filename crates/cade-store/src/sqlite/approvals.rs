@@ -38,12 +38,8 @@ pub fn create_pending_approval(
 
 pub fn get_approval_status(db: &Db, id: &str) -> Result<Option<String>> {
     let conn = db.get()?;
-    let mut stmt = conn.prepare(
-        "SELECT status FROM pending_approvals WHERE id = ?1",
-    )?;
-    let mut rows = stmt.query_map(params![id], |row| {
-        row.get::<_, String>(0)
-    })?;
+    let mut stmt = conn.prepare("SELECT status FROM pending_approvals WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
 
     if let Some(r) = rows.next() {
         Ok(Some(r?))

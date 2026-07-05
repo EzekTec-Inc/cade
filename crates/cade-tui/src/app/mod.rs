@@ -31,8 +31,9 @@ use std::time::Instant;
 use crate::Result;
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::{
     DefaultTerminal, Frame,
@@ -857,8 +858,6 @@ pub struct TuiApp {
     /// Up/Down cursor navigation uses the real column width.
     term_width: u16,
 
-
-
     // -- Status / thinking
     pub thinking: Option<ThinkingState>,
     pub last_status: Option<String>,
@@ -900,10 +899,11 @@ pub struct TuiApp {
 
     // -- Prepared Entries cache
     pub(crate) prepared_cache: Option<PreparedCache>,
-    pub(crate) item_cache: std::collections::HashMap<(crate::app::timeline::TimelineKey, bool), crate::app::timeline::PreparedTimelineEntry>,
+    pub(crate) item_cache: std::collections::HashMap<
+        (crate::app::timeline::TimelineKey, bool),
+        crate::app::timeline::PreparedTimelineEntry,
+    >,
     pub(crate) last_timeline_w: usize,
-
-
 
     /// Monotonically increasing version counter for conversation content.
     /// Incremented on every `push()`, `commit_streaming()`, `append_live_output_line()`, `clear()`.
@@ -1062,7 +1062,8 @@ impl TuiApp {
         let _ = crossterm::execute!(
             std::io::stdout(),
             EnableBracketedPaste,
-            EnableFocusChange
+            EnableFocusChange,
+            EnableMouseCapture
         );
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
@@ -1169,6 +1170,25 @@ impl TuiApp {
         // U7: do NOT call self.draw() here — let the tick loop or the
         // caller coalesce redraws.  Previously every Up/Down in the
         // theme picker triggered two full draws per keystroke.
+    }
+
+    /// Toggle mouse capture dynamically (V-03 / /mouse command).
+    pub fn toggle_mouse_capture(&mut self) -> bool {
+        self.mouse_capture_disabled = !self.mouse_capture_disabled;
+        if self.mouse_capture_disabled {
+            let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+            self.show_toast(
+                "Mouse capture disabled (native selection active)",
+                ToastLevel::Info,
+            );
+        } else {
+            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+            self.show_toast(
+                "Mouse capture enabled (TUI selection active)",
+                ToastLevel::Info,
+            );
+        }
+        self.mouse_capture_disabled
     }
 
     // -- Live output (streaming bash)
@@ -1667,7 +1687,12 @@ impl TuiApp {
         // Restore the overlay stack and slot manager.
         self.overlays = overlay_stack;
         self.slots = slot_mgr;
-        apply_selection_highlight(self.selection_active, self.selection_start, self.selection_current, &mut self.terminal);
+        apply_selection_highlight(
+            self.selection_active,
+            self.selection_start,
+            self.selection_current,
+            &mut self.terminal,
+        );
 
         // Stash the messages area rect for click-to-copy.
         self.messages_area = messages_area;
@@ -1768,7 +1793,10 @@ impl TuiApp {
 #[derive(Clone)]
 pub(crate) struct PreparedCache {
     pub(crate) entries: Vec<crate::app::timeline::PreparedTimelineEntry>,
-    pub(crate) item_cache: std::collections::HashMap<(crate::app::timeline::TimelineKey, bool), crate::app::timeline::PreparedTimelineEntry>,
+    pub(crate) item_cache: std::collections::HashMap<
+        (crate::app::timeline::TimelineKey, bool),
+        crate::app::timeline::PreparedTimelineEntry,
+    >,
     pub version: u64,
     pub timeline_w: usize,
     pub expand_all: bool,
@@ -1778,7 +1806,9 @@ pub(crate) struct PreparedCache {
 impl TuiApp {
     /// Build the prepared-timeline-entry list the same way `render_frame` does.
     /// Uses a content-version cache to avoid re-parsing markdown / ANSI on every frame and on every mouse click.
-    pub(crate) fn build_prepared_entries(&mut self) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
+    pub(crate) fn build_prepared_entries(
+        &mut self,
+    ) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
@@ -1851,8 +1881,7 @@ impl TuiApp {
 
         // Streaming entry (always rebuilt — changes every tick, not cached).
         if self.streaming_active {
-            let full =
-                crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
+            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
             let reveal = self.streaming_reveal_len.min(full.len());
             let visible_streaming = &full[..reveal];
             let next_index = self.lines.len();
@@ -1888,8 +1917,12 @@ impl TuiApp {
             return false;
         }
 
-        let Some((x1, y1)) = self.selection_start else { return false; };
-        let Some((x2, y2)) = self.selection_current else { return false; };
+        let Some((x1, y1)) = self.selection_start else {
+            return false;
+        };
+        let Some((x2, y2)) = self.selection_current else {
+            return false;
+        };
 
         // If it's a single click (no drag), don't trigger selection copy
         if x1 == x2 && y1 == y2 {
@@ -1916,7 +1949,11 @@ impl TuiApp {
         }
 
         // Check if selection starts within messages area
-        if x1 < inner.x || x1 >= inner.x + inner.width || y1 < inner.y || y1 >= inner.y + inner.height {
+        if x1 < inner.x
+            || x1 >= inner.x + inner.width
+            || y1 < inner.y
+            || y1 >= inner.y + inner.height
+        {
             self.selection_active = false;
             self.selection_start = None;
             self.selection_current = None;
@@ -1960,8 +1997,9 @@ impl TuiApp {
                 for (i, line) in entry.lines.iter().enumerate() {
                     let line_row = entry_start + i as u16;
                     if line_row >= start_visual_row && line_row <= end_visual_row {
-                        let mut line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                        
+                        let mut line_text: String =
+                            line.spans.iter().map(|s| s.content.as_ref()).collect();
+
                         if line_row == start_visual_row {
                             let slice_start = start_col.saturating_sub(inner.x) as usize;
                             if slice_start < line_text.len() {
@@ -1996,7 +2034,10 @@ impl TuiApp {
         if !selected_text.is_empty() {
             crate::app::clipboard::write_to_clipboard(&selected_text);
             crate::app::clipboard::write_to_file_fallback(&selected_text);
-            self.show_toast("Copied selection to clipboard", crate::app::ToastLevel::Success);
+            self.show_toast(
+                "Copied selection to clipboard",
+                crate::app::ToastLevel::Success,
+            );
             self.draw_dirty = true;
             true
         } else {
@@ -2013,42 +2054,47 @@ fn apply_selection_highlight(
     terminal: &mut DefaultTerminal,
 ) {
     if selection_active
-        && let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current) {
-            let size = terminal.size().unwrap_or_default();
-            let width = size.width;
-            let height = size.height;
-            if width == 0 || height == 0 {
-                return;
+        && let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current)
+    {
+        let size = terminal.size().unwrap_or_default();
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        // Sort start and end coordinates
+        let (start_x, start_y, end_x, end_y) = if y1 < y2 || (y1 == y2 && x1 <= x2) {
+            (x1, y1, x2, y2)
+        } else {
+            (x2, y2, x1, y1)
+        };
+
+        let buffer = terminal.current_buffer_mut();
+        for y in start_y..=end_y {
+            if y >= height {
+                continue;
             }
-
-            // Sort start and end coordinates
-            let (start_x, start_y, end_x, end_y) = if y1 < y2 || (y1 == y2 && x1 <= x2) {
-                (x1, y1, x2, y2)
+            let min_x = if y == start_y { start_x } else { 0 };
+            let max_x = if y == end_y {
+                end_x
             } else {
-                (x2, y2, x1, y1)
+                width.saturating_sub(1)
             };
-
-            let buffer = terminal.current_buffer_mut();
-            for y in start_y..=end_y {
-                if y >= height {
+            for x in min_x..=max_x {
+                if x >= width {
                     continue;
                 }
-                let min_x = if y == start_y { start_x } else { 0 };
-                let max_x = if y == end_y { end_x } else { width.saturating_sub(1) };
-                for x in min_x..=max_x {
-                    if x >= width {
-                        continue;
-                    }
-                    let cell = &mut buffer[(x, y)];
-                    let fg = cell.fg;
-                    let bg = cell.bg;
-                    cell.set_fg(bg);
-                    cell.set_bg(fg);
-                    let current_style = cell.style();
-                    cell.set_style(current_style.add_modifier(ratatui::style::Modifier::REVERSED));
-                }
+                let cell = &mut buffer[(x, y)];
+                let fg = cell.fg;
+                let bg = cell.bg;
+                cell.set_fg(bg);
+                cell.set_bg(fg);
+                let current_style = cell.style();
+                cell.set_style(current_style.add_modifier(ratatui::style::Modifier::REVERSED));
             }
         }
+    }
 }
 
 /// Called from repl.rs after each usage_statistics SSE event.

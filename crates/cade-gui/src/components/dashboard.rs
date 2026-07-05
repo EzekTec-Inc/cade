@@ -347,9 +347,15 @@ fn code_for_tab(tab: i32, lang: CodeLanguage) -> Vec<(&'static str, &'static str
     match (tab, lang) {
         (0, CodeLanguage::Javascript) => vec![
             ("import", "{ Cade } from \"@cade-ai/cade-sdk\";"),
-            ("const", "client = new Cade({ apiKey: \"sk-cade...OA==\" });"),
+            (
+                "const",
+                "client = new Cade({ apiKey: \"sk-cade...OA==\" });",
+            ),
             ("", ""),
-            ("const", "response = await client.agents.messages.create(\"AGENT_ID\", {"),
+            (
+                "const",
+                "response = await client.agents.messages.create(\"AGENT_ID\", {",
+            ),
             ("    input:", "\"What do you remember about me?\","),
             ("});", ""),
             ("", ""),
@@ -368,14 +374,23 @@ fn code_for_tab(tab: i32, lang: CodeLanguage) -> Vec<(&'static str, &'static str
             ("print", "(response.messages)"),
         ],
         (0, CodeLanguage::Curl) => vec![
-            ("curl", "-X POST \"https://api.cade.ai/v1/agents/AGENT_ID/messages\" \\"),
+            (
+                "curl",
+                "-X POST \"https://api.cade.ai/v1/agents/AGENT_ID/messages\" \\",
+            ),
             ("  -H", "\"Authorization: Bearer sk-cade...OA==\" \\"),
             ("  -H", "\"Content-Type: application/json\" \\"),
-            ("  -d", "'{\"message\": \"What do you remember about me?\"}'"),
+            (
+                "  -d",
+                "'{\"message\": \"What do you remember about me?\"}'",
+            ),
         ],
         (1, CodeLanguage::Javascript) => vec![
             ("import", "{ Cade } from \"@cade-ai/cade-sdk\";"),
-            ("const", "client = new Cade({ apiKey: \"sk-cade...OA==\" });"),
+            (
+                "const",
+                "client = new Cade({ apiKey: \"sk-cade...OA==\" });",
+            ),
             ("", ""),
             ("const", "agent = await client.agents.create({"),
             ("    name:", "\"Research-Assistant\","),
@@ -404,15 +419,24 @@ fn code_for_tab(tab: i32, lang: CodeLanguage) -> Vec<(&'static str, &'static str
             ("  -H", "\"Content-Type: application/json\" \\"),
             ("  -d", "'{"),
             ("    \"name\":", "\"Research-Assistant\","),
-            ("    \"system_prompt\":", "\"You are a helpful researcher.\","),
+            (
+                "    \"system_prompt\":",
+                "\"You are a helpful researcher.\",",
+            ),
             ("    \"model\":", "\"gpt-4o\""),
             ("  }'", ""),
         ],
         (2, CodeLanguage::Javascript) => vec![
             ("import", "{ Cade } from \"@cade-ai/cade-sdk\";"),
-            ("const", "client = new Cade({ apiKey: \"sk-cade...OA==\" });"),
+            (
+                "const",
+                "client = new Cade({ apiKey: \"sk-cade...OA==\" });",
+            ),
             ("", ""),
-            ("const", "memory = await client.agents.memory.retrieve(\"AGENT_ID\");"),
+            (
+                "const",
+                "memory = await client.agents.memory.retrieve(\"AGENT_ID\");",
+            ),
             ("", ""),
             ("console.log", "(\"Core Memory Blocks:\", memory.blocks);"),
         ],
@@ -421,12 +445,18 @@ fn code_for_tab(tab: i32, lang: CodeLanguage) -> Vec<(&'static str, &'static str
             ("", ""),
             ("client", "= Cade(api_key=\"sk-cade...OA==\")"),
             ("", ""),
-            ("memory", "= client.agents.memory.retrieve(agent_id=\"AGENT_ID\")"),
+            (
+                "memory",
+                "= client.agents.memory.retrieve(agent_id=\"AGENT_ID\")",
+            ),
             ("", ""),
             ("print", "(f\"Core Memory Blocks: {memory.blocks}\")"),
         ],
         _ => vec![
-            ("curl", "-X GET \"https://api.cade.ai/v1/agents/AGENT_ID/memory\" \\"),
+            (
+                "curl",
+                "-X GET \"https://api.cade.ai/v1/agents/AGENT_ID/memory\" \\",
+            ),
             ("  -H", "\"Authorization: Bearer sk-cade...OA==\""),
         ],
     }

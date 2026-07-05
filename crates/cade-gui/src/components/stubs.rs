@@ -23,4 +23,8 @@ macro_rules! stub_page {
     };
 }
 
-stub_page!(PlaceholderView, "Placeholder", "This page is not yet implemented.");
+stub_page!(
+    PlaceholderView,
+    "Placeholder",
+    "This page is not yet implemented."
+);

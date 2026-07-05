@@ -157,7 +157,9 @@ impl Repl {
                         prompt.push_str(prompt_str);
                     }
                     if let Some(prompt_str) = &user_prompt {
-                        self.tui_sys(format!("  Running skill: /{skill_id} with prompt: {prompt_str}"));
+                        self.tui_sys(format!(
+                            "  Running skill: /{skill_id} with prompt: {prompt_str}"
+                        ));
                     } else {
                         self.tui_sys(format!("  Running skill: /{skill_id}"));
                     }
@@ -431,6 +433,10 @@ impl Repl {
                         self.tui_err(format!("  ✗ Failed to trust directory: {}", e));
                     }
                 }
+                return Ok(false);
+            }
+            SlashCmd::Mouse => {
+                self.app.lock().toggle_mouse_capture();
                 return Ok(false);
             }
             SlashCmd::Update => {
@@ -755,9 +761,15 @@ impl Repl {
             return Ok(false);
         }
         let body = serde_json::json!({ "action": "approve" });
-        match self.client.raw_post(&format!("/approvals/{trimmed_id}/action"), &body).await {
+        match self
+            .client
+            .raw_post(&format!("/approvals/{trimmed_id}/action"), &body)
+            .await
+        {
             Ok(_) => {
-                self.tui_ok(format!("  ✓ Request '{trimmed_id}' APPROVED successfully. Subagent resumed."));
+                self.tui_ok(format!(
+                    "  ✓ Request '{trimmed_id}' APPROVED successfully. Subagent resumed."
+                ));
             }
             Err(e) => self.tui_err(format!("Failed to approve request: {e}")),
         }
@@ -771,9 +783,15 @@ impl Repl {
             return Ok(false);
         }
         let body = serde_json::json!({ "action": "deny" });
-        match self.client.raw_post(&format!("/approvals/{trimmed_id}/action"), &body).await {
+        match self
+            .client
+            .raw_post(&format!("/approvals/{trimmed_id}/action"), &body)
+            .await
+        {
             Ok(_) => {
-                self.tui_ok(format!("  ✗ Request '{trimmed_id}' DENIED successfully. Subagent notified."));
+                self.tui_ok(format!(
+                    "  ✗ Request '{trimmed_id}' DENIED successfully. Subagent notified."
+                ));
             }
             Err(e) => self.tui_err(e.to_string()),
         }

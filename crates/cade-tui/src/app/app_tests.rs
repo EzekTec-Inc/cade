@@ -115,7 +115,15 @@ fn test_prepare_timeline_entries_row_sum() {
     let colors = ThemeColors::default();
     let expanded = std::collections::HashSet::new();
     let mut temp_cache = std::collections::HashMap::new();
-    let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors, true, &mut temp_cache);
+    let prepared = prepare_timeline_entries(
+        &entries,
+        80,
+        false,
+        &expanded,
+        &colors,
+        true,
+        &mut temp_cache,
+    );
     assert_eq!(prepared.len(), 3);
     let total: u16 = prepared.iter().map(|p| p.rows).sum();
     assert!(total >= 3, "at least 1 row per item; got {total}");
@@ -348,7 +356,10 @@ fn test_scrolling_constraints_and_velocity_governor() {
     assert_eq!(app.scroll_target, 3); // unchanged
 
     // Key scrolling should also be blocked during drag
-    let consumed_key_during_drag = app.handle_scroll_key(crossterm::event::KeyCode::PageUp, crossterm::event::KeyModifiers::empty());
+    let consumed_key_during_drag = app.handle_scroll_key(
+        crossterm::event::KeyCode::PageUp,
+        crossterm::event::KeyModifiers::empty(),
+    );
     assert!(!consumed_key_during_drag);
     assert_eq!(app.scroll_target, 3); // unchanged
 
@@ -357,12 +368,18 @@ fn test_scrolling_constraints_and_velocity_governor() {
 
     // 3. Verify restrict to Scroll-Keys only
     // Non-scroll keys should not be consumed and should not modify scroll_target
-    let consumed_non_scroll = app.handle_scroll_key(crossterm::event::KeyCode::Char('a'), crossterm::event::KeyModifiers::empty());
+    let consumed_non_scroll = app.handle_scroll_key(
+        crossterm::event::KeyCode::Char('a'),
+        crossterm::event::KeyModifiers::empty(),
+    );
     assert!(!consumed_non_scroll);
     assert_eq!(app.scroll_target, 3); // unchanged
 
     // Valid scroll keys (e.g. PageUp) should be consumed and modify scroll_target
-    let consumed_scroll_key = app.handle_scroll_key(crossterm::event::KeyCode::PageUp, crossterm::event::KeyModifiers::empty());
+    let consumed_scroll_key = app.handle_scroll_key(
+        crossterm::event::KeyCode::PageUp,
+        crossterm::event::KeyModifiers::empty(),
+    );
     assert!(consumed_scroll_key);
     assert!(app.scroll_target > 3);
 }

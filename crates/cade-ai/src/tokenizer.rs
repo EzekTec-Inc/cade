@@ -122,7 +122,9 @@ pub fn resolve_token_counter(model_id: &str) -> Box<dyn TokenCounter> {
         return Box::new(TiktokenAdapter { encoder: enc });
     }
 
-    Box::new(FallbackCharAdapter { chars_per_token: FALLBACK_CHARS_PER_TOKEN })
+    Box::new(FallbackCharAdapter {
+        chars_per_token: FALLBACK_CHARS_PER_TOKEN,
+    })
 }
 
 /// Count tokens in `text` using the best available encoder for `model_id`.

@@ -1,7 +1,7 @@
 //! Centralized state action reducer for CADE TUI.
 #![cfg_attr(test, allow(unused_imports))]
 
-use crate::app::{TuiApp, ToastLevel};
+use crate::app::{ToastLevel, TuiApp};
 
 // region:    --- Types
 

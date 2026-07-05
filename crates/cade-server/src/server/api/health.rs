@@ -22,7 +22,11 @@ pub async fn get_config(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-pub async fn defragment_database_handler(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, String)> {
+pub async fn defragment_database_handler(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
     crate::server::defragment::defragment_database(&state).await;
-    Ok(Json(json!({ "status": "ok", "message": "Database defragmentation and GC completed." })))
+    Ok(Json(
+        json!({ "status": "ok", "message": "Database defragmentation and GC completed." }),
+    ))
 }

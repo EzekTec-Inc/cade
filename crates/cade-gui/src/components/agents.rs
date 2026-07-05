@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, SelectedPage, ToastLevel};
+use crate::types::{AppState, SelectedPage, ToastLevel, add_toast};
 
 #[component]
 pub fn AgentsView() -> Element {

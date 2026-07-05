@@ -814,7 +814,7 @@ pub fn recall_chunks_hybrid(
          JOIN shared_memory_blocks b ON b.id = c.block_id
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.tier != 'long' AND c.embedding IS NOT NULL
-         LIMIT ?2"
+         LIMIT ?2",
     ) {
         if let Ok(rows) = stmt.query_map(params![agent_id, limit as i64 * 5], |row| {
             let label: String = row.get(0)?;
@@ -829,7 +829,11 @@ pub fn recall_chunks_hybrid(
                     if let Some(sim) = super::embedding::cosine_similarity(&q_vec, &vec) {
                         if sim > 0.3 {
                             sem_chunks.push((
-                                RecalledChunk { label, chunk_content: content, chunk_index },
+                                RecalledChunk {
+                                    label,
+                                    chunk_content: content,
+                                    chunk_index,
+                                },
                                 sim as f64,
                             ));
                         }
@@ -848,7 +852,8 @@ pub fn recall_chunks_hybrid(
     let fused = super::embedding::reciprocal_rank_fusion(&kw_ids, &sem_ids, 60.0);
 
     // Build lookup maps
-    let mut by_label: std::collections::HashMap<String, RecalledChunk> = std::collections::HashMap::new();
+    let mut by_label: std::collections::HashMap<String, RecalledChunk> =
+        std::collections::HashMap::new();
     for c in kw {
         by_label.entry(c.label.clone()).or_insert(c);
     }
@@ -858,7 +863,8 @@ pub fn recall_chunks_hybrid(
 
     // Return top-k in fused order
     let mut seen = std::collections::HashSet::new();
-    fused.into_iter()
+    fused
+        .into_iter()
         .filter_map(|l| by_label.remove(&l))
         .filter(|c| seen.insert(c.label.clone()))
         .take(limit)

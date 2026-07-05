@@ -1,12 +1,12 @@
 use dioxus::prelude::*;
 
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
 pub fn ToolsView() -> Element {
     let state = use_context::<AppState>();
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
-    
+
     let servers = use_signal(Vec::<serde_json::Value>::new);
     let approvals = use_signal(Vec::<serde_json::Value>::new);
     let fetching = use_signal(|| true);
@@ -17,22 +17,27 @@ pub fn ToolsView() -> Element {
         let mut apprs = approvals;
         let mut busy = fetching;
         let api_client = client();
-        
+
         spawn(async move {
             match api_client.list_mcp_servers().await {
                 Ok(data) => srv.set(data),
                 Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch MCP servers", e),
             }
-            
+
             match api_client.list_approvals().await {
                 Ok(data) => {
                     if let Some(arr) = data.get("approvals").and_then(|v| v.as_array()) {
                         apprs.set(arr.clone());
                     }
                 }
-                Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch pending approvals", e),
+                Err(e) => add_toast(
+                    &st,
+                    ToastLevel::Error,
+                    "Failed to fetch pending approvals",
+                    e,
+                ),
             }
-            
+
             busy.set(false);
         });
     });
@@ -48,7 +53,11 @@ pub fn ToolsView() -> Element {
         spawn(async move {
             match api_client.action_approval(&id, &action).await {
                 Ok(_) => {
-                    let msg = if action == "approve" { "Approved successfully" } else { "Permission denied" };
+                    let msg = if action == "approve" {
+                        "Approved successfully"
+                    } else {
+                        "Permission denied"
+                    };
                     add_toast(&st, ToastLevel::Success, msg, format!("Request ID: {}", id));
                     // Refresh the pending list
                     if let Ok(data) = api_client.list_approvals().await {
@@ -67,7 +76,7 @@ pub fn ToolsView() -> Element {
             header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
                 h1 { class: "text-lg font-semibold text-white", "Tools & Approvals" }
             }
-            
+
             div { class: "p-10 space-y-10",
                 // ── Section 1: Headless Approvals Queue ─────────────────────────
                 div { class: "space-y-4",
@@ -82,7 +91,7 @@ pub fn ToolsView() -> Element {
                     p { class: "text-xs text-gray-500 max-w-2xl leading-relaxed",
                         "When background subagents request permissions to modify files or execute shell commands, their operations are held here until authorized."
                     }
-                    
+
                     if pending_approvals.is_empty() {
                         div { class: "bg-[#16171d]/30 border border-[#272833]/50 rounded-xl p-6 text-center select-none",
                             p { class: "text-gray-500 text-xs", "No pending approvals. All background systems running smoothly." }

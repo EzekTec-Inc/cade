@@ -325,10 +325,17 @@ impl ToolRuntime {
             return ("Error: 'query' is required".to_string(), true);
         }
 
-        match self.storage.recall(&self.agent_id, &query, Some(limit)).await {
+        match self
+            .storage
+            .recall(&self.agent_id, &query, Some(limit))
+            .await
+        {
             Ok(results) => {
                 if results.is_empty() {
-                    return ("No results found across any memory source.".to_string(), false);
+                    return (
+                        "No results found across any memory source.".to_string(),
+                        false,
+                    );
                 }
                 let mut out = format!(
                     "Found {} result(s) across all memory sources:\n\n",
@@ -339,13 +346,7 @@ impl ToolRuntime {
                     let label = item["label"].as_str().unwrap_or("");
                     let snippet = item["snippet"].as_str().unwrap_or("");
                     let preview: String = snippet.chars().take(300).collect();
-                    out.push_str(&format!(
-                        "{}. [{}] {}: {}\n",
-                        i + 1,
-                        source,
-                        label,
-                        preview
-                    ));
+                    out.push_str(&format!("{}. [{}] {}: {}\n", i + 1, source, label, preview));
                 }
                 (out, false)
             }
@@ -364,7 +365,11 @@ impl ToolRuntime {
 
         // Fetch broader results, then filter and rank
         let limit = max_sources * 2;
-        let results = match self.storage.recall(&self.agent_id, &question, Some(limit)).await {
+        let results = match self
+            .storage
+            .recall(&self.agent_id, &question, Some(limit))
+            .await
+        {
             Ok(r) => r,
             Err(e) => return (format!("Recall failed: {e}"), true),
         };
@@ -386,7 +391,8 @@ impl ToolRuntime {
             );
         }
 
-        let mut answer = format!("Based on my memory, here's what I know about \"{question}\":\n\n");
+        let mut answer =
+            format!("Based on my memory, here's what I know about \"{question}\":\n\n");
         for (i, src) in filtered.iter().enumerate() {
             let source = src["source"].as_str().unwrap_or("memory");
             let label = src["label"].as_str().unwrap_or("");

@@ -146,13 +146,14 @@ impl WasmRuntime {
             })?;
 
         // Get the memory exported by the WASM module
-        let memory = instance
-            .get_memory(&mut store, "memory")
-            .map_err(|_| crate::Error::custom(format!("WASM plugin '{plugin_name}' must export 'memory'")))?;
+        let memory = instance.get_memory(&mut store, "memory").map_err(|_| {
+            crate::Error::custom(format!("WASM plugin '{plugin_name}' must export 'memory'"))
+        })?;
 
         let arg_len = args_json.len() as i32;
         // If malloc is exported, allocate dynamic buffer. Otherwise fallback to static offset 0.
-        let arg_ptr = if let Ok(malloc) = instance.get_typed_func::<i32, i32>(&mut store, "malloc") {
+        let arg_ptr = if let Ok(malloc) = instance.get_typed_func::<i32, i32>(&mut store, "malloc")
+        {
             malloc.call(&mut store, arg_len).await.unwrap_or(0)
         } else {
             0
@@ -162,13 +163,16 @@ impl WasmRuntime {
         if arg_ptr >= 0 {
             memory
                 .write(&mut store, arg_ptr as usize, args_json.as_bytes())
-                .map_err(|e| crate::Error::custom(format!("Failed to write to WASM memory: {e}")))?;
+                .map_err(|e| {
+                    crate::Error::custom(format!("Failed to write to WASM memory: {e}"))
+                })?;
         }
 
         // Call the tool function, passing pointer and length
-        let result_packed = func.call(&mut store, (arg_ptr, arg_len)).await.map_err(|e| {
-            crate::Error::custom(format!("WASM function execution failed: {e}"))
-        })?;
+        let result_packed = func
+            .call(&mut store, (arg_ptr, arg_len))
+            .await
+            .map_err(|e| crate::Error::custom(format!("WASM function execution failed: {e}")))?;
 
         // Unpack (ptr, len) from the 64-bit result value
         let res_ptr = (result_packed >> 32) as usize;
@@ -200,7 +204,9 @@ impl WasmRuntime {
         for plugin in self.plugins.values() {
             tracing::info!(
                 "[WASM] Plugin '{}' notified of event '{}' with payload '{}'",
-                plugin.name, event, payload
+                plugin.name,
+                event,
+                payload
             );
         }
     }

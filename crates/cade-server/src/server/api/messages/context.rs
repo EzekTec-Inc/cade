@@ -468,14 +468,15 @@ pub(crate) async fn build_context(
             // Phase B: load per-agent disabled-skill blacklist from DB.
             let db_pool = state.db.clone();
             let agent_id_clone = agent_id.to_string();
-            let disabled: std::collections::HashSet<String> = tokio::task::spawn_blocking(move || {
-                cade_store::sqlite::skills::get_disabled_skills(&db_pool, &agent_id_clone)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect()
-            })
-            .await
-            .unwrap_or_default();
+            let disabled: std::collections::HashSet<String> =
+                tokio::task::spawn_blocking(move || {
+                    cade_store::sqlite::skills::get_disabled_skills(&db_pool, &agent_id_clone)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect()
+                })
+                .await
+                .unwrap_or_default();
 
             let skills_section = render_skills_section_filtered(
                 &loaded,
@@ -1238,7 +1239,8 @@ fn assemble_system_prompt_memory(
     let budgets = MemoryBudgets::for_model(&agent.model);
     let unified_budget = budgets.pinned + budgets.short + budgets.long;
     let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
-    let long_excerpts = sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
+    let long_excerpts =
+        sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
 
     let composer = PromptComposer::new(unified_budget);
     let (packed_parts, long_parts, overflow_manifest, dynamic_parts) = composer.compose(
@@ -1300,7 +1302,10 @@ fn assemble_system_prompt_memory(
                 sqlite::get_latest_user_message(&state.db, agent_id, conversation_id)
         {
             let recalled = sqlite::memory::recall_chunks_hybrid(
-                &state.db, agent_id, &user_msg, 3,
+                &state.db,
+                agent_id,
+                &user_msg,
+                3,
                 state.embedder.as_deref(),
             );
             if !recalled.is_empty() {
@@ -1747,18 +1752,28 @@ impl PromptComposer {
         // 1. Process Active Plan
         if let Some(plan_json) = active_plan_json
             && let Ok(plan) = serde_json::from_str::<serde_json::Value>(plan_json)
-                && let Some(steps) = plan.get("steps").and_then(|v| v.as_array()) {
-                    let mut xml = String::from("<active_plan>\n");
-                    for step in steps {
-                        let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let desc = step.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                        let is_done = step.get("is_done").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let status = if is_done { "done" } else { "pending" };
-                        xml.push_str(&format!("  <step id=\"{}\" status=\"{}\">{}</step>\n", id, status, desc));
-                    }
-                    xml.push_str("</active_plan>");
-                    dynamic_parts.push(xml);
-                }
+            && let Some(steps) = plan.get("steps").and_then(|v| v.as_array())
+        {
+            let mut xml = String::from("<active_plan>\n");
+            for step in steps {
+                let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                let desc = step
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let is_done = step
+                    .get("is_done")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let status = if is_done { "done" } else { "pending" };
+                xml.push_str(&format!(
+                    "  <step id=\"{}\" status=\"{}\">{}</step>\n",
+                    id, status, desc
+                ));
+            }
+            xml.push_str("</active_plan>");
+            dynamic_parts.push(xml);
+        }
 
         // 2. Classify candidate blocks
         let mut candidates = Vec::new();
@@ -1851,9 +1866,15 @@ impl PromptComposer {
             } else {
                 let recovery = if c.label.starts_with("skill:") {
                     let skill_id = c.label.strip_prefix("skill:").unwrap_or(&c.label);
-                    format!("- [{}] ({} chars) — use load_skill(\"{}\") to reload", c.label, c.chars, skill_id)
+                    format!(
+                        "- [{}] ({} chars) — use load_skill(\"{}\") to reload",
+                        c.label, c.chars, skill_id
+                    )
                 } else {
-                    format!("- [{}] ({} chars) — use search_memory(\"{}\") to retrieve", c.label, c.chars, c.label)
+                    format!(
+                        "- [{}] ({} chars) — use search_memory(\"{}\") to retrieve",
+                        c.label, c.chars, c.label
+                    )
                 };
                 overflow_manifest.push(recovery);
             }
@@ -1903,14 +1924,34 @@ mod prompt_composer_tests {
         let composer = PromptComposer::new(100); // 100 characters budget
 
         let active_blocks = vec![
-            ("persona".to_string(), "You are helpful".to_string(), "".to_string(), "pinned".to_string(), 0),
-            ("custom_block_1".to_string(), "Some notes".to_string(), "".to_string(), "short".to_string(), 0),
-            ("custom_block_2".to_string(), "A very very very very long block of notes that will exceed our budget limit".to_string(), "".to_string(), "short".to_string(), 0),
+            (
+                "persona".to_string(),
+                "You are helpful".to_string(),
+                "".to_string(),
+                "pinned".to_string(),
+                0,
+            ),
+            (
+                "custom_block_1".to_string(),
+                "Some notes".to_string(),
+                "".to_string(),
+                "short".to_string(),
+                0,
+            ),
+            (
+                "custom_block_2".to_string(),
+                "A very very very very long block of notes that will exceed our budget limit"
+                    .to_string(),
+                "".to_string(),
+                "short".to_string(),
+                0,
+            ),
         ];
 
         let long_excerpts = vec![];
 
-        let (packed, _long, overflow, _dynamic) = composer.compose(&active_blocks, &long_excerpts, None);
+        let (packed, _long, overflow, _dynamic) =
+            composer.compose(&active_blocks, &long_excerpts, None);
 
         // P0 Core identity must be included
         assert!(packed.iter().any(|p| p.contains("persona")));

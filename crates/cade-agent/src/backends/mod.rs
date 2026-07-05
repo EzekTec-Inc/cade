@@ -149,7 +149,16 @@ impl SandboxManager {
 
     /// Checks a command for dangerous shell injection vectors.
     pub fn validate_command(&self, command: &str) -> crate::Result<()> {
-        let forbidden = ["rm -rf", "rm -f", "mkfs", "dd if=", "chmod -R", "chown -R", "curl | sh", "wget | sh"];
+        let forbidden = [
+            "rm -rf",
+            "rm -f",
+            "mkfs",
+            "dd if=",
+            "chmod -R",
+            "chown -R",
+            "curl | sh",
+            "wget | sh",
+        ];
         let normalized = command.to_lowercase();
         for pattern in &forbidden {
             if normalized.contains(pattern) {
@@ -163,7 +172,12 @@ impl SandboxManager {
     }
 
     /// Execute a command securely using the managed backend.
-    pub async fn execute(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+    pub async fn execute(
+        &self,
+        command: &str,
+        cwd: &Path,
+        timeout_secs: u64,
+    ) -> crate::Result<BashOutput> {
         self.validate_command(command)?;
         self.backend.exec_bash(command, cwd, timeout_secs).await
     }

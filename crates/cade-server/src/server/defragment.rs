@@ -102,10 +102,16 @@ pub async fn defragment_database(state: &AppState) {
     let conn_res = state.db.get();
     if let Ok(conn) = conn_res {
         // 1. Delete older runs (ON DELETE CASCADE will automatically clean up run_events)
-        let _ = conn.execute("DELETE FROM runs WHERE created_at < ?1", rusqlite::params![cut_off]);
-        
+        let _ = conn.execute(
+            "DELETE FROM runs WHERE created_at < ?1",
+            rusqlite::params![cut_off],
+        );
+
         // 2. Delete older event logs
-        let _ = conn.execute("DELETE FROM event_log WHERE created_at < ?1", rusqlite::params![cut_off]);
+        let _ = conn.execute(
+            "DELETE FROM event_log WHERE created_at < ?1",
+            rusqlite::params![cut_off],
+        );
 
         // 3. Execute VACUUM to reclaim disk space
         let _ = conn.execute("VACUUM", []);

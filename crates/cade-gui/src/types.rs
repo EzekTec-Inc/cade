@@ -49,7 +49,6 @@ pub enum ToastLevel {
 /// whole struct derives `Clone` and can be cheaply shared across
 /// components via `use_context`.
 
-
 #[derive(Clone, Default)]
 pub struct SafeAbortHandle(pub std::sync::Arc<std::sync::atomic::AtomicBool>);
 
@@ -76,7 +75,12 @@ pub struct AppState {
 }
 
 /// Helper: push a toast notification into global state.
-pub fn add_toast(state: &AppState, level: ToastLevel, title: impl Into<String>, detail: impl Into<String>) {
+pub fn add_toast(
+    state: &AppState,
+    level: ToastLevel,
+    title: impl Into<String>,
+    detail: impl Into<String>,
+) {
     let mut toasts = state.toasts;
     let mut list = toasts();
     list.push(ToastMessage {
@@ -100,7 +104,12 @@ impl AppSessionStore {
         Self { state }
     }
 
-    pub fn add_toast(&self, level: ToastLevel, title: impl Into<String>, detail: impl Into<String>) {
+    pub fn add_toast(
+        &self,
+        level: ToastLevel,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
         let mut toasts = self.state.toasts;
         let mut list = toasts();
         list.push(ToastMessage {

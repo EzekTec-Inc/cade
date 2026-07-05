@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Method {
@@ -197,18 +197,25 @@ pub fn CodeView() -> Element {
     let has_detail = current_ep.is_some();
     let detail_ep = current_ep;
 
-    let detail_method_color = detail_ep.map(|ep| match ep.method {
-        Method::Get => "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
-        Method::Post => "text-blue-400 bg-blue-500/10 border-blue-500/20",
-        Method::Delete => "text-red-400 bg-red-500/10 border-red-500/20",
-    }).unwrap_or("");
+    let detail_method_color = detail_ep
+        .map(|ep| match ep.method {
+            Method::Get => "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+            Method::Post => "text-blue-400 bg-blue-500/10 border-blue-500/20",
+            Method::Delete => "text-red-400 bg-red-500/10 border-red-500/20",
+        })
+        .unwrap_or("");
     let detail_method_str = detail_ep.map(|ep| ep.method.as_str()).unwrap_or("");
     let detail_path = detail_ep.map(|ep| ep.path).unwrap_or("");
     let detail_title = detail_ep.map(|ep| ep.title).unwrap_or("");
     let detail_desc = detail_ep.map(|ep| ep.desc).unwrap_or("");
-    let detail_needs_agent_id = detail_ep.map(|ep| ep.path.contains("{id}")).unwrap_or(false);
-    let detail_supports_body = detail_ep.map(|ep| ep.method == Method::Post || ep.method == Method::Delete).unwrap_or(false);
-    let method_badge_class = format!("text-[11px] font-bold px-2 py-0.5 rounded border {detail_method_color}");
+    let detail_needs_agent_id = detail_ep
+        .map(|ep| ep.path.contains("{id}"))
+        .unwrap_or(false);
+    let detail_supports_body = detail_ep
+        .map(|ep| ep.method == Method::Post || ep.method == Method::Delete)
+        .unwrap_or(false);
+    let method_badge_class =
+        format!("text-[11px] font-bold px-2 py-0.5 rounded border {detail_method_color}");
 
     use_effect(move || {
         if let Some(ep) = selected_endpoint().and_then(|idx| ENDPOINTS.get(idx)) {

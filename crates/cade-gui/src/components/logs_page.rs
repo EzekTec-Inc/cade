@@ -1,14 +1,16 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
 pub fn LogsView() -> Element {
     let state = use_context::<AppState>();
     let events = use_signal(Vec::<serde_json::Value>::new);
     let fetching = use_signal(|| true);
-    let agent_id = (state.selected_agent)().map(|a| a.id.clone()).unwrap_or_default();
+    let agent_id = (state.selected_agent)()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
 
     let key = state.api_key;
     use_effect(move || {

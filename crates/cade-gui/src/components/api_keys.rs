@@ -7,7 +7,7 @@ pub fn ApiKeysView() -> Element {
     let state = use_context::<AppState>();
     let key = (state.api_key)();
     let masked = if key.len() > 8 {
-        format!("{}\u{2026}{}", &key[..4], &key[key.len()-4..])
+        format!("{}\u{2026}{}", &key[..4], &key[key.len() - 4..])
     } else {
         "(not set)".to_string()
     };

@@ -18,7 +18,7 @@ impl FileLockManager {
     pub fn normalize_key(path: &Path) -> String {
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let path_str = abs_path.to_string_lossy();
-        
+
         // Match /sa_ followed by 8 characters (hex/uuid slice) and a slash
         if let Some(idx) = path_str.find("/sa_") {
             let sub_path = &path_str[idx + 1..]; // e.g. "sa_12345678/src/main.rs"
@@ -40,7 +40,10 @@ impl FileLockManager {
         let key = Self::normalize_key(path);
         let lock = {
             let mut guard = self.locks.lock().unwrap();
-            guard.entry(key).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
+            guard
+                .entry(key)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
         };
         lock.clone().lock_owned().await
     }
@@ -71,7 +74,9 @@ mod tests {
 
         let start_time = std::time::Instant::now();
         let handle = tokio::spawn(async move {
-            let _lock2 = FileLockManager::global().acquire_lock(Path::new("/tmp/test_locking_file.txt")).await;
+            let _lock2 = FileLockManager::global()
+                .acquire_lock(Path::new("/tmp/test_locking_file.txt"))
+                .await;
             std::time::Instant::now()
         });
 
@@ -85,7 +90,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_lock_concurrent_sandbox() {
         let manager = FileLockManager::global();
-        
+
         let path_sandbox1 = Path::new("/tmp/sa_12345678/src/main.rs");
         let path_sandbox2 = Path::new("/tmp/sa_abcdef01/src/main.rs");
 

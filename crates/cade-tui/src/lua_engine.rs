@@ -43,7 +43,9 @@ impl LuaEngine {
                 on_returns: false,
             },
             move |_, _| {
-                Err(mlua::Error::RuntimeError("Runaway script: instruction limit (50,000) exceeded.".to_string()))
+                Err(mlua::Error::RuntimeError(
+                    "Runaway script: instruction limit (50,000) exceeded.".to_string(),
+                ))
             },
         )?;
 
@@ -377,7 +379,10 @@ fn style_to_lua_table(lua: &mlua::Lua, style: ratatui::style::Style) -> mlua::Re
     }
     table.set("bold", style.add_modifier.contains(Modifier::BOLD))?;
     table.set("italic", style.add_modifier.contains(Modifier::ITALIC))?;
-    table.set("underlined", style.add_modifier.contains(Modifier::UNDERLINED))?;
+    table.set(
+        "underlined",
+        style.add_modifier.contains(Modifier::UNDERLINED),
+    )?;
     table.set("dim", style.add_modifier.contains(Modifier::DIM))?;
     table.set("reversed", style.add_modifier.contains(Modifier::REVERSED))?;
     Ok(table)
@@ -509,7 +514,7 @@ mod additional_tests {
     #[test]
     fn test_lua_sandboxed_environment() {
         let engine = LuaEngine::new().unwrap();
-        
+
         // io and debug must be nill
         let io_val: mlua::Value = engine.lua.globals().get("io").unwrap();
         assert!(matches!(io_val, mlua::Value::Nil));
@@ -521,7 +526,7 @@ mod additional_tests {
         let os: mlua::Table = engine.lua.globals().get("os").unwrap();
         let exec_val: mlua::Value = os.get("execute").unwrap();
         assert!(matches!(exec_val, mlua::Value::Nil));
-        
+
         let exit_val: mlua::Value = os.get("exit").unwrap();
         assert!(matches!(exit_val, mlua::Value::Nil));
     }

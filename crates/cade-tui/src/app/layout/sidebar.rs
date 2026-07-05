@@ -186,7 +186,6 @@ pub(crate) fn render_sidebar(
             Span::styled(" turns   ", colors.text_muted()),
             Span::styled(state.turn_count.to_string(), colors.text_primary()),
         ]),
-
         if let Some(reason) = state.reasoning_effort {
             Line::from(vec![
                 Span::styled(" reason  ", colors.text_muted()),

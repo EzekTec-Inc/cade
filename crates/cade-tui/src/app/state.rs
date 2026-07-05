@@ -203,8 +203,6 @@ impl TuiApp {
         self.streaming_active
     }
 
-
-
     pub fn show_toast(&mut self, message: impl Into<String>, level: ToastLevel) {
         self.toast = Some(Toast {
             message: message.into(),
@@ -300,6 +298,12 @@ impl TuiApp {
 
     pub fn suspend(&mut self) -> Result<()> {
         crossterm::terminal::disable_raw_mode().map_err(|e| crate::Error::Custom(e.to_string()))?;
+        if !self.mouse_capture_disabled {
+            let _ = crossterm::execute!(
+                self.terminal.backend_mut(),
+                crossterm::event::DisableMouseCapture
+            );
+        }
         crossterm::execute!(
             self.terminal.backend_mut(),
             crossterm::terminal::LeaveAlternateScreen
@@ -315,6 +319,12 @@ impl TuiApp {
             crossterm::terminal::EnterAlternateScreen
         )
         .map_err(|e| crate::Error::Custom(e.to_string()))?;
+        if !self.mouse_capture_disabled {
+            let _ = crossterm::execute!(
+                self.terminal.backend_mut(),
+                crossterm::event::EnableMouseCapture
+            );
+        }
         self.terminal
             .clear()
             .map_err(|e| crate::Error::Custom(e.to_string()))?;
@@ -539,14 +549,20 @@ impl TuiApp {
                 true
             }
             // Shift+Up or Ctrl+Up — scroll up 3 lines
-            KeyCode::Up if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Up
+                if modifiers.contains(KeyModifiers::SHIFT)
+                    || modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 self.follow = false;
                 self.scroll_target = self.scroll_target.saturating_add(3);
                 self.draw_dirty = true;
                 true
             }
             // Shift+Down or Ctrl+Down — scroll down 3 lines
-            KeyCode::Down if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Down
+                if modifiers.contains(KeyModifiers::SHIFT)
+                    || modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 self.scroll_target = self.scroll_target.saturating_sub(3);
                 if self.scroll_target == 0 {
                     self.follow = true;
@@ -586,19 +602,19 @@ impl TuiApp {
         match kind {
             MouseEventKind::ScrollUp => {
                 self.follow = false;
-                
+
                 let diff = self.scroll_target.saturating_sub(self.scroll);
                 if diff < max_buffer {
                     // Elastic scaling: reduce increment from +3 to +1 as we approach the max buffer cap
                     let increment = if diff < max_buffer / 2 { 3 } else { 1 };
                     self.scroll_target = self.scroll_target.saturating_add(increment);
-                    
+
                     // Clamp to max buffer boundary
                     if self.scroll_target.saturating_sub(self.scroll) > max_buffer {
                         self.scroll_target = self.scroll.saturating_add(max_buffer);
                     }
                 }
-                
+
                 self.draw_dirty = true;
                 true
             }
@@ -608,13 +624,13 @@ impl TuiApp {
                     // Elastic scaling: reduce decrement from 3 to 1 as we approach the max buffer cap
                     let increment = if diff < max_buffer / 2 { 3 } else { 1 };
                     self.scroll_target = self.scroll_target.saturating_sub(increment);
-                    
+
                     // Clamp to max buffer boundary (bugfix: clamp target relative to scroll, not target itself)
                     if self.scroll.saturating_sub(self.scroll_target) > max_buffer {
                         self.scroll_target = self.scroll.saturating_sub(max_buffer);
                     }
                 }
-                
+
                 if self.scroll_target == 0 {
                     self.follow = true;
                     self.pending_lines = 0;

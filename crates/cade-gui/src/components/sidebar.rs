@@ -67,7 +67,12 @@ pub fn Sidebar() -> Element {
 
 /// A single navigation item in the sidebar.
 #[component]
-fn nav_item(active_page: Signal<SelectedPage>, page: SelectedPage, icon: String, label: String) -> Element {
+fn nav_item(
+    active_page: Signal<SelectedPage>,
+    page: SelectedPage,
+    icon: String,
+    label: String,
+) -> Element {
     let is_active = active_page() == page;
     let cls = if is_active {
         "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer"

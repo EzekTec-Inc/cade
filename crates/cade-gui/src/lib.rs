@@ -59,14 +59,10 @@ fn App() -> Element {
     };
     use_context_provider(|| app_state);
 
-    let client = use_memo(move || {
-        crate::api::CadeApiClient::new(api_key())
-    });
+    let client = use_memo(move || crate::api::CadeApiClient::new(api_key()));
     use_context_provider(|| client);
 
-    let store = use_memo(move || {
-        crate::types::AppSessionStore::new(app_state)
-    });
+    let store = use_memo(move || crate::types::AppSessionStore::new(app_state));
     use_context_provider(|| store);
 
     // ── Startup: fetch first agent + start message polling ─────────────────
@@ -87,7 +83,9 @@ fn App() -> Element {
                     if let Some(first) = list.into_iter().next() {
                         let agent_id = first.id.clone();
                         selected.set(Some(first));
-                        let _ = api::list_conversations(&agent_id, &key()).await.map(|list| convs.set(list));
+                        let _ = api::list_conversations(&agent_id, &key())
+                            .await
+                            .map(|list| convs.set(list));
                     }
                 }
                 Err(e) => {
@@ -105,7 +103,9 @@ fn App() -> Element {
                         if let Some(first) = list.into_iter().next() {
                             let agent_id = first.id.clone();
                             selected.set(Some(first));
-                            let _ = api::list_conversations(&agent_id, &key()).await.map(|list| convs.set(list));
+                            let _ = api::list_conversations(&agent_id, &key())
+                                .await
+                                .map(|list| convs.set(list));
                         }
                     }
                 } else {

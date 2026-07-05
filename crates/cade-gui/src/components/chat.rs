@@ -1,15 +1,13 @@
 use dioxus::prelude::*;
 
-
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 /// Full chat view with message history and input area.
 #[component]
 pub fn ChatView() -> Element {
     let state = use_context::<AppState>();
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
-    let agent_name = (state
-        .selected_agent)()
+    let agent_name = (state.selected_agent)()
         .map(|a| a.name.clone())
         .unwrap_or_else(|| "deep-thought-research-agent_copy".to_string());
 
@@ -26,7 +24,10 @@ pub fn ChatView() -> Element {
         let mut active_stream = state.active_stream;
 
         // Abort the previous stream on conversation/agent switch
-        active_stream.peek().0.store(true, std::sync::atomic::Ordering::Release);
+        active_stream
+            .peek()
+            .0
+            .store(true, std::sync::atomic::Ordering::Release);
         active_stream.set(crate::types::SafeAbortHandle::default());
 
         spawn(async move {
@@ -84,10 +85,8 @@ fn chat_sidebar(
     let mut new_title = use_signal(String::new);
 
     let checkpoints = use_signal(Vec::<serde_json::Value>::new);
-    let agent_id_for_cp = selected_agent()
-        .map(|a| a.id.clone())
-        .unwrap_or_default();
-    
+    let agent_id_for_cp = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
+
     let cp_api_client = client;
     use_effect(move || {
         let a_id = agent_id_for_cp.clone();
@@ -107,14 +106,15 @@ fn chat_sidebar(
         if title.is_empty() {
             return;
         }
-        let agent_id = selected_agent()
-            .map(|a| a.id.clone())
-            .unwrap_or_default();
+        let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let mut convs = conversations;
         let mut active = active_conversation;
         spawn(async move {
-            match api_client.create_conversation(&agent_id, Some(&title)).await {
+            match api_client
+                .create_conversation(&agent_id, Some(&title))
+                .await
+            {
                 Ok(conv) => {
                     let mut list = convs();
                     list.push(conv.clone());
@@ -122,7 +122,12 @@ fn chat_sidebar(
                     active.set(Some(conv.id));
                     add_toast(&state, ToastLevel::Success, "Conversation created", &title);
                 }
-                Err(e) => add_toast(&state, ToastLevel::Error, "Failed to create conversation", e),
+                Err(e) => add_toast(
+                    &state,
+                    ToastLevel::Error,
+                    "Failed to create conversation",
+                    e,
+                ),
             }
         });
         new_title.set(String::new());
@@ -130,9 +135,7 @@ fn chat_sidebar(
     };
 
     let delete_conv = move |conv_id: String| {
-        let agent_id = selected_agent()
-            .map(|a| a.id.clone())
-            .unwrap_or_default();
+        let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let mut convs = conversations;
         let mut active = active_conversation;
@@ -147,7 +150,12 @@ fn chat_sidebar(
                     }
                     add_toast(&state, ToastLevel::Success, "Conversation deleted", "");
                 }
-                Err(e) => add_toast(&state, ToastLevel::Error, "Failed to delete conversation", e),
+                Err(e) => add_toast(
+                    &state,
+                    ToastLevel::Error,
+                    "Failed to delete conversation",
+                    e,
+                ),
             }
         });
     };
@@ -355,13 +363,9 @@ fn split_reasoning(text: &str) -> Option<(String, String)> {
     let start = text.find(start_tag)?;
     let end = text.find(end_tag)?;
     let reasoning = text[start + start_tag.len()..end].trim().to_string();
-    let content = format!(
-        "{}{}",
-        &text[..start],
-        &text[end + end_tag.len()..]
-    )
-    .trim()
-    .to_string();
+    let content = format!("{}{}", &text[..start], &text[end + end_tag.len()..])
+        .trim()
+        .to_string();
     Some((reasoning, content))
 }
 
@@ -385,7 +389,13 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
         "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6]"
     };
 
-    let avatar_label = if is_user { "U" } else if is_tool { "\u{2699}" } else { "AI" };
+    let avatar_label = if is_user {
+        "U"
+    } else if is_tool {
+        "\u{2699}"
+    } else {
+        "AI"
+    };
 
     let role_label = if is_user {
         "user"
@@ -566,7 +576,9 @@ fn input_area(
 
         // Abort controller setup for the active stream (safe atomic bool cancel token)
         let cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        state.active_stream.set(crate::types::SafeAbortHandle(cancel_token.clone()));
+        state
+            .active_stream
+            .set(crate::types::SafeAbortHandle(cancel_token.clone()));
 
         // Optimistically insert user message + placeholder assistant message
         let mut current_msgs = messages();
@@ -584,9 +596,7 @@ fn input_area(
         });
         messages.set(current_msgs);
 
-        let agent_id = selected_agent()
-            .map(|a| a.id.clone())
-            .unwrap_or_default();
+        let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let conv_id = active_conversation();
 
@@ -699,18 +709,10 @@ fn input_area(
             if let Some(idx) = msgs.iter().position(|m| m.id == stream_id) {
                 let final_content = match &result {
                     Err(e) => {
-                        let existing = msgs[idx]
-                            .content
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string();
+                        let existing = msgs[idx].content.as_str().unwrap_or("").to_string();
                         format!("{existing}\n\n[Stream Error: {e}]")
                     }
-                    Ok(_) => msgs[idx]
-                        .content
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
+                    Ok(_) => msgs[idx].content.as_str().unwrap_or("").to_string(),
                 };
                 msgs[idx].content = serde_json::Value::String(final_content);
                 msgs[idx].id = format!("msg-{timestamp}");

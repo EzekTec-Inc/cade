@@ -773,9 +773,12 @@ pub async fn consolidate_agent(
 
     // ── P9: Decay confidence of stale memories ─────────────────────────────────
     // Phase C: Memories that haven't been accessed recently decay in confidence.
-    if let Ok(decayed) =
-        cade_store::sqlite::memory::decay_stale_memories(&state.db, agent_id, current_turn, crate::server::api::messages::MemoryBudgets::decay_threshold_for_model(&agent.model))
-        && decayed > 0
+    if let Ok(decayed) = cade_store::sqlite::memory::decay_stale_memories(
+        &state.db,
+        agent_id,
+        current_turn,
+        crate::server::api::messages::MemoryBudgets::decay_threshold_for_model(&agent.model),
+    ) && decayed > 0
     {
         tracing::debug!(
             "consolidate [{}]: Phase C decayed confidence for {} stale memory blocks",

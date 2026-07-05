@@ -882,8 +882,8 @@ pub struct AgentRow {
     pub active_plan_json: Option<String>,
 }
 
-pub mod approvals;
 pub mod agents;
+pub mod approvals;
 pub mod conversations;
 pub mod embedding;
 pub mod event_log;
@@ -898,8 +898,8 @@ pub mod runs;
 pub mod skills;
 pub mod tools;
 
-pub use approvals::*;
 pub use agents::*;
+pub use approvals::*;
 pub use conversations::*;
 pub use evidence::*;
 pub use knowledge::*;

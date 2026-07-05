@@ -4,14 +4,27 @@ use super::*;
 pub(crate) fn read_clipboard_image() -> Option<(String, u32, u32, String)> {
     let mut cb = arboard::Clipboard::new().ok()?;
     let img = cb.get_image().ok()?;
-    
+
     let mut png_bytes = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
     use image::ImageEncoder;
-    if encoder.write_image(&img.bytes, img.width as u32, img.height as u32, image::ColorType::Rgba8.into()).is_ok() {
+    if encoder
+        .write_image(
+            &img.bytes,
+            img.width as u32,
+            img.height as u32,
+            image::ColorType::Rgba8.into(),
+        )
+        .is_ok()
+    {
         use base64::Engine;
         let b64 = base64::prelude::BASE64_STANDARD.encode(&png_bytes);
-        Some(("image/png".to_string(), img.width as u32, img.height as u32, b64))
+        Some((
+            "image/png".to_string(),
+            img.width as u32,
+            img.height as u32,
+            b64,
+        ))
     } else {
         None
     }
@@ -37,7 +50,10 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
     let sequence = if std::env::var("TMUX").is_ok() {
         // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
         format!("\x1bPtmux;\x1b\x1b]52;c;{}\x07\x1b\\", b64)
-    } else if std::env::var("TERM").map(|t| t.contains("screen")).unwrap_or(false) {
+    } else if std::env::var("TERM")
+        .map(|t| t.contains("screen"))
+        .unwrap_or(false)
+    {
         // GNU Screen passthrough wrapping
         format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
     } else {
@@ -54,14 +70,14 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
     // Headless safety: on Linux, skip arboard if no display server is running
     // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
     #[cfg(target_os = "linux")]
-    let should_try_native = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+    let should_try_native =
+        std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
     #[cfg(not(target_os = "linux"))]
     let should_try_native = true;
 
-    if should_try_native
-        && let Ok(mut cb) = arboard::Clipboard::new() {
-            ok |= cb.set_text(text).is_ok();
-        }
+    if should_try_native && let Ok(mut cb) = arboard::Clipboard::new() {
+        ok |= cb.set_text(text).is_ok();
+    }
 
     // 3. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
     if !ok {
@@ -86,16 +102,13 @@ pub(crate) fn write_to_file_fallback(text: &str) {
 
 /// Try to copy text via platform-native command line tools (pbcopy, xclip, wl-copy, clip.exe)
 fn copy_via_shell_commands(text: &str) -> bool {
-    use std::process::{Command, Stdio};
     use std::io::Write;
+    use std::process::{Command, Stdio};
 
     // macOS pbcopy
     #[cfg(target_os = "macos")]
     {
-        if let Ok(mut child) = Command::new("pbcopy")
-            .stdin(Stdio::piped())
-            .spawn()
-        {
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
             if let Some(mut stdin) = child.stdin.take() {
                 if stdin.write_all(text.as_bytes()).is_ok() {
                     return child.wait().map(|s| s.success()).unwrap_or(false);
@@ -108,14 +121,13 @@ fn copy_via_shell_commands(text: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
         // Try wl-copy (Wayland)
-        if let Ok(mut child) = Command::new("wl-copy")
-            .stdin(Stdio::piped())
-            .spawn()
+        if let Ok(mut child) = Command::new("wl-copy").stdin(Stdio::piped()).spawn()
             && let Some(mut stdin) = child.stdin.take()
-                && stdin.write_all(text.as_bytes()).is_ok()
-                    && child.wait().map(|s| s.success()).unwrap_or(false) {
-                        return true;
-                    }
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
 
         // Try xclip (X11)
         if let Ok(mut child) = Command::new("xclip")
@@ -124,10 +136,11 @@ fn copy_via_shell_commands(text: &str) -> bool {
             .stdin(Stdio::piped())
             .spawn()
             && let Some(mut stdin) = child.stdin.take()
-                && stdin.write_all(text.as_bytes()).is_ok()
-                    && child.wait().map(|s| s.success()).unwrap_or(false) {
-                        return true;
-                    }
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
 
         // Try xsel
         if let Ok(mut child) = Command::new("xsel")
@@ -136,29 +149,26 @@ fn copy_via_shell_commands(text: &str) -> bool {
             .stdin(Stdio::piped())
             .spawn()
             && let Some(mut stdin) = child.stdin.take()
-                && stdin.write_all(text.as_bytes()).is_ok()
-                    && child.wait().map(|s| s.success()).unwrap_or(false) {
-                        return true;
-                    }
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
 
         // Try clip.exe (WSL)
-        if let Ok(mut child) = Command::new("clip.exe")
-            .stdin(Stdio::piped())
-            .spawn()
+        if let Ok(mut child) = Command::new("clip.exe").stdin(Stdio::piped()).spawn()
             && let Some(mut stdin) = child.stdin.take()
-                && stdin.write_all(text.as_bytes()).is_ok()
-                    && child.wait().map(|s| s.success()).unwrap_or(false) {
-                        return true;
-                    }
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
     }
 
     // Windows native clip
     #[cfg(target_os = "windows")]
     {
-        if let Ok(mut child) = Command::new("clip")
-            .stdin(Stdio::piped())
-            .spawn()
-        {
+        if let Ok(mut child) = Command::new("clip").stdin(Stdio::piped()).spawn() {
             if let Some(mut stdin) = child.stdin.take() {
                 if stdin.write_all(text.as_bytes()).is_ok() {
                     return child.wait().map(|s| s.success()).unwrap_or(false);

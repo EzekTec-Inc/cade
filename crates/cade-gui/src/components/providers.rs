@@ -1,7 +1,6 @@
 use dioxus::prelude::*;
 
-
-use crate::types::{add_toast, AppState, ToastLevel};
+use crate::types::{AppState, ToastLevel, add_toast};
 
 /// Provider management page — list, add, delete providers.
 #[component]
@@ -57,24 +56,28 @@ pub fn ProvidersView() -> Element {
         }
         let api_key_val = {
             let v = form_api_key_val();
-            if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
+            if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.trim().to_string())
+            }
         };
         let base_url = {
             let v = form_base_url();
-            if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
+            if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.trim().to_string())
+            }
         };
         let api_client = client();
         let mut provs = providers;
         let st = state;
 
         spawn(async move {
-            match api_client.add_provider(
-                &name,
-                &kind,
-                api_key_val.as_deref(),
-                base_url.as_deref(),
-            )
-            .await
+            match api_client
+                .add_provider(&name, &kind, api_key_val.as_deref(), base_url.as_deref())
+                .await
             {
                 Ok(_) => {
                     match api_client.list_providers().await {
@@ -83,7 +86,9 @@ pub fn ProvidersView() -> Element {
                                 provs.set(arr.clone());
                             }
                         }
-                        Err(e) => add_toast(&st, ToastLevel::Error, "Failed to refresh providers", e),
+                        Err(e) => {
+                            add_toast(&st, ToastLevel::Error, "Failed to refresh providers", e)
+                        }
                     }
                     form_name.set(String::new());
                     form_kind.set(String::new());
@@ -130,7 +135,11 @@ pub fn ProvidersView() -> Element {
     let preset_buttons: Vec<(String, serde_json::Value)> = presets()
         .iter()
         .map(|p| {
-            let label = p.get("name").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+            let label = p
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?")
+                .to_string();
             (label, p.clone())
         })
         .collect();
@@ -275,7 +284,10 @@ fn provider_card(data: serde_json::Value, remove: EventHandler<String>) -> Eleme
     let kind = data.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let base_url = data.get("base_url").and_then(|v| v.as_str()).unwrap_or("");
     let model = data.get("model").and_then(|v| v.as_str()).unwrap_or("");
-    let enabled = data.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+    let enabled = data
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     let n = name.to_string();
 
