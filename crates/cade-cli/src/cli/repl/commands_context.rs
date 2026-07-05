@@ -239,7 +239,7 @@ impl Repl {
                 "  History: {c_used} / {c_bud} chars used  ({pct_c})"
             )));
             let consol_str = if consol {
-                "yes — Sleeptime will summarise dropped turns after 60 s idle"
+                "yes — Sleeptime will summarise dropped turns after 20 s idle"
             } else {
                 "none pending"
             };

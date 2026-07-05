@@ -1,7 +1,7 @@
 //! Phase 3: `/compact` slash command handler.
 //!
 //! Manually triggers the same `consolidate_agent` flow that the Sleeptime
-//! background task runs after 60 s of agent inactivity (or that the P1-3
+//! background task runs after 20 s of agent inactivity (or that the P1-3
 //! recovery loop runs synchronously on a context-overflow error).  Lets
 //! the user proactively roll dropped turns into the pinned
 //! `session_summary` block before issuing a large request.

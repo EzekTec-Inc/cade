@@ -2,7 +2,7 @@
 //!
 //! When the budget-based context builder in `build_context()` drops older turns
 //! from the LLM prompt it sets `needs_consolidation = true` in `agent_activity`.
-//! After 60 s of agent inactivity the Sleeptime background task calls
+//! After 20 s of agent inactivity the Sleeptime background task calls
 //! [`consolidate_agent`], which summarises the dropped turns into a persistent
 //! `session_summary` memory block so the agent retains the gist of past work
 //! across context rotations.
