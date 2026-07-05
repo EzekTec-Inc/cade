@@ -379,52 +379,8 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────
-    // Polls every 30 s.  When an agent has been inactive for 20 s AND its
-    // build_context dropped turns in the last request, call consolidate_agent
-    // to summarise the dropped turns into the `session_summary` memory block.
-    // M3: threshold lowered from 60 s → 20 s so interactive pauses trigger
-    // consolidation sooner; turn-count eager path (see build_context) covers
-    // continuous sessions that never hit the idle timer.
-    let state_bg = state.clone();
-    // RC7-FIX: Semaphore limits concurrent consolidation tasks to prevent
-    // unbounded task spawning when many agents need consolidation at once.
-    let consolidation_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-            let mut pending: Vec<(String, Option<String>)> = Vec::new();
-            {
-                let mut activity = state_bg.agent_activity.write().await;
-                let now = chrono::Utc::now().timestamp();
-                for (agent_id, act) in activity.iter_mut() {
-                    if act.needs_consolidation && (now - act.last_active_ts) > 20 {
-                        act.needs_consolidation = false;
-                        pending.push((agent_id.clone(), act.conversation_id.clone()));
-                    }
-                }
-            }
-
-            for (agent_id, conv_id) in pending {
-                tracing::info!(
-                    "Sleeptime consolidation triggered for agent {} (conv={:?})",
-                    agent_id,
-                    conv_id
-                );
-                let state_c = state_bg.clone();
-                let sem = consolidation_semaphore.clone();
-                tokio::spawn(async move {
-                    let _permit = sem.acquire().await;
-                    cade::server::consolidation::consolidate_agent(
-                        &state_c,
-                        &agent_id,
-                        conv_id.as_deref(),
-                        None,
-                    )
-                    .await;
-                });
-            }
-        }
-    });
+    // Spawn the deep SleeptimeAgent background task to manage automated periodic memory consolidation.
+    let _sleeptime_handle = cade::server::consolidation::SleeptimeAgent::new(state.clone()).spawn();
 
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|req: &Request<_>| {

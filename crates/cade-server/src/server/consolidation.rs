@@ -1301,6 +1301,125 @@ fn group_turns(messages: &[(String, String)], max_turn_chars: usize) -> Vec<Vec<
     turns
 }
 
+// ── SleeptimeAgent ────────────────────────────────────────────────────────────
+
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+
+/// Background manager for automated, periodic memory consolidation ("Sleeptime Agent").
+/// Monitors agent inactivity and triggers compaction when conversation budgets are crossed,
+/// ensuring full isolation and thread safety.
+pub struct SleeptimeAgent {
+    state: AppState,
+    poll_interval: Duration,
+    inactivity_threshold_secs: i64,
+    concurrency_limit: usize,
+    cancellation_token: Option<CancellationToken>,
+}
+
+impl SleeptimeAgent {
+    /// Create a new `SleeptimeAgent` with default parameters:
+    /// - Poll Interval: 30 seconds
+    /// - Inactivity Threshold: 20 seconds
+    /// - Concurrency Limit: 4 concurrent tasks
+    pub fn new(state: AppState) -> Self {
+        Self {
+            state,
+            poll_interval: Duration::from_secs(30),
+            inactivity_threshold_secs: 20,
+            concurrency_limit: 4,
+            cancellation_token: None,
+        }
+    }
+
+    /// Set a custom poll interval.
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
+    /// Set a custom inactivity threshold (in seconds).
+    pub fn with_inactivity_threshold(mut self, threshold_secs: i64) -> Self {
+        self.inactivity_threshold_secs = threshold_secs;
+        self
+    }
+
+    /// Set a custom maximum limit of parallel consolidation tasks.
+    pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit = limit;
+        self
+    }
+
+    /// Set a cancellation token for graceful cooperative shutdown.
+    pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = Some(token);
+        self
+    }
+
+    /// Spawn the background consolidation task loop inside a tokio thread.
+    pub fn spawn(self) -> tokio::task::JoinHandle<()> {
+        let state_bg = self.state.clone();
+        let poll_interval = self.poll_interval;
+        let threshold_secs = self.inactivity_threshold_secs;
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(self.concurrency_limit));
+        let cancel = self.cancellation_token.clone();
+
+        tokio::spawn(async move {
+            loop {
+                if let Some(ref c) = cancel {
+                    tokio::select! {
+                        _ = c.cancelled() => {
+                            tracing::info!("SleeptimeAgent background task cancelled cleanly");
+                            break;
+                        }
+                        _ = tokio::time::sleep(poll_interval) => {}
+                    }
+                } else {
+                    tokio::time::sleep(poll_interval).await;
+                }
+
+                if let Some(ref c) = cancel {
+                    if c.is_cancelled() {
+                        break;
+                    }
+                }
+
+                let mut pending: Vec<(String, Option<String>)> = Vec::new();
+                {
+                    let mut activity = state_bg.agent_activity.write().await;
+                    let now = chrono::Utc::now().timestamp();
+                    for (agent_id, act) in activity.iter_mut() {
+                        if act.needs_consolidation && (now - act.last_active_ts) > threshold_secs {
+                            act.needs_consolidation = false;
+                            pending.push((agent_id.clone(), act.conversation_id.clone()));
+                        }
+                    }
+                }
+
+                for (agent_id, conv_id) in pending {
+                    tracing::info!(
+                        "Sleeptime consolidation triggered for agent {} (conv={:?})",
+                        agent_id,
+                        conv_id
+                    );
+                    let state_c = state_bg.clone();
+                    let sem_c = sem.clone();
+                    tokio::spawn(async move {
+                        let _permit = sem_c.acquire().await;
+                        consolidate_agent(
+                            &state_c,
+                            &agent_id,
+                            conv_id.as_deref(),
+                            None,
+                        )
+                        .await;
+                    });
+                }
+            }
+        })
+    }
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
