@@ -1994,6 +1994,11 @@ impl TuiApp {
             let entry_end = entry_start + entry_rows;
 
             if entry_end > start_visual_row && entry_start <= end_visual_row {
+                let offset = match entry.card_style {
+                    crate::app::timeline::CardStyle::None => 0u16,
+                    _ => 2u16, // 1 for left border, 1 for padding (TUI-Selection Offset Fix)
+                };
+
                 for (i, line) in entry.lines.iter().enumerate() {
                     let line_row = entry_start + i as u16;
                     if line_row >= start_visual_row && line_row <= end_visual_row {
@@ -2001,7 +2006,7 @@ impl TuiApp {
                             line.spans.iter().map(|s| s.content.as_ref()).collect();
 
                         if line_row == start_visual_row {
-                            let slice_start = start_col.saturating_sub(inner.x) as usize;
+                            let slice_start = start_col.saturating_sub(inner.x + offset) as usize;
                             if slice_start < line_text.len() {
                                 line_text = line_text[slice_start..].to_string();
                             } else {
@@ -2010,7 +2015,7 @@ impl TuiApp {
                         }
 
                         if line_row == end_visual_row {
-                            let slice_end = (end_col.saturating_sub(inner.x) + 1) as usize;
+                            let slice_end = (end_col.saturating_sub(inner.x + offset) + 1) as usize;
                             if slice_end < line_text.len() {
                                 line_text.truncate(slice_end);
                             }

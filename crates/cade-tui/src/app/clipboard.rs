@@ -45,7 +45,27 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
 
     let mut ok = false;
 
-    // 1. OSC 52 universal fallback (with TMUX / Screen passthrough wrapping)
+    // 1. Native OS clipboard (arboard)
+    // Headless safety: on Linux, skip arboard if no display server is running
+    // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
+    #[cfg(target_os = "linux")]
+    let should_try_native =
+        std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+    #[cfg(not(target_os = "linux"))]
+    let should_try_native = true;
+
+    if should_try_native && let Ok(mut cb) = arboard::Clipboard::new() {
+        ok = cb.set_text(text).is_ok();
+    }
+
+    // 2. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
+    if !ok {
+        ok = copy_via_shell_commands(text);
+    }
+
+    // 3. OSC 52 universal fallback (with TMUX / Screen passthrough wrapping)
+    // Treated as a best-effort, non-blocking side effect so we don't assume writing bytes
+    // to stdout guarantees successful OS clipboard synchronization (TUI-Selection Sync Fix).
     let b64 = base64::prelude::BASE64_STANDARD.encode(text);
     let sequence = if std::env::var("TMUX").is_ok() {
         // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
@@ -63,25 +83,7 @@ pub(crate) fn write_to_clipboard(text: &str) -> bool {
 
     let mut stdout = std::io::stdout().lock();
     if stdout.write_all(sequence.as_bytes()).is_ok() {
-        ok |= stdout.flush().is_ok();
-    }
-
-    // 2. Native OS clipboard (arboard)
-    // Headless safety: on Linux, skip arboard if no display server is running
-    // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
-    #[cfg(target_os = "linux")]
-    let should_try_native =
-        std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
-    #[cfg(not(target_os = "linux"))]
-    let should_try_native = true;
-
-    if should_try_native && let Ok(mut cb) = arboard::Clipboard::new() {
-        ok |= cb.set_text(text).is_ok();
-    }
-
-    // 3. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
-    if !ok {
-        ok |= copy_via_shell_commands(text);
+        let _ = stdout.flush();
     }
 
     ok
