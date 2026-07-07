@@ -1445,6 +1445,10 @@ impl TuiApp {
         let item_cache = &mut self.item_cache;
         let last_timeline_w = &mut self.last_timeline_w;
 
+        let selection_active = self.selection_active;
+        let selection_start = self.selection_start;
+        let selection_current = self.selection_current;
+
         let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
             let (m_skip, cur_pos, msg_area) = render_frame(
@@ -1682,17 +1686,19 @@ impl TuiApp {
                 // (the overlay is responsible for its own cursor, if any).
                 input_cursor_pos = None;
             }
+
+            // Apply selection highlight onto the buffer before the frame is drawn/flushed.
+            apply_selection_highlight(
+                selection_active,
+                selection_start,
+                selection_current,
+                frame.buffer_mut(),
+            );
         })?;
 
         // Restore the overlay stack and slot manager.
         self.overlays = overlay_stack;
         self.slots = slot_mgr;
-        apply_selection_highlight(
-            self.selection_active,
-            self.selection_start,
-            self.selection_current,
-            &mut self.terminal,
-        );
 
         // Stash the messages area rect for click-to-copy.
         self.messages_area = messages_area;
@@ -1924,14 +1930,6 @@ impl TuiApp {
             return false;
         };
 
-        // If it's a single click (no drag), don't trigger selection copy
-        if x1 == x2 && y1 == y2 {
-            self.selection_active = false;
-            self.selection_start = None;
-            self.selection_current = None;
-            return false;
-        }
-
         // Bounding box of message viewport
         use ratatui::layout::Rect;
         let inner = Rect {
@@ -1948,27 +1946,25 @@ impl TuiApp {
             return false;
         }
 
-        // Check if selection starts within messages area
-        if x1 < inner.x
-            || x1 >= inner.x + inner.width
-            || y1 < inner.y
-            || y1 >= inner.y + inner.height
-        {
+        // Clamp coordinates to message viewport boundary to enable robust dragging from outside/borders
+        let cx1 = x1.clamp(inner.x, inner.x + inner.width.saturating_sub(1));
+        let cy1 = y1.clamp(inner.y, inner.y + inner.height.saturating_sub(1));
+        let cx2 = x2.clamp(inner.x, inner.x + inner.width.saturating_sub(1));
+        let cy2 = y2.clamp(inner.y, inner.y + inner.height.saturating_sub(1));
+
+        // If after clamping it's a single cell (no drag/drag clamped to same cell), don't trigger copy
+        if cx1 == cx2 && cy1 == cy2 {
             self.selection_active = false;
             self.selection_start = None;
             self.selection_current = None;
             return false;
         }
 
-        // Clip end coordinate to messages area
-        let cx2 = x2.max(inner.x).min(inner.x + inner.width - 1);
-        let cy2 = y2.max(inner.y).min(inner.y + inner.height - 1);
-
-        // Sort coordinates
-        let (start_col, start_row, end_col, end_row) = if y1 < cy2 || (y1 == cy2 && x1 <= cx2) {
-            (x1, y1, cx2, cy2)
+        // Sort coordinates symmetrically
+        let (start_col, start_row, end_col, end_row) = if cy1 < cy2 || (cy1 == cy2 && cx1 <= cx2) {
+            (cx1, cy1, cx2, cy2)
         } else {
-            (cx2, cy2, x1, y1)
+            (cx2, cy2, cx1, cy1)
         };
 
         let prepared = self.build_prepared_entries();
@@ -2002,30 +1998,28 @@ impl TuiApp {
                 for (i, line) in entry.lines.iter().enumerate() {
                     let line_row = entry_start + i as u16;
                     if line_row >= start_visual_row && line_row <= end_visual_row {
-                        let mut line_text: String =
+                        let line_text: String =
                             line.spans.iter().map(|s| s.content.as_ref()).collect();
 
-                        if line_row == start_visual_row {
-                            let slice_start = start_col.saturating_sub(inner.x + offset) as usize;
-                            if slice_start < line_text.len() {
-                                line_text = line_text[slice_start..].to_string();
-                            } else {
-                                line_text = String::new();
-                            }
-                        }
+                        let slice_start = if line_row == start_visual_row {
+                            (start_col.saturating_sub(inner.x + offset) as usize).min(line_text.len())
+                        } else {
+                            0
+                        };
 
-                        if line_row == end_visual_row {
-                            let slice_end = (end_col.saturating_sub(inner.x + offset) + 1) as usize;
-                            if slice_end < line_text.len() {
-                                line_text.truncate(slice_end);
-                            }
-                        }
+                        let slice_end = if line_row == end_visual_row {
+                            ((end_col.saturating_sub(inner.x + offset) + 1) as usize).min(line_text.len())
+                        } else {
+                            line_text.len()
+                        };
 
-                        let trimmed = line_text.trim_end().to_string();
-                        if !selected_text.is_empty() {
-                            selected_text.push('\n');
+                        if slice_start < slice_end {
+                            let trimmed = line_text[slice_start..slice_end].trim_end().to_string();
+                            if !selected_text.is_empty() {
+                                selected_text.push('\n');
+                            }
+                            selected_text.push_str(&trimmed);
                         }
-                        selected_text.push_str(&trimmed);
                     }
                 }
             }
@@ -2051,19 +2045,18 @@ impl TuiApp {
     }
 }
 
-/// Highlight the currently selected visual terminal cells (called after draw)
+/// Highlight the currently selected visual terminal cells (called during draw)
 fn apply_selection_highlight(
     selection_active: bool,
     selection_start: Option<(u16, u16)>,
     selection_current: Option<(u16, u16)>,
-    terminal: &mut DefaultTerminal,
+    buffer: &mut ratatui::buffer::Buffer,
 ) {
     if selection_active
         && let (Some((x1, y1)), Some((x2, y2))) = (selection_start, selection_current)
     {
-        let size = terminal.size().unwrap_or_default();
-        let width = size.width;
-        let height = size.height;
+        let width = buffer.area.width;
+        let height = buffer.area.height;
         if width == 0 || height == 0 {
             return;
         }
@@ -2075,7 +2068,6 @@ fn apply_selection_highlight(
             (x2, y2, x1, y1)
         };
 
-        let buffer = terminal.current_buffer_mut();
         for y in start_y..=end_y {
             if y >= height {
                 continue;
