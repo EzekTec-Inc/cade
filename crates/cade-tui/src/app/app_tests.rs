@@ -383,3 +383,24 @@ fn test_scrolling_constraints_and_velocity_governor() {
     assert!(consumed_scroll_key);
     assert!(app.scroll_target > 3);
 }
+
+#[test]
+#[ignore = "requires tty"]
+fn test_copy_selected_text_basic() {
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test".into(),
+        "test-model".into(),
+        None,
+    );
+    app.push_silent(RenderLine::UserMessage("hello world".to_string()));
+    
+    app.messages_area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    
+    app.selection_start = Some((4, 1));
+    app.selection_current = Some((8, 1));
+    app.selection_active = true;
+    
+    let result = app.copy_selected_text();
+    assert!(result);
+}

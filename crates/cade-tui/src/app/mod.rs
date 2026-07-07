@@ -2001,20 +2001,24 @@ impl TuiApp {
                         let line_text: String =
                             line.spans.iter().map(|s| s.content.as_ref()).collect();
 
+                        let chars: Vec<char> = line_text.chars().collect();
+                        let char_len = chars.len();
+
                         let slice_start = if line_row == start_visual_row {
-                            (start_col.saturating_sub(inner.x + offset) as usize).min(line_text.len())
+                            (start_col.saturating_sub(inner.x + offset) as usize).min(char_len)
                         } else {
                             0
                         };
 
                         let slice_end = if line_row == end_visual_row {
-                            ((end_col.saturating_sub(inner.x + offset) + 1) as usize).min(line_text.len())
+                            ((end_col.saturating_sub(inner.x + offset) + 1) as usize).min(char_len)
                         } else {
-                            line_text.len()
+                            char_len
                         };
 
                         if slice_start < slice_end {
-                            let trimmed = line_text[slice_start..slice_end].trim_end().to_string();
+                            let text_slice: String = chars[slice_start..slice_end].iter().collect();
+                            let trimmed = text_slice.trim_end().to_string();
                             if !selected_text.is_empty() {
                                 selected_text.push('\n');
                             }
