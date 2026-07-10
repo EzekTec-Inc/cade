@@ -11,7 +11,10 @@ impl Repl {
         use cade_tui::mcp_picker::{McpEntry, show_mcp_manager};
 
         let mcp_configs = self.settings.lock().all_mcp_servers();
-        let statuses = self.mcp.status().await;
+        let statuses = match self.client.get_mcp_statuses().await {
+            Ok(s) => s,
+            Err(_) => self.mcp.status().await,
+        };
 
         let mut entries = Vec::new();
         for (key, config) in mcp_configs {

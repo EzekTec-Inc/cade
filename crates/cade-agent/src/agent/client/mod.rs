@@ -633,6 +633,29 @@ impl HttpTransport {
         }
         Ok(())
     }
+
+    /// Query server-side MCP server statuses.
+    #[cfg(feature = "mcp")]
+    pub async fn get_mcp_statuses(&self) -> Result<Vec<crate::mcp::McpStatus>> {
+        let resp = self
+            .client
+            .get(self.url("/mcp"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "get_mcp_statuses failed: {}",
+                resp.status()
+            )));
+        }
+        #[derive(Deserialize)]
+        struct McpResponse {
+            servers: Vec<crate::mcp::McpStatus>,
+        }
+        let res = resp.json::<McpResponse>().await?;
+        Ok(res.servers)
+    }
 }
 
 pub mod extensions;

@@ -296,6 +296,9 @@ pub struct LocalSettings {
     /// Maximum tokens per turn. Exceeding this triggers a split turn boundary cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens_per_turn: Option<usize>,
+    /// Preferred model per permission mode
+    #[serde(default)]
+    pub mode_models: std::collections::HashMap<String, String>,
 }
 
 // region:    --- Tests

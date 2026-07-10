@@ -36,57 +36,64 @@ pub(crate) fn read_clipboard_text() -> Option<String> {
     cb.get_text().ok()
 }
 
-/// Write `text` to the system clipboard via OSC 52 escape sequence, falling
-/// back to `arboard` for native access.  Returns `true` if at least one
-/// mechanism succeeded.
-pub(crate) fn write_to_clipboard(text: &str) -> bool {
-    use base64::Engine;
-    use std::io::Write;
+impl TuiApp {
+    /// Write `text` to the system clipboard via OSC 52 escape sequence, falling
+    /// back to `arboard` for native access.  Returns `true` if at least one
+    /// mechanism succeeded.
+    pub(crate) fn write_to_clipboard(&mut self, text: &str) -> bool {
+        use base64::Engine;
+        use std::io::Write;
 
-    let mut ok = false;
+        let mut ok = false;
 
-    // 1. Native OS clipboard (arboard)
-    // Headless safety: on Linux, skip arboard if no display server is running
-    // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
-    #[cfg(target_os = "linux")]
-    let should_try_native =
-        std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
-    #[cfg(not(target_os = "linux"))]
-    let should_try_native = true;
+        // 1. Native OS clipboard (arboard)
+        // Headless safety: on Linux, skip arboard if no display server is running
+        // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
+        #[cfg(target_os = "linux")]
+        let should_try_native =
+            std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let should_try_native = true;
 
-    if should_try_native && let Ok(mut cb) = arboard::Clipboard::new() {
-        ok = cb.set_text(text).is_ok();
+        if should_try_native {
+            if let Some(ref mut cb) = self.clipboard {
+                ok = cb.set_text(text).is_ok();
+            } else if let Ok(mut cb) = arboard::Clipboard::new() {
+                ok = cb.set_text(text).is_ok();
+                self.clipboard = Some(cb);
+            }
+        }
+
+        // 2. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
+        if !ok {
+            ok = copy_via_shell_commands(text);
+        }
+
+        // 3. OSC 52 universal fallback (with TMUX / Screen passthrough wrapping)
+        // Treated as a best-effort, non-blocking side effect so we don't assume writing bytes
+        // to stdout guarantees successful OS clipboard synchronization (TUI-Selection Sync Fix).
+        let b64 = base64::prelude::BASE64_STANDARD.encode(text);
+        let sequence = if std::env::var("TMUX").is_ok() {
+            // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
+            format!("\x1bPtmux;\x1b\x1b]52;c;{}\x07\x1b\\", b64)
+        } else if std::env::var("TERM")
+            .map(|t| t.contains("screen"))
+            .unwrap_or(false)
+        {
+            // GNU Screen passthrough wrapping
+            format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
+        } else {
+            // Standard OSC 52 escape sequence
+            format!("\x1b]52;c;{}\x07", b64)
+        };
+
+        let mut stdout = std::io::stdout().lock();
+        if stdout.write_all(sequence.as_bytes()).is_ok() {
+            let _ = stdout.flush();
+        }
+
+        ok
     }
-
-    // 2. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
-    if !ok {
-        ok = copy_via_shell_commands(text);
-    }
-
-    // 3. OSC 52 universal fallback (with TMUX / Screen passthrough wrapping)
-    // Treated as a best-effort, non-blocking side effect so we don't assume writing bytes
-    // to stdout guarantees successful OS clipboard synchronization (TUI-Selection Sync Fix).
-    let b64 = base64::prelude::BASE64_STANDARD.encode(text);
-    let sequence = if std::env::var("TMUX").is_ok() {
-        // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
-        format!("\x1bPtmux;\x1b\x1b]52;c;{}\x07\x1b\\", b64)
-    } else if std::env::var("TERM")
-        .map(|t| t.contains("screen"))
-        .unwrap_or(false)
-    {
-        // GNU Screen passthrough wrapping
-        format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
-    } else {
-        // Standard OSC 52 escape sequence
-        format!("\x1b]52;c;{}\x07", b64)
-    };
-
-    let mut stdout = std::io::stdout().lock();
-    if stdout.write_all(sequence.as_bytes()).is_ok() {
-        let _ = stdout.flush();
-    }
-
-    ok
 }
 
 /// Fallback for headless or remote servers: write copied content to ~/.cade/clipboard.txt

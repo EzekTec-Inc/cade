@@ -30,7 +30,7 @@ impl TuiApp {
                 self.draw_dirty = true;
             }
             TuiAction::CopyBlock(text) => {
-                crate::app::clipboard::write_to_clipboard(&text);
+                self.write_to_clipboard(&text);
                 self.show_toast("Content copied to clipboard", ToastLevel::Success);
                 self.draw_dirty = true;
             }

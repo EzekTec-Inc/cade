@@ -896,6 +896,7 @@ pub struct TuiApp {
     pub selection_start: Option<(u16, u16)>,
     pub selection_current: Option<(u16, u16)>,
     pub selection_active: bool,
+    pub(crate) clipboard: Option<arboard::Clipboard>,
 
     // -- Prepared Entries cache
     pub(crate) prepared_cache: Option<PreparedCache>,
@@ -1120,6 +1121,7 @@ impl TuiApp {
             selection_start: None,
             selection_current: None,
             selection_active: false,
+            clipboard: None,
             prepared_cache: None,
             item_cache: std::collections::HashMap::new(),
             last_timeline_w: 0,
@@ -2035,7 +2037,7 @@ impl TuiApp {
         self.selection_current = None;
 
         if !selected_text.is_empty() {
-            crate::app::clipboard::write_to_clipboard(&selected_text);
+            self.write_to_clipboard(&selected_text);
             crate::app::clipboard::write_to_file_fallback(&selected_text);
             self.show_toast(
                 "Copied selection to clipboard",

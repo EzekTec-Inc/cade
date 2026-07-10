@@ -9,7 +9,7 @@ Lives in `cade-core::permissions::PermissionMode`. Cycle with `/mode <name>`,
 or shortcut commands:
 
 | Mode | Internal name | Icon | Behaviour |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Safe** | `default` | ✅ | All tool calls require approval |
 | **Edit freely** | `acceptEdits` | 📝 | File edits auto-approved; other tools ask |
 | **Plan only** | `plan` | 📖 | Read-only — state-mutating tools are blocked |
@@ -79,6 +79,7 @@ to the LLM, but state-mutating tools (any `write_*`, `edit_file`, `bash`,
 execution.
 
 Use plan mode when:
+
 - Reviewing an LLM's proposed changes before committing
 - Exploring an unfamiliar codebase
 - Running an agent against a production checkout
@@ -116,3 +117,13 @@ protection, suspicious-bash detection, and granular allow/deny rules.
 
 A `PreToolUse` hook can supplement plan mode by blocking specific
 patterns even in `default` mode. See [hooks.md](hooks.md).
+
+## Mode Model Retention (Auto-switching LLMs per Mode)
+
+To optimize cost and quality across different tasks, CADE automatically remembers and swaps the active LLM model when you switch between permission modes.
+
+### Key Characteristics
+
+- **Automatic Mapping:** When you are in a specific mode (e.g., `/plan` or `/default`) and run `/model <model_name>`, CADE automatically registers that model as your preference for the active mode.
+- **Seamless Auto-Switching:** Whenever you switch modes (via `/mode`, `/plan`, `/default`, `/yolo`, or dynamically cycling with the `Tab` / `Shift-Tab` keyboard shortcuts), CADE automatically patches the backend agent, updates your active toolset, and displays a TUI notification (`🔄 Auto-switching model to ...`).
+- **Restart Persistence:** Your preferred model mappings are persisted in the gitignored **Local Settings** layer (`.cade/settings.local.json`). When you restart CADE, it will automatically resolve and apply your preferred model for your startup permission mode.

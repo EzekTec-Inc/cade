@@ -75,7 +75,7 @@ impl McpStartResult {
 }
 
 /// Public summary of a running MCP server (for `/mcp` command display).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpStatus {
     pub key: String,
     pub command: String,

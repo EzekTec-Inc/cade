@@ -1039,12 +1039,14 @@ impl Repl {
                 let next = cycle_mode(self.permissions.mode());
                 self.permissions.set_mode(next);
                 self.app.lock().update_mode(next);
+                let _ = self.auto_switch_model_for_mode(next).await;
                 continue;
             }
             if input == "__BACKTAB__" {
                 let prev = cycle_mode_back(self.permissions.mode());
                 self.permissions.set_mode(prev);
                 self.app.lock().update_mode(prev);
+                let _ = self.auto_switch_model_for_mode(prev).await;
                 continue;
             }
 

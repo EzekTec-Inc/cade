@@ -311,6 +311,17 @@ impl SettingsManager {
         self.save_local()
     }
 
+    /// Get the preferred model for a given permission mode.
+    pub fn model_for_mode(&self, mode: crate::permissions::PermissionMode) -> Option<String> {
+        self.local.mode_models.get(&mode.to_string()).cloned()
+    }
+
+    /// Set the preferred model for a given permission mode and persist to local settings.
+    pub fn set_model_for_mode(&mut self, mode: crate::permissions::PermissionMode, model: &str) -> Result<()> {
+        self.local.mode_models.insert(mode.to_string(), model.to_string());
+        self.save_local()
+    }
+
     pub fn global(&self) -> &GlobalSettings {
         &self.global
     }

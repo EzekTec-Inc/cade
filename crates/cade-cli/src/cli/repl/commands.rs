@@ -307,6 +307,7 @@ impl Repl {
                     .show_toast("Permission mode: plan (read-only)", ToastLevel::Info);
                 self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
                 self.sync_plan_tools(true).await;
+                let _ = self.auto_switch_model_for_mode(PermissionMode::Plan).await;
             }
             SlashCmd::Todos => {
                 let mut app = self.app.lock();
@@ -348,6 +349,7 @@ impl Repl {
                     .show_toast("Permission mode: default", ToastLevel::Success);
                 self.tui_ok("✅ Permission mode: default — tools require approval");
                 self.sync_plan_tools(false).await;
+                let _ = self.auto_switch_model_for_mode(PermissionMode::Default).await;
             }
             SlashCmd::Mode(arg) => {
                 return self.cmd_mode(arg).await;

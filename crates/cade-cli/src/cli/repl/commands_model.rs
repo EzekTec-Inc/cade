@@ -30,6 +30,13 @@ impl Repl {
         match self.client.patch_agent_model(&self.agent_id(), &m).await {
             Ok(new_model) => {
                 *self.current_model.lock() = new_model.clone();
+
+                // Save model association for current mode
+                let active_mode = self.permissions.mode();
+                if let Err(e) = self.settings.lock().set_model_for_mode(active_mode, &new_model) {
+                    tracing::error!("Failed to save preferred model for mode {active_mode}: {e}");
+                }
+
                 if new_toolset != old_toolset {
                     *self.current_toolset.lock() = new_toolset;
                     self.spawn_tool_reregister();

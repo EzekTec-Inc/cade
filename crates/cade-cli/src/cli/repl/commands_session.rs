@@ -151,6 +151,7 @@ impl Repl {
             "⚡ Permission mode: bypassPermissions — all tools auto-approved".to_string(),
         ));
         self.sync_plan_tools(false).await;
+        let _ = self.auto_switch_model_for_mode(PermissionMode::BypassPermissions).await;
         Ok(false)
     }
 }
