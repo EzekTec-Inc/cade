@@ -520,6 +520,9 @@ impl Repl {
                 return self.cmd_artifacts().await;
             }
             SlashCmd::New => {
+                // Prompt to summarize the current branch before creating a new conversation
+                let _ = self.ask_and_summarize_branch().await;
+
                 let agent_id = self.agent_id();
                 match self.client.create_conversation(&agent_id, "").await {
                     Ok(conv) => {

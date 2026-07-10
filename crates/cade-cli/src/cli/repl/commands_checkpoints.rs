@@ -6,6 +6,9 @@ use crate::ui::ToastLevel;
 
 impl Repl {
     pub(crate) async fn cmd_fork(&mut self, label_arg: Option<String>) -> Result<bool> {
+        // Prompt to summarize the current branch before forking!
+        let _ = self.ask_and_summarize_branch().await;
+
         let agent_id = self.agent_id();
         let label = label_arg.as_deref().unwrap_or("fork");
         self.tui_dim(format!("  Creating fork point '{label}'…"));
