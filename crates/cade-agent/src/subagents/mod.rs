@@ -48,6 +48,23 @@ impl std::fmt::Display for SubagentTools {
 }
 
 impl SubagentTools {
+    pub fn is_readonly(&self) -> bool {
+        match self {
+            Self::All => false,
+            Self::Readonly => true,
+            Self::List(tools) => {
+                !tools.iter().any(|t| {
+                    matches!(t.as_str(), "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file") || t.contains("__")
+                })
+            }
+            Self::Restricted { allowed_tools, .. } => {
+                !allowed_tools.iter().any(|t| {
+                    matches!(t.as_str(), "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file") || t.contains("__")
+                })
+            }
+        }
+    }
+
     fn from_str(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "all" => Self::All,

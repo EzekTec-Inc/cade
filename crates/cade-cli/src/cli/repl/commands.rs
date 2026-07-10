@@ -697,6 +697,9 @@ impl Repl {
             SlashCmd::Deny(id) => {
                 return self.cmd_deny(id).await;
             }
+            SlashCmd::Steer(arg) => {
+                return self.cmd_steer(arg).await;
+            }
 
             SlashCmd::Providers => {
                 return self.cmd_providers().await;
@@ -806,23 +809,70 @@ impl Repl {
     }
 
     pub(crate) async fn cmd_deny(&self, id: String) -> Result<bool> {
-        let trimmed_id = id.trim();
-        if trimmed_id.is_empty() {
-            self.tui_err("Usage: /deny <id>".to_string());
+        let trimmed = id.trim();
+        if trimmed.is_empty() {
+            self.tui_err("Usage: /deny <id> [feedback...]".to_string());
             return Ok(false);
         }
-        let body = serde_json::json!({ "action": "deny" });
+
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        let trimmed_id = parts[0];
+        let feedback = parts.get(1).map(|&s| s.trim().to_string());
+
+        let body = serde_json::json!({
+            "action": "deny",
+            "feedback": feedback,
+        });
         match self
             .client
             .raw_post(&format!("/approvals/{trimmed_id}/action"), &body)
             .await
         {
             Ok(_) => {
-                self.tui_ok(format!(
-                    "  ✗ Request '{trimmed_id}' DENIED successfully. Subagent notified."
-                ));
+                if let Some(ref fb) = feedback {
+                    self.tui_ok(format!(
+                        "  ✗ Request '{trimmed_id}' DENIED with feedback: \"{fb}\". Subagent notified."
+                    ));
+                } else {
+                    self.tui_ok(format!(
+                        "  ✗ Request '{trimmed_id}' DENIED successfully. Subagent notified."
+                    ));
+                }
             }
             Err(e) => self.tui_err(e.to_string()),
+        }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_steer(&self, arg: String) -> Result<bool> {
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            self.tui_err("Usage: /steer <subagent_id> <message>".to_string());
+            return Ok(false);
+        }
+
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        let subagent_id = parts[0];
+        let message = match parts.get(1) {
+            Some(&m) => m.trim(),
+            None => {
+                self.tui_err("Usage: /steer <subagent_id> <message>".to_string());
+                return Ok(false);
+            }
+        };
+
+        let body = serde_json::json!({ "message": message });
+        match self
+            .client
+            .raw_post(&format!("/subagents/{subagent_id}/steer"), &body)
+            .await
+        {
+            Ok(_) => {
+                self.tui_ok(format!(
+                    "  ✓ Steering instruction successfully sent to subagent '{subagent_id}'."
+                ));
+            }
+            Err(e) => self.tui_err(format!("Failed to steer subagent: {e}")),
         }
         Ok(false)
     }

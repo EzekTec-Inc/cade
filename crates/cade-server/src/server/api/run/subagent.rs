@@ -2,6 +2,33 @@
 
 use crate::server::state::AppState;
 
+use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+
+fn get_writeback_lock(parent_agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let locks_map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = locks_map.lock().unwrap();
+    guard.entry(parent_agent_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+static STEERING_QUEUES: OnceLock<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>> = OnceLock::new();
+
+fn get_steering_queues() -> &'static Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>> {
+    STEERING_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn steer_subagent(subagent_id: &str, message: String) -> bool {
+    let queues = get_steering_queues().lock().unwrap();
+    if let Some(tx) = queues.get(subagent_id) {
+        tx.send(message).is_ok()
+    } else {
+        false
+    }
+}
+
 /// REC-2: Drop guard that ensures the ephemeral agent DB row is cleaned
 /// up even if the agentic loop panics or returns early.  On drop it:
 ///   1. Writes back any subagent findings to the parent (A15).
@@ -38,6 +65,9 @@ impl EphemeralEnvironment {
             return 0;
         }
         self.defused = true;
+
+        let lock_mutex = get_writeback_lock(&self.parent_agent_id);
+        let _lock = lock_mutex.lock().await;
 
         let facts = cade_store::sqlite::memory::extract_subagent_memory_for_writeback(
             &self.db,
@@ -427,9 +457,20 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let task_preview: String = cfg.prompt.chars().take(80).collect();
     let prompt = cfg.prompt_with_test_command();
 
+    // Resolve subagent definition + model via shared helpers
+    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
+    let def_opt = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
+
+    let is_subagent_readonly = def_opt
+        .map(|d| d.tools.is_readonly())
+        .unwrap_or_else(|| {
+            cfg.mode == "plan" || cfg.mode == "recall"
+        });
+
     let use_isolation = std::env::var("CADE_ISOLATION")
         .map(|v| v == "true")
-        .unwrap_or(false);
+        .unwrap_or(false) && !is_subagent_readonly;
     let temp_workspace = if use_isolation {
         let root = std::env::current_dir().unwrap_or_default();
         match cade_agent::tools::IsolatedWorkspace::clone_from(&root) {
@@ -452,11 +493,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
     } else {
         None
     };
-
-    // Resolve subagent definition + model via shared helpers
-    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
-    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
-    let def_opt = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
 
     let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
         .ok()
@@ -727,11 +763,46 @@ pub(super) async fn handle_run_subagent_tool_inner(
         id: subagent_id.clone(),
     };
 
+    // Setup steering channel
+    let (steer_tx, mut steer_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    {
+        let mut queues = get_steering_queues().lock().unwrap();
+        queues.insert(subagent_id.clone(), steer_tx);
+    }
+    struct SteeringCleanup {
+        subagent_id: String,
+    }
+    impl Drop for SteeringCleanup {
+        fn drop(&mut self) {
+            let mut queues = get_steering_queues().lock().unwrap();
+            queues.remove(&self.subagent_id);
+        }
+    }
+    let _steering_cleanup = SteeringCleanup { subagent_id: subagent_id.clone() };
+
     // Wall-clock timeout guard (REC-1, pre-existing).
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
     let mut cumulative_tokens = 0u64;
     let loop_result = tokio::time::timeout(timeout_dur, async {
         for iter in 0..max_iters {
+            // Consume any queued steering messages
+            let mut steer_msgs = Vec::new();
+            while let Ok(msg) = steer_rx.try_recv() {
+                steer_msgs.push(msg);
+            }
+            if !steer_msgs.is_empty() {
+                let steering_content = format!(
+                    "SYSTEM INTERVENTION: The user has redirected your task mid-run with the following instructions:\n\n{}",
+                    steer_msgs.join("\n\n")
+                );
+                messages.push(cade_ai::LlmMessage {
+                    role: "user".to_string(),
+                    content: steering_content,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    images: None,
+                });
+            }
             if let Some(budget) = cfg.max_tokens_budget {
                 let mut iter_input_tokens = 0;
                 for m in &messages {
@@ -1743,6 +1814,9 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
                     return Ok(true);
                 } else if status == "denied" {
                     return Ok(false);
+                } else if status.starts_with("denied:") {
+                    let feedback = &status["denied:".len()..];
+                    return Err(format!("Permission Denied: {}", feedback));
                 }
             }
 

@@ -21,6 +21,7 @@ pub async fn list_approvals(
 #[derive(serde::Deserialize)]
 pub struct ActionPayload {
     pub action: String, // "approve" or "deny"
+    pub feedback: Option<String>,
 }
 
 pub async fn action_approval(
@@ -29,8 +30,18 @@ pub async fn action_approval(
     Json(payload): Json<ActionPayload>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let status = match payload.action.as_str() {
-        "approve" => "approved",
-        "deny" => "denied",
+        "approve" => "approved".to_string(),
+        "deny" => {
+            if let Some(fb) = &payload.feedback {
+                if !fb.trim().is_empty() {
+                    format!("denied:{}", fb.trim())
+                } else {
+                    "denied".to_string()
+                }
+            } else {
+                "denied".to_string()
+            }
+        }
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -55,7 +66,7 @@ pub async fn action_approval(
         ));
     }
 
-    cade_store::sqlite::set_approval_status(&state.db, &id, status)
+    cade_store::sqlite::set_approval_status(&state.db, &id, &status)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(json!({ "id": id, "status": status })))

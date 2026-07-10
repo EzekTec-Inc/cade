@@ -75,6 +75,10 @@ pub fn router(state: AppState) -> Router {
             post(approvals::action_approval),
         )
         .route(
+            "/v1/subagents/{id}/steer",
+            post(run::steer_subagent_handler),
+        )
+        .route(
             "/v1/workflows/{workflow_name}",
             post(workflows::dispatch_workflow),
         )

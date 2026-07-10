@@ -976,3 +976,23 @@ pub(super) fn extract_file_paths(arguments: &serde_json::Value) -> String {
     }
     serde_json::to_string(&paths).unwrap_or_else(|_| "[]".to_string())
 }
+
+#[derive(serde::Deserialize)]
+pub struct SteerPayload {
+    pub message: String,
+}
+
+pub async fn steer_subagent_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+    Json(payload): Json<SteerPayload>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    if subagent::steer_subagent(&subagent_id, payload.message) {
+        Ok(Json(json!({ "status": "success", "subagent_id": subagent_id })))
+    } else {
+        Err((
+            axum::http::StatusCode::NOT_FOUND,
+            format!("Subagent '{}' not active or steering queue closed.", subagent_id),
+        ))
+    }
+}
