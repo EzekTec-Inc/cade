@@ -56,6 +56,15 @@ the GUI palette uses the same triggers via `cade-core::resources::palette`.
 | `/approve-always <pattern>` | | Permanent allow rule |
 | `/deny-always <pattern>` | | Permanent deny rule |
 
+## Approvals & Multi-Agent Steering
+
+| Command | Description |
+|---|---|
+| `/approvals` | List all active pending tool approvals |
+| `/approve <id>` | Approve a pending tool authorization request |
+| `/deny <id> [feedback...]` | Deny a request with optional steering feedback (notifies the subagent) |
+| `/steer <subagent_id> <message>` | Intervene/redirect an active background subagent with instructions |
+
 ## Memory
 
 | Command | Description |

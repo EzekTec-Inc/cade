@@ -128,6 +128,27 @@ A subagent runs securely via the `SubagentExecutor` leveraging a stateful design
   the same `cade_agent::tools::manager::dispatch` path
 - Final result is returned as a string to the parent's tool-call result. Status updates (`subagent_started` and `subagent_complete`) are streamed natively to the TUI via the `SubagentEventEmitter`.
 
+## Subagent Steering & Human-in-the-Loop Redirection
+
+To maintain strict, safe bounds over autonomous execution, CADE provides a powerful **Human-in-the-Loop Steering and Redirection protocol**:
+
+### 1. Denial Feedback (`/deny <id> [feedback...]`)
+When a background subagent requests permission to execute a potentially destructive or unsafe tool (like `bash` or `write_file`), it suspends its thread asynchronously and waits. 
+*   If you wish to reject the tool call, you can run `/deny <id>`.
+*   Additionally, you can supply **custom redirection feedback** directly with your denial:
+    ```bash
+    /deny app-1234 use the existing standard library instead of creating a new file!
+    ```
+*   The CADE server attaches this feedback to the approval record. When the subagent resumes, instead of receiving a generic `PermissionDenied` error, it receives your exact, formatted feedback as a **system intervention message** (e.g. `[System Note: Tool call 'write_file' was denied by the user with feedback: "..."]`). The subagent is instructed to immediately revise its plan, preserving execution safety.
+
+### 2. Dynamic Steering (`/steer <subagent_id> <message>`)
+If a subagent is running a long-horizon task or is suspended awaiting permission, you can inject active instructions to dynamically steer its execution at any time:
+```bash
+/steer sa_e83bc4 please stop compiling everything in release mode, run cargo check instead!
+```
+*   The server intercepts this command via the `/subagents/:id/steer` endpoint, pushes it to the subagent's active instruction stream, and triggers a dynamic LLM redirection turn.
+*   This allows you to change constraints, correct early mistakes, or redirect subagents mid-flight without having to cancel, kill, or restart the entire task.
+
 ## Background runs
 
 Set `background: true` to detach. The call returns immediately with a
