@@ -46,6 +46,30 @@ pub fn shell_command_sync(command: &str) -> std::process::Command {
     }
 }
 
+/// Open a URL dynamically in the default system browser based on the target OS.
+/// Hides platform-appropriate shell-opening commands securely.
+pub fn open_browser(url: &str) -> std::io::Result<std::process::Child> {
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd").args(["/C", "start", url]).spawn()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Unsupported target platform",
+        ))
+    }
+}
+
 // region:    --- Tests
 
 #[cfg(test)]

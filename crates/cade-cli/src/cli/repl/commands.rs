@@ -139,17 +139,10 @@ impl Repl {
                     "  Opening CADE Web GUI Dashboard in default browser…".to_string(),
                 ));
 
-                #[cfg(target_os = "linux")]
-                {
-                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = std::process::Command::new("open").arg(&url).spawn();
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn();
+                if let Err(e) = cade_core::shell::open_browser(&url) {
+                    let _ = app.push(RenderLine::ErrorMsg(format!(
+                        "  Failed to open browser: {e}"
+                    )));
                 }
 
                 return Ok(false);
