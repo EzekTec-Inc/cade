@@ -884,3 +884,80 @@ async fn test_merge_session_summaries_mocked() {
     assert_eq!(res, "Merged Summary Content");
     assert_eq!(mock_llm.calls.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn test_touched_files_extraction_parsing_formatting_and_stripping() {
+    use serde_json::json;
+
+    // 1. Test extraction from MessageRows
+    let rows = vec![
+        sqlite::MessageRow {
+            id: "1".to_string(),
+            agent_id: "a1".to_string(),
+            conversation_id: None,
+            role: "assistant".to_string(),
+            content: json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "read_file",
+                        "arguments": {
+                            "path": "src/lib.rs"
+                        }
+                    },
+                    {
+                        "id": "c2",
+                        "name": "write_file",
+                        "arguments": {
+                            "path": "Cargo.toml"
+                        }
+                    }
+                ]
+            }),
+            char_count: 0,
+        },
+        sqlite::MessageRow {
+            id: "2".to_string(),
+            agent_id: "a1".to_string(),
+            conversation_id: None,
+            role: "assistant".to_string(),
+            content: json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c3",
+                        "name": "apply_patch",
+                        "arguments": {
+                            "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,3 +1,4 @@\n"
+                        }
+                    }
+                ]
+            }),
+            char_count: 0,
+        }
+    ];
+
+    let (reads, mods) = extract_touched_files(&rows);
+    assert_eq!(reads, vec!["src/lib.rs".to_string()]);
+    assert_eq!(mods, vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]);
+
+    // 2. Test formatting
+    let formatted = format_touched_files_section(&reads, &mods);
+    assert!(formatted.contains("### Files Checked in this Session:"));
+    assert!(formatted.contains("* Read: [src/lib.rs]"));
+    assert!(formatted.contains("* Modified: [Cargo.toml, src/main.rs]"));
+
+    // 3. Test parsing from existing
+    let (parsed_reads, parsed_mods) = parse_existing_touched_files(&formatted);
+    assert!(parsed_reads.contains("src/lib.rs"));
+    assert!(parsed_mods.contains("Cargo.toml"));
+    assert!(parsed_mods.contains("src/main.rs"));
+
+    // 4. Test stripping
+    let combined_summary = format!("This is the summary content.{}", formatted);
+    let stripped = strip_touched_files_section(&combined_summary);
+    assert_eq!(stripped, "This is the summary content.");
+}

@@ -581,10 +581,35 @@ pub async fn consolidate_agent(
         .map(|(_, val, _)| val.as_str())
         .unwrap_or("");
 
-    let new_value = if existing.is_empty() {
-        final_summary.clone()
+    // Extract newly touched files from the dropped turns being consolidated
+    let (new_read, new_mod) = extract_touched_files(&all_rows);
+
+    // Parse any existing touched files from the existing summary block
+    let (mut accum_read, mut mut_mod) = parse_existing_touched_files(existing);
+    
+    // Merge lists
+    for r in new_read {
+        accum_read.insert(r);
+    }
+    for m in new_mod {
+        mut_mod.insert(m);
+    }
+
+    let mut accum_read_vec: Vec<String> = accum_read.into_iter().collect();
+    let mut mut_mod_vec: Vec<String> = mut_mod.into_iter().collect();
+    accum_read_vec.sort();
+    mut_mod_vec.sort();
+
+    let files_metadata = format_touched_files_section(&accum_read_vec, &mut_mod_vec);
+
+    // Strip file metadata from the summaries before the merge pass
+    let clean_existing = strip_touched_files_section(existing);
+    let clean_final_summary = strip_touched_files_section(&final_summary);
+
+    let new_value = if clean_existing.is_empty() {
+        format!("{clean_final_summary}{files_metadata}")
     } else {
-        let combined = format!("{existing}\n\n---\n\n{final_summary}");
+        let combined = format!("{clean_existing}\n\n---\n\n{clean_final_summary}");
         if combined.chars().count() > SESSION_SUMMARY_MAX_CHARS {
             // Under Candidate A: merge existing and new summaries iteratively
             // using an LLM pass to compress into a single, high-density summary
@@ -599,8 +624,8 @@ pub async fn consolidate_agent(
                 merge_session_summaries(
                     state.clone(),
                     agent_id.to_string(),
-                    existing.to_string(),
-                    final_summary.clone(),
+                    clean_existing,
+                    clean_final_summary,
                 ),
             )
             .await
@@ -611,7 +636,7 @@ pub async fn consolidate_agent(
                         agent_id,
                         merged.chars().count()
                     );
-                    merged
+                    format!("{merged}{files_metadata}")
                 }
                 Ok(Err(e)) => {
                     tracing::warn!(
@@ -620,7 +645,7 @@ pub async fn consolidate_agent(
                         e
                     );
                     rotate_and_archive_session_summary(state, agent_id, existing);
-                    final_summary.clone()
+                    format!("{final_summary}{files_metadata}")
                 }
                 Err(_) => {
                     tracing::warn!(
@@ -628,11 +653,11 @@ pub async fn consolidate_agent(
                         agent_id
                     );
                     rotate_and_archive_session_summary(state, agent_id, existing);
-                    final_summary.clone()
+                    format!("{final_summary}{files_metadata}")
                 }
             }
         } else {
-            combined
+            format!("{combined}{files_metadata}")
         }
     };
 
