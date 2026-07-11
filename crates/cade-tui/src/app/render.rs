@@ -39,7 +39,7 @@ use super::layout::sidebar::{SidebarState, render_sidebar};
 use super::layout::toast::render_toast;
 use super::timeline::{
     PreparedTimelineEntry, TimelineEntry, TimelineKey, build_timeline_entries,
-    prepare_timeline_entries, render_timeline_viewport,
+    render_timeline_viewport, TimelineLayoutEngine,
 };
 use super::{
     BRAILLE, DOTS, FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT,
@@ -141,8 +141,8 @@ pub(crate) fn render_frame(
     last_input_width: &mut u16,
     nerd: bool,
     subagent_trackers: &[crate::subagent_tracker::SubagentTracker],
-    item_cache: &mut std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
-    last_timeline_w: &mut usize,
+    layout_engine: &mut TimelineLayoutEngine,
+    content_version: u64,
 ) -> (u16, Option<(u16, u16)>, ratatui::layout::Rect) {
     // returns max_skip for V-04 scroll clamping + messages_area for click-to-copy
     let area = frame.area();
@@ -294,25 +294,17 @@ pub(crate) fn render_frame(
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
-    if timeline_w != *last_timeline_w {
-        item_cache.clear();
-        *last_timeline_w = timeline_w;
-    }
-    let timeline_entries = build_timeline_entries(lines);
-    let mut prepared = prepare_timeline_entries(
-        &timeline_entries,
+    let mut prepared = layout_engine.layout_items(
+        lines,
         timeline_w,
         expand_all,
         expanded_items,
         colors,
         nerd,
-        item_cache,
-    );
+        content_version,
+    ).to_vec();
     if let Some(s) = streaming {
-        let next_index = timeline_entries
-            .last()
-            .map(|e| e.key.index + 1)
-            .unwrap_or(0);
+        let next_index = lines.len();
         let streaming_entry = TimelineEntry::streaming(next_index, s);
         let mut lines = Vec::new();
         let effective_w = timeline_w.saturating_sub(2);

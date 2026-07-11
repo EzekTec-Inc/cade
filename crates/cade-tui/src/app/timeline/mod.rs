@@ -653,3 +653,118 @@ pub(crate) fn timeline_key_expanded(
 ) -> bool {
     expand_all || expanded_items.contains(key)
 }
+
+/// A deep, cohesive layout engine that encapsulates text wrapping, sizing,
+/// prompt-specific card styling, caching, and cache invalidation.
+#[derive(Clone, Default)]
+pub(crate) struct TimelineLayoutEngine {
+    pub(crate) item_cache: std::collections::HashMap<
+        (TimelineKey, bool),
+        PreparedTimelineEntry,
+    >,
+    pub(crate) entries: Vec<PreparedTimelineEntry>,
+    pub(crate) version: u64,
+    pub(crate) timeline_w: usize,
+    pub(crate) expand_all: bool,
+    pub(crate) expanded_hash: u64,
+}
+
+impl TimelineLayoutEngine {
+    pub fn new() -> Self {
+        Self {
+            item_cache: std::collections::HashMap::new(),
+            entries: Vec::new(),
+            version: 0,
+            timeline_w: 0,
+            expand_all: false,
+            expanded_hash: 0,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn clear(&mut self) {
+        self.item_cache.clear();
+        self.entries.clear();
+        self.version = 0;
+        self.timeline_w = 0;
+        self.expand_all = false;
+        self.expanded_hash = 0;
+    }
+
+    pub fn prepare_entries(
+        &mut self,
+        entries: &[TimelineEntry<'_>],
+        width: usize,
+        expand_all: bool,
+        expanded_items: &std::collections::HashSet<TimelineKey>,
+        colors: &ThemeColors,
+        nerd: bool,
+    ) -> Vec<PreparedTimelineEntry> {
+        prepare_timeline_entries(
+            entries,
+            width,
+            expand_all,
+            expanded_items,
+            colors,
+            nerd,
+            &mut self.item_cache,
+        )
+    }
+
+    /// Evaluates layout for a sequence of conversation lines, automatically managing caching.
+    /// If content, width, or expanded state changes, the layout is automatically recalculated.
+    pub fn layout_items(
+        &mut self,
+        lines: &[RenderLine],
+        timeline_w: usize,
+        expand_all: bool,
+        expanded_items: &std::collections::HashSet<TimelineKey>,
+        colors: &ThemeColors,
+        nerd: bool,
+        content_version: u64,
+    ) -> &[PreparedTimelineEntry] {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Derive a stable hash of expanded_items for cache invalidation.
+        let expanded_hash = {
+            let mut h = DefaultHasher::new();
+            let mut items: Vec<_> = expanded_items.iter().collect();
+            items.sort();
+            for k in &items {
+                k.hash(&mut h);
+            }
+            h.finish()
+        };
+
+        if self.version == content_version
+            && self.timeline_w == timeline_w
+            && self.expand_all == expand_all
+            && self.expanded_hash == expanded_hash
+        {
+            // Cache hit
+            &self.entries
+        } else {
+            // Cache miss — rebuild entries
+            if self.timeline_w != timeline_w {
+                self.item_cache.clear();
+            }
+            let entries = build_timeline_entries(lines);
+            let p = prepare_timeline_entries(
+                &entries,
+                timeline_w,
+                expand_all,
+                expanded_items,
+                colors,
+                nerd,
+                &mut self.item_cache,
+            );
+            self.entries = p;
+            self.version = content_version;
+            self.timeline_w = timeline_w;
+            self.expand_all = expand_all;
+            self.expanded_hash = expanded_hash;
+            &self.entries
+        }
+    }
+}

@@ -898,13 +898,8 @@ pub struct TuiApp {
     pub selection_active: bool,
     pub(crate) clipboard: Option<arboard::Clipboard>,
 
-    // -- Prepared Entries cache
-    pub(crate) prepared_cache: Option<PreparedCache>,
-    pub(crate) item_cache: std::collections::HashMap<
-        (crate::app::timeline::TimelineKey, bool),
-        crate::app::timeline::PreparedTimelineEntry,
-    >,
-    pub(crate) last_timeline_w: usize,
+    // -- Layout engine
+    pub(crate) layout_engine: crate::app::timeline::TimelineLayoutEngine,
 
     /// Monotonically increasing version counter for conversation content.
     /// Incremented on every `push()`, `commit_streaming()`, `append_live_output_line()`, `clear()`.
@@ -1122,9 +1117,7 @@ impl TuiApp {
             selection_current: None,
             selection_active: false,
             clipboard: None,
-            prepared_cache: None,
-            item_cache: std::collections::HashMap::new(),
-            last_timeline_w: 0,
+            layout_engine: crate::app::timeline::TimelineLayoutEngine::new(),
             content_version: 0,
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
@@ -1444,8 +1437,6 @@ impl TuiApp {
         // closure (which already borrows self.terminal mutably).
         let mut overlay_stack = std::mem::take(&mut self.overlays);
         let mut slot_mgr = std::mem::take(&mut self.slots);
-        let item_cache = &mut self.item_cache;
-        let last_timeline_w = &mut self.last_timeline_w;
 
         let selection_active = self.selection_active;
         let selection_start = self.selection_start;
@@ -1490,8 +1481,8 @@ impl TuiApp {
                 &mut self.last_input_width,
                 nerd,
                 &self.subagent_trackers,
-                item_cache,
-                last_timeline_w,
+                &mut self.layout_engine,
+                self.content_version,
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;
@@ -1736,15 +1727,14 @@ impl TuiApp {
             if !self.follow && self.scroll > 0 {
                 let timeline_entries = crate::app::timeline::build_timeline_entries(lines);
                 let old_timeline_w = (old_width as usize).saturating_sub(4).max(1);
-                let mut temp_cache = std::collections::HashMap::new();
-                let prepared_old = crate::app::timeline::prepare_timeline_entries(
+                let mut temp_engine = crate::app::timeline::TimelineLayoutEngine::new();
+                let prepared_old = temp_engine.prepare_entries(
                     &timeline_entries,
                     old_timeline_w,
                     self.expand_all,
                     &self.expanded_items,
                     &self.colors,
                     self.use_nerd_fonts,
-                    &mut temp_cache,
                 );
 
                 let total_visual_old: u16 = prepared_old.iter().map(|p| p.rows).sum();
@@ -1768,14 +1758,13 @@ impl TuiApp {
                 }
 
                 let new_timeline_w = (sz.0 as usize).saturating_sub(4).max(1);
-                let prepared_new = crate::app::timeline::prepare_timeline_entries(
+                let prepared_new = self.layout_engine.prepare_entries(
                     &timeline_entries,
                     new_timeline_w,
                     self.expand_all,
                     &self.expanded_items,
                     &self.colors,
                     self.use_nerd_fonts,
-                    &mut self.item_cache,
                 );
                 let total_visual_new: u16 = prepared_new.iter().map(|p| p.rows).sum();
                 let mut new_item_start = 0u16;
@@ -1798,94 +1787,24 @@ impl TuiApp {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct PreparedCache {
-    pub(crate) entries: Vec<crate::app::timeline::PreparedTimelineEntry>,
-    pub(crate) item_cache: std::collections::HashMap<
-        (crate::app::timeline::TimelineKey, bool),
-        crate::app::timeline::PreparedTimelineEntry,
-    >,
-    pub version: u64,
-    pub timeline_w: usize,
-    pub expand_all: bool,
-    pub expanded_hash: u64,
-}
-
 impl TuiApp {
     /// Build the prepared-timeline-entry list the same way `render_frame` does.
     /// Uses a content-version cache to avoid re-parsing markdown / ANSI on every frame and on every mouse click.
     pub(crate) fn build_prepared_entries(
         &mut self,
     ) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
 
-        // Derive a stable hash of expanded_items for cache invalidation.
-        let expanded_hash = {
-            let mut h = DefaultHasher::new();
-            let mut items: Vec<_> = self.expanded_items.iter().collect();
-            items.sort();
-            for k in &items {
-                k.hash(&mut h);
-            }
-            h.finish()
-        };
-
         // Try cache for the non-streaming portion.
-        let mut prepared = if let Some(ref mut cache) = self.prepared_cache {
-            if cache.version == self.content_version
-                && cache.timeline_w == timeline_w
-                && cache.expand_all == self.expand_all
-                && cache.expanded_hash == expanded_hash
-            {
-                // Cache hit — avoid full rebuild.
-                cache.entries.clone()
-            } else {
-                // Cache miss — rebuild non-streaming entries.
-                if cache.timeline_w != timeline_w {
-                    cache.item_cache.clear();
-                }
-                let entries = crate::app::timeline::build_timeline_entries(&self.lines);
-                let p = crate::app::timeline::prepare_timeline_entries(
-                    &entries,
-                    timeline_w,
-                    self.expand_all,
-                    &self.expanded_items,
-                    &self.colors,
-                    self.use_nerd_fonts,
-                    &mut cache.item_cache,
-                );
-                cache.entries = p.clone();
-                cache.version = self.content_version;
-                cache.timeline_w = timeline_w;
-                cache.expand_all = self.expand_all;
-                cache.expanded_hash = expanded_hash;
-                p
-            }
-        } else {
-            let entries = crate::app::timeline::build_timeline_entries(&self.lines);
-            let mut item_cache = std::collections::HashMap::new();
-            let p = crate::app::timeline::prepare_timeline_entries(
-                &entries,
-                timeline_w,
-                self.expand_all,
-                &self.expanded_items,
-                &self.colors,
-                self.use_nerd_fonts,
-                &mut item_cache,
-            );
-            self.prepared_cache = Some(PreparedCache {
-                entries: p.clone(),
-                item_cache,
-                version: self.content_version,
-                timeline_w,
-                expand_all: self.expand_all,
-                expanded_hash,
-            });
-            p
-        };
+        let mut prepared = self.layout_engine.layout_items(
+            &self.lines,
+            timeline_w,
+            self.expand_all,
+            &self.expanded_items,
+            &self.colors,
+            self.use_nerd_fonts,
+            self.content_version,
+        ).to_vec();
 
         // Streaming entry (always rebuilt — changes every tick, not cached).
         if self.streaming_active {
@@ -1905,12 +1824,15 @@ impl TuiApp {
                 &self.colors,
                 self.use_nerd_fonts,
             );
-            let stream_rows: u16 = stream_lines
-                .iter()
-                .map(|l| crate::app::render::count_wrapped_rows(l, effective_w as u16))
-                .sum();
+            // Pre-wrap streaming lines just like we do for standard cached lines in LayoutEngine,
+            // avoiding paragraph layout overflow.
+            let mut pre_wrapped_stream_lines = Vec::new();
+            for l in stream_lines {
+                pre_wrapped_stream_lines.extend(crate::app::timeline::wrap_line(l, effective_w as u16));
+            }
+            let stream_rows = pre_wrapped_stream_lines.len() as u16;
             prepared.push(crate::app::timeline::PreparedTimelineEntry {
-                lines: stream_lines,
+                lines: pre_wrapped_stream_lines,
                 rows: stream_rows,
                 card_style: crate::app::timeline::CardStyle::Assistant,
             });
