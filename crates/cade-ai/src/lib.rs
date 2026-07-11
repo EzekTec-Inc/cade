@@ -23,7 +23,7 @@ pub mod vcr;
 pub use catalogue::{CATALOGUE, ModelEntry};
 pub use registry::{ModelPricing, ModelRegistry, PricingRule};
 pub use router::*;
-pub use tokenizer::{FALLBACK_CHARS_PER_TOKEN, chars_for_tokens, count_tokens};
+pub use tokenizer::{FALLBACK_CHARS_PER_TOKEN, chars_for_tokens, count_tokens, PromptBudgetManager, ContextBudgetResult};
 pub use types::*;
 pub use utils::*;
 

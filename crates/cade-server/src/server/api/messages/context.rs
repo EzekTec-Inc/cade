@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use cade_ai::{LlmMessage, catalogue};
+use cade_ai::{LlmMessage, catalogue, PromptBudgetManager};
 use cade_store::sqlite::{self};
 use serde_json::{Value, json};
 
@@ -631,6 +631,8 @@ pub(crate) async fn build_context(
         turns.remove(0);
     }
 
+    let budget_manager = PromptBudgetManager::new();
+
     // ── P2-1: token-based system overhead deduction ─────────────────────────
     // Previously this counted raw chars of all leading system messages,
     // which over-deducted for verbose system text (English is ~3.5–4 c/t,
@@ -646,7 +648,7 @@ pub(crate) async fn build_context(
         .map(|m| m.content.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let system_tokens = cade_ai::count_tokens(&agent.model, &system_text);
+    let system_tokens = budget_manager.count_tokens(&agent.model, &system_text);
     // Defence in depth: if the tokenizer reports zero tokens on non-empty
     // text (encoder load failed and char fallback rounded to zero), fall
     // back to the legacy raw-char deduction so we never *under*-reserve.
@@ -655,7 +657,7 @@ pub(crate) async fn build_context(
     } else if system_tokens == 0 {
         system_text.chars().count()
     } else {
-        cade_ai::chars_for_tokens(system_tokens)
+        budget_manager.chars_for_tokens(system_tokens)
     };
     let message_budget = context_char_budget.saturating_sub(system_overhead_chars);
 
@@ -663,53 +665,16 @@ pub(crate) async fn build_context(
     let mut budget_used: usize = 0;
     let mut omitted_turns: usize = 0;
 
-    // Phase 4 Part 2: per-message + per-turn cost is now anchored to real
-    // BPE tokens via `count_tokens` and converted back to a char budget
-    // through `chars_for_tokens`.  This matches the system-overhead path
-    // (P2-1) so the entire walker now uses one consistent token model.
-    // For tool_calls we count the JSON-serialised arguments string the
-    // same way the provider serialises them on the wire.
-    fn turn_cost_chars(model: &str, turn: &[LlmMessage]) -> usize {
-        let mut total_tokens = 0usize;
-        for m in turn {
-            if !m.content.is_empty() {
-                total_tokens += cade_ai::count_tokens(model, &m.content);
-            }
-            if let Some(tcs) = m.tool_calls.as_deref() {
-                for tc in tcs {
-                    let json = tc.arguments.to_string();
-                    if !json.is_empty() {
-                        total_tokens += cade_ai::count_tokens(model, &json);
-                    }
-                }
-            }
-        }
-        // Defence-in-depth: if the encoder load failed and returned 0
-        // tokens for non-empty text, fall back to raw chars so we never
-        // *under*-cost the turn.
-        let fallback_chars: usize = turn
-            .iter()
-            .map(|m| {
-                m.content.chars().count()
-                    + m.tool_calls
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|tc| tc.arguments.to_string().len())
-                        .sum::<usize>()
-            })
-            .sum();
-        if total_tokens == 0 && fallback_chars > 0 {
-            fallback_chars
-        } else {
-            cade_ai::chars_for_tokens(total_tokens)
-        }
-    }
-
     let turns_len = turns.len();
 
     for mut turn in turns.into_iter().rev() {
-        let raw_chars: usize = turn_cost_chars(&agent.model, &turn);
+        let turn_cost_toks = budget_manager.turn_cost(&agent.model, &turn);
+        let fallback_chars = budget_manager.turn_cost_fallback_chars(&turn);
+        let raw_chars = if turn_cost_toks == 0 && fallback_chars > 0 {
+            fallback_chars
+        } else {
+            budget_manager.chars_for_tokens(turn_cost_toks)
+        };
 
         let mut turn_chars = raw_chars;
 
@@ -793,7 +758,13 @@ pub(crate) async fn build_context(
         // selected[0] is the most-recent turn (pushed first in the rev-walk).
         // Pop the oldest, which is the last element.
         if let Some(dropped) = selected.pop() {
-            let chars: usize = turn_cost_chars(&agent.model, &dropped);
+            let turn_cost_toks = budget_manager.turn_cost(&agent.model, &dropped);
+            let fallback_chars = budget_manager.turn_cost_fallback_chars(&dropped);
+            let chars = if turn_cost_toks == 0 && fallback_chars > 0 {
+                fallback_chars
+            } else {
+                budget_manager.chars_for_tokens(turn_cost_toks)
+            };
             budget_used = budget_used.saturating_sub(chars);
             preflight_dropped += 1;
         }
@@ -1125,22 +1096,7 @@ pub(crate) async fn build_context(
     let history_tokens: usize = messages
         .iter()
         .skip_while(|m| m.role == "system")
-        .map(|m| {
-            let mut t = if m.content.is_empty() {
-                0
-            } else {
-                cade_ai::count_tokens(&agent.model, &m.content)
-            };
-            if let Some(tcs) = m.tool_calls.as_deref() {
-                for tc in tcs {
-                    let json = tc.arguments.to_string();
-                    if !json.is_empty() {
-                        t += cade_ai::count_tokens(&agent.model, &json);
-                    }
-                }
-            }
-            t
-        })
+        .map(|m| budget_manager.turn_cost(&agent.model, std::slice::from_ref(m)))
         .sum();
     let total_tokens: usize = system_tokens.saturating_add(history_tokens);
     let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
@@ -1499,19 +1455,10 @@ pub(crate) async fn compute_context_stats(
     let mut turns_omitted = 0usize;
     let mut chars_used = 0usize;
 
+    let budget_manager = PromptBudgetManager::new();
+
     for turn in turns.iter().rev() {
-        let turn_chars: usize = turn
-            .iter()
-            .map(|m| {
-                m.content.chars().count()
-                    + m.tool_calls
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|tc| tc.arguments.to_string().len())
-                        .sum::<usize>()
-            })
-            .sum();
+        let turn_chars = budget_manager.turn_cost_fallback_chars(turn);
 
         if turns_included == 0 || chars_used + turn_chars <= message_budget {
             turns_included += 1;

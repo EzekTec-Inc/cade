@@ -132,6 +132,14 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     ),
     (
         "gemini",
+        "Gemini 2.5 Flash",
+        "gemini/gemini-2.5-flash",
+        "gemini",
+        8192,
+        1_048_576,
+    ),
+    (
+        "gemini",
         "Gemini 2.0 Flash",
         "gemini/gemini-2.0-flash",
         "gemini",
@@ -306,7 +314,7 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
         // - gemini-2.0-flash (actually fast — 2.5-pro is the large reasoning model).
         "anthropic" => "anthropic/claude-haiku-4-5".to_string(),
         "openai" => "openai/o4-mini".to_string(),
-        "gemini" => "gemini/gemini-2.0-flash".to_string(),
+        "gemini" => "gemini/gemini-2.5-flash".to_string(),
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
 }
@@ -472,9 +480,9 @@ mod tests {
     }
 
     #[test]
-    fn fast_model_gemini_returns_2_0_flash() {
+    fn fast_model_gemini_returns_2_5_flash() {
         let result = super::fast_model_for_main_model("gemini/gemini-2.5-pro");
-        assert_eq!(result, "gemini/gemini-2.0-flash");
+        assert_eq!(result, "gemini/gemini-2.5-flash");
     }
 
     #[test]

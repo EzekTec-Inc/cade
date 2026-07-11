@@ -1814,8 +1814,7 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
                     return Ok(true);
                 } else if status == "denied" {
                     return Ok(false);
-                } else if status.starts_with("denied:") {
-                    let feedback = &status["denied:".len()..];
+                } else if let Some(feedback) = status.strip_prefix("denied:") {
                     return Err(format!("Permission Denied: {}", feedback));
                 }
             }

@@ -268,6 +268,8 @@ pub async fn consolidate_agent(
     let turns = group_turns(&flat, max_turn_chars);
     let total_turns = turns.len();
 
+    let budget_manager = cade_ai::PromptBudgetManager::new();
+
     let mut in_context = 0usize;
     let mut used = 0usize;
     for turn in turns.iter().rev() {
@@ -275,14 +277,14 @@ pub async fn consolidate_agent(
         let mut fallback_chars = 0usize;
         for (_, text) in turn {
             if !text.is_empty() {
-                total_tokens += cade_ai::count_tokens(&agent.model, text);
+                total_tokens += budget_manager.count_tokens(&agent.model, text);
             }
             fallback_chars += text.chars().count();
         }
         let chars = if total_tokens == 0 && fallback_chars > 0 {
             fallback_chars
         } else {
-            cade_ai::chars_for_tokens(total_tokens)
+            budget_manager.chars_for_tokens(total_tokens)
         };
 
         if used + chars <= history_budget {
@@ -1378,11 +1380,10 @@ impl SleeptimeAgent {
                     tokio::time::sleep(poll_interval).await;
                 }
 
-                if let Some(ref c) = cancel {
-                    if c.is_cancelled() {
+                if let Some(ref c) = cancel
+                    && c.is_cancelled() {
                         break;
                     }
-                }
 
                 let mut pending: Vec<(String, Option<String>)> = Vec::new();
                 {

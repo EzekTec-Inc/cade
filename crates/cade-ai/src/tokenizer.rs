@@ -13,6 +13,7 @@
 
 use once_cell::sync::Lazy;
 use tiktoken_rs::CoreBPE;
+use crate::types::LlmMessage;
 
 /// Default fallback ratio when *all* tokenizer paths fail (encoder load
 /// error, panic, unknown family).  Conservative: 3 chars/token leaves
@@ -106,11 +107,10 @@ pub fn resolve_token_counter(model_id: &str) -> Box<dyn TokenCounter> {
         || lower.contains("/o3")
         || lower.contains("/o4");
 
-    if is_o200k {
-        if let Some(enc) = O200K.as_ref() {
+    if is_o200k
+        && let Some(enc) = O200K.as_ref() {
             return Box::new(TiktokenAdapter { encoder: enc });
         }
-    }
 
     if let Some(enc) = CL100K.as_ref() {
         if lower.contains("anthropic") || lower.contains("claude") {
@@ -148,6 +148,122 @@ pub fn count_tokens(model_id: &str, text: &str) -> usize {
 /// char-based budget API but anchor it to a real token window.
 pub fn chars_for_tokens(tokens: usize) -> usize {
     tokens.saturating_mul(FALLBACK_CHARS_PER_TOKEN)
+}
+
+/// A deep, concrete manager that unifies token counting, conversion math,
+/// and context budgeting calculations behind a simple, high-leverage interface.
+#[derive(Debug, Clone, Default)]
+pub struct PromptBudgetManager;
+
+impl PromptBudgetManager {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Count tokens in `text` using the best available encoder for `model_id`.
+    pub fn count_tokens(&self, model_id: &str, text: &str) -> usize {
+        count_tokens(model_id, text)
+    }
+
+    /// Compute the total token cost of a turn (all content + tool calls)
+    pub fn turn_cost(&self, model_id: &str, turn: &[LlmMessage]) -> usize {
+        let mut total_tokens = 0usize;
+        for m in turn {
+            if !m.content.is_empty() {
+                total_tokens += self.count_tokens(model_id, &m.content);
+            }
+            if let Some(tcs) = m.tool_calls.as_deref() {
+                for tc in tcs {
+                    let json = tc.arguments.to_string();
+                    if !json.is_empty() {
+                        total_tokens += self.count_tokens(model_id, &json);
+                    }
+                }
+            }
+        }
+        total_tokens
+    }
+
+    /// Compute the fallback character-based cost of a turn for backward compatibility
+    pub fn turn_cost_fallback_chars(&self, turn: &[LlmMessage]) -> usize {
+        turn.iter()
+            .map(|m| {
+                m.content.chars().count()
+                    + m.tool_calls
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|tc| tc.arguments.to_string().len())
+                        .sum::<usize>()
+            })
+            .sum()
+    }
+
+    /// Convert a token count to its equivalent upper-bound character count.
+    pub fn chars_for_tokens(&self, tokens: usize) -> usize {
+        chars_for_tokens(tokens)
+    }
+
+    /// Unified context budgeting calculation for a set of turns, returning both token and legacy character metrics.
+    /// Walks the turns from newest to oldest, ensuring the newest turn is always included, and respects the budget.
+    pub fn calculate_budget(
+        &self,
+        model_id: &str,
+        turns: &[Vec<LlmMessage>],
+        system_overhead_tokens: usize,
+        max_context_chars: usize,
+    ) -> ContextBudgetResult {
+        let system_overhead_chars = self.chars_for_tokens(system_overhead_tokens);
+        let message_budget = max_context_chars.saturating_sub(system_overhead_chars);
+
+        let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
+        let mut budget_used_chars: usize = 0;
+        let mut total_tokens_used: usize = system_overhead_tokens;
+
+        for turn in turns.iter().cloned().rev() {
+            let tokens = self.turn_cost(model_id, &turn);
+            let fallback_chars = self.turn_cost_fallback_chars(&turn);
+            
+            let turn_chars = if tokens == 0 && fallback_chars > 0 {
+                fallback_chars
+            } else {
+                self.chars_for_tokens(tokens)
+            };
+
+            if selected.is_empty() {
+                // Always include the most recent turn regardless of size
+                selected.push(turn);
+                budget_used_chars += turn_chars;
+                total_tokens_used += tokens;
+            } else if budget_used_chars + turn_chars <= message_budget {
+                selected.push(turn);
+                budget_used_chars += turn_chars;
+                total_tokens_used += tokens;
+            } else {
+                break;
+            }
+        }
+
+        // Reverse back to chronological order (oldest first)
+        selected.reverse();
+        let omitted_count = turns.len().saturating_sub(selected.len());
+
+        ContextBudgetResult {
+            selected_turns: selected,
+            total_tokens_used,
+            total_chars_used: budget_used_chars + system_overhead_chars,
+            omitted_turns_count: omitted_count,
+        }
+    }
+}
+
+/// Holds the results of a prompt budget assessment.
+#[derive(Debug, Clone)]
+pub struct ContextBudgetResult {
+    pub selected_turns: Vec<Vec<LlmMessage>>,
+    pub total_tokens_used: usize,
+    pub total_chars_used: usize,
+    pub omitted_turns_count: usize,
 }
 
 #[cfg(test)]
