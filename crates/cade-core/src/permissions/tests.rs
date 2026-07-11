@@ -831,3 +831,83 @@ fn accept_edits_mode_asks_for_bash() {
         "acceptEdits mode should Ask for bash (only file edits are auto-approved)"
     );
 }
+
+#[tokio::test]
+async fn test_security_authority_resolves_allow_and_deny_synchronously() {
+    use crate::permissions::authority::SecurityAuthority;
+    use crate::permissions::manager::PermissionManager;
+    use crate::permissions::service::YoloBypassAdapter;
+    use crate::permissions::rules::Verdict;
+    use serde_json::json;
+
+    // Rules engine says Deny (protected path)
+    let mgr = PermissionManager::new(PermissionMode::Default);
+    let authority = SecurityAuthority::new(mgr, std::sync::Arc::new(YoloBypassAdapter));
+    let args = json!({"path": ".git/config", "content": "bad"});
+    
+    let res = authority.authorize("write_file", &args, false).await.unwrap();
+    assert!(matches!(res, Verdict::Deny(_)));
+
+    // Rules engine says Allow (Bypass mode)
+    let mgr_bypass = PermissionManager::new(PermissionMode::BypassPermissions);
+    let authority_bypass = SecurityAuthority::new(mgr_bypass, std::sync::Arc::new(YoloBypassAdapter));
+    let res_allow = authority_bypass.authorize("write_file", &args, false).await.unwrap();
+    assert!(matches!(res_allow, Verdict::Allow));
+}
+
+struct MockPermissionService {
+    approve: std::sync::atomic::AtomicBool,
+    feedback: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl PermissionService for MockPermissionService {
+    async fn request_permission(&self, _tool_name: &str, _args: &serde_json::Value) -> std::result::Result<bool, String> {
+        if let Some(ref fb) = self.feedback {
+            return Err(fb.clone());
+        }
+        Ok(self.approve.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+#[tokio::test]
+async fn test_security_authority_delegates_to_service_on_ask() {
+    use crate::permissions::authority::SecurityAuthority;
+    use crate::permissions::manager::PermissionManager;
+    use crate::permissions::rules::Verdict;
+    use serde_json::json;
+
+    let mgr = PermissionManager::new(PermissionMode::Default);
+    let args = json!({"path": "normal.rs", "content": "code"});
+
+    // 1. Mock service approves the request
+    let service_approve = MockPermissionService {
+        approve: std::sync::atomic::AtomicBool::new(true),
+        feedback: None,
+    };
+    let authority = SecurityAuthority::new(mgr.clone(), std::sync::Arc::new(service_approve));
+    let res = authority.authorize("write_file", &args, false).await.unwrap();
+    assert!(matches!(res, Verdict::Allow));
+
+    // 2. Mock service denies the request
+    let service_deny = MockPermissionService {
+        approve: std::sync::atomic::AtomicBool::new(false),
+        feedback: None,
+    };
+    let authority_deny = SecurityAuthority::new(mgr.clone(), std::sync::Arc::new(service_deny));
+    let res_deny = authority_deny.authorize("write_file", &args, false).await.unwrap();
+    assert!(matches!(res_deny, Verdict::Deny(_)));
+
+    // 3. Mock service denies with specific redirection feedback
+    let service_feedback = MockPermissionService {
+        approve: std::sync::atomic::AtomicBool::new(false),
+        feedback: Some("Permission Denied: Use standard libraries instead!".to_string()),
+    };
+    let authority_feedback = SecurityAuthority::new(mgr.clone(), std::sync::Arc::new(service_feedback));
+    let res_feedback = authority_feedback.authorize("write_file", &args, false).await.unwrap();
+    if let Verdict::Deny(reason) = res_feedback {
+        assert!(reason.contains("Use standard libraries instead"));
+    } else {
+        panic!("Expected Verdict::Deny with feedback");
+    }
+}

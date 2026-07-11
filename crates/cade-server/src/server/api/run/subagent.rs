@@ -1052,20 +1052,36 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 let mut permission_denied = false;
                 let mut permission_error_msg = String::new();
 
-                if tc.name != "run_subagent" && tc.name != "finish" && is_mutating_tool(&tc.name) {
+                if tc.name != "run_subagent" && tc.name != "finish" {
                     let is_yolo = std::env::var("CADE_YOLO").map(|v| v == "true").unwrap_or(false)
                         || cfg!(test);
                     if !is_yolo {
+                        use cade_core::permissions::{PermissionManager, PermissionMode, SecurityAuthority, Verdict};
+                        
+                        let perm_mode = match cfg.mode.as_str() {
+                            "plan" | "recall" => PermissionMode::Plan,
+                            "accept-edits" | "acceptEdits" => PermissionMode::AcceptEdits,
+                            _ => PermissionMode::Default,
+                        };
+                        let manager = PermissionManager::new(perm_mode);
+
                         let service = HeadlessQueueAdapter {
                             db: state.db.clone(),
                             parent_agent_id: parent_agent_id.to_string(),
                             subagent_id: subagent_id.clone(),
                         };
-                        use cade_core::permissions::PermissionService;
-                        match service.request_permission(&tc.name, &tc.arguments).await {
-                            Ok(true) => {}
-                            Ok(false) => {
+
+                        let authority = SecurityAuthority::new(manager, std::sync::Arc::new(service));
+                        let is_mcp_write = tc.name.contains("__");
+
+                        match authority.authorize(&tc.name, &tc.arguments, is_mcp_write).await {
+                            Ok(Verdict::Allow) => {}
+                            Ok(Verdict::Deny(reason)) => {
                                 permission_denied = true;
+                                permission_error_msg = reason;
+                            }
+                            Ok(Verdict::Ask(_)) => {
+                                // Handled internally by authority/service
                             }
                             Err(e) => {
                                 permission_denied = true;
@@ -1694,12 +1710,7 @@ pub(super) async fn smart_memory_merge(
     }
 }
 
-fn is_mutating_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file"
-    ) || name.contains("__")
-}
+
 
 #[cfg(test)]
 mod tests {
