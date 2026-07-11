@@ -786,12 +786,18 @@ pub(crate) async fn build_context(
     // no turns were dropped yet.  This gives the Sleeptime task a wider
     // runway to produce a `session_summary` block before the next request
     // actually overflows.
-    let usage_fraction = if message_budget > 0 {
-        budget_used as f64 / message_budget as f64
+    let total_selected_tokens: usize = system_tokens + selected
+        .iter()
+        .map(|turn| budget_manager.turn_cost(&agent.model, turn))
+        .sum::<usize>();
+
+    let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
+    let token_usage_fraction = if window_tokens > 0 {
+        total_selected_tokens as f64 / window_tokens as f64
     } else {
         0.0
     };
-    let needs_proactive = usage_fraction >= PROACTIVE_CONSOLIDATION_THRESHOLD;
+    let needs_proactive = token_usage_fraction >= PROACTIVE_CONSOLIDATION_THRESHOLD;
 
     // P5-B: Trigger consolidation if there are too many turns since the last compaction marker.
     // This handles the case where the context budget is large enough to fit many turns, but
@@ -814,13 +820,13 @@ pub(crate) async fn build_context(
             );
         } else {
             tracing::debug!(
-                "build_context [{}]: proactive consolidation signal at {:.0}% usage, {} turns \
-                 ({} chars / {} budget)",
+                "build_context [{}]: proactive consolidation signal at {:.0}% token usage, {} turns \
+                 ({} / {} tokens)",
                 agent_id,
-                usage_fraction * 100.0,
+                token_usage_fraction * 100.0,
                 turns_len,
-                budget_used,
-                message_budget,
+                total_selected_tokens,
+                window_tokens,
             );
         }
         // Signal the Sleeptime consolidation task.  After 20 s of inactivity
