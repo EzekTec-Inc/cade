@@ -200,16 +200,16 @@ pub async fn consolidate_agent(
     agent_id: &str,
     conversation_id: Option<&str>,
     override_history_budget: Option<usize>,
-) {
+) -> Option<usize> {
     let agent = match sqlite::get_agent(&state.db, agent_id) {
         Ok(Some(a)) => a,
         Ok(None) => {
             tracing::warn!(agent_id = %agent_id, "consolidate:  agent not found — skipping");
-            return;
+            return None;
         }
         Err(e) => {
             tracing::warn!("consolidate [{}]: DB error: {}", agent_id, e);
-            return;
+            return None;
         }
     };
 
@@ -229,7 +229,7 @@ pub async fn consolidate_agent(
             agent_id,
             all_rows.len()
         );
-        return;
+        return None;
     }
 
     // Convert rows to (role, text) pairs for turn grouping.
@@ -302,7 +302,7 @@ pub async fn consolidate_agent(
             agent_id,
             total_turns
         );
-        return;
+        return None;
     }
 
     // ── 3. Format dropped turns into a text block for the LLM ────────────────
@@ -355,7 +355,7 @@ pub async fn consolidate_agent(
 
     if history_text.trim().is_empty() {
         tracing::debug!(agent_id = %agent_id, "consolidate:  dropped turns have no useful text — skipping");
-        return;
+        return None;
     }
 
     // ── 3b. F2: Cache full dropped turns into archival memory ────────────────
@@ -507,13 +507,13 @@ pub async fn consolidate_agent(
         Ok(resp) => resp.content.unwrap_or_default().trim().to_string(),
         Err(e) => {
             tracing::warn!("consolidate [{}]: LLM call failed: {}", agent_id, e);
-            return;
+            return None;
         }
     };
 
     if summary.is_empty() {
         tracing::debug!(agent_id = %agent_id, "consolidate:  LLM returned empty summary");
-        return;
+        return None;
     }
 
     // ── 4b. Inflation Guard & Regex Fallback ──
@@ -569,7 +569,7 @@ pub async fn consolidate_agent(
     };
 
     if final_summary.is_empty() {
-        return;
+        return None;
     }
 
     // ── 5. Write to the `session_summary` memory block ───────────────────────
@@ -674,7 +674,7 @@ pub async fn consolidate_agent(
             agent_id,
             e
         );
-        return;
+        return None;
     }
 
     // P5-C: Ensure session_summary remains pinned across restarts.
@@ -752,7 +752,7 @@ pub async fn consolidate_agent(
         let marker_ts = {
             let Ok(conn) = state.db.get() else {
                 tracing::warn!("consolidate_agent: pool get failed; skipping marker");
-                return;
+                return None;
             };
             conn.query_row(
                 "SELECT created_at FROM messages WHERE id = ?1",
@@ -787,7 +787,7 @@ pub async fn consolidate_agent(
         {
             let Ok(conn) = state.db.get() else {
                 tracing::warn!("consolidate_agent: pool get failed; skipping marker insert");
-                return;
+                return None;
             };
             let _ = conn.execute(
                 "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
@@ -853,6 +853,8 @@ pub async fn consolidate_agent(
             decayed
         );
     }
+
+    Some(new_value.chars().count())
 }
 
 // ── P7: active_goal auto-update ───────────────────────────────────────────────

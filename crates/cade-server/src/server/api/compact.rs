@@ -29,21 +29,12 @@ pub async fn compact_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conversation_id = params.get("conversation_id").map(String::as_str);
 
-    crate::server::consolidation::consolidate_agent(&state, &agent_id, conversation_id, None).await;
-
-    // Inspect the resulting session_summary block (if any) so the client
-    // can render a meaningful toast.
-    let summary_chars = cade_store::sqlite::get_active_blocks(&state.db, &agent_id)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|(label, _val, _desc, _tier, _lt)| label == "session_summary")
-        .map(|(_l, val, _d, _t, _lt)| val.chars().count())
-        .unwrap_or(0);
+    let compacted_chars = crate::server::consolidation::consolidate_agent(&state, &agent_id, conversation_id, None).await;
 
     Ok(Json(json!({
         "agent_id":             agent_id,
         "conversation_id":      conversation_id,
-        "session_summary_chars": summary_chars,
+        "session_summary_chars": compacted_chars.unwrap_or(0),
         "ok":                   true,
     })))
 }
