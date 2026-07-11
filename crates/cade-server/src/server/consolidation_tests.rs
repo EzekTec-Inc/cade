@@ -856,16 +856,20 @@ fn default_compaction_anthropic_uses_current_haiku_model_id() {
 
 #[tokio::test]
 async fn test_merge_session_summaries_mocked() {
-    let db = cade_store::sqlite::Db::in_memory().unwrap();
+    let db = cade_store::sqlite::open(":memory:").unwrap();
     let agent_id = "a1";
-    let _ = sqlite::create_agent(
+    let _ = store_sqlite::create_agent(
         &db,
-        &sqlite::agents::CreateAgentRequest {
+        &store_sqlite::AgentRow {
             id: agent_id.to_string(),
             name: "agent1".to_string(),
             model: "anthropic/claude-3-5-sonnet".to_string(),
-            description: "".to_string(),
-            system_prompt: "".to_string(),
+            description: None,
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
         },
     );
 
