@@ -658,10 +658,7 @@ pub(crate) fn timeline_key_expanded(
 /// prompt-specific card styling, caching, and cache invalidation.
 #[derive(Clone, Default)]
 pub(crate) struct TimelineLayoutEngine {
-    pub(crate) item_cache: std::collections::HashMap<
-        (TimelineKey, bool),
-        PreparedTimelineEntry,
-    >,
+    pub(crate) item_cache: std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
     pub(crate) entries: Vec<PreparedTimelineEntry>,
     pub(crate) version: u64,
     pub(crate) timeline_w: usize,

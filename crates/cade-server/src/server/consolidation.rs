@@ -586,11 +586,51 @@ pub async fn consolidate_agent(
     } else {
         let combined = format!("{existing}\n\n---\n\n{final_summary}");
         if combined.chars().count() > SESSION_SUMMARY_MAX_CHARS {
-            // Phase C: instead of losing the previous summary, rotate it into
-            // the `session_summary_N` ring (long-term tier). The new live
-            // value becomes just the latest summary.
-            rotate_and_archive_session_summary(state, agent_id, existing);
-            final_summary.clone()
+            // Under Candidate A: merge existing and new summaries iteratively
+            // using an LLM pass to compress into a single, high-density summary
+            // instead of rotating and splitting across multiple ring blocks.
+            tracing::info!(
+                "consolidate [{}]: merging existing and new summaries ({} chars total)",
+                agent_id,
+                combined.chars().count()
+            );
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                merge_session_summaries(
+                    state.clone(),
+                    agent_id.to_string(),
+                    existing.to_string(),
+                    final_summary.clone(),
+                ),
+            )
+            .await
+            {
+                Ok(Ok(merged)) => {
+                    tracing::info!(
+                        "consolidate [{}]: successfully merged summaries ({} chars)",
+                        agent_id,
+                        merged.chars().count()
+                    );
+                    merged
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        "consolidate [{}]: failed to merge summaries: {}. Falling back to ring rotation.",
+                        agent_id,
+                        e
+                    );
+                    rotate_and_archive_session_summary(state, agent_id, existing);
+                    final_summary.clone()
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "consolidate [{}]: merge summaries timed out. Falling back to ring rotation.",
+                        agent_id
+                    );
+                    rotate_and_archive_session_summary(state, agent_id, existing);
+                    final_summary.clone()
+                }
+            }
         } else {
             combined
         }
@@ -1156,6 +1196,59 @@ fn first_nonempty_line(s: &str) -> String {
         }
     }
     String::new()
+}
+
+/// Synthesizes the previous session summary and the newest conversation summary 
+/// into a single, high-density, cohesive summary under the SESSION_SUMMARY_MAX_CHARS limit.
+pub(super) async fn merge_session_summaries(
+    state: AppState,
+    agent_id: String,
+    old_summary: String,
+    new_summary: String,
+) -> Result<String, String> {
+    let prompt = format!(
+        "You are an expert context consolidation agent. Your task is to merge an older session summary with a newly generated summary of the most recent conversation turns into a single, high-density, cohesive summary.\n\n\
+         CRITICAL CONSTRAINTS:\n\
+         1. The combined summary must preserve all critical decisions, key file changes, error traces, and architectural goals.\n\
+         2. It must be written in a high-density, professional, and concise format.\n\
+         3. The final output must be strictly less than 6,500 characters so that it safely fits within CADE's active memory block buffers.\n\
+         4. Do not include any intro, outro, preamble, or markdown code block wrappers (like ```markdown). Respond ONLY with the raw merged summary text.\n\n\
+         OLDER SESSION SUMMARY:\n{old_summary}\n\n\
+         NEW CONVERSATION SUMMARY:\n{new_summary}"
+    );
+
+    let model = sqlite::get_agent(&state.db, &agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Agent not found".to_string())?
+        .model;
+
+    // Resolve the cheapest capable model for compaction (GPT-4o-mini, Gemini-2.5-flash, etc.)
+    let compaction_model = default_compaction_model(&model);
+
+    let req = CompletionRequest {
+        model: compaction_model,
+        messages: vec![LlmMessage {
+            role: "user".to_string(),
+            content: prompt,
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }],
+        tools: vec![],
+        max_tokens: 1500,
+        reasoning_effort: None,
+    };
+
+    match state.llm.complete(&req).await {
+        Ok(resp) => {
+            if let Some(content) = resp.content {
+                Ok(content.trim().to_string())
+            } else {
+                Err("Empty response from consolidation model".to_string())
+            }
+        }
+        Err(e) => Err(format!("LLM completion failed: {e}")),
+    }
 }
 
 /// Sanitize a line for inclusion in `session_index`: strip newlines,

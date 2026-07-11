@@ -853,3 +853,34 @@ fn default_compaction_anthropic_uses_current_haiku_model_id() {
         "anthropic/claude-haiku-4-5"
     );
 }
+
+#[tokio::test]
+async fn test_merge_session_summaries_mocked() {
+    let db = cade_store::sqlite::Db::in_memory().unwrap();
+    let agent_id = "a1";
+    let _ = sqlite::create_agent(
+        &db,
+        &sqlite::agents::CreateAgentRequest {
+            id: agent_id.to_string(),
+            name: "agent1".to_string(),
+            model: "anthropic/claude-3-5-sonnet".to_string(),
+            description: "".to_string(),
+            system_prompt: "".to_string(),
+        },
+    );
+
+    let mock_llm = Arc::new(MockSummaryLlm::new("Merged Summary Content"));
+    let state = mk_state(db.clone(), mock_llm.clone());
+
+    let res = merge_session_summaries(
+        state,
+        agent_id.to_string(),
+        "Old Summary".to_string(),
+        "New Summary".to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(res, "Merged Summary Content");
+    assert_eq!(mock_llm.calls.load(Ordering::SeqCst), 1);
+}
