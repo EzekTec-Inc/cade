@@ -1198,6 +1198,112 @@ fn first_nonempty_line(s: &str) -> String {
     String::new()
 }
 
+/// Extract newly touched files from the consolidated message rows.
+fn extract_touched_files(rows: &[sqlite::MessageRow]) -> (Vec<String>, Vec<String>) {
+    let mut read_files = std::collections::HashSet::new();
+    let mut modified_files = std::collections::HashSet::new();
+
+    for row in rows {
+        if let Some(tool_calls) = row.content.get("tool_calls").and_then(|v| v.as_array()) {
+            for tc in tool_calls {
+                let name = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let args = tc.get("arguments");
+                if let Some(args_obj) = args {
+                    if let Some(path) = args_obj.get("path").and_then(|v| v.as_str()) {
+                        let clean_path = path.trim().to_string();
+                        if !clean_path.is_empty() {
+                            match name {
+                                "read_file" | "view_file" => {
+                                    read_files.insert(clean_path);
+                                }
+                                "write_file" | "edit_file" | "create_file" => {
+                                    modified_files.insert(clean_path);
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if name == "apply_patch"
+                        && let Some(patch_str) = args_obj.get("patch").and_then(|v| v.as_str()) {
+                            for line in patch_str.lines() {
+                                if line.starts_with("+++ ") {
+                                    let path_part = line["+++ ".len()..].trim();
+                                    let clean_path = if path_part.starts_with("b/") {
+                                        path_part["b/".len()..].to_string()
+                                    } else {
+                                        path_part.to_string()
+                                    };
+                                    if !clean_path.is_empty() && clean_path != "/dev/null" {
+                                        modified_files.insert(clean_path);
+                                    }
+                                }
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    let mut r_vec: Vec<String> = read_files.into_iter().collect();
+    let mut m_vec: Vec<String> = modified_files.into_iter().collect();
+    r_vec.sort();
+    m_vec.sort();
+    (r_vec, m_vec)
+}
+
+/// Parse any existing touched files from the existing summary block.
+fn parse_existing_touched_files(summary: &str) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+    let mut read = std::collections::HashSet::new();
+    let mut modified = std::collections::HashSet::new();
+
+    for line in summary.lines() {
+        if line.starts_with("* Read: [") && line.ends_with(']') {
+            let content = &line["* Read: [".len()..line.len() - 1];
+            for p in content.split(',') {
+                let cleaned = p.trim().to_string();
+                if !cleaned.is_empty() {
+                    read.insert(cleaned);
+                }
+            }
+        } else if line.starts_with("* Modified: [") && line.ends_with(']') {
+            let content = &line["* Modified: [".len()..line.len() - 1];
+            for p in content.split(',') {
+                let cleaned = p.trim().to_string();
+                if !cleaned.is_empty() {
+                    modified.insert(cleaned);
+                }
+            }
+        }
+    }
+
+    (read, modified)
+}
+
+/// Format the touched files section to append to the summary.
+fn format_touched_files_section(read: &[String], modified: &[String]) -> String {
+    if read.is_empty() && modified.is_empty() {
+        return String::new();
+    }
+    
+    let mut section = String::new();
+    section.push_str("\n\n### Files Checked in this Session:\n");
+    if !read.is_empty() {
+        section.push_str(&format!("* Read: [{}]\n", read.join(", ")));
+    }
+    if !modified.is_empty() {
+        section.push_str(&format!("* Modified: [{}]\n", modified.join(", ")));
+    }
+    section
+}
+
+/// Strip the touched files section from a summary block to keep it pure for synthesis.
+fn strip_touched_files_section(summary: &str) -> String {
+    if let Some(pos) = summary.find("### Files Checked in this Session:") {
+        summary[..pos].trim().to_string()
+    } else {
+        summary.to_string()
+    }
+}
+
 /// Synthesizes the previous session summary and the newest conversation summary 
 /// into a single, high-density, cohesive summary under the SESSION_SUMMARY_MAX_CHARS limit.
 pub(super) async fn merge_session_summaries(
