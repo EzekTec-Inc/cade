@@ -256,7 +256,7 @@ async fn dashboard_existing_asset_returns_200() {
         .next()
         .expect("there must be at least one asset in the dashboard folder (e.g. index.html)");
     let req = Request::builder()
-        .uri(&format!("/dashboard/{}", asset_path))
+        .uri(format!("/dashboard/{}", asset_path))
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();

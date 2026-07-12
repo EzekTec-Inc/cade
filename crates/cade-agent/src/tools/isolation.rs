@@ -58,30 +58,28 @@ impl IsolatedWorkspace {
             .hidden(false)
             .build();
 
-        for entry in walker {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_file()
-                    && let Ok(rel_path) = path.strip_prefix(temp_path)
-                {
-                    let dest_path = self.primary_dir.join(rel_path);
+        for entry in walker.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && let Ok(rel_path) = path.strip_prefix(temp_path)
+            {
+                let dest_path = self.primary_dir.join(rel_path);
 
-                    // Check if file content differs or does not exist
-                    let temp_bytes = std::fs::read(path)?;
-                    let host_bytes_opt = std::fs::read(&dest_path).ok();
+                // Check if file content differs or does not exist
+                let temp_bytes = std::fs::read(path)?;
+                let host_bytes_opt = std::fs::read(&dest_path).ok();
 
-                    if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
-                        if let Some(parent) = dest_path.parent() {
-                            std::fs::create_dir_all(parent)?;
-                        }
-
-                        // Acquire global file lock during final merge step (ADR 6)
-                        let lock_manager = crate::tools::file_lock::FileLockManager::global();
-                        let _lock = lock_manager.acquire_lock(&dest_path).await;
-
-                        std::fs::write(&dest_path, &temp_bytes)?;
-                        tracing::info!("Workspace Isolation merged file back: {:?}", rel_path);
+                if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
+                    if let Some(parent) = dest_path.parent() {
+                        std::fs::create_dir_all(parent)?;
                     }
+
+                    // Acquire global file lock during final merge step (ADR 6)
+                    let lock_manager = crate::tools::file_lock::FileLockManager::global();
+                    let _lock = lock_manager.acquire_lock(&dest_path).await;
+
+                    std::fs::write(&dest_path, &temp_bytes)?;
+                    tracing::info!("Workspace Isolation merged file back: {:?}", rel_path);
                 }
             }
         }

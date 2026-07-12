@@ -1601,7 +1601,7 @@ async fn skills_section_lives_in_static_system_block() {
         static_sys.contains(marker),
         "skills section MUST appear in system_static (messages[0]) for cache anchoring;\n\
          static_sys (first 400 chars):\n{}\n",
-        &static_sys.chars().take(400).collect::<String>()
+        static_sys.chars().take(400).collect::<String>()
     );
     assert!(
         !dynamic_sys.contains(marker),

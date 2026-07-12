@@ -815,30 +815,27 @@ pub fn recall_chunks_hybrid(
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.tier != 'long' AND c.embedding IS NOT NULL
          LIMIT ?2",
-    ) {
-        if let Ok(rows) = stmt.query_map(params![agent_id, limit as i64 * 5], |row| {
-            let label: String = row.get(0)?;
-            let content: String = row.get(1)?;
-            let chunk_index: i64 = row.get(2)?;
-            let blob: Vec<u8> = row.get(3)?;
-            Ok((label, content, chunk_index, blob))
-        }) {
-            for row in rows.filter_map(|r| r.ok()) {
-                let (label, content, chunk_index, blob) = row;
-                if let Some(vec) = super::embedding::decode_embedding_blob(&blob) {
-                    if let Some(sim) = super::embedding::cosine_similarity(&q_vec, &vec) {
-                        if sim > 0.3 {
-                            sem_chunks.push((
-                                RecalledChunk {
-                                    label,
-                                    chunk_content: content,
-                                    chunk_index,
-                                },
-                                sim as f64,
-                            ));
-                        }
-                    }
-                }
+    ) && let Ok(rows) = stmt.query_map(params![agent_id, limit as i64 * 5], |row| {
+        let label: String = row.get(0)?;
+        let content: String = row.get(1)?;
+        let chunk_index: i64 = row.get(2)?;
+        let blob: Vec<u8> = row.get(3)?;
+        Ok((label, content, chunk_index, blob))
+    }) {
+        for row in rows.filter_map(|r| r.ok()) {
+            let (label, content, chunk_index, blob) = row;
+            if let Some(vec) = super::embedding::decode_embedding_blob(&blob)
+                && let Some(sim) = super::embedding::cosine_similarity(&q_vec, &vec)
+                && sim > 0.3
+            {
+                sem_chunks.push((
+                    RecalledChunk {
+                        label,
+                        chunk_content: content,
+                        chunk_index,
+                    },
+                    sim as f64,
+                ));
             }
         }
     }

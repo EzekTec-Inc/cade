@@ -1211,13 +1211,14 @@ fn extract_touched_files(rows: &[sqlite::MessageRow]) -> (Vec<String>, Vec<Strin
                         && let Some(patch_str) = args_obj.get("patch").and_then(|v| v.as_str())
                     {
                         for line in patch_str.lines() {
-                            if line.starts_with("+++ ") {
-                                let path_part = line["+++ ".len()..].trim();
-                                let clean_path = if path_part.starts_with("b/") {
-                                    path_part["b/".len()..].to_string()
-                                } else {
-                                    path_part.to_string()
-                                };
+                            if let Some(stripped) = line.strip_prefix("+++ ") {
+                                let path_part = stripped.trim();
+                                let clean_path =
+                                    if let Some(stripped_b) = path_part.strip_prefix("b/") {
+                                        stripped_b.to_string()
+                                    } else {
+                                        path_part.to_string()
+                                    };
                                 if !clean_path.is_empty() && clean_path != "/dev/null" {
                                     modified_files.insert(clean_path);
                                 }

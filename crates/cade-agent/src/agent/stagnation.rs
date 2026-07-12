@@ -22,6 +22,12 @@ pub struct DoomLoopDetector {
     repeat_threshold: usize,
 }
 
+impl Default for DoomLoopDetector {
+    fn default() -> Self {
+        Self::new(4, 3)
+    }
+}
+
 impl DoomLoopDetector {
     /// Create a new `DoomLoopDetector` with custom thresholds.
     pub fn new(window_size: usize, repeat_threshold: usize) -> Self {
@@ -30,13 +36,6 @@ impl DoomLoopDetector {
             window_size,
             repeat_threshold,
         }
-    }
-
-    /// Create a standard `DoomLoopDetector` with default thresholds:
-    /// - Sliding Window Size: 4 tool calls
-    /// - Repeat Threshold: 3 repeats
-    pub fn default() -> Self {
-        Self::new(4, 3)
     }
 
     /// Record a tool call and check if stagnation is triggered.

@@ -14,6 +14,7 @@ mcp = ["dep:cade-mcp", "cade-agent/mcp"]
 cade-core.path       = "../cade-core"
 cade-ai.path         = "../cade-ai"
 cade-store.path      = "../cade-store"
+cade-desktop.path    = "../cade-desktop"
 cade-agent = { path = "../cade-agent", default-features = false, optional = false }
 cade-mcp   = { path = "../cade-mcp", optional = true }
 # -- Error handling

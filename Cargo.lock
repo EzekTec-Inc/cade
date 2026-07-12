@@ -1144,6 +1144,7 @@ dependencies = [
  "cade-agent",
  "cade-ai",
  "cade-core",
+ "cade-desktop",
  "cade-mcp",
  "cade-plugin",
  "cade-store",
