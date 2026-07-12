@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 // -- Hook configuration
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum HookDef {
     /// Run a shell command. Exit 0=allow, 1=log+continue, 2=block+stderr→agent.
@@ -10,6 +10,14 @@ pub enum HookDef {
         command: String,
         #[serde(default = "default_hook_timeout")]
         timeout: u64, // milliseconds
+    },
+    /// Blocks mutating or access operations containing forbidden paths.
+    PathBlocker {
+        forbidden_paths: Vec<String>,
+    },
+    /// Scans inputs, prompts, or arguments for blacklisted regex patterns.
+    RegexGuard {
+        patterns: Vec<String>,
     },
 }
 

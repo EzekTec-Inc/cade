@@ -164,6 +164,33 @@ fn hook_def_json_roundtrip() -> Result<()> {
             assert_eq!(command, "echo hello");
             assert_eq!(timeout, 30000);
         }
+        _ => panic!("Expected HookDef::Command"),
+    }
+
+    // Test PathBlocker roundtrip
+    let blocker = HookDef::PathBlocker {
+        forbidden_paths: vec![".env".into()],
+    };
+    let json = serde_json::to_string(&blocker)?;
+    let parsed: HookDef = serde_json::from_str(&json)?;
+    match parsed {
+        HookDef::PathBlocker { forbidden_paths } => {
+            assert_eq!(forbidden_paths, vec![".env"]);
+        }
+        _ => panic!("Expected HookDef::PathBlocker"),
+    }
+
+    // Test RegexGuard roundtrip
+    let guard = HookDef::RegexGuard {
+        patterns: vec!["secret".into()],
+    };
+    let json = serde_json::to_string(&guard)?;
+    let parsed: HookDef = serde_json::from_str(&json)?;
+    match parsed {
+        HookDef::RegexGuard { patterns } => {
+            assert_eq!(patterns, vec!["secret"]);
+        }
+        _ => panic!("Expected HookDef::RegexGuard"),
     }
 
     Ok(())
@@ -175,6 +202,7 @@ fn hook_def_default_timeout() -> Result<()> {
     let hook: HookDef = serde_json::from_str(json)?;
     match hook {
         HookDef::Command { timeout, .. } => assert_eq!(timeout, 60_000),
+        _ => panic!("Expected HookDef::Command"),
     }
 
     Ok(())

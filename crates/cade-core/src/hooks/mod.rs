@@ -415,55 +415,117 @@ enum HookResult {
     Block(String), // exit 2 — stderr shown to agent
 }
 
+fn collect_strings(val: &Value, list: &mut Vec<String>) {
+    match val {
+        Value::String(s) => list.push(s.clone()),
+        Value::Array(arr) => {
+            for item in arr {
+                collect_strings(item, list);
+            }
+        }
+        Value::Object(obj) => {
+            for (_, v) in obj {
+                collect_strings(v, list);
+            }
+        }
+        _ => {}
+    }
+}
+
 async fn run_hook_command(
     hook: &crate::settings::HookDef,
     input: &Value,
     cwd: &PathBuf,
 ) -> HookResult {
-    let crate::settings::HookDef::Command { command, timeout } = hook;
-    let timeout_ms = *timeout;
-    let input_str = serde_json::to_string(input).unwrap_or_default();
+    match hook {
+        crate::settings::HookDef::Command { command, timeout } => {
+            let timeout_ms = *timeout;
+            let input_str = serde_json::to_string(input).unwrap_or_default();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(timeout_ms),
-        spawn_command(command, &input_str, cwd),
-    )
-    .await;
+            let result = tokio::time::timeout(
+                Duration::from_millis(timeout_ms),
+                spawn_command(command, &input_str, cwd),
+            )
+            .await;
 
-    match result {
-        Err(_) => {
-            tracing::warn!("Hook timed out after {timeout_ms}ms: {command}");
-            HookResult::Continue
-        }
-        Ok(Err(e)) => {
-            tracing::warn!("Hook failed to spawn: {command}: {e}");
-            HookResult::Continue
-        }
-        Ok(Ok((exit_code, stdout, stderr))) => match exit_code {
-            0 => {
-                if !stdout.is_empty() {
-                    tracing::debug!("Hook stdout: {}", stdout.trim());
+            match result {
+                Err(_) => {
+                    tracing::warn!("Hook timed out after {timeout_ms}ms: {command}");
+                    HookResult::Continue
                 }
-                HookResult::Allow
+                Ok(Err(e)) => {
+                    tracing::warn!("Hook failed to spawn: {command}: {e}");
+                    HookResult::Continue
+                }
+                Ok(Ok((exit_code, stdout, stderr))) => match exit_code {
+                    0 => {
+                        if !stdout.is_empty() {
+                            tracing::debug!("Hook stdout: {}", stdout.trim());
+                        }
+                        HookResult::Allow
+                    }
+                    1 => {
+                        tracing::warn!("Hook non-blocking error: {command}: {}", stderr.trim());
+                        HookResult::Continue
+                    }
+                    2 => {
+                        let reason = if stderr.trim().is_empty() {
+                            format!("Hook blocked: {command}")
+                        } else {
+                            stderr.trim().to_string()
+                        };
+                        tracing::info!("Hook blocked action: {reason}");
+                        HookResult::Block(reason)
+                    }
+                    other => {
+                        tracing::warn!("Hook unexpected exit {other}: {command}");
+                        HookResult::Continue
+                    }
+                },
             }
-            1 => {
-                tracing::warn!("Hook non-blocking error: {command}: {}", stderr.trim());
-                HookResult::Continue
+        }
+        crate::settings::HookDef::PathBlocker { forbidden_paths } => {
+            if let Some(tool_name) = input.get("tool_name").and_then(|v| v.as_str())
+                && let Some(tool_input) = input.get("tool_input")
+            {
+                if let Some(target_path) = crate::permissions::tool_first_arg(tool_name, tool_input) {
+                    let lower_path = target_path.to_lowercase();
+                    for pat in forbidden_paths {
+                        if lower_path.contains(&pat.to_lowercase()) {
+                            return HookResult::Block(format!(
+                                "Path blocker: path contains forbidden pattern: {pat}"
+                            ));
+                        }
+                    }
+                }
             }
-            2 => {
-                let reason = if stderr.trim().is_empty() {
-                    format!("Hook blocked: {command}")
+            HookResult::Allow
+        }
+        crate::settings::HookDef::RegexGuard { patterns } => {
+            let mut strings = Vec::new();
+            collect_strings(input, &mut strings);
+            for pattern in patterns {
+                if let Ok(re) = regex::Regex::new(pattern) {
+                    for s in &strings {
+                        if re.is_match(s) {
+                            return HookResult::Block(format!(
+                                "Regex guard: pattern match detected: {pattern}"
+                            ));
+                        }
+                    }
                 } else {
-                    stderr.trim().to_string()
-                };
-                tracing::info!("Hook blocked action: {reason}");
-                HookResult::Block(reason)
+                    let lower_pat = pattern.to_lowercase();
+                    for s in &strings {
+                        if s.to_lowercase().contains(&lower_pat) {
+                            return HookResult::Block(format!(
+                                "Regex guard: substring match detected: {pattern}"
+                            ));
+                        }
+                    }
+                }
             }
-            other => {
-                tracing::warn!("Hook unexpected exit {other}: {command}");
-                HookResult::Continue
-            }
-        },
+            HookResult::Allow
+        }
     }
 }
 
@@ -473,38 +535,41 @@ async fn run_hook_command_with_context(
     input: &Value,
     cwd: &PathBuf,
 ) -> Option<String> {
-    let crate::settings::HookDef::Command { command, timeout } = hook;
-    let input_str = serde_json::to_string(input).unwrap_or_default();
+    match hook {
+        crate::settings::HookDef::Command { command, timeout } => {
+            let input_str = serde_json::to_string(input).unwrap_or_default();
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(*timeout),
-        spawn_command(command, &input_str, cwd),
-    )
-    .await;
+            let result = tokio::time::timeout(
+                Duration::from_millis(*timeout),
+                spawn_command(command, &input_str, cwd),
+            )
+            .await;
 
-    match result {
-        Ok(Ok((0, stdout, _))) if !stdout.trim().is_empty() => {
-            // Parse stdout for additionalContext
-            if let Ok(v) = serde_json::from_str::<Value>(&stdout) {
-                let ctx = v
-                    .get("additionalContext")
-                    .or_else(|| v.pointer("/hookSpecificOutput/additionalContext"))
-                    .and_then(|c| c.as_str())
-                    .map(String::from);
-                return ctx;
+            match result {
+                Ok(Ok((0, stdout, _))) if !stdout.trim().is_empty() => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&stdout) {
+                        let ctx = v
+                            .get("additionalContext")
+                            .or_else(|| v.pointer("/hookSpecificOutput/additionalContext"))
+                            .and_then(|c| c.as_str())
+                            .map(String::from);
+                        return ctx;
+                    }
+                    None
+                }
+                Ok(Ok((1, _, stderr))) => {
+                    tracing::warn!("PostToolUse hook non-blocking error: {}", stderr.trim());
+                    None
+                }
+                Ok(Ok((2, _, stderr))) => {
+                    tracing::warn!(
+                        "PostToolUse hook exit 2 (ignored for PostToolUse): {}",
+                        stderr.trim()
+                    );
+                    None
+                }
+                _ => None,
             }
-            None
-        }
-        Ok(Ok((1, _, stderr))) => {
-            tracing::warn!("PostToolUse hook non-blocking error: {}", stderr.trim());
-            None
-        }
-        Ok(Ok((2, _, stderr))) => {
-            tracing::warn!(
-                "PostToolUse hook exit 2 (ignored for PostToolUse): {}",
-                stderr.trim()
-            );
-            None
         }
         _ => None,
     }
@@ -546,11 +611,20 @@ async fn spawn_command(
 
 impl std::fmt::Display for crate::settings::HookDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self::Command { command, timeout } = self;
-        if *timeout == 60_000 {
-            write!(f, "[command] {command}")
-        } else {
-            write!(f, "[command] {command}  (timeout: {timeout}ms)")
+        match self {
+            Self::Command { command, timeout } => {
+                if *timeout == 60_000 {
+                    write!(f, "[command] {command}")
+                } else {
+                    write!(f, "[command] {command}  (timeout: {timeout}ms)")
+                }
+            }
+            Self::PathBlocker { forbidden_paths } => {
+                write!(f, "[pathblocker] forbidden: {}", forbidden_paths.join(", "))
+            }
+            Self::RegexGuard { patterns } => {
+                write!(f, "[regexguard] patterns: {}", patterns.join(", "))
+            }
         }
     }
 }
@@ -779,5 +853,55 @@ mod tests {
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         // Timeout → treated as Continue (Allow)
         assert!(!outcome.is_block());
+    }
+
+    #[tokio::test]
+    async fn test_path_blocker_hook() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::PathBlocker {
+                forbidden_paths: vec![".env".into(), "/etc/passwd".into()],
+            }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
+        
+        // 1. Safe access -> allow
+        let outcome = engine.pre_tool_use("read_file", &json!({ "path": "src/lib.rs" })).await;
+        assert!(!outcome.is_block());
+
+        // 2. Accessing forbidden .env file -> block
+        let outcome = engine.pre_tool_use("read_file", &json!({ "path": "/home/user/.env" })).await;
+        assert!(outcome.is_block());
+        assert!(outcome.reason().unwrap().contains("Path blocker"));
+
+        // 3. Accessing forbidden /etc/passwd file -> block
+        let outcome = engine.pre_tool_use("read_file", &json!({ "path": "/etc/passwd" })).await;
+        assert!(outcome.is_block());
+    }
+
+    #[tokio::test]
+    async fn test_regex_guard_hook() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::RegexGuard {
+                patterns: vec![r"AWS_[A-Z_]+".into(), "secret-key".into()],
+            }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
+
+        // 1. Safe prompt/input -> allow
+        let outcome = engine.pre_tool_use("bash", &json!({ "command": "echo hello" })).await;
+        assert!(!outcome.is_block());
+
+        // 2. Sensitive env var -> block
+        let outcome = engine.pre_tool_use("bash", &json!({ "command": "export AWS_ACCESS_KEY_ID=123" })).await;
+        assert!(outcome.is_block());
+        assert!(outcome.reason().unwrap().contains("Regex guard"));
+
+        // 3. Substring match -> block
+        let outcome = engine.pre_tool_use("bash", &json!({ "command": "my secret-key is here" })).await;
+        assert!(outcome.is_block());
     }
 }
