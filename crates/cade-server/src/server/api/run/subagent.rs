@@ -478,6 +478,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
         let root = std::env::current_dir().unwrap_or_default();
         match cade_agent::tools::IsolatedWorkspace::clone_from(&root) {
             Ok(tmp) => {
+                let branch_name = format!("temp-branch-{}", subagent_id);
+                let tmp = tmp.with_git_branch(&branch_name).await;
                 tracing::info!(
                     "Subagent [{}] running inside isolated workspace sandbox at {:?}",
                     subagent_id,
@@ -1820,6 +1822,68 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(src.path().join("new.txt"))?,
+            "fresh file"
+        );
+
+        Ok(())
+    }
+
+    async fn run_git_test(cwd: &std::path::Path, args: &[&str]) -> (i32, String, String) {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.args(args).current_dir(cwd);
+        let out = cmd.output().await.unwrap();
+        let exit = out.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        (exit, stdout, stderr)
+    }
+
+    #[tokio::test]
+    async fn test_workspace_cloning_and_copy_back_with_git_branch() -> std::io::Result<()> {
+        let src = tempfile::tempdir()?;
+
+        // Setup a mock git repository on the host
+        let (init_exit, _, _) = run_git_test(src.path(), &["init"]).await;
+        assert_eq!(init_exit, 0);
+        let _ = run_git_test(src.path(), &["config", "user.name", "CADE User"]).await;
+        let _ = run_git_test(src.path(), &["config", "user.email", "user@cade.ai"]).await;
+
+        // Create some mock source files
+        fs::write(src.path().join("a.txt"), "hello")?;
+        fs::create_dir(src.path().join("sub"))?;
+        fs::write(src.path().join("sub/b.txt"), "world")?;
+
+        // Commit initial files on main
+        let _ = run_git_test(src.path(), &["add", "-A"]).await;
+        let _ = run_git_test(src.path(), &["commit", "-m", "Initial commit"]).await;
+
+        // Clone it
+        let clone_dir = cade_agent::tools::IsolatedWorkspace::clone_from(src.path())?;
+
+        // Enable git branch sandboxing
+        let clone_dir = clone_dir.with_git_branch("temp-sub-1").await;
+
+        // Modify in clone
+        fs::write(clone_dir.path().join("a.txt"), "hello modified in branch")?;
+        fs::write(
+            clone_dir.path().join("sub/b.txt"),
+            "world modified in branch",
+        )?;
+        fs::write(clone_dir.path().join("new_in_branch.txt"), "fresh file")?;
+
+        // Copy back (this should commit in sandbox and merge sandbox branch to host main!)
+        clone_dir.merge_back().await?;
+
+        assert_eq!(
+            fs::read_to_string(src.path().join("a.txt"))?,
+            "hello modified in branch"
+        );
+        assert_eq!(
+            fs::read_to_string(src.path().join("sub/b.txt"))?,
+            "world modified in branch"
+        );
+        assert_eq!(
+            fs::read_to_string(src.path().join("new_in_branch.txt"))?,
             "fresh file"
         );
 

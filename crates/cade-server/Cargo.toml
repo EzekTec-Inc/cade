@@ -1,47 +1,47 @@
 [package]
-name        = "cade-server"
+name = "cade-server"
 version = "0.2.4"
-edition     = "2024"
+edition = "2024"
 
 [lib]
-doctest     = false
+doctest = false
 
 [features]
 mcp = ["dep:cade-mcp", "cade-agent/mcp"]
 
 [dependencies]
 # -- Workspace crates
-cade-core.path       = "../cade-core"
-cade-ai.path         = "../cade-ai"
-cade-store.path      = "../cade-store"
-cade-desktop.path    = "../cade-desktop"
+cade-core.path = "../cade-core"
+cade-ai.path = "../cade-ai"
+cade-store.path = "../cade-store"
+cade-desktop.path = "../cade-desktop"
 cade-agent = { path = "../cade-agent", default-features = false, optional = false }
-cade-mcp   = { path = "../cade-mcp", optional = true }
+cade-mcp = { path = "../cade-mcp", optional = true }
 # -- Error handling
-derive_more.workspace  = true
-regex.workspace        = true
-serde.workspace        = true
-serde_json.workspace   = true
+derive_more.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 # -- Logging
-tracing.workspace      = true
+tracing.workspace = true
 # -- Async
-tokio.workspace        = true
+tokio.workspace = true
 tokio-stream.workspace = true
-futures.workspace      = true
-reqwest        = { workspace = true, features = ["stream"] }
+futures.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
 tokio-util = { version = "0.7.13", features = ["io"] }
 # -- Misc utilities
-uuid.workspace         = true
-chrono.workspace       = true
-parking_lot.workspace  = true
-dotenvy.workspace      = true
-dirs.workspace         = true
-ignore.workspace       = true
-tempfile.workspace     = true
+uuid.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+dotenvy.workspace = true
+dirs.workspace = true
+ignore.workspace = true
+tempfile.workspace = true
 # -- Server
-axum.workspace         = true
-tower-http.workspace   = true
-rusqlite.workspace     = true
+axum.workspace = true
+tower-http.workspace = true
+rusqlite.workspace = true
 # -- Auth
 subtle = "2.6.1"
 getrandom = { workspace = true }
