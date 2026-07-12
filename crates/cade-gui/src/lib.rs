@@ -28,7 +28,9 @@ fn App() -> Element {
                     let parts: Vec<&str> = pair.split('=').collect();
                     if parts.len() == 2 {
                         let key = parts[0];
-                        let val = urlencoding::decode(parts[1]).unwrap_or_default().into_owned();
+                        let val = urlencoding::decode(parts[1])
+                            .unwrap_or_default()
+                            .into_owned();
                         match key {
                             "api_key" => initial_key = val,
                             "agent_id" => initial_agent_id = Some(val),
@@ -41,7 +43,11 @@ fn App() -> Element {
         }
     }
 
-    let initial_page = if initial_agent_id.is_some() { SelectedPage::Chat } else { SelectedPage::Dashboard };
+    let initial_page = if initial_agent_id.is_some() {
+        SelectedPage::Chat
+    } else {
+        SelectedPage::Dashboard
+    };
 
     // ── Shared state ────────────────────────────────────────────────────────
     let api_key = use_signal(|| initial_key);

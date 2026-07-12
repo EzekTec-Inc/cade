@@ -12,13 +12,9 @@ pub enum HookDef {
         timeout: u64, // milliseconds
     },
     /// Blocks mutating or access operations containing forbidden paths.
-    PathBlocker {
-        forbidden_paths: Vec<String>,
-    },
+    PathBlocker { forbidden_paths: Vec<String> },
     /// Scans inputs, prompts, or arguments for blacklisted regex patterns.
-    RegexGuard {
-        patterns: Vec<String>,
-    },
+    RegexGuard { patterns: Vec<String> },
 }
 
 fn default_hook_timeout() -> u64 {

@@ -342,7 +342,9 @@ impl Repl {
                     .show_toast("Permission mode: default", ToastLevel::Success);
                 self.tui_ok("✅ Permission mode: default — tools require approval");
                 self.sync_plan_tools(false).await;
-                let _ = self.auto_switch_model_for_mode(PermissionMode::Default).await;
+                let _ = self
+                    .auto_switch_model_for_mode(PermissionMode::Default)
+                    .await;
             }
             SlashCmd::Mode(arg) => {
                 return self.cmd_mode(arg).await;

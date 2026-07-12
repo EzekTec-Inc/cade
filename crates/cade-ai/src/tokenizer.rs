@@ -11,9 +11,9 @@
 //! `count_tokens` thousands of times per request without re-loading BPE
 //! tables.
 
+use crate::types::LlmMessage;
 use once_cell::sync::Lazy;
 use tiktoken_rs::CoreBPE;
-use crate::types::LlmMessage;
 
 /// Default fallback ratio when *all* tokenizer paths fail (encoder load
 /// error, panic, unknown family).  Conservative: 3 chars/token leaves
@@ -107,10 +107,9 @@ pub fn resolve_token_counter(model_id: &str) -> Box<dyn TokenCounter> {
         || lower.contains("/o3")
         || lower.contains("/o4");
 
-    if is_o200k
-        && let Some(enc) = O200K.as_ref() {
-            return Box::new(TiktokenAdapter { encoder: enc });
-        }
+    if is_o200k && let Some(enc) = O200K.as_ref() {
+        return Box::new(TiktokenAdapter { encoder: enc });
+    }
 
     if let Some(enc) = CL100K.as_ref() {
         if lower.contains("anthropic") || lower.contains("claude") {
@@ -223,7 +222,7 @@ impl PromptBudgetManager {
         for turn in turns.iter().cloned().rev() {
             let tokens = self.turn_cost(model_id, &turn);
             let fallback_chars = self.turn_cost_fallback_chars(&turn);
-            
+
             let turn_chars = if tokens == 0 && fallback_chars > 0 {
                 fallback_chars
             } else {

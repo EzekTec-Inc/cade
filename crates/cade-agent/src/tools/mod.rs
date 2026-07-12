@@ -9,9 +9,9 @@ pub mod catalog;
 pub mod desktop;
 pub mod file_lock;
 pub mod fs;
-pub mod isolation;
 pub mod fs_agent;
 pub mod git_checkpoint;
+pub mod isolation;
 pub mod manager;
 pub mod memory;
 pub mod meta;
@@ -22,6 +22,7 @@ pub mod search_agent;
 pub mod traits;
 
 pub use ask::AskUserQuestionTool;
+pub use isolation::IsolatedWorkspace;
 pub use manager::{
     ToolResult, all_schemas, dispatch, is_mcp_write_tool, schemas_for_names, schemas_for_toolset,
 };
@@ -30,6 +31,5 @@ pub use plan::{
     EnterPlanModeTool, ExitPlanModeTool, FinishTaskTool, SetPlanTool, TodoWriteTool, UpdatePlanTool,
 };
 pub use runtime::{RuntimeToolResult, ToolRuntime};
-pub use isolation::IsolatedWorkspace;
 
 // endregion: --- Modules

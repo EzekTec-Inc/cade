@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use cade_ai::{LlmMessage, catalogue, PromptBudgetManager};
+use cade_ai::{LlmMessage, PromptBudgetManager, catalogue};
 use cade_store::sqlite::{self};
 use serde_json::{Value, json};
 
@@ -786,10 +786,11 @@ pub(crate) async fn build_context(
     // no turns were dropped yet.  This gives the Sleeptime task a wider
     // runway to produce a `session_summary` block before the next request
     // actually overflows.
-    let total_selected_tokens: usize = system_tokens + selected
-        .iter()
-        .map(|turn| budget_manager.turn_cost(&agent.model, turn))
-        .sum::<usize>();
+    let total_selected_tokens: usize = system_tokens
+        + selected
+            .iter()
+            .map(|turn| budget_manager.turn_cost(&agent.model, turn))
+            .sum::<usize>();
 
     let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
     let token_usage_fraction = if window_tokens > 0 {

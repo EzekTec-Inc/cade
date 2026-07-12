@@ -1796,15 +1796,18 @@ impl TuiApp {
         let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
 
         // Try cache for the non-streaming portion.
-        let mut prepared = self.layout_engine.layout_items(
-            &self.lines,
-            timeline_w,
-            self.expand_all,
-            &self.expanded_items,
-            &self.colors,
-            self.use_nerd_fonts,
-            self.content_version,
-        ).to_vec();
+        let mut prepared = self
+            .layout_engine
+            .layout_items(
+                &self.lines,
+                timeline_w,
+                self.expand_all,
+                &self.expanded_items,
+                &self.colors,
+                self.use_nerd_fonts,
+                self.content_version,
+            )
+            .to_vec();
 
         // Streaming entry (always rebuilt — changes every tick, not cached).
         if self.streaming_active {
@@ -1828,7 +1831,8 @@ impl TuiApp {
             // avoiding paragraph layout overflow.
             let mut pre_wrapped_stream_lines = Vec::new();
             for l in stream_lines {
-                pre_wrapped_stream_lines.extend(crate::app::timeline::wrap_line(l, effective_w as u16));
+                pre_wrapped_stream_lines
+                    .extend(crate::app::timeline::wrap_line(l, effective_w as u16));
             }
             let stream_rows = pre_wrapped_stream_lines.len() as u16;
             prepared.push(crate::app::timeline::PreparedTimelineEntry {

@@ -842,14 +842,17 @@ async fn async_main() -> Result<()> {
     let mut initial_model = agent.model.clone().unwrap_or(default_model.to_string());
     let mut toolset = toolset;
     if let Some(preferred) = settings.model_for_mode(perm_mode)
-        && preferred != initial_model {
-            tracing::info!("Applying preferred model '{preferred}' for startup mode '{perm_mode}'");
-            initial_model = preferred.clone();
-            toolset = Toolset::for_model(&preferred);
-            if let Err(e) = client.patch_agent_model(&agent.id, &preferred).await {
-                tracing::warn!("Failed to patch agent model to preferred model '{preferred}' on startup: {e}");
-            }
+        && preferred != initial_model
+    {
+        tracing::info!("Applying preferred model '{preferred}' for startup mode '{perm_mode}'");
+        initial_model = preferred.clone();
+        toolset = Toolset::for_model(&preferred);
+        if let Err(e) = client.patch_agent_model(&agent.id, &preferred).await {
+            tracing::warn!(
+                "Failed to patch agent model to preferred model '{preferred}' on startup: {e}"
+            );
         }
+    }
 
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));

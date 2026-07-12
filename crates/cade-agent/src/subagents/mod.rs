@@ -52,16 +52,18 @@ impl SubagentTools {
         match self {
             Self::All => false,
             Self::Readonly => true,
-            Self::List(tools) => {
-                !tools.iter().any(|t| {
-                    matches!(t.as_str(), "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file") || t.contains("__")
-                })
-            }
-            Self::Restricted { allowed_tools, .. } => {
-                !allowed_tools.iter().any(|t| {
-                    matches!(t.as_str(), "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file") || t.contains("__")
-                })
-            }
+            Self::List(tools) => !tools.iter().any(|t| {
+                matches!(
+                    t.as_str(),
+                    "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file"
+                ) || t.contains("__")
+            }),
+            Self::Restricted { allowed_tools, .. } => !allowed_tools.iter().any(|t| {
+                matches!(
+                    t.as_str(),
+                    "bash" | "shell" | "write_file" | "edit_file" | "apply_patch" | "create_file"
+                ) || t.contains("__")
+            }),
         }
     }
 

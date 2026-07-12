@@ -114,7 +114,7 @@ fn test_prepare_timeline_entries_row_sum() {
     let entries = build_timeline_entries(&lines);
     let colors = ThemeColors::default();
     let expanded = std::collections::HashSet::new();
-    let mut temp_cache = std::collections::HashMap::new();
+    let mut temp_cache = crate::app::timeline::PreparedCache::new();
     let prepared = prepare_timeline_entries(
         &entries,
         80,
@@ -394,13 +394,103 @@ fn test_copy_selected_text_basic() {
         None,
     );
     app.push_silent(RenderLine::UserMessage("hello world".to_string()));
-    
+
     app.messages_area = ratatui::layout::Rect::new(0, 0, 80, 24);
-    
+
     app.selection_start = Some((4, 1));
     app.selection_current = Some((8, 1));
     app.selection_active = true;
-    
+
     let result = app.copy_selected_text();
     assert!(result);
+}
+
+#[test]
+fn test_prepared_cache_content_aware_invalidation() {
+    use crate::app::RenderLine;
+    use crate::app::timeline::*;
+    use crate::colors::ThemeColors;
+
+    let colors = ThemeColors::default();
+    let expanded = std::collections::HashSet::new();
+    let mut engine = TimelineLayoutEngine::new();
+
+    // Helper to check if a prepared entry contains specific text
+    let contains_text = |entry: &PreparedTimelineEntry, text: &str| -> bool {
+        entry.lines.iter().any(|line| {
+            let line_text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            line_text.contains(text)
+        })
+    };
+
+    // Line 1: Original content
+    let lines_v1 = vec![
+        RenderLine::UserMessage("hello v1".to_string()),
+        RenderLine::AssistantText("world v1".to_string()),
+    ];
+
+    // First layout pass — populates the cache
+    let prepared_v1 = engine
+        .layout_items(&lines_v1, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared_v1.len(), 2);
+    assert!(contains_text(&prepared_v1[0], "hello v1"));
+
+    // Trigger a global layout cache miss by resetting engine's cached version,
+    // which forces rebuilding the timeline layout while retaining the per-item PreparedCache.
+    engine.version = 0;
+
+    // Second layout pass — exact same content, same version -> should be a cache hit at item-level
+    let prepared_v1_hit = engine
+        .layout_items(&lines_v1, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared_v1_hit.len(), 2);
+    assert!(contains_text(&prepared_v1_hit[0], "hello v1"));
+
+    // Line 2: Modified content, same index, different content version
+    let lines_v2 = vec![
+        RenderLine::UserMessage("hello v2".to_string()), // modified
+        RenderLine::AssistantText("world v1".to_string()), // unmodified
+    ];
+
+    // Third layout pass — content changed at index 0 -> should invalidate and rebuild index 0,
+    // but reuse cached layout for index 1 (since index 1 content and width did not change).
+    let prepared_v2 = engine
+        .layout_items(&lines_v2, 80, false, &expanded, &colors, true, 2)
+        .to_vec();
+    assert_eq!(prepared_v2.len(), 2);
+    assert!(contains_text(&prepared_v2[0], "hello v2")); // correctly updated (cache invalidated)
+    assert!(contains_text(&prepared_v2[1], "world v1")); // correctly preserved (cache reused)
+}
+
+#[test]
+fn test_prepared_cache_width_invalidation() {
+    use crate::app::RenderLine;
+    use crate::app::timeline::*;
+    use crate::colors::ThemeColors;
+
+    let colors = ThemeColors::default();
+    let expanded = std::collections::HashSet::new();
+    let mut engine = TimelineLayoutEngine::new();
+
+    let lines = vec![RenderLine::UserMessage(
+        "hello world this is a long wrapped line".to_string(),
+    )];
+
+    // Layout on width 80
+    let prepared_80 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+
+    // Layout on width 10 (forces word-wrapping to multiple rows)
+    let prepared_10 = engine
+        .layout_items(&lines, 10, false, &expanded, &colors, true, 1)
+        .to_vec();
+
+    // Width 10 should have significantly more wrapped rows than width 80
+    assert!(prepared_10[0].rows > prepared_80[0].rows);
 }

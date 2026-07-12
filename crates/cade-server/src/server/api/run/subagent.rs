@@ -2,21 +2,25 @@
 
 use crate::server::state::AppState;
 
-use std::sync::{Arc, Mutex, OnceLock};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 fn get_writeback_lock(parent_agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     let locks_map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = locks_map.lock().unwrap();
-    guard.entry(parent_agent_id.to_string())
+    guard
+        .entry(parent_agent_id.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
 }
 
-static STEERING_QUEUES: OnceLock<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>> = OnceLock::new();
+static STEERING_QUEUES: OnceLock<
+    Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>,
+> = OnceLock::new();
 
-fn get_steering_queues() -> &'static Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>> {
+fn get_steering_queues()
+-> &'static Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>> {
     STEERING_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -464,13 +468,12 @@ pub(super) async fn handle_run_subagent_tool_inner(
 
     let is_subagent_readonly = def_opt
         .map(|d| d.tools.is_readonly())
-        .unwrap_or_else(|| {
-            cfg.mode == "plan" || cfg.mode == "recall"
-        });
+        .unwrap_or_else(|| cfg.mode == "plan" || cfg.mode == "recall");
 
     let use_isolation = std::env::var("CADE_ISOLATION")
         .map(|v| v == "true")
-        .unwrap_or(false) && !is_subagent_readonly;
+        .unwrap_or(false)
+        && !is_subagent_readonly;
     let temp_workspace = if use_isolation {
         let root = std::env::current_dir().unwrap_or_default();
         match cade_agent::tools::IsolatedWorkspace::clone_from(&root) {
@@ -778,7 +781,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
             queues.remove(&self.subagent_id);
         }
     }
-    let _steering_cleanup = SteeringCleanup { subagent_id: subagent_id.clone() };
+    let _steering_cleanup = SteeringCleanup {
+        subagent_id: subagent_id.clone(),
+    };
 
     // Wall-clock timeout guard (REC-1, pre-existing).
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
@@ -1057,7 +1062,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         || cfg!(test);
                     if !is_yolo {
                         use cade_core::permissions::{PermissionManager, PermissionMode, SecurityAuthority, Verdict};
-                        
+
                         let perm_mode = match cfg.mode.as_str() {
                             "plan" | "recall" => PermissionMode::Plan,
                             "accept-edits" | "acceptEdits" => PermissionMode::AcceptEdits,
@@ -1709,8 +1714,6 @@ pub(super) async fn smart_memory_merge(
         );
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

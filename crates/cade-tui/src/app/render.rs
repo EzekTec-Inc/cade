@@ -38,8 +38,8 @@ use super::layout::cursor::{calc_input_rows, input_mode_badge};
 use super::layout::sidebar::{SidebarState, render_sidebar};
 use super::layout::toast::render_toast;
 use super::timeline::{
-    PreparedTimelineEntry, TimelineEntry, TimelineKey, build_timeline_entries,
-    render_timeline_viewport, TimelineLayoutEngine,
+    PreparedTimelineEntry, TimelineEntry, TimelineKey, TimelineLayoutEngine,
+    build_timeline_entries, render_timeline_viewport,
 };
 use super::{
     BRAILLE, DOTS, FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT,
@@ -294,15 +294,17 @@ pub(crate) fn render_frame(
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
-    let mut prepared = layout_engine.layout_items(
-        lines,
-        timeline_w,
-        expand_all,
-        expanded_items,
-        colors,
-        nerd,
-        content_version,
-    ).to_vec();
+    let mut prepared = layout_engine
+        .layout_items(
+            lines,
+            timeline_w,
+            expand_all,
+            expanded_items,
+            colors,
+            nerd,
+            content_version,
+        )
+        .to_vec();
     if let Some(s) = streaming {
         let next_index = lines.len();
         let streaming_entry = TimelineEntry::streaming(next_index, s);

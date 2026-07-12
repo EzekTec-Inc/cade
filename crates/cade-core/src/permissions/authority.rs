@@ -1,10 +1,10 @@
 use crate::permissions::manager::PermissionManager;
-use crate::permissions::service::PermissionService;
 use crate::permissions::rules::Verdict;
+use crate::permissions::service::PermissionService;
 use std::sync::Arc;
 
 /// A deep, unified module that acts as the single entrypoint for security and execution permissions.
-/// It brings together the synchronous rules engine (`PermissionManager`) and the asynchronous 
+/// It brings together the synchronous rules engine (`PermissionManager`) and the asynchronous
 /// human-in-the-loop prompt delegates (`PermissionService`) behind a single, high-leverage seam.
 pub struct SecurityAuthority {
     manager: PermissionManager,

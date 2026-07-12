@@ -941,12 +941,15 @@ fn test_touched_files_extraction_parsing_formatting_and_stripping() {
                 ]
             }),
             char_count: 0,
-        }
+        },
     ];
 
     let (reads, mods) = extract_touched_files(&rows);
     assert_eq!(reads, vec!["src/lib.rs".to_string()]);
-    assert_eq!(mods, vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]);
+    assert_eq!(
+        mods,
+        vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]
+    );
 
     // 2. Test formatting
     let formatted = format_touched_files_section(&reads, &mods);

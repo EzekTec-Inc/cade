@@ -24,7 +24,9 @@ impl Repl {
                             .show_toast(format!("{icon} {label}"), ToastLevel::Success);
                         self.tui_ok(format!("{icon} Permission mode: {label}"));
                         self.sync_plan_tools(false).await;
-                        let _ = self.auto_switch_model_for_mode(PermissionMode::Default).await;
+                        let _ = self
+                            .auto_switch_model_for_mode(PermissionMode::Default)
+                            .await;
                     }
                     Some("plan") => {
                         self.permissions.set_mode(PermissionMode::Plan);
@@ -44,7 +46,9 @@ impl Repl {
                             .show_toast(format!("{icon} {label}"), ToastLevel::Warning);
                         self.tui_sys(format!("{icon} Permission mode: {label}"));
                         self.sync_plan_tools(false).await;
-                        let _ = self.auto_switch_model_for_mode(PermissionMode::BypassPermissions).await;
+                        let _ = self
+                            .auto_switch_model_for_mode(PermissionMode::BypassPermissions)
+                            .await;
                     }
                     Some("acceptEdits") => {
                         self.permissions.set_mode(PermissionMode::AcceptEdits);
@@ -54,7 +58,9 @@ impl Repl {
                             .show_toast(format!("{icon} {label}"), ToastLevel::Success);
                         self.tui_ok(format!("{icon} Permission mode: {label}"));
                         self.sync_plan_tools(false).await;
-                        let _ = self.auto_switch_model_for_mode(PermissionMode::AcceptEdits).await;
+                        let _ = self
+                            .auto_switch_model_for_mode(PermissionMode::AcceptEdits)
+                            .await;
                     }
                     _ => {
                         self.tui_err(format!(
@@ -74,11 +80,17 @@ impl Repl {
         if let Some(preferred) = preferred_model {
             let current = self.current_model.lock().clone();
             if preferred != current {
-                self.tui_dim(format!("  🔄 Auto-switching model to {preferred} for {mode} mode…"));
+                self.tui_dim(format!(
+                    "  🔄 Auto-switching model to {preferred} for {mode} mode…"
+                ));
                 let new_toolset = cade_core::toolsets::Toolset::for_model(&preferred);
                 let old_toolset = *self.current_toolset.lock();
 
-                match self.client.patch_agent_model(&self.agent_id(), &preferred).await {
+                match self
+                    .client
+                    .patch_agent_model(&self.agent_id(), &preferred)
+                    .await
+                {
                     Ok(new_model) => {
                         *self.current_model.lock() = new_model.clone();
                         if new_toolset != old_toolset {
@@ -89,7 +101,10 @@ impl Repl {
                         self.tui_ok(format!("  ✓ Model: {new_model}"));
                         {
                             let mut app = self.app.lock();
-                            app.show_toast(format!("Auto-switched model → {new_model}"), ToastLevel::Success);
+                            app.show_toast(
+                                format!("Auto-switched model → {new_model}"),
+                                ToastLevel::Success,
+                            );
                             let _ = app.draw();
                         }
                     }

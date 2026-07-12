@@ -31,7 +31,8 @@ impl Repl {
         let opts = vec![
             QuestionOption {
                 label: "Yes — summarize branch".to_string(),
-                description: "Consolidates recent turns and saves them to SQLite archival memory.".to_string(),
+                description: "Consolidates recent turns and saves them to SQLite archival memory."
+                    .to_string(),
             },
             QuestionOption {
                 label: "No — switch immediately".to_string(),

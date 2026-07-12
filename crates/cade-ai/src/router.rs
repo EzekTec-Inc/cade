@@ -586,11 +586,10 @@ impl LlmRouter {
 
         let mut matched_id = None;
         for (cat_provider, _display, full_id, _toolset, _max, _window) in CATALOGUE {
-            if *cat_provider == provider
-                && full_id.contains(clean_model) {
-                    matched_id = Some(full_id.to_string());
-                    break;
-                }
+            if *cat_provider == provider && full_id.contains(clean_model) {
+                matched_id = Some(full_id.to_string());
+                break;
+            }
         }
 
         let final_model_id = matched_id.unwrap_or_else(|| format!("{}/{}", provider, clean_model));
@@ -623,18 +622,19 @@ impl LlmProvider for LlmRouter {
                 if req.model.starts_with("openrouter/")
                     && let Some((native_provider_name, native_bare)) =
                         self.map_openrouter_to_native(&bare_model)
-                        && let Some(native_provider) = self.providers.get(&native_provider_name) {
-                            tracing::warn!(
-                                "OpenRouter call failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
-                                native_provider_name,
-                                native_bare
-                            );
-                            let failover_req = CompletionRequest {
-                                model: native_bare,
-                                ..req.clone()
-                            };
-                            return native_provider.complete(&failover_req).await;
-                        }
+                    && let Some(native_provider) = self.providers.get(&native_provider_name)
+                {
+                    tracing::warn!(
+                        "OpenRouter call failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
+                        native_provider_name,
+                        native_bare
+                    );
+                    let failover_req = CompletionRequest {
+                        model: native_bare,
+                        ..req.clone()
+                    };
+                    return native_provider.complete(&failover_req).await;
+                }
                 Err(e)
             }
         }
@@ -650,29 +650,27 @@ impl LlmProvider for LlmRouter {
             ..req.clone()
         };
 
-        match routed.model.as_str() {
-            _ => match provider.stream(&routed).await {
-                Ok(stream) => Ok(stream),
-                Err(e) => {
-                    if req.model.starts_with("openrouter/")
-                        && let Some((native_provider_name, native_bare)) =
-                            self.map_openrouter_to_native(&bare_model)
-                            && let Some(native_provider) = self.providers.get(&native_provider_name)
-                            {
-                                tracing::warn!(
-                                    "OpenRouter streaming connection failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
-                                    native_provider_name,
-                                    native_bare
-                                );
-                                let failover_req = CompletionRequest {
-                                    model: native_bare,
-                                    ..req.clone()
-                                };
-                                return native_provider.stream(&failover_req).await;
-                            }
-                    Err(e)
+        match provider.stream(&routed).await {
+            Ok(stream) => Ok(stream),
+            Err(e) => {
+                if req.model.starts_with("openrouter/")
+                    && let Some((native_provider_name, native_bare)) =
+                        self.map_openrouter_to_native(&bare_model)
+                    && let Some(native_provider) = self.providers.get(&native_provider_name)
+                {
+                    tracing::warn!(
+                        "OpenRouter streaming connection failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
+                        native_provider_name,
+                        native_bare
+                    );
+                    let failover_req = CompletionRequest {
+                        model: native_bare,
+                        ..req.clone()
+                    };
+                    return native_provider.stream(&failover_req).await;
                 }
-            },
+                Err(e)
+            }
         }
     }
 }

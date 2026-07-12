@@ -107,7 +107,8 @@ mod tests {
             tool_name,
             repeat_count,
             intervention_message,
-        } = detector.record_call(tool, &args) {
+        } = detector.record_call(tool, &args)
+        {
             assert_eq!(tool_name, "bash");
             assert_eq!(repeat_count, 3);
             assert!(intervention_message.contains("SYSTEM INTERVENTION"));
@@ -116,7 +117,10 @@ mod tests {
         }
 
         // Fourth call with different arguments: Ok
-        assert_eq!(detector.record_call(tool, &other_args), StagnationResult::Ok);
+        assert_eq!(
+            detector.record_call(tool, &other_args),
+            StagnationResult::Ok
+        );
 
         // Clear resets the sliding window
         detector.clear();

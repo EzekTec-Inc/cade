@@ -33,7 +33,11 @@ impl Repl {
 
                 // Save model association for current mode
                 let active_mode = self.permissions.mode();
-                if let Err(e) = self.settings.lock().set_model_for_mode(active_mode, &new_model) {
+                if let Err(e) = self
+                    .settings
+                    .lock()
+                    .set_model_for_mode(active_mode, &new_model)
+                {
                     tracing::error!("Failed to save preferred model for mode {active_mode}: {e}");
                 }
 

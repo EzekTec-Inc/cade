@@ -487,15 +487,14 @@ async fn run_hook_command(
         crate::settings::HookDef::PathBlocker { forbidden_paths } => {
             if let Some(tool_name) = input.get("tool_name").and_then(|v| v.as_str())
                 && let Some(tool_input) = input.get("tool_input")
+                && let Some(target_path) = crate::permissions::tool_first_arg(tool_name, tool_input)
             {
-                if let Some(target_path) = crate::permissions::tool_first_arg(tool_name, tool_input) {
-                    let lower_path = target_path.to_lowercase();
-                    for pat in forbidden_paths {
-                        if lower_path.contains(&pat.to_lowercase()) {
-                            return HookResult::Block(format!(
-                                "Path blocker: path contains forbidden pattern: {pat}"
-                            ));
-                        }
+                let lower_path = target_path.to_lowercase();
+                for pat in forbidden_paths {
+                    if lower_path.contains(&pat.to_lowercase()) {
+                        return HookResult::Block(format!(
+                            "Path blocker: path contains forbidden pattern: {pat}"
+                        ));
                     }
                 }
             }
@@ -865,18 +864,24 @@ mod tests {
             }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
-        
+
         // 1. Safe access -> allow
-        let outcome = engine.pre_tool_use("read_file", &json!({ "path": "src/lib.rs" })).await;
+        let outcome = engine
+            .pre_tool_use("read_file", &json!({ "path": "src/lib.rs" }))
+            .await;
         assert!(!outcome.is_block());
 
         // 2. Accessing forbidden .env file -> block
-        let outcome = engine.pre_tool_use("read_file", &json!({ "path": "/home/user/.env" })).await;
+        let outcome = engine
+            .pre_tool_use("read_file", &json!({ "path": "/home/user/.env" }))
+            .await;
         assert!(outcome.is_block());
         assert!(outcome.reason().unwrap().contains("Path blocker"));
 
         // 3. Accessing forbidden /etc/passwd file -> block
-        let outcome = engine.pre_tool_use("read_file", &json!({ "path": "/etc/passwd" })).await;
+        let outcome = engine
+            .pre_tool_use("read_file", &json!({ "path": "/etc/passwd" }))
+            .await;
         assert!(outcome.is_block());
     }
 
@@ -892,16 +897,25 @@ mod tests {
         let engine = HookEngine::new(config, PathBuf::from("."), "test_session".to_string());
 
         // 1. Safe prompt/input -> allow
-        let outcome = engine.pre_tool_use("bash", &json!({ "command": "echo hello" })).await;
+        let outcome = engine
+            .pre_tool_use("bash", &json!({ "command": "echo hello" }))
+            .await;
         assert!(!outcome.is_block());
 
         // 2. Sensitive env var -> block
-        let outcome = engine.pre_tool_use("bash", &json!({ "command": "export AWS_ACCESS_KEY_ID=123" })).await;
+        let outcome = engine
+            .pre_tool_use(
+                "bash",
+                &json!({ "command": "export AWS_ACCESS_KEY_ID=123" }),
+            )
+            .await;
         assert!(outcome.is_block());
         assert!(outcome.reason().unwrap().contains("Regex guard"));
 
         // 3. Substring match -> block
-        let outcome = engine.pre_tool_use("bash", &json!({ "command": "my secret-key is here" })).await;
+        let outcome = engine
+            .pre_tool_use("bash", &json!({ "command": "my secret-key is here" }))
+            .await;
         assert!(outcome.is_block());
     }
 }

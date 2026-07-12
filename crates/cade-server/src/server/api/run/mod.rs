@@ -988,11 +988,16 @@ pub async fn steer_subagent_handler(
     Json(payload): Json<SteerPayload>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     if subagent::steer_subagent(&subagent_id, payload.message) {
-        Ok(Json(json!({ "status": "success", "subagent_id": subagent_id })))
+        Ok(Json(
+            json!({ "status": "success", "subagent_id": subagent_id }),
+        ))
     } else {
         Err((
             axum::http::StatusCode::NOT_FOUND,
-            format!("Subagent '{}' not active or steering queue closed.", subagent_id),
+            format!(
+                "Subagent '{}' not active or steering queue closed.",
+                subagent_id
+            ),
         ))
     }
 }

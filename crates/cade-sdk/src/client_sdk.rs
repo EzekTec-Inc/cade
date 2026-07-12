@@ -13,7 +13,10 @@ pub struct CadeClientSdk {
 impl CadeClientSdk {
     /// Create a new instance of the SDK client.
     pub fn new(server_url: String, api_key: String) -> Self {
-        Self { server_url, api_key }
+        Self {
+            server_url,
+            api_key,
+        }
     }
 }
 
@@ -22,9 +25,9 @@ impl CadeClientSdk {
 #[cfg(not(target_arch = "wasm32"))]
 mod native_impl {
     use super::*;
+    use futures_util::StreamExt;
     use futures_util::stream::BoxStream;
     use reqwest_eventsource::{Event, EventSource};
-    use futures_util::StreamExt;
 
     impl CadeClientSdk {
         /// Fetch list of all agents.
@@ -43,7 +46,8 @@ mod native_impl {
                 .await
                 .map_err(|e| crate::Error::custom(format!("read_body: {e}")))?;
 
-            serde_json::from_str(&body).map_err(|e| crate::Error::custom(format!("parse_agents: {e}")))
+            serde_json::from_str(&body)
+                .map_err(|e| crate::Error::custom(format!("parse_agents: {e}")))
         }
 
         /// Fetch messages for a given agent.
@@ -70,7 +74,8 @@ mod native_impl {
                 .await
                 .map_err(|e| crate::Error::custom(format!("read_body: {e}")))?;
 
-            serde_json::from_str(&body).map_err(|e| crate::Error::custom(format!("parse_messages: {e}")))
+            serde_json::from_str(&body)
+                .map_err(|e| crate::Error::custom(format!("parse_messages: {e}")))
         }
 
         /// Stream messages via the Server-Sent Events (SSE) pipe.
@@ -87,31 +92,31 @@ mod native_impl {
                 body["conversation_id"] = Value::String(cid.to_string());
             }
 
-            let request = client
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .json(&body);
+            let request = client.post(&url).bearer_auth(&self.api_key).json(&body);
 
             let event_source = EventSource::new(request)
                 .map_err(|e| crate::Error::custom(format!("event_source: {e}")))?;
 
-            let s = event_source.map(|item| match item {
-                Ok(Event::Message(msg)) => {
-                    let trimmed = msg.data.trim();
-                    if trimmed == "[DONE]" {
-                        Err(crate::Error::custom("DONE"))
-                    } else {
-                        serde_json::from_str::<StreamEvent>(trimmed)
-                            .map_err(|e| crate::Error::custom(format!("parse_event: {e}")))
+            let s = event_source
+                .map(|item| match item {
+                    Ok(Event::Message(msg)) => {
+                        let trimmed = msg.data.trim();
+                        if trimmed == "[DONE]" {
+                            Err(crate::Error::custom("DONE"))
+                        } else {
+                            serde_json::from_str::<StreamEvent>(trimmed)
+                                .map_err(|e| crate::Error::custom(format!("parse_event: {e}")))
+                        }
                     }
-                }
-                Ok(_) => Err(crate::Error::custom("Non-message event")),
-                Err(e) => Err(crate::Error::custom(format!("stream_err: {e}"))),
-            })
-            .filter(|r| futures_util::future::ready(match r {
-                Err(e) if e.to_string().contains("DONE") => false,
-                _ => true,
-            }));
+                    Ok(_) => Err(crate::Error::custom("Non-message event")),
+                    Err(e) => Err(crate::Error::custom(format!("stream_err: {e}"))),
+                })
+                .filter(|r| {
+                    futures_util::future::ready(match r {
+                        Err(e) if e.to_string().contains("DONE") => false,
+                        _ => true,
+                    })
+                });
 
             Ok(s.boxed())
         }
@@ -123,16 +128,23 @@ mod native_impl {
 #[cfg(target_arch = "wasm32")]
 mod wasm_impl {
     use super::*;
-    use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Request, RequestInit, RequestMode, Response, ReadableStreamDefaultReader, TextDecoder};
-    use js_sys::Reflect;
-    use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
+    use futures_util::stream::BoxStream;
+    use js_sys::Reflect;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{
+        ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response, TextDecoder,
+    };
 
     impl CadeClientSdk {
-        async fn api_request(&self, method: &str, path: &str, body: Option<&str>) -> Result<String, crate::Error> {
+        async fn api_request(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&str>,
+        ) -> Result<String, crate::Error> {
             let window = web_sys::window().ok_or_else(|| crate::Error::custom("No window"))?;
             let opts = RequestInit::new();
             opts.set_method(method);
@@ -147,26 +159,35 @@ mod wasm_impl {
             let request = Request::new_with_str_and_init(&url, &opts)
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
-            request.headers()
+            request
+                .headers()
                 .set("Authorization", &format!("Bearer {}", self.api_key))
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
-            request.headers()
+            request
+                .headers()
                 .set("Content-Type", "application/json")
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
             let resp_value = JsFuture::from(window.fetch_with_request(&request))
                 .await
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
-            let resp: Response = resp_value.dyn_into()
+            let resp: Response = resp_value
+                .dyn_into()
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
             if !resp.ok() {
-                return Err(crate::Error::custom(format!("HTTP error: {}", resp.status())));
+                return Err(crate::Error::custom(format!(
+                    "HTTP error: {}",
+                    resp.status()
+                )));
             }
 
-            let text_value = JsFuture::from(resp.text().map_err(|e| crate::Error::custom(format!("{:?}", e)))?)
-                .await
-                .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
+            let text_value = JsFuture::from(
+                resp.text()
+                    .map_err(|e| crate::Error::custom(format!("{:?}", e)))?,
+            )
+            .await
+            .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
             Ok(text_value.as_string().unwrap_or_default())
         }
@@ -174,7 +195,8 @@ mod wasm_impl {
         /// Fetch list of all agents.
         pub async fn list_agents(&self) -> Result<Vec<AgentInfo>, crate::Error> {
             let body = self.api_request("GET", "/v1/agents", None).await?;
-            serde_json::from_str(&body).map_err(|e| crate::Error::custom(format!("JSON parse: {e}")))
+            serde_json::from_str(&body)
+                .map_err(|e| crate::Error::custom(format!("JSON parse: {e}")))
         }
 
         /// Fetch messages for a given agent.
@@ -188,7 +210,8 @@ mod wasm_impl {
                 None => format!("/v1/agents/{agent_id}/messages"),
             };
             let body = self.api_request("GET", &path, None).await?;
-            serde_json::from_str(&body).map_err(|e| crate::Error::custom(format!("JSON parse: {e}")))
+            serde_json::from_str(&body)
+                .map_err(|e| crate::Error::custom(format!("JSON parse: {e}")))
         }
 
         /// Stream messages via the Server-Sent Events (SSE) pipe.
@@ -215,29 +238,41 @@ mod wasm_impl {
             let url = format!("{}{}", self.server_url, path);
             let request = Request::new_with_str_and_init(&url, &opts)
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
-            request.headers()
+            request
+                .headers()
                 .set("Authorization", &format!("Bearer {}", self.api_key))
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
-            request.headers()
+            request
+                .headers()
                 .set("Content-Type", "application/json")
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
             let resp_value = JsFuture::from(window.fetch_with_request(&request))
                 .await
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
-            let resp: Response = resp_value.dyn_into()
+            let resp: Response = resp_value
+                .dyn_into()
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
             if !resp.ok() {
-                return Err(crate::Error::custom(format!("HTTP error: {}", resp.status())));
+                return Err(crate::Error::custom(format!(
+                    "HTTP error: {}",
+                    resp.status()
+                )));
             }
 
-            let stream = resp.body().ok_or_else(|| crate::Error::custom("No response body"))?;
-            let reader: ReadableStreamDefaultReader = stream.get_reader().dyn_into()
+            let stream = resp
+                .body()
+                .ok_or_else(|| crate::Error::custom("No response body"))?;
+            let reader: ReadableStreamDefaultReader = stream
+                .get_reader()
+                .dyn_into()
                 .map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
-            let decoder = TextDecoder::new().map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
+            let decoder =
+                TextDecoder::new().map_err(|e| crate::Error::custom(format!("{:?}", e)))?;
 
-            let (mut tx, rx) = futures_util::channel::mpsc::channel::<Result<StreamEvent, crate::Error>>(100);
+            let (mut tx, rx) =
+                futures_util::channel::mpsc::channel::<Result<StreamEvent, crate::Error>>(100);
 
             wasm_bindgen_futures::spawn_local(async move {
                 let mut buffer = String::new();
@@ -291,7 +326,7 @@ mod wasm_impl {
                     while let Some(pos) = buffer.find("\n\n") {
                         let event_str = buffer[..pos].to_string();
                         buffer = buffer[pos + 2..].to_string();
-                        
+
                         for line in event_str.lines() {
                             if let Some(data) = line.strip_prefix("data: ") {
                                 let trimmed = data.trim();

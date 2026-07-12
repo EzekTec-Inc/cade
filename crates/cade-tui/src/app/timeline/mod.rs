@@ -61,6 +61,7 @@ pub(crate) struct PreparedTimelineEntry {
     pub(crate) card_style: CardStyle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TimelineItem<'a> {
     Separator,
     Blank,
@@ -468,13 +469,31 @@ pub(crate) fn prepare_timeline_entries(
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
     nerd: bool,
-    item_cache: &mut std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
+    item_cache: &mut PreparedCache,
 ) -> Vec<PreparedTimelineEntry> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
     entries
         .iter()
         .map(|entry| {
             let is_expanded = expand_all || expanded_items.contains(&entry.key);
-            if let Some(cached) = item_cache.get(&(entry.key, is_expanded)) {
+
+            // Compute a precise content hash of the inner item to enable content-aware caching
+            let content_hash = {
+                let mut h = DefaultHasher::new();
+                entry.item.hash(&mut h);
+                h.finish()
+            };
+
+            let cache_key = PreparedCacheKey {
+                index: entry.key.index,
+                kind: entry.key.kind,
+                is_expanded,
+                content_hash,
+            };
+
+            if let Some(cached) = item_cache.get(&cache_key) {
                 return cached.clone();
             }
 
@@ -513,7 +532,7 @@ pub(crate) fn prepare_timeline_entries(
                 card_style,
             };
 
-            item_cache.insert((entry.key, is_expanded), prepared.clone());
+            item_cache.insert(cache_key, prepared.clone());
             prepared
         })
         .collect()
@@ -654,11 +673,49 @@ pub(crate) fn timeline_key_expanded(
     expand_all || expanded_items.contains(key)
 }
 
+/// A localized cache key for a single timeline entry that ensures robust cache invalidation
+/// across width changes, toggles (folded/expanded state), and content modifications.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PreparedCacheKey {
+    pub(crate) index: usize,
+    pub(crate) kind: TimelineItemKind,
+    pub(crate) is_expanded: bool,
+    pub(crate) content_hash: u64,
+}
+
+/// A localized rendering cache in `cade-tui` that stores pre-wrapped visual layout spans
+/// and calculated line heights for individual timeline entries. This eliminates redundant,
+/// heavy CPU text-wrapping computations during continuous draw cycles, scrolling, or streaming updates.
+#[derive(Clone, Default)]
+pub(crate) struct PreparedCache {
+    pub(crate) cache: std::collections::HashMap<PreparedCacheKey, PreparedTimelineEntry>,
+}
+
+impl PreparedCache {
+    pub fn new() -> Self {
+        Self {
+            cache: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn get(&self, key: &PreparedCacheKey) -> Option<&PreparedTimelineEntry> {
+        self.cache.get(key)
+    }
+
+    pub fn insert(&mut self, key: PreparedCacheKey, entry: PreparedTimelineEntry) {
+        self.cache.insert(key, entry);
+    }
+
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+}
+
 /// A deep, cohesive layout engine that encapsulates text wrapping, sizing,
 /// prompt-specific card styling, caching, and cache invalidation.
 #[derive(Clone, Default)]
 pub(crate) struct TimelineLayoutEngine {
-    pub(crate) item_cache: std::collections::HashMap<(TimelineKey, bool), PreparedTimelineEntry>,
+    pub(crate) item_cache: PreparedCache,
     pub(crate) entries: Vec<PreparedTimelineEntry>,
     pub(crate) version: u64,
     pub(crate) timeline_w: usize,
@@ -669,7 +726,7 @@ pub(crate) struct TimelineLayoutEngine {
 impl TimelineLayoutEngine {
     pub fn new() -> Self {
         Self {
-            item_cache: std::collections::HashMap::new(),
+            item_cache: PreparedCache::new(),
             entries: Vec::new(),
             version: 0,
             timeline_w: 0,
@@ -710,6 +767,7 @@ impl TimelineLayoutEngine {
 
     /// Evaluates layout for a sequence of conversation lines, automatically managing caching.
     /// If content, width, or expanded state changes, the layout is automatically recalculated.
+    #[allow(clippy::too_many_arguments)]
     pub fn layout_items(
         &mut self,
         lines: &[RenderLine],
