@@ -67,6 +67,10 @@ pub struct McpServerConfig {
     /// If true, tools from this server are considered "core" and never pruned from the LLM context.
     #[serde(default)]
     pub core_server: bool,
+    /// If true (or if not specified, defaults to true), spawn this MCP server process
+    /// inside a sanitized sandbox environment (purging non-safe environment variables).
+    #[serde(default)]
+    pub sandboxed: Option<bool>,
 }
 
 /// Global settings stored in ~/.cade/settings.json

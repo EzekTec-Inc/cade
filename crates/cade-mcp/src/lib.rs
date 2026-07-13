@@ -627,6 +627,31 @@ impl McpManager {
         }
     }
 
+    fn build_stdio_command(config: &McpServerConfig) -> Command {
+        let mut cmd = Command::new(&config.command);
+
+        let is_sandboxed = config.sandboxed.unwrap_or(true);
+        if is_sandboxed {
+            cmd.env_clear();
+            const SAFE_ENV_VARS: &[&str] = &[
+                "PATH", "HOME", "LANG", "TZ", "TERM", "USER", "LOGNAME", "SHELL",
+            ];
+            for var in SAFE_ENV_VARS {
+                if let Ok(val) = std::env::var(var) {
+                    cmd.env(var, val);
+                }
+            }
+        }
+
+        cade_core::agent_env::apply_agent_env(&mut cmd);
+        cmd.args(&config.args);
+        for (k, v) in &config.env {
+            cmd.env(k, v);
+        }
+
+        cmd
+    }
+
     /// Connect via HTTP+SSE or Streamable HTTP (remote servers).
     ///
     /// Uses rmcp's unified `StreamableHttpClientTransport` which auto-detects
@@ -691,12 +716,7 @@ impl McpManager {
 
     /// Connect via stdio (local child process — original transport).
     async fn connect_server_stdio(key: &str, config: &McpServerConfig) -> Result<McpServer> {
-        let mut cmd = Command::new(&config.command);
-        cade_core::agent_env::apply_agent_env(&mut cmd);
-        cmd.args(&config.args);
-        for (k, v) in &config.env {
-            cmd.env(k, v);
-        }
+        let cmd = Self::build_stdio_command(config);
 
         // Redirect server's stderr to a log file for debugging and transparency.
         let stderr_io = std::fs::OpenOptions::new()
@@ -877,4 +897,54 @@ fn extract_content_text(content: &[rmcp::model::Content]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_sandboxed_command_env() {
+        std::env::set_var("CADE_API_KEY_SECRET_MOCK", "super-secret-key-999");
+        std::env::set_var("PATH", "/usr/bin:/bin");
+
+        let mut config = McpServerConfig {
+            command: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            ..Default::default()
+        };
+        config.env.insert("AUTHORIZED_VAR".to_string(), "authorized-value".to_string());
+
+        // Case 1: Sandboxed by default (None -> true)
+        let cmd = McpManager::build_stdio_command(&config);
+        let std_cmd = cmd.as_std();
+        let envs: HashMap<&OsStr, Option<&OsStr>> = std_cmd.get_envs().collect();
+
+        // SENSITIVE_API_KEY_SECRET_MOCK must be explicitly cleared (set to None)
+        // or absent if env_clear is called (envs will not contain it at all or set it to None)
+        assert!(
+            envs.get(OsStr::new("CADE_API_KEY_SECRET_MOCK")).is_none()
+            || envs.get(OsStr::new("CADE_API_KEY_SECRET_MOCK")) == Some(&None)
+        );
+
+        // AUTHORIZED_VAR must be explicitly set
+        assert_eq!(
+            envs.get(OsStr::new("AUTHORIZED_VAR")),
+            Some(&Some(OsStr::new("authorized-value")))
+        );
+
+        // Case 2: Explicitly NOT sandboxed
+        config.sandboxed = Some(false);
+        let cmd_unsandboxed = McpManager::build_stdio_command(&config);
+        let std_cmd_unsandboxed = cmd_unsandboxed.as_std();
+        let envs_unsandboxed: HashMap<&OsStr, Option<&OsStr>> = std_cmd_unsandboxed.get_envs().collect();
+
+        // Since it's not sandboxed, SENSITIVE_API_KEY_SECRET_MOCK should not be explicitly cleared
+        assert_ne!(
+            envs_unsandboxed.get(OsStr::new("CADE_API_KEY_SECRET_MOCK")),
+            Some(&None)
+        );
+    }
 }
