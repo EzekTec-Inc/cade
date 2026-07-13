@@ -858,6 +858,13 @@ async fn async_main() -> Result<()> {
     let settings_arc = Arc::new(Mutex::new(settings));
     let session_arc = Arc::new(Mutex::new(session));
 
+    // Apply adaptive provider-aware theme colors at startup if available
+    let theme_colors = if let Some(adaptive) = cli::repl::resolve_adaptive_theme(&initial_model) {
+        adaptive
+    } else {
+        theme_colors
+    };
+
     let repl = Repl::new(
         client,
         agent.id,

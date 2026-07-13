@@ -197,7 +197,8 @@ pub(crate) fn render_frame(
 
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
-    let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
+    let hotkey_bar_h: u16 = 1;
+    let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h + hotkey_bar_h;
 
     if main_area.height <= bottom_rows + 1 {
         frame.render_widget(
@@ -226,7 +227,7 @@ pub(crate) fn render_frame(
             Constraint::Length(1),                  // [4] top separator
             Constraint::Length(input_rows),         // [5] input or question
             Constraint::Length(1),                  // [6] bottom separator
-            Constraint::Length(1 + footer_extra_h), // [7] footer
+            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
         ])
         .split(main_area)
     } else {
@@ -240,7 +241,7 @@ pub(crate) fn render_frame(
             Constraint::Length(1),                  // [4] top separator
             Constraint::Length(input_rows),         // [5] input or question
             Constraint::Length(1),                  // [6] bottom separator
-            Constraint::Length(1 + footer_extra_h), // [7] footer
+            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
         ])
         .split(main_area)
     };
@@ -641,6 +642,52 @@ pub(crate) fn render_frame(
             extra_rect,
         );
     }
+
+    // -- Contextual Hotkey Footer Bar (TUI ShortcutsGauge)
+    let hotkey_rect = ratatui::layout::Rect {
+        x: chunks[7].x,
+        y: chunks[7].y + 1 + footer_extra_h,
+        width: chunks[7].width,
+        height: 1,
+    };
+    let hotkey_spans = if overlay.is_some() {
+        vec![
+            Span::styled(" ▲▼ ", colors.primary_bold()),
+            Span::styled("Navigate", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" ↵ ", colors.primary_bold()),
+            Span::styled("Select", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" Esc ", colors.primary_bold()),
+            Span::styled("Close", colors.text_muted()),
+        ]
+    } else if streaming.is_some() {
+        vec![
+            Span::styled(" ^C ", colors.primary_bold()),
+            Span::styled("Abort Stream", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" Space ", colors.primary_bold()),
+            Span::styled("Snap Bottom", colors.text_muted()),
+        ]
+    } else {
+        vec![
+            Span::styled(" ^O ", colors.primary_bold()),
+            Span::styled("Expand All", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" Tab ", colors.primary_bold()),
+            Span::styled("Cycle Mode", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" ^G ", colors.primary_bold()),
+            Span::styled("Collapse Last", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" ^P ", colors.primary_bold()),
+            Span::styled("Menu", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
+            Span::styled(" ? ", colors.primary_bold()),
+            Span::styled("Help", colors.text_muted()),
+        ]
+    };
+    frame.render_widget(Paragraph::new(Line::from(hotkey_spans)), hotkey_rect);
 
     if let Some(sidebar) = sidebar_area {
         let sidebar_state = SidebarState {

@@ -47,6 +47,11 @@ impl Repl {
                     self.tui_hdr(format!("  Toolset → {}", new_toolset.display_name()));
                 }
                 self.tui_ok(format!("  ✓ Model: {new_model}"));
+                if let Some(adaptive_theme) = crate::cli::repl::resolve_adaptive_theme(&new_model) {
+                    let mut app = self.app.lock();
+                    app.apply_theme(adaptive_theme);
+                    self.tui_ok("  ✓ Applied adaptive provider-aware theme colors".to_string());
+                }
                 {
                     let mut app = self.app.lock();
                     app.show_toast(format!("Model → {new_model}"), ToastLevel::Success);

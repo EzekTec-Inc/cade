@@ -197,7 +197,7 @@ fn wrap_spans_to_width(
 }
 
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    parse_markdown_lines_with_theme(text, &ThemeColors::default(), 0)
+    parse_markdown_lines_with_theme(text, &ThemeColors::default(), 0, true)
 }
 
 /// Parse markdown text into styled `Line`s.
@@ -210,6 +210,7 @@ pub fn parse_markdown_lines_with_theme(
     text: &str,
     colors: &ThemeColors,
     max_width: usize,
+    is_expanded: bool,
 ) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -239,6 +240,7 @@ pub fn parse_markdown_lines_with_theme(
     let mut table_alignments: Vec<Alignment> = Vec::new();
     let mut current_cell = String::new();
     let mut in_table = false;
+    let mut code_block_buf = String::new();
 
     // V7: stack of image dest URLs for nested image tags (rare but legal).
     let mut image_url_stack: Vec<String> = Vec::new();
@@ -321,20 +323,12 @@ pub fn parse_markdown_lines_with_theme(
                     }
                     last_was_block_end = false;
                     in_code_block = true;
+                    code_block_buf.clear();
 
                     if let CodeBlockKind::Fenced(lang) = kind {
                         current_lang = lang.to_string();
                     } else {
                         current_lang.clear();
-                    }
-
-                    #[cfg(feature = "syntax-highlighting")]
-                    {
-                        let syntax = SYNTAX_SET
-                            .find_syntax_by_token(&current_lang)
-                            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
-
-                        highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
                     }
 
                     // Top border with optional language label, sized to viewport
@@ -541,6 +535,94 @@ pub fn parse_markdown_lines_with_theme(
                 }
                 TagEnd::CodeBlock => {
                     push_line(&mut lines, &mut current_spans, in_blockquote);
+                    // Body width inside the code-block frame:
+                    //   max_width − INDENT(2) − CODE_INDENT(4)  = max_width − 6
+                    let _body_width = max_width.saturating_sub(6);
+                    let prefix_span =
+                        Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
+
+                    let total_lines = code_block_buf.lines().count();
+                    let should_collapse = !is_expanded && total_lines > 15;
+
+                    let lines_to_render = if should_collapse {
+                        code_block_buf.lines().take(3).collect::<Vec<_>>()
+                    } else {
+                        code_block_buf.lines().collect::<Vec<_>>()
+                    };
+
+                    #[cfg(feature = "syntax-highlighting")]
+                    let dyn_theme = crate::colors::generate_syntect_theme(colors);
+                    #[cfg(feature = "syntax-highlighting")]
+                    let syntax = SYNTAX_SET
+                        .find_syntax_by_token(&current_lang)
+                        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+                    #[cfg(feature = "syntax-highlighting")]
+                    let mut highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
+
+                    for raw_line in lines_to_render {
+                        let mut spans = vec![prefix_span.clone()];
+
+                        #[cfg(feature = "syntax-highlighting")]
+                        {
+                            let mut line_str = raw_line.to_string();
+                            if !line_str.ends_with('\n') {
+                                line_str.push('\n');
+                            }
+                            if let Some(ref mut h) = highlighter {
+                                if let Ok(regions) = h.highlight_line(&line_str, &SYNTAX_SET) {
+                                    for (style, text) in regions {
+                                        let c = style.foreground;
+                                        let tc = ratatui::style::Color::Rgb(c.r, c.g, c.b);
+                                        let mut s = Style::default().fg(tc);
+                                        if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                                            s = s.add_modifier(Modifier::BOLD);
+                                        }
+                                        if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+                                            s = s.add_modifier(Modifier::ITALIC);
+                                        }
+                                        spans.push(Span::styled(text.replace('\n', ""), s));
+                                    }
+                                } else {
+                                    spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                                }
+                            } else {
+                                spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                            }
+                        }
+                        #[cfg(not(feature = "syntax-highlighting"))]
+                        {
+                            spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                        }
+
+                        if in_blockquote {
+                            let mut b_spans = vec![Span::styled(
+                                format!("{INDENT}▎ "),
+                                colors.md_quote_border(),
+                            )];
+                            b_spans.extend(spans);
+                            lines.push(Line::from(b_spans));
+                        } else {
+                            lines.push(Line::from(spans));
+                        }
+                    }
+
+                    if should_collapse {
+                        let mut spans = vec![prefix_span.clone(), Span::styled(
+                            format!("... [code block collapsed ({total_lines} lines) — Press Ctrl+G to expand] ..."),
+                            colors.text_dim().add_modifier(Modifier::ITALIC),
+                        )];
+                        if in_blockquote {
+                            let mut b_spans = vec![Span::styled(
+                                format!("{INDENT}▎ "),
+                                colors.md_quote_border(),
+                            )];
+                            b_spans.extend(spans);
+                            lines.push(Line::from(b_spans));
+                        } else {
+                            lines.push(Line::from(spans));
+                        }
+                    }
+
                     // Bottom border, sized to viewport
                     let border_w = if max_width > 2 {
                         max_width.saturating_sub(INDENT.len()).max(8)
@@ -552,7 +634,9 @@ pub fn parse_markdown_lines_with_theme(
                         format!("{INDENT}└{dashes}"),
                         code_border_style(colors),
                     )));
+
                     in_code_block = false;
+                    code_block_buf.clear();
                     current_lang.clear();
                     last_was_block_end = true;
                 }
@@ -632,75 +716,7 @@ pub fn parse_markdown_lines_with_theme(
                 if in_table {
                     current_cell.push_str(&text);
                 } else if in_code_block {
-                    // Body width inside the code-block frame:
-                    //   max_width − INDENT(2) − CODE_INDENT(4)  = max_width − 6
-                    // Falls back to 0 (no wrap) when max_width is unknown.
-                    let body_width = max_width.saturating_sub(6);
-                    let prefix_span =
-                        Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
-                    let cont_prefix_span =
-                        Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
-
-                    #[cfg(feature = "syntax-highlighting")]
-                    if let Some(ref mut h) = highlighter {
-                        let line_iter = LinesWithEndings::from(&text);
-                        let mut first = true;
-                        for raw_line in line_iter {
-                            if !first {
-                                push_line(&mut lines, &mut current_spans, in_blockquote);
-                            }
-                            first = false;
-
-                            // Build body spans (highlighted tokens) with no prefix.
-                            let mut body: Vec<Span<'static>> = Vec::new();
-                            let highlighted =
-                                h.highlight_line(raw_line, &SYNTAX_SET).unwrap_or_default();
-                            for (style, content) in highlighted {
-                                let clean_content =
-                                    content.trim_end_matches('\n').trim_end_matches('\r');
-                                if !clean_content.is_empty() {
-                                    body.push(Span::styled(
-                                        clean_content.to_string(),
-                                        syntect_to_tui_style(style),
-                                    ));
-                                }
-                            }
-
-                            // Hard-wrap at viewport so long code lines stay
-                            // inside the code-block frame.
-                            let wrapped = wrap_code_line_spans(
-                                vec![prefix_span.clone()],
-                                body,
-                                vec![cont_prefix_span.clone()],
-                                body_width,
-                            );
-                            for l in wrapped {
-                                current_spans.extend(l.spans);
-                                push_line(&mut lines, &mut current_spans, in_blockquote);
-                            }
-                        }
-                        // The trailing newline behaviour is preserved by the
-                        // line_iter loop above; no extra push needed.
-                    }
-                    #[cfg(not(feature = "syntax-highlighting"))]
-                    {
-                        // Plain rendering without syntax highlighting.
-                        let _ = &highlighter; // suppress unused warning
-                        for raw_line in text.lines() {
-                            let body =
-                                vec![Span::styled(raw_line.to_string(), colors.text_primary())];
-                            let wrapped = wrap_code_line_spans(
-                                vec![prefix_span.clone()],
-                                body,
-                                vec![cont_prefix_span.clone()],
-                                body_width,
-                            );
-                            for l in wrapped {
-                                current_spans.extend(l.spans);
-                                push_line(&mut lines, &mut current_spans, in_blockquote);
-                            }
-                        }
-                    }
+                    code_block_buf.push_str(&text);
                 } else {
                     let style = style_stack.last().copied().unwrap_or_default();
                     current_spans.push(Span::styled(text.into_string(), style));

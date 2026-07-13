@@ -1318,3 +1318,81 @@ pub(crate) fn spawn_plugin_watcher(cwd: &std::path::Path) -> tokio::sync::mpsc::
 
     rx
 }
+
+pub fn resolve_adaptive_theme(model_id: &str) -> Option<cade_tui::ThemeColors> {
+    let lower = model_id.to_lowercase();
+    let toml = if lower.contains("anthropic") || lower.contains("claude") {
+        Some(r#"
+        [meta]
+        name = "claude"
+        variant = "light"
+        description = "Anthropic Claude warm scholarly sepia theme"
+        [colors]
+        "bg.base" = "#fcfaf2"
+        "bg.surface0" = "#f5f2e5"
+        "bg.surface1" = "#ebe7d5"
+        "bg.surface2" = "#ded9c2"
+        "bg.selection" = "#dfd8be"
+        "text.primary" = "#191919"
+        "text.muted" = "#4a463d"
+        "text.dim" = "#807b6c"
+        "border.base" = "#ded9c2"
+        "border.focus" = "#b45309"
+        "border.muted" = "#ebe7d5"
+        "border.accent" = "#b45309"
+        "accent.primary" = "#b45309"
+        "accent.secondary" = "#cc5a37"
+        "accent.tertiary" = "#10b981"
+        "#)
+    } else if lower.contains("openai") || lower.contains("gpt") || lower.contains("o3") || lower.contains("o1") {
+        Some(r#"
+        [meta]
+        name = "gpt"
+        variant = "dark"
+        description = "OpenAI ChatGPT obsidian-dark theme"
+        [colors]
+        "bg.base" = "#0d0d0d"
+        "bg.surface0" = "#1a1a1a"
+        "bg.surface1" = "#262626"
+        "bg.surface2" = "#333333"
+        "bg.selection" = "#2a2a2a"
+        "text.primary" = "#ececec"
+        "text.muted" = "#b4b4b4"
+        "text.dim" = "#7f7f7f"
+        "border.base" = "#333333"
+        "border.focus" = "#10b981"
+        "border.muted" = "#262626"
+        "border.accent" = "#10b981"
+        "accent.primary" = "#10b981"
+        "accent.secondary" = "#6366f1"
+        "accent.tertiary" = "#f59e0b"
+        "#)
+    } else if lower.contains("google") || lower.contains("gemini") {
+        Some(r#"
+        [meta]
+        name = "gemini"
+        variant = "dark"
+        description = "Google Gemini deep-space galaxy theme"
+        [colors]
+        "bg.base" = "#090d16"
+        "bg.surface0" = "#111827"
+        "bg.surface1" = "#1f2937"
+        "bg.surface2" = "#374151"
+        "bg.selection" = "#1e293b"
+        "text.primary" = "#f3f4f6"
+        "text.muted" = "#9ca3af"
+        "text.dim" = "#6b7280"
+        "border.base" = "#374151"
+        "border.focus" = "#8b5cf6"
+        "border.muted" = "#1f2937"
+        "border.accent" = "#8b5cf6"
+        "accent.primary" = "#a855f7"
+        "accent.secondary" = "#06b6d4"
+        "accent.tertiary" = "#ec4899"
+        "#)
+    } else {
+        None
+    };
+
+    toml.and_then(|t| opaline::load_from_str(t, None).ok())
+}
