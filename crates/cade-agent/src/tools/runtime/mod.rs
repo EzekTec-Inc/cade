@@ -203,6 +203,7 @@ impl ToolRuntime {
             // -- Meta tools (agents)
             LIST_AGENTS => self.handle_list_agents().await,
             MESSAGE_AGENT => self.handle_message_agent(args).await,
+            SEARCH_TOOLS => self.handle_search_tools(args).await,
 
             // -- Web tools (Phase 6)
             #[cfg(feature = "web")]
@@ -544,6 +545,22 @@ mod tests {
             )
             .await;
         assert!(result.is_some(), "read_file must be handled by ToolRuntime");
+    }
+
+    #[tokio::test]
+    async fn runtime_executes_search_tools_empty() {
+        let rt = build_test_runtime();
+        let result = rt
+            .execute(
+                "tc_5".into(),
+                "search_tools",
+                &serde_json::json!({"query": "postgres"}),
+            )
+            .await;
+        assert!(result.is_some());
+        let res = result.unwrap();
+        assert!(!res.is_error);
+        assert!(res.output.contains("No third-party MCP tools matched search query 'postgres'"));
     }
 }
 

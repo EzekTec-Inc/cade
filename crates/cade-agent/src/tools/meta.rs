@@ -39,6 +39,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_conversation_search(),
         schema_query_event_log(),
         schema_search_memory(),
+        schema_search_tools(),
         schema_recall(),
         schema_load_skill(),
         schema_unload_skill(),
@@ -715,6 +716,23 @@ fn schema_reflect() -> Value {
                 }
             },
             "required": []
+        }
+    })
+}
+
+fn schema_search_tools() -> Value {
+    json!({
+        "name": "search_tools",
+        "description": "Search for available third-party MCP tools by keyword or capability. Returns matching tool schemas with their name, description, parameters, and how to use them. Use this tool when you need a specific capability (e.g. database access, web search, file formatting) that is not supported by your core pinned tools.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search keyword, tool name, or capability description (e.g., 'postgres', 'weather', 'kubernetes')"
+                }
+            },
+            "required": ["query"]
         }
     })
 }
