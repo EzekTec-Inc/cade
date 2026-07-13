@@ -293,6 +293,24 @@ impl Repl {
                             }
                         }
                     }
+                    "tool_progress_message" => {
+                        if let Some(progress) = msg.data.get("tool_progress") {
+                            let tool_name = progress["name"].as_str().unwrap_or("tool");
+                            let status = progress["status"].as_str().unwrap_or("started");
+                            let message = progress["message"].as_str().unwrap_or("");
+                            if let Some(bar) = &bar_text_arc {
+                                if status == "started" {
+                                    *bar.lock() = format!("● {}…", tool_name);
+                                } else if status == "completed" {
+                                    *bar.lock() = format!("✓ {} completed", tool_name);
+                                }
+                            }
+                            if !message.is_empty() {
+                                let mut app = app_arc.lock();
+                                app.show_toast(message.to_string(), crate::ui::ToastLevel::Info);
+                            }
+                        }
+                    }
                     "error" => {
                         if let Some(err) = msg.data.get("error").and_then(|v| v.as_str()) {
                             let mut app = app_arc.lock();

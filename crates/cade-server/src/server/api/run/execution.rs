@@ -234,6 +234,18 @@ pub(super) async fn execute_turn_tools(
 
     for tc in legacy_tool_calls {
         let arguments = tc.arguments.clone();
+
+        // Send tool-start progress notification
+        let _ = tx.send(Ok(axum::response::sse::Event::default().data(json!({
+            "message_type": "tool_progress_message",
+            "tool_progress": {
+                "id": tc.id,
+                "name": tc.name,
+                "status": "started",
+                "message": format!("Executing tool '{}'...", tc.name)
+            }
+        }).to_string()))).await;
+
         let result = if tc.name == "run_sequential_tasks" {
             handle_sequential_workflow(state, agent_id, &tc.id, &arguments, &runtime).await
         } else if tc.name == "run_subagent" {
@@ -270,6 +282,18 @@ pub(super) async fn execute_turn_tools(
                     ui_resource_uri: None,
                 })
         };
+
+        // Send tool-complete progress notification
+        let _ = tx.send(Ok(axum::response::sse::Event::default().data(json!({
+            "message_type": "tool_progress_message",
+            "tool_progress": {
+                "id": tc.id,
+                "name": tc.name,
+                "status": "completed",
+                "message": ""
+            }
+        }).to_string()))).await;
+
         turn_results.push((result, arguments));
     }
 
