@@ -71,6 +71,9 @@ pub struct SubagentConfig {
 
     /// Maximum combined tokens (prompt + completion) this subagent is allowed to consume.
     pub max_tokens_budget: Option<u64>,
+
+    /// Force this subagent run to use an isolated temporary workspace.
+    pub enforce_isolation: bool,
 }
 
 impl SubagentConfig {
@@ -124,6 +127,11 @@ impl SubagentConfig {
 
         let max_tokens_budget = args["max_tokens_budget"].as_u64();
 
+        let enforce_isolation = args["enforce_isolation"]
+            .as_bool()
+            .or_else(|| args["_enforce_isolation"].as_bool())
+            .unwrap_or(false);
+
         Self {
             prompt,
             mode,
@@ -137,6 +145,7 @@ impl SubagentConfig {
             silent_stream,
             depth,
             max_tokens_budget,
+            enforce_isolation,
         }
     }
 

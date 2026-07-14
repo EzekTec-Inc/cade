@@ -470,9 +470,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
         .map(|d| d.tools.is_readonly())
         .unwrap_or_else(|| cfg.mode == "plan" || cfg.mode == "recall");
 
-    let use_isolation = std::env::var("CADE_ISOLATION")
-        .map(|v| v == "true")
-        .unwrap_or(false)
+    let use_isolation = (std::env::var("CADE_ISOLATION").map(|v| v == "true").unwrap_or(false)
+        || cfg.enforce_isolation)
         && !is_subagent_readonly;
     let temp_workspace = if use_isolation {
         let root = std::env::current_dir().unwrap_or_default();

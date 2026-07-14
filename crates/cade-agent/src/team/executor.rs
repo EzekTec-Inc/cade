@@ -135,6 +135,12 @@ impl TeamExecutor {
                         Value::String(model.clone()),
                     );
                 }
+                if config.isolation {
+                    member_args.insert(
+                        "_enforce_isolation".to_string(),
+                        Value::Bool(true),
+                    );
+                }
 
                 let task_args_json = Value::Object(member_args);
                 let tr = runner.run_subagent(&task_call_id, &task_args_json).await;
@@ -191,6 +197,12 @@ impl TeamExecutor {
                 member_args.insert(
                     "model".to_string(),
                     Value::String(model.clone()),
+                );
+            }
+            if config.isolation {
+                member_args.insert(
+                    "_enforce_isolation".to_string(),
+                    Value::Bool(true),
                 );
             }
             tasks_val.push(Value::Object(member_args));

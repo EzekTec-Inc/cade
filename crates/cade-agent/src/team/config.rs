@@ -19,6 +19,7 @@ pub struct TeamConfig {
     pub max_iterations: Option<usize>,
     pub depth: usize,
     pub max_tokens_budget: Option<u64>,
+    pub isolation: bool,
 }
 impl TeamConfig {
     pub fn from_args(args: &Value) -> Self {
@@ -61,6 +62,7 @@ impl TeamConfig {
                 .map(|n| n as usize)
                 .unwrap_or(0),
             max_tokens_budget: args["max_tokens_budget"].as_u64(),
+            isolation: args["isolation"].as_bool().unwrap_or(true),
         }
     }
     pub fn validate(&self) -> Result<(), String> {
