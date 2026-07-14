@@ -101,3 +101,12 @@ A standardized, machine-readable JSON Schema for CADE color themes. It allows cu
 
 #### Unified Lua Style Bindings
 The style API exposed to the TUI plugin environment as `CADE_UI.get_style(token_name)`. It allows Lua scripts to query and apply active user-selected theme styles (colors and text modifiers) dynamically to custom widgets.
+
+#### ContextCompactionEngine
+An asynchronous context management module that unifies prompt budgeting, historical summarization, and SQLite transactions behind a single high-leverage interface.
+
+#### ParsedMessageCache
+A global, session-scoped in-memory cache in the `cade-gui` web client that stores pre-rendered and memoized message structures, eliminating redundant rendering and parsing when switching views or receiving live streaming updates.
+
+#### SSEEventDispatchLoop
+A persistent, real-time Server-Sent Events stream managed at the root of the `cade-gui` client that replaces periodic polling with instantaneous, reactive updates from the server.
