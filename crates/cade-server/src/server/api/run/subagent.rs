@@ -1349,14 +1349,8 @@ pub(super) async fn handle_run_parallel_subagents_tool(
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::tools::manager::ToolResult;
-    use cade_agent::team::{TeamConfig, TeamExecutor, SubagentRunner};
+    use cade_agent::team::SubagentRunner;
     use futures::StreamExt;
-
-    let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
-        .ok()
-        .flatten()
-        .map(|a| a.model)
-        .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
 
     let runner = CadeSubagentRunner {
         state: state.clone(),
@@ -1364,61 +1358,99 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         sse_tx: sse_tx.clone(),
     };
 
-    if let Some(tasks) = args.get("tasks").and_then(|v| v.as_array()) {
-        let mut futures = Vec::new();
-        for (idx, task_args) in tasks.iter().enumerate() {
-            let task_call_id = format!("{}_{}", tool_call_id, idx);
-            let runner_ref = &runner;
-            let task_args_c = task_args.clone();
-            futures.push(Box::pin(async move {
-                runner_ref.run_subagent(&task_call_id, &task_args_c).await
-            }));
+    let tasks = match args.get("tasks").and_then(|v| v.as_array()) {
+        Some(t) => t,
+        None => {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_parallel_subagents".to_string(),
+                output: "error: 'tasks' array is required".to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            };
         }
+    };
 
-        let concurrency_cap = std::env::var("CADE_MAX_SUBAGENTS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(4);
-
-        let results = futures::stream::iter(futures)
-            .buffered(concurrency_cap)
-            .collect::<Vec<_>>()
-            .await;
-
-        let mut aggregated = Vec::new();
-        for (idx, tr) in results.into_iter().enumerate() {
-            match tr {
-                Ok(result) => {
-                    aggregated.push(serde_json::json!({
-                        "task_index": idx,
-                        "output": result.output,
-                        "is_error": result.is_error,
-                    }));
-                }
-                Err(err) => {
-                    aggregated.push(serde_json::json!({
-                        "task_index": idx,
-                        "output": format!("execution error: {err}"),
-                        "is_error": true,
-                    }));
-                }
-            }
-        }
-
+    if tasks.is_empty() {
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "run_parallel_subagents".to_string(),
-            output: serde_json::to_string_pretty(&aggregated).unwrap_or_default(),
-            is_error: false,
+            output: "error: 'tasks' array cannot be empty".to_string(),
+            is_error: true,
             ui_resource_uri: None,
         };
     }
+
+    let mut futures = Vec::new();
+    for (idx, task_args) in tasks.iter().enumerate() {
+        let task_call_id = format!("{}_{}", tool_call_id, idx);
+        let runner_ref = &runner;
+        let task_args_c = task_args.clone();
+        futures.push(Box::pin(async move {
+            runner_ref.run_subagent(&task_call_id, &task_args_c).await
+        }));
+    }
+
+    let concurrency_cap = std::env::var("CADE_MAX_SUBAGENTS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(4);
+
+    let results = futures::stream::iter(futures)
+        .buffered(concurrency_cap)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut aggregated = Vec::new();
+    for (idx, tr) in results.into_iter().enumerate() {
+        match tr {
+            Ok(result) => {
+                aggregated.push(serde_json::json!({
+                    "task_index": idx,
+                    "output": result.output,
+                    "is_error": result.is_error,
+                }));
+            }
+            Err(err) => {
+                aggregated.push(serde_json::json!({
+                    "task_index": idx,
+                    "output": format!("execution error: {err}"),
+                    "is_error": true,
+                }));
+            }
+        }
+    }
+
+    ToolResult {
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: "run_parallel_subagents".to_string(),
+        output: serde_json::to_string_pretty(&aggregated).unwrap_or_default(),
+        is_error: false,
+        ui_resource_uri: None,
+    }
+}
+
+pub(super) async fn handle_run_team_tool(
+    state: &AppState,
+    parent_agent_id: &str,
+    tool_call_id: &str,
+    args: &serde_json::Value,
+    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::tools::manager::ToolResult;
+    use cade_agent::team::{TeamConfig, TeamExecutor};
+
+    let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
+        .ok()
+        .flatten()
+        .map(|a| a.model)
+        .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
 
     let config = TeamConfig::from_args(args);
     if let Err(e) = config.validate() {
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
-            tool_name: "run_parallel_subagents".to_string(),
+            tool_name: "run_team".to_string(),
             output: e,
             is_error: true,
             ui_resource_uri: None,
@@ -1432,7 +1464,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         None => {
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
-                tool_name: "run_parallel_subagents".to_string(),
+                tool_name: "run_team".to_string(),
                 output: format!("error: team not found: {}", config.team_id),
                 is_error: true,
                 ui_resource_uri: None,
@@ -1440,6 +1472,11 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         }
     };
 
+    let runner = CadeSubagentRunner {
+        state: state.clone(),
+        parent_agent_id: parent_agent_id.to_string(),
+        sse_tx: sse_tx.clone(),
+    };
     let llm = CadeLlmCompleter {
         state: state.clone(),
     };
@@ -1460,7 +1497,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
             }
             ToolResult {
                 tool_call_id: tool_call_id.to_string(),
-                tool_name: "run_parallel_subagents".to_string(),
+                tool_name: "run_team".to_string(),
                 output: serde_json::to_string_pretty(&aggregated_json).unwrap_or_default(),
                 is_error: false,
                 ui_resource_uri: None,
@@ -1468,7 +1505,7 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         }
         Err(e) => ToolResult {
             tool_call_id: tool_call_id.to_string(),
-            tool_name: "run_parallel_subagents".to_string(),
+            tool_name: "run_team".to_string(),
             output: e,
             is_error: true,
             ui_resource_uri: None,

@@ -319,6 +319,7 @@ async fn run_one_tool(
         canonical,
         "run_subagent"
             | "run_parallel_subagents"
+            | "run_team"
             | "cancel_subagent"
             | "ask_user_question"
             | "EnterPlanMode"
@@ -328,6 +329,9 @@ async fn run_one_tool(
             "run_subagent" => {
                 "Nested run_subagent calls are not supported from a headless subagent context. \
                                Complete the work directly or return control to the parent agent."
+            }
+            "run_team" => {
+                "Nested run_team calls are not supported from a headless subagent context."
             }
             "ask_user_question" => {
                 "ask_user_question is unavailable in headless mode (no interactive user). \

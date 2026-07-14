@@ -260,6 +260,15 @@ pub(super) async fn execute_turn_tools(
                 tx.clone(),
             )
             .await
+        } else if tc.name == "run_team" {
+            subagent::handle_run_team_tool(
+                state,
+                agent_id,
+                &tc.id,
+                &arguments,
+                tx.clone(),
+            )
+            .await
         } else if tc.name == "cancel_subagent" {
             subagent::handle_cancel_subagent_tool(state, &tc.id, &arguments).await
         } else {

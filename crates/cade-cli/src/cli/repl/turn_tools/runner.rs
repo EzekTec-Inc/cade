@@ -951,6 +951,15 @@ ui_resource_uri: None,
             "run_parallel_subagents" => {
                 Some(self.handle_run_parallel_subagents(call_id, args).await)
             }
+            "run_team" => {
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "run_team".to_string(),
+                    output: "error: run_team is only supported when connected to the CADE Server.".to_string(),
+                    is_error: true,
+                    ui_resource_uri: None,
+                }))
+            }
             "cancel_subagent" => Some(self.handle_cancel_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             "message_agent" => Some(self.handle_message_agent(call_id, args).await),
