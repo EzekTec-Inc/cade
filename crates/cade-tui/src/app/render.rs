@@ -650,7 +650,7 @@ pub(crate) fn render_frame(
         width: chunks[7].width,
         height: 1,
     };
-    let hotkey_spans = if overlay.is_some() {
+    let hotkey_spans = if top_overlay.is_some() {
         vec![
             Span::styled(" ▲▼ ", colors.primary_bold()),
             Span::styled("Navigate", colors.text_muted()),

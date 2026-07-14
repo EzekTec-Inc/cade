@@ -14,8 +14,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::Style as SyntectStyle;
 #[cfg(feature = "syntax-highlighting")]
 use syntect::parsing::SyntaxSet;
-#[cfg(feature = "syntax-highlighting")]
-use syntect::util::LinesWithEndings;
+
 
 #[cfg(feature = "syntax-highlighting")]
 pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> =
@@ -226,12 +225,6 @@ pub fn parse_markdown_lines_with_theme(
     let mut in_blockquote = false;
     let mut in_code_block = false;
     let mut current_lang = String::new();
-    #[cfg(feature = "syntax-highlighting")]
-    let dyn_theme = crate::colors::generate_syntect_theme(colors);
-    #[cfg(feature = "syntax-highlighting")]
-    let mut highlighter: Option<HighlightLines<'_>> = None;
-    #[cfg(not(feature = "syntax-highlighting"))]
-    let mut highlighter: Option<()> = None;
 
     let mut list_depth: usize = 0;
     let mut list_counters: Vec<Option<u64>> = Vec::new();
@@ -607,7 +600,7 @@ pub fn parse_markdown_lines_with_theme(
                     }
 
                     if should_collapse {
-                        let mut spans = vec![prefix_span.clone(), Span::styled(
+                        let spans = vec![prefix_span.clone(), Span::styled(
                             format!("... [code block collapsed ({total_lines} lines) — Press Ctrl+G to expand] ..."),
                             colors.text_dim().add_modifier(Modifier::ITALIC),
                         )];
