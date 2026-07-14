@@ -1159,6 +1159,7 @@ dependencies = [
  "getrandom 0.4.3",
  "ignore",
  "lru 0.18.1",
+ "once_cell",
  "parking_lot",
  "regex",
  "reqwest 0.12.28",

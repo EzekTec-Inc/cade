@@ -70,6 +70,7 @@ fn App() -> Element {
     let mut global_error = use_signal(|| Option::<String>::None);
     let active_stream_id = use_signal(|| Option::<String>::None);
     let active_stream = use_signal(types::SafeAbortHandle::default);
+    let parsed_messages = use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
 
     // Provide individual signals and composite state to all children
     use_context_provider(|| api_key);
@@ -84,6 +85,7 @@ fn App() -> Element {
     use_context_provider(|| global_error);
     use_context_provider(|| active_stream_id);
     use_context_provider(|| active_stream);
+    use_context_provider(|| parsed_messages);
 
     let app_state = AppState {
         api_key,
@@ -98,6 +100,7 @@ fn App() -> Element {
         global_error,
         active_stream_id,
         active_stream,
+        parsed_messages,
     };
     use_context_provider(|| app_state);
 
@@ -107,12 +110,16 @@ fn App() -> Element {
     let store = use_memo(move || crate::types::AppSessionStore::new(app_state));
     use_context_provider(|| store);
 
-    // ── Startup: fetch first agent + start message polling ─────────────────
+    // ── Startup: fetch first agent + start real-time SSE event loop ─────────
     use_effect(move || {
         let key = api_key;
         let _state = app_state;
         let mut selected = selected_agent;
         let mut convs = conversations;
+        let mut messages = messages;
+        let mut active_conversation = active_conversation;
+        let mut global_error = global_error;
+
         spawn(async move {
             // Wait until an API key is configured
             while key().is_empty() {
@@ -141,28 +148,73 @@ fn App() -> Element {
                 }
             }
 
-            // Poll conversations only — messages are loaded reactively
-            // when the user selects a conversation or switches agents (see ChatView).
+            // Real-time SSE event loop
             loop {
-                if global_error().is_some() {
+                let client_inst = crate::api::CadeApiClient::new(key());
+                
+                let sse_res = client_inst.listen_global_events(|event| {
+                    let event_type = event["event_type"].as_str().unwrap_or("");
+                    match event_type {
+                        "conversation_created" => {
+                            let agent_id = event["agent_id"].as_str().unwrap_or("");
+                            if let Some(curr) = selected() {
+                                if curr.id == agent_id {
+                                    if let Ok(conv) = serde_json::from_value::<cade_api_types::ConversationInfo>(event["conversation"].clone()) {
+                                        let mut list = convs();
+                                        if !list.contains(&conv) {
+                                            list.push(conv);
+                                            convs.set(list);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "conversation_deleted" => {
+                            let agent_id = event["agent_id"].as_str().unwrap_or("");
+                            let conv_id = event["conversation_id"].as_str().unwrap_or("");
+                            if let Some(curr) = selected() {
+                                if curr.id == agent_id {
+                                    let mut list = convs();
+                                    list.retain(|c| c.id != conv_id);
+                                    convs.set(list);
+                                    if active_conversation() == Some(conv_id.to_string()) {
+                                        active_conversation.set(None);
+                                    }
+                                }
+                            }
+                        }
+                        "message_created" => {
+                            let m_agent_id = event["agent_id"].as_str().unwrap_or("");
+                            let m_conv_id = event["conversation_id"].as_str();
+                            if let Some(curr_agent) = selected() {
+                                if curr_agent.id == m_agent_id && active_conversation() == m_conv_id.map(String::from) {
+                                    if let Ok(msg) = serde_json::from_value::<cade_api_types::ChatMessage>(event["message"].clone()) {
+                                        let mut list = messages();
+                                        if !list.iter().any(|m| m.id == msg.id) {
+                                            list.push(msg);
+                                            messages.set(list);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }).await;
+
+                if let Err(e) = sse_res {
+                    global_error.set(Some(format!("Server connection lost: {e}")));
                     gloo_timers::future::TimeoutFuture::new(3000).await;
+                    
+                    // Re-sync on reconnect
                     if let Ok(list) = api::list_agents(&key()).await {
                         global_error.set(None);
                         if let Some(first) = list.into_iter().next() {
                             let agent_id = first.id.clone();
                             selected.set(Some(first));
-                            let _ = api::list_conversations(&agent_id, &key())
-                                .await
-                                .map(|list| convs.set(list));
-                        }
-                    }
-                } else {
-                    gloo_timers::future::TimeoutFuture::new(10000).await;
-                    if let Some(agent) = selected() {
-                        if let Ok(list) = api::list_conversations(&agent.id, &key()).await {
-                            convs.set(list);
-                        } else {
-                            global_error.set(Some("Server connection lost".to_string()));
+                            if let Ok(c_list) = api::list_conversations(&agent_id, &key()).await {
+                                convs.set(c_list);
+                            }
                         }
                     }
                 }

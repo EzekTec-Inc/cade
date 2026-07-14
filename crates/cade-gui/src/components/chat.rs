@@ -346,7 +346,7 @@ fn messages_panel(
                 }
             } else {
                 for m in messages().iter() {
-                    message_bubble { message: m.clone() }
+                    message_bubble { key: "{m.id}", message: m.clone() }
                 }
             }
         }
@@ -489,6 +489,7 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
             }
         }
     } else {
+        let mut state = use_context::<AppState>();
         let content_str;
         let content_val = if let Some(s) = message.content.as_str() {
             s
@@ -497,11 +498,22 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
             &content_str
         };
 
-        let reasoning_parts = split_reasoning(content_val);
-        let display_text = if let Some((_, ref text)) = reasoning_parts {
-            text.as_str()
-        } else {
-            content_val
+        let (display_text, reasoning_val) = {
+            let mut cache = state.parsed_messages.write();
+            if let Some(cached) = cache.get(&message.id) {
+                cached.clone()
+            } else {
+                let reasoning_parts = split_reasoning(content_val);
+                let (reason, disp) = if let Some((ref r, ref d)) = reasoning_parts {
+                    (Some(r.clone()), d.clone())
+                } else {
+                    (None, content_val.to_string())
+                };
+                if !is_streaming {
+                    cache.insert(message.id.clone(), (disp.clone(), reason.clone()));
+                }
+                (disp, reason)
+            }
         };
 
         rsx! {
@@ -509,7 +521,7 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
                 div { class: "{avatar_class}", "{avatar_label}" }
                 div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm group relative",
                     div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
-                    if let Some((ref reasoning, _)) = reasoning_parts {
+                    if let Some(ref reasoning) = reasoning_val {
                         details { class: "mb-2",
                             summary { class: "text-yellow-500 text-xs cursor-pointer hover:text-yellow-400 select-none",
                                 "\u{1f4ad} Reasoning"

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use axum::response::sse::{Event, Sse};
+use axum::response::IntoResponse;
 use futures::stream::StreamExt;
 use once_cell::sync::Lazy;
 use tokio::sync::broadcast;
