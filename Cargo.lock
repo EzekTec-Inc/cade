@@ -988,6 +988,7 @@ dependencies = [
  "ignore",
  "mlua",
  "notify",
+ "opaline",
  "parking_lot",
  "ratatui",
  "reqwest 0.12.28",

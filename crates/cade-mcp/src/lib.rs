@@ -907,9 +907,6 @@ mod tests {
 
     #[test]
     fn test_sandboxed_command_env() {
-        std::env::set_var("CADE_API_KEY_SECRET_MOCK", "super-secret-key-999");
-        std::env::set_var("PATH", "/usr/bin:/bin");
-
         let mut config = McpServerConfig {
             command: "echo".to_string(),
             args: vec!["hello".to_string()],
@@ -922,11 +919,10 @@ mod tests {
         let std_cmd = cmd.as_std();
         let envs: HashMap<&OsStr, Option<&OsStr>> = std_cmd.get_envs().collect();
 
-        // SENSITIVE_API_KEY_SECRET_MOCK must be explicitly cleared (set to None)
-        // or absent if env_clear is called (envs will not contain it at all or set it to None)
+        // CARGO_MANIFEST_DIR must be explicitly cleared (set to None or absent)
         assert!(
-            envs.get(OsStr::new("CADE_API_KEY_SECRET_MOCK")).is_none()
-            || envs.get(OsStr::new("CADE_API_KEY_SECRET_MOCK")) == Some(&None)
+            envs.get(OsStr::new("CARGO_MANIFEST_DIR")).is_none()
+            || envs.get(OsStr::new("CARGO_MANIFEST_DIR")) == Some(&None)
         );
 
         // AUTHORIZED_VAR must be explicitly set
@@ -941,9 +937,9 @@ mod tests {
         let std_cmd_unsandboxed = cmd_unsandboxed.as_std();
         let envs_unsandboxed: HashMap<&OsStr, Option<&OsStr>> = std_cmd_unsandboxed.get_envs().collect();
 
-        // Since it's not sandboxed, SENSITIVE_API_KEY_SECRET_MOCK should not be explicitly cleared
+        // Since it's not sandboxed, CARGO_MANIFEST_DIR should not be explicitly cleared
         assert_ne!(
-            envs_unsandboxed.get(OsStr::new("CADE_API_KEY_SECRET_MOCK")),
+            envs_unsandboxed.get(OsStr::new("CARGO_MANIFEST_DIR")),
             Some(&None)
         );
     }

@@ -1322,7 +1322,7 @@ pub(crate) fn spawn_plugin_watcher(cwd: &std::path::Path) -> tokio::sync::mpsc::
 pub fn resolve_adaptive_theme(model_id: &str) -> Option<cade_tui::ThemeColors> {
     let lower = model_id.to_lowercase();
     let toml = if lower.contains("anthropic") || lower.contains("claude") {
-        Some(r#"
+        Some(r##"
         [meta]
         name = "claude"
         variant = "light"
@@ -1343,9 +1343,9 @@ pub fn resolve_adaptive_theme(model_id: &str) -> Option<cade_tui::ThemeColors> {
         "accent.primary" = "#b45309"
         "accent.secondary" = "#cc5a37"
         "accent.tertiary" = "#10b981"
-        "#)
+        "##)
     } else if lower.contains("openai") || lower.contains("gpt") || lower.contains("o3") || lower.contains("o1") {
-        Some(r#"
+        Some(r##"
         [meta]
         name = "gpt"
         variant = "dark"
@@ -1366,9 +1366,9 @@ pub fn resolve_adaptive_theme(model_id: &str) -> Option<cade_tui::ThemeColors> {
         "accent.primary" = "#10b981"
         "accent.secondary" = "#6366f1"
         "accent.tertiary" = "#f59e0b"
-        "#)
+        "##)
     } else if lower.contains("google") || lower.contains("gemini") {
-        Some(r#"
+        Some(r##"
         [meta]
         name = "gemini"
         variant = "dark"
@@ -1389,7 +1389,7 @@ pub fn resolve_adaptive_theme(model_id: &str) -> Option<cade_tui::ThemeColors> {
         "accent.primary" = "#a855f7"
         "accent.secondary" = "#06b6d4"
         "accent.tertiary" = "#ec4899"
-        "#)
+        "##)
     } else {
         None
     };

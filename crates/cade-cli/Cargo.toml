@@ -37,6 +37,7 @@ arboard = { workspace = true, optional = true }
 crossterm.workspace    = true
 ratatui.workspace      = true
 clap.workspace         = true
+opaline = { version = "0.4", features = ["ratatui", "builtin-themes"] }
 # -- Filesystem
 dirs.workspace         = true
 walkdir.workspace      = true

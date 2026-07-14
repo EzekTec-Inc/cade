@@ -21,6 +21,7 @@ pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> =
     LazyLock::new(SyntaxSet::load_defaults_newlines);
 
 #[cfg(feature = "syntax-highlighting")]
+#[allow(dead_code)]
 pub(crate) fn syntect_to_tui_style(style: SyntectStyle) -> Style {
     let mut s = Style::default().fg(RC::Rgb(
         style.foreground.r,
@@ -963,6 +964,7 @@ fn pad_cell_aligned(cell: &str, width: usize, align: Alignment) -> String {
 /// across wrap boundaries.
 ///
 /// `body_width = 0` disables wrapping (single line returned).
+#[allow(dead_code)]
 fn wrap_code_line_spans(
     prefix_spans: Vec<Span<'static>>,
     body_spans: Vec<Span<'static>>,
