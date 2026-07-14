@@ -48,6 +48,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_run_skill_script(),
         schema_load_skill_ref(),
         schema_run_subagent(),
+        schema_subagent(),
         schema_run_parallel_subagents(),
         schema_run_team(),
         schema_cancel_subagent(),
@@ -431,6 +432,64 @@ fn schema_run_subagent() -> Value {
                 }
             },
             "required": ["prompt"]
+        }
+    })
+}
+
+fn schema_subagent() -> Value {
+    json!({
+        "name": "subagent",
+        "description": "Delegate tasks to specialized subagents with isolated context. Supports single (agent + task), parallel (tasks array), and chain (sequential steps) modes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "Management or control action. Valid values: 'list', 'get', 'create', 'update', 'delete', 'status', 'interrupt', 'cancel_subagent', 'doctor'."
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "Name of the agent to invoke (for single mode), e.g., 'worker', 'scout', 'planner', 'reviewer', 'oracle', 'researcher', 'context-builder'."
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Task to delegate to the agent (for single mode)."
+                },
+                "tasks": {
+                    "type": "array",
+                    "description": "Array of task objects for concurrent/parallel execution.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "agent": { "type": "string", "description": "Name of the agent" },
+                            "task": { "type": "string", "description": "Focused task for this agent" },
+                            "cwd": { "type": "string", "description": "Optional custom working directory" }
+                        },
+                        "required": ["agent", "task"]
+                    }
+                },
+                "chain": {
+                    "type": "array",
+                    "description": "Array of chain objects for sequential execution where {previous} can be used for prior output.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "agent": { "type": "string" },
+                            "task": { "type": "string" },
+                            "cwd": { "type": "string" }
+                        },
+                        "required": ["agent", "task"]
+                    }
+                },
+                "async": {
+                    "type": "boolean",
+                    "description": "Run in the background (default false). When true, the tool returns immediately with a task ID."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional: subagent ID for status or interrupt/cancel actions."
+                }
+            }
         }
     })
 }

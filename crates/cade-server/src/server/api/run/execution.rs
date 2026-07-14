@@ -248,18 +248,15 @@ pub(super) async fn execute_turn_tools(
 
         let result = if tc.name == "run_sequential_tasks" {
             handle_sequential_workflow(state, agent_id, &tc.id, &arguments, &runtime).await
+        } else if tc.name == "subagent" {
+            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
+                .await
         } else if tc.name == "run_subagent" {
-            subagent::handle_run_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
+            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
                 .await
         } else if tc.name == "run_parallel_subagents" {
-            subagent::handle_run_parallel_subagents_tool(
-                state,
-                agent_id,
-                &tc.id,
-                &arguments,
-                tx.clone(),
-            )
-            .await
+            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
+                .await
         } else if tc.name == "run_team" {
             subagent::handle_run_team_tool(
                 state,
@@ -270,7 +267,8 @@ pub(super) async fn execute_turn_tools(
             )
             .await
         } else if tc.name == "cancel_subagent" {
-            subagent::handle_cancel_subagent_tool(state, &tc.id, &arguments).await
+            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
+                .await
         } else {
             // ... other legacy tool handlers
             runtime

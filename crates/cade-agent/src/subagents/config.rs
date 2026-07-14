@@ -25,7 +25,7 @@ const SKIP_LABELS: &[&str] = &["active_goal", "session_summary"];
 
 // ── SubagentConfig ───────────────────────────────────────────────────────────
 
-/// All fields that can be provided via `run_subagent` tool arguments.
+/// All fields that can be provided via `run_subagent` or `subagent` tool arguments.
 #[derive(Debug, Clone)]
 pub struct SubagentConfig {
     /// The task description forwarded to the subagent.  Required — callers
@@ -74,23 +74,48 @@ pub struct SubagentConfig {
 
     /// Force this subagent run to use an isolated temporary workspace.
     pub enforce_isolation: bool,
+
+    /// Unified subagent action (list, status, interrupt, doctor, etc.)
+    pub action: Option<String>,
+
+    /// Unified subagent tasks for parallel mode
+    pub tasks: Option<Vec<Value>>,
+
+    /// Unified subagent chain for sequential mode
+    pub chain: Option<Vec<Value>>,
+
+    /// Unified target ID (subagent_id, runId, or task_id)
+    pub id: Option<String>,
 }
 
 impl SubagentConfig {
     // ── Parsing ──────────────────────────────────────────────────────────────
 
     /// Parse a `SubagentConfig` from the raw JSON arguments of a `run_subagent`
-    /// tool call.
+    /// or `subagent` tool call.
     ///
     /// Does **not** validate that `prompt` is non-empty — call
     /// [`Self::validate`] after construction when an error `ToolResult` is
     /// wanted.
     pub fn from_args(args: &Value) -> Self {
-        let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
+        let prompt = args["prompt"]
+            .as_str()
+            .or_else(|| args["task"].as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
 
-        let mode = args["mode"].as_str().unwrap_or("build").trim().to_string();
+        let mode = args["mode"]
+            .as_str()
+            .or_else(|| args["agent"].as_str())
+            .unwrap_or("build")
+            .trim()
+            .to_string();
 
-        let background = args["background"].as_bool().unwrap_or(false);
+        let background = args["background"]
+            .as_bool()
+            .or_else(|| args["async"].as_bool())
+            .unwrap_or(false);
 
         let model_override = args["model"]
             .as_str()
@@ -132,6 +157,22 @@ impl SubagentConfig {
             .or_else(|| args["_enforce_isolation"].as_bool())
             .unwrap_or(false);
 
+        let action = args["action"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let tasks = args["tasks"].as_array().cloned();
+
+        let chain = args["chain"].as_array().cloned();
+
+        let id = args["id"]
+            .as_str()
+            .or_else(|| args["subagent_id"].as_str())
+            .or_else(|| args["runId"].as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         Self {
             prompt,
             mode,
@@ -146,6 +187,10 @@ impl SubagentConfig {
             depth,
             max_tokens_budget,
             enforce_isolation,
+            action,
+            tasks,
+            chain,
+            id,
         }
     }
 
@@ -153,8 +198,12 @@ impl SubagentConfig {
 
     /// Returns `Err(reason)` if the config is invalid (e.g., prompt empty).
     pub fn validate(&self) -> Result<(), String> {
-        if self.prompt.trim().is_empty() {
-            return Err("error: 'prompt' is required".to_string());
+        if self.action.is_none()
+            && self.tasks.is_none()
+            && self.chain.is_none()
+            && self.prompt.trim().is_empty()
+        {
+            return Err("error: 'prompt' or 'task' is required".to_string());
         }
         Ok(())
     }

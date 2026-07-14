@@ -148,8 +148,8 @@ impl UpdateBackend for GithubUpdateBackend {
 
         // 3. Cryptographic Checksum Integrity Verification (Opportunity 2)
         // If a SHA256 checksum file is present for CADE CLI in the release assets, we verify it.
-        if let Some(asset) = latest.assets.iter().find(|a| a.name.contains(&self.cli_bin_name) && !a.name.ends_with(".sha256")) {
-            if let Some(sha_asset) = latest.assets.iter().find(|a| a.name == format!("{}.sha256", asset.name)) {
+        if let Some(asset) = latest.assets.iter().find(|a| a.name.contains(&self.cli_bin_name) && !a.name.ends_with(".sha256"))
+            && let Some(sha_asset) = latest.assets.iter().find(|a| a.name == format!("{}.sha256", asset.name)) {
                 eprintln!("[*] Verifying CLI cryptographic signature integrity...");
                 
                 // Fetch the remote SHA256 checksum text
@@ -160,7 +160,6 @@ impl UpdateBackend for GithubUpdateBackend {
                 if sha_resp.status().is_success() {
                     let expected_sha = sha_resp.text().await
                         .map_err(|e| crate::error::Error::custom(e.to_string()))?
-                        .trim()
                         .split_whitespace()
                         .next()
                         .unwrap_or("")
@@ -182,7 +181,6 @@ impl UpdateBackend for GithubUpdateBackend {
                     }
                 }
             }
-        }
 
         // 4. Update Server
         let mut server_old_exe = None;
@@ -223,16 +221,15 @@ impl UpdateBackend for GithubUpdateBackend {
         };
 
         // Server Cryptographic Checksum Integrity Verification (Opportunity 2)
-        if server_status {
-            if let Some(asset) = latest.assets.iter().find(|a| a.name.contains(&self.server_bin_name) && !a.name.ends_with(".sha256")) {
-                if let Some(sha_asset) = latest.assets.iter().find(|a| a.name == format!("{}.sha256", asset.name)) {
+        if server_status
+            && let Some(asset) = latest.assets.iter().find(|a| a.name.contains(&self.server_bin_name) && !a.name.ends_with(".sha256"))
+                && let Some(sha_asset) = latest.assets.iter().find(|a| a.name == format!("{}.sha256", asset.name)) {
                     eprintln!("[*] Verifying Server cryptographic signature integrity...");
                     
                     let client = reqwest::Client::new();
-                    if let Ok(sha_resp) = client.get(&sha_asset.download_url).send().await {
-                        if sha_resp.status().is_success() && let Ok(expected_sha_raw) = sha_resp.text().await {
+                    if let Ok(sha_resp) = client.get(&sha_asset.download_url).send().await
+                        && sha_resp.status().is_success() && let Ok(expected_sha_raw) = sha_resp.text().await {
                             let expected_sha = expected_sha_raw
-                                .trim()
                                 .split_whitespace()
                                 .next()
                                 .unwrap_or("")
@@ -252,10 +249,7 @@ impl UpdateBackend for GithubUpdateBackend {
                                 eprintln!("  ✓ Server Integrity hash verified successfully!");
                             }
                         }
-                    }
                 }
-            }
-        }
 
         Ok::<bool, crate::error::Error>(cli_status.updated() || server_status)
     }

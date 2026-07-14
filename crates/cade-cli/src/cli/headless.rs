@@ -317,7 +317,8 @@ async fn run_one_tool(
     let canonical = cade_agent::tools::manager::canonical_name(&tool_name);
     if matches!(
         canonical,
-        "run_subagent"
+        "subagent"
+            | "run_subagent"
             | "run_parallel_subagents"
             | "run_team"
             | "cancel_subagent"
@@ -326,8 +327,8 @@ async fn run_one_tool(
             | "ExitPlanMode"
     ) {
         let msg = match canonical {
-            "run_subagent" => {
-                "Nested run_subagent calls are not supported from a headless subagent context. \
+            "subagent" | "run_subagent" => {
+                "Nested subagent calls are not supported from a headless subagent context. \
                                Complete the work directly or return control to the parent agent."
             }
             "run_team" => {

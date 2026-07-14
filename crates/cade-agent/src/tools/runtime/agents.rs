@@ -80,9 +80,9 @@ impl ToolRuntime {
             out.push_str(&format!("### `{name}`\n"));
             out.push_str(&format!("**Description:** {desc}\n"));
 
-            if let Some(obj) = params.as_object() {
-                if let Some(props) = obj.get("properties").and_then(|p| p.as_object()) {
-                    if !props.is_empty() {
+            if let Some(obj) = params.as_object()
+                && let Some(props) = obj.get("properties").and_then(|p| p.as_object())
+                    && !props.is_empty() {
                         out.push_str("**Parameters:**\n");
                         let mut sorted_props: Vec<(&String, &Value)> = props.iter().collect();
                         sorted_props.sort_by_key(|(k, _)| k.as_str());
@@ -98,9 +98,7 @@ impl ToolRuntime {
                             out.push_str(&format!("  - `{p_name}` ({p_type}){req_str}: {p_desc}\n"));
                         }
                     }
-                }
-            }
-            out.push_str("\n");
+            out.push('\n');
         }
 
         (out.trim_end().to_string(), false)
