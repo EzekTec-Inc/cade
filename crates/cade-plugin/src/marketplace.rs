@@ -52,6 +52,23 @@ pub async fn install_plugin(
         .unpack(&plugin_dir)
         .map_err(|e| crate::Error::custom(format!("Unpack failed: {e}")))?;
 
+    // 2b. Directory Promotion (Option B): promote single nested subdirectories to root
+    if let Ok(entries) = std::fs::read_dir(&plugin_dir) {
+        let mut paths = Vec::new();
+        for entry in entries.flatten() {
+            paths.push(entry.path());
+        }
+        if paths.len() == 1 && paths[0].is_dir() {
+            let nested_dir = &paths[0];
+            let temp_dir_name = format!("{}_temp_{}", plugin_id.replace('/', "_"), uuid::Uuid::new_v4());
+            let temp_dir = target_dir.join(temp_dir_name);
+            if std::fs::rename(nested_dir, &temp_dir).is_ok() {
+                let _ = std::fs::remove_dir_all(&plugin_dir);
+                let _ = std::fs::rename(&temp_dir, &plugin_dir);
+            }
+        }
+    }
+
     // 3. Load manifest
     crate::manifest::PluginManifest::load(&plugin_dir)
 }
