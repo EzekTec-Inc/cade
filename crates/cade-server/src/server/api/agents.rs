@@ -7,8 +7,38 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use axum::response::sse::{Event, Sse};
+use futures::stream::StreamExt;
+use once_cell::sync::Lazy;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+
 use crate::server::state::AppState;
 use cade_store::sqlite::{self, AgentRow};
+
+pub static GLOBAL_EVENTS_TX: Lazy<broadcast::Sender<Value>> = Lazy::new(|| {
+    let (tx, _) = broadcast::channel(100);
+    tx
+});
+
+pub fn broadcast_global_event(event: Value) {
+    let _ = GLOBAL_EVENTS_TX.send(event);
+}
+
+pub async fn stream_global_events() -> impl axum::response::IntoResponse {
+    let rx = GLOBAL_EVENTS_TX.subscribe();
+    let stream = BroadcastStream::new(rx)
+        .filter_map(|res| async move {
+            match res {
+                Ok(val) => {
+                    let data = val.to_string();
+                    Some(Ok::<Event, std::convert::Infallible>(Event::default().data(data)))
+                }
+                Err(_) => None,
+            }
+        });
+    Sse::new(stream).into_response()
+}
 
 /// Minimal fallback system prompt used only when the client doesn't supply one
 /// (e.g. API calls outside the CLI). The CLI always sends BASE_SYSTEM_PROMPT.
@@ -659,7 +689,14 @@ pub async fn create_conversation(
         }
     }
 
-    Ok(Json(conv_to_json(&row)))
+    let res_json = conv_to_json(&row);
+    broadcast_global_event(json!({
+        "event_type": "conversation_created",
+        "agent_id": agent_id,
+        "conversation": res_json
+    }));
+
+    Ok(Json(res_json))
 }
 
 /// DELETE /v1/agents/:id/conversations/:conv_id
@@ -686,6 +723,11 @@ pub async fn delete_conversation(
     }
     let deleted =
         sqlite::delete_conversation(&state.db, &conv_id).map_err(|e| server_err(e.to_string()))?;
+    broadcast_global_event(json!({
+        "event_type": "conversation_deleted",
+        "agent_id": agent_id,
+        "conversation_id": conv_id
+    }));
     Ok(Json(json!({ "deleted": deleted })))
 }
 

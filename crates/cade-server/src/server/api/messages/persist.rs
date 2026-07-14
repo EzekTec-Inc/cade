@@ -122,6 +122,21 @@ pub(crate) fn persist(
             "{}",
             fmt_persist_error("insert_message", role, agent_id, conversation_id, &e)
         );
+    } else {
+        let payload = serde_json::json!({
+            "id": row.id,
+            "agent_id": row.agent_id,
+            "conversation_id": row.conversation_id.clone(),
+            "role": row.role.clone(),
+            "content": row.content.clone(),
+            "char_count": row.char_count,
+        });
+        crate::server::api::agents::broadcast_global_event(serde_json::json!({
+            "event_type": "message_created",
+            "agent_id": agent_id,
+            "conversation_id": conversation_id,
+            "message": payload
+        }));
     }
     // Touch the conversation's updated_at so list order stays current
     if let Some(conv_id) = conversation_id

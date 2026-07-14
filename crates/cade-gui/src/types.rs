@@ -72,6 +72,7 @@ pub struct AppState {
     pub global_error: Signal<Option<String>>,
     pub active_stream_id: Signal<Option<String>>,
     pub active_stream: Signal<SafeAbortHandle>,
+    pub parsed_messages: Signal<std::collections::HashMap<String, (String, Option<String>)>>,
 }
 
 /// Helper: push a toast notification into global state.

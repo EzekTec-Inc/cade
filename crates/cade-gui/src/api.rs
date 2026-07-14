@@ -537,4 +537,95 @@ impl CadeApiClient {
         let res = api_request("POST", &path, Some(&body.to_string()), &self.api_key).await?;
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
+
+    pub async fn listen_global_events<F>(&self, on_event: F) -> Result<(), String>
+    where
+        F: FnMut(serde_json::Value),
+    {
+        listen_global_events(&self.api_key, on_event).await
+    }
+}
+
+/// Listen to the global SSE event stream and call `on_event` for each parsed JSON packet.
+pub async fn listen_global_events<F>(api_key: &str, mut on_event: F) -> Result<(), String>
+where
+    F: FnMut(serde_json::Value),
+{
+    let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
+    let path = "/v1/events";
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+
+    let request = Request::new_with_str_and_init(path, &opts).map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Content-Type", "application/json")
+        .map_err(|e| format!("{:?}", e))?;
+
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+    let resp: Response = resp_value.dyn_into().map_err(|e| format!("{:?}", e))?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP error: {}", resp.status()));
+    }
+
+    let stream = resp.body().ok_or_else(|| "No response body".to_string())?;
+    let reader: ReadableStreamDefaultReader = stream
+        .get_reader()
+        .dyn_into()
+        .map_err(|e| format!("{:?}", e))?;
+    let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
+
+    let mut buffer = String::new();
+
+    loop {
+        let result = JsFuture::from(reader.read())
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+
+        let done = Reflect::get(&result, &JsValue::from_str("done"))
+            .map(|v| v.as_bool().unwrap_or(false))
+            .unwrap_or(false);
+
+        if done {
+            break;
+        }
+
+        let value =
+            Reflect::get(&result, &JsValue::from_str("value")).map_err(|e| format!("{:?}", e))?;
+
+        if value.is_null() || value.is_undefined() {
+            continue;
+        }
+
+        let uint8array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{:?}", e))?;
+        let chunk = decoder
+            .decode_with_buffer_source(&uint8array.into())
+            .map_err(|e| format!("{:?}", e))?;
+
+        buffer.push_str(&chunk);
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_str = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+            
+            for line in event_str.lines() {
+                if let Some(data_str) = line.strip_prefix("data:") {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim()) {
+                        on_event(val);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
