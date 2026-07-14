@@ -1268,6 +1268,80 @@ ui_resource_uri: None,
     }
 }
 
+struct CadeSubagentRunner {
+    state: AppState,
+    parent_agent_id: String,
+    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+}
+
+#[async_trait::async_trait]
+impl cade_agent::team::SubagentRunner for CadeSubagentRunner {
+    async fn run_subagent(
+        &self,
+        task_call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<cade_agent::tools::manager::ToolResult, String> {
+        Ok(handle_run_subagent_tool(
+            &self.state,
+            &self.parent_agent_id,
+            task_call_id,
+            args,
+            self.sse_tx.clone(),
+        ).await)
+    }
+}
+
+struct CadeLlmCompleter {
+    state: AppState,
+}
+
+#[async_trait::async_trait]
+impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
+    async fn complete(
+        &self,
+        model: &str,
+        system_prompt: Option<&str>,
+        prompt: &str,
+    ) -> Result<String, String> {
+        let mut messages = Vec::new();
+        if let Some(sys) = system_prompt {
+            messages.push(cade_ai::LlmMessage {
+                role: "system".to_string(),
+                content: sys.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            });
+        }
+        messages.push(cade_ai::LlmMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        });
+
+        let req = cade_ai::CompletionRequest {
+            model: model.to_string(),
+            messages,
+            tools: vec![],
+            max_tokens: 3000,
+            reasoning_effort: None,
+        };
+
+        match self.state.llm.complete(&req).await {
+            Ok(resp) => {
+                if let Some(content) = resp.content {
+                    Ok(content)
+                } else {
+                    Err("No content returned from LLM".to_string())
+                }
+            }
+            Err(e) => Err(format!("LLM completion error: {e}")),
+        }
+    }
+}
+
 pub(super) async fn handle_run_parallel_subagents_tool(
     state: &AppState,
     parent_agent_id: &str,
@@ -1276,6 +1350,8 @@ pub(super) async fn handle_run_parallel_subagents_tool(
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::tools::manager::ToolResult;
+    use cade_agent::team::{TeamConfig, TeamExecutor, SubagentRunner};
+    use futures::StreamExt;
 
     let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
         .ok()
@@ -1283,334 +1359,121 @@ pub(super) async fn handle_run_parallel_subagents_tool(
         .map(|a| a.model)
         .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
 
-    let mut tasks_val: Vec<serde_json::Value> = Vec::new();
-    let mut active_mode = cade_agent::team::TeamMode::Broadcast;
-    let mut resolved_team = None;
-    let mut prompt_val = String::new();
+    let runner = CadeSubagentRunner {
+        state: state.clone(),
+        parent_agent_id: parent_agent_id.to_string(),
+        sse_tx: sse_tx.clone(),
+    };
 
-    if let Some(team_id) = args.get("team_id").and_then(|v| v.as_str()) {
-        let prompt = match args.get("prompt").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    tool_call_id: tool_call_id.to_string(),
-                    tool_name: "run_parallel_subagents".to_string(),
-                    output: "error: 'prompt' is required when 'team_id' is provided".to_string(),
-                    is_error: true,
-                    ui_resource_uri: None,
-                };
-            }
-        };
-        prompt_val = prompt.to_string();
+    if let Some(tasks) = args.get("tasks").and_then(|v| v.as_array()) {
+        let mut futures = Vec::new();
+        for (idx, task_args) in tasks.iter().enumerate() {
+            let task_call_id = format!("{}_{}", tool_call_id, idx);
+            let runner_ref = &runner;
+            let task_args_c = task_args.clone();
+            futures.push(Box::pin(async move {
+                runner_ref.run_subagent(&task_call_id, &task_args_c).await
+            }));
+        }
 
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let all_teams = cade_agent::team::discovery::discover_all_teams(&cwd);
-        let team = match cade_agent::team::discovery::resolve_team_def(team_id, &all_teams) {
-            Some(t) => t,
-            None => {
-                return ToolResult {
-                    tool_call_id: tool_call_id.to_string(),
-                    tool_name: "run_parallel_subagents".to_string(),
-                    output: format!("error: team not found: {}", team_id),
-                    is_error: true,
-                    ui_resource_uri: None,
-                };
-            }
-        };
-        active_mode = team.mode;
-        resolved_team = Some(team.clone());
+        let concurrency_cap = std::env::var("CADE_MAX_SUBAGENTS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4);
 
-        let mut members_to_run = team.members.clone();
+        let results = futures::stream::iter(futures)
+            .buffered(concurrency_cap)
+            .collect::<Vec<_>>()
+            .await;
 
-        // 🟢 1. TeamMode::Route (Specialist Routing Pass)
-        if active_mode == cade_agent::team::TeamMode::Route {
-            let mut roster = String::new();
-            for m in &team.members {
-                roster.push_str(&format!(
-                    "- Member ID: {}\n  Role: {:?}\n  Description: {}\n\n",
-                    m.id, m.role, m.description
-                ));
-            }
-
-            let route_prompt = format!(
-                "You are an AI router. Given the following user request and a roster of specialized team members, select the single best-suited member (or top 2 members if multiple specialists are required) to handle this request.\n\n\
-                 USER REQUEST:\n{}\n\n\
-                 ROSTER:\n{}\n\
-                 Return a JSON array of the selected Member IDs, e.g. [\"id1\", \"id2\"]. Return ONLY the JSON array, no explanation.",
-                prompt, roster
-            );
-
-            let req = cade_ai::CompletionRequest {
-                model: parent_model.clone(),
-                messages: vec![cade_ai::LlmMessage {
-                    role: "user".to_string(),
-                    content: route_prompt,
-                    tool_call_id: None,
-                    tool_calls: None,
-                    images: None,
-                }],
-                tools: vec![],
-                max_tokens: 500,
-                reasoning_effort: None,
-            };
-
-            if let Ok(resp) = state.llm.complete(&req).await
-                && let Some(content) = resp.content
-            {
-                let clean_json = content
-                    .trim()
-                    .trim_start_matches("```json")
-                    .trim_end_matches("```")
-                    .trim();
-                if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(clean_json) {
-                    let selected_ids: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
-                    if !selected_ids.is_empty() {
-                        members_to_run.retain(|m| selected_ids.contains(&m.id));
-                        tracing::info!(
-                            "Router selected {} specialized members for execution: {:?}",
-                            members_to_run.len(),
-                            selected_ids
-                        );
-                    }
+        let mut aggregated = Vec::new();
+        for (idx, tr) in results.into_iter().enumerate() {
+            match tr {
+                Ok(result) => {
+                    aggregated.push(serde_json::json!({
+                        "task_index": idx,
+                        "output": result.output,
+                        "is_error": result.is_error,
+                    }));
+                }
+                Err(err) => {
+                    aggregated.push(serde_json::json!({
+                        "task_index": idx,
+                        "output": format!("execution error: {err}"),
+                        "is_error": true,
+                    }));
                 }
             }
         }
 
-        // 🟢 2. TeamMode::Tasks (Sequential Pipeline Execution)
-        if active_mode == cade_agent::team::TeamMode::Tasks {
-            let mut sequential_results = Vec::new();
-            let mut previous_outputs = String::new();
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_parallel_subagents".to_string(),
+            output: serde_json::to_string_pretty(&aggregated).unwrap_or_default(),
+            is_error: false,
+            ui_resource_uri: None,
+        };
+    }
 
-            for (idx, member) in members_to_run.iter().enumerate() {
-                let task_call_id = format!("{}_{}", tool_call_id, idx);
-                let custom_prompt = if previous_outputs.is_empty() {
-                    prompt.to_string()
-                } else {
-                    format!(
-                        "{}\n\n<previous_outputs>\n{}\n</previous_outputs>",
-                        prompt, previous_outputs
-                    )
-                };
+    let config = TeamConfig::from_args(args);
+    if let Err(e) = config.validate() {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_parallel_subagents".to_string(),
+            output: e,
+            is_error: true,
+            ui_resource_uri: None,
+        };
+    }
 
-                let mut member_args = serde_json::Map::new();
-                member_args.insert(
-                    "prompt".to_string(),
-                    serde_json::Value::String(custom_prompt),
-                );
-                member_args.insert(
-                    "description".to_string(),
-                    serde_json::Value::String(format!(
-                        "Pipeline step [{}]: {} - {}",
-                        idx + 1,
-                        member.name,
-                        member.description
-                    )),
-                );
-                if !member.system_prompt.is_empty() {
-                    member_args.insert(
-                        "system_prompt".to_string(),
-                        serde_json::Value::String(member.system_prompt.clone()),
-                    );
-                }
-                if let Some(model) = &member.model {
-                    member_args.insert(
-                        "model".to_string(),
-                        serde_json::Value::String(model.clone()),
-                    );
-                }
-
-                let task_args_json = serde_json::Value::Object(member_args);
-                let tr = handle_run_subagent_tool(
-                    state,
-                    parent_agent_id,
-                    &task_call_id,
-                    &task_args_json,
-                    sse_tx.clone(),
-                )
-                .await;
-
-                if !tr.is_error {
-                    previous_outputs.push_str(&format!(
-                        "\n--- Output of {} ---\n{}\n",
-                        member.name, tr.output
-                    ));
-                }
-
-                sequential_results.push(serde_json::json!({
-                    "task_index": idx,
-                    "output": tr.output,
-                    "is_error": tr.is_error,
-                }));
-            }
-
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let all_teams = cade_agent::team::discovery::discover_all_teams(&cwd);
+    let team_def = match cade_agent::team::discovery::resolve_team_def(&config.team_id, &all_teams) {
+        Some(t) => t,
+        None => {
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: "run_parallel_subagents".to_string(),
-                output: serde_json::to_string_pretty(&sequential_results)
-                    .unwrap_or_else(|e| format!("error serializing results: {e}")),
-                is_error: false,
+                output: format!("error: team not found: {}", config.team_id),
+                is_error: true,
                 ui_resource_uri: None,
             };
         }
+    };
 
-        // For Coordinate or Broadcast, populate tasks_val normally
-        for member in &members_to_run {
-            let mut member_args = serde_json::Map::new();
-            member_args.insert(
-                "prompt".to_string(),
-                serde_json::Value::String(prompt.to_string()),
-            );
-            member_args.insert(
-                "description".to_string(),
-                serde_json::Value::String(format!(
-                    "Team member: {} - {}",
-                    member.name, member.description
-                )),
-            );
-            if !member.system_prompt.is_empty() {
-                member_args.insert(
-                    "system_prompt".to_string(),
-                    serde_json::Value::String(member.system_prompt.clone()),
-                );
-            }
-            if let Some(model) = &member.model {
-                member_args.insert(
-                    "model".to_string(),
-                    serde_json::Value::String(model.clone()),
-                );
-            }
-            tasks_val.push(serde_json::Value::Object(member_args));
-        }
-    } else if let Some(t) = args.get("tasks").and_then(|v| v.as_array()) {
-        tasks_val = t.clone();
-    } else {
-        return ToolResult {
-            tool_call_id: tool_call_id.to_string(),
-            tool_name: "run_parallel_subagents".to_string(),
-            output: "error: either 'tasks' array OR 'team_id' and 'prompt' are required"
-                .to_string(),
-            is_error: true,
-            ui_resource_uri: None,
-        };
-    }
+    let llm = CadeLlmCompleter {
+        state: state.clone(),
+    };
 
-    if tasks_val.is_empty() {
-        return ToolResult {
-            tool_call_id: tool_call_id.to_string(),
-            tool_name: "run_parallel_subagents".to_string(),
-            output: "error: task list cannot be empty (team may have no members)".to_string(),
-            is_error: true,
-            ui_resource_uri: None,
-        };
-    }
-
-    // Prepare futures
-    let mut futures = Vec::new();
-    for (idx, task_args) in tasks_val.iter().enumerate() {
-        let task_call_id = format!("{}_{}", tool_call_id, idx);
-
-        let state_c = state.clone();
-        let parent_agent_id_c = parent_agent_id.to_string();
-        let sse_tx_c = sse_tx.clone();
-        let task_args_c = task_args.clone();
-
-        futures.push(Box::pin(async move {
-            handle_run_subagent_tool(
-                &state_c,
-                &parent_agent_id_c,
-                &task_call_id,
-                &task_args_c,
-                sse_tx_c,
-            )
-            .await
-        }));
-    }
-
-    use futures::StreamExt;
-
-    let concurrency_cap = std::env::var("CADE_MAX_SUBAGENTS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(4);
-
-    // Pace and execute subagents concurrently up to the cap to avoid semaphore starvation timeout.
-    let results = futures::stream::iter(futures)
-        .buffered(concurrency_cap)
-        .collect::<Vec<_>>()
-        .await;
-
-    // Aggregate
-    let mut aggregated = Vec::new();
-    for (idx, tr) in results.into_iter().enumerate() {
-        aggregated.push(serde_json::json!({
-            "task_index": idx,
-            "output": tr.output,
-            "is_error": tr.is_error,
-        }));
-    }
-
-    // 🟢 3. TeamMode::Coordinate (Orchestrated Leader Synthesis)
-    if active_mode == cade_agent::team::TeamMode::Coordinate
-        && let Some(team) = resolved_team
+    let executor = TeamExecutor::new();
+    match executor
+        .run_team(&team_def, &config, &parent_model, tool_call_id, &runner, &llm)
+        .await
     {
-        let mut reports = String::new();
-        for (idx, tr) in aggregated.iter().enumerate() {
-            let name = &team.members[idx].name;
-            let output_str = tr["output"].as_str().unwrap_or("");
-            reports.push_str(&format!("--- Report from {} ---\n{}\n\n", name, output_str));
-        }
-
-        let coord_prompt = format!(
-            "You are a Team Coordinator. You have delegated a task to multiple specialized subagents. Below are their individual reports. Consolidate their findings into a single, coherent, unified master report. Resolve any conflicts or redundancies.\n\n\
-             ORIGINAL TASK:\n{}\n\n\
-             SUBAGENT REPORTS:\n{}\n\
-             Write a clear, structured, and comprehensive final report.",
-            prompt_val, reports
-        );
-
-        let req = cade_ai::CompletionRequest {
-            model: parent_model.clone(),
-            messages: vec![cade_ai::LlmMessage {
-                role: "user".to_string(),
-                content: coord_prompt,
-                tool_call_id: None,
-                tool_calls: None,
-                images: None,
-            }],
-            tools: vec![],
-            max_tokens: 3000,
-            reasoning_effort: None,
-        };
-
-        if let Ok(resp) = state.llm.complete(&req).await
-            && let Some(content) = resp.content
-        {
-            let aggregated_json = serde_json::json!([{
-                "task_index": 0,
-                "output": content.trim().to_string(),
-                "is_error": false,
-            }]);
-
-            return ToolResult {
+        Ok(results) => {
+            let mut aggregated_json = Vec::new();
+            for r in results {
+                aggregated_json.push(serde_json::json!({
+                    "task_index": r.task_index,
+                    "output": r.output,
+                    "is_error": r.is_error,
+                }));
+            }
+            ToolResult {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: "run_parallel_subagents".to_string(),
                 output: serde_json::to_string_pretty(&aggregated_json).unwrap_or_default(),
                 is_error: false,
                 ui_resource_uri: None,
-            };
+            }
         }
-    }
-
-    ToolResult {
-        tool_call_id: tool_call_id.to_string(),
-        tool_name: "run_parallel_subagents".to_string(),
-        output: serde_json::to_string_pretty(&aggregated)
-            .unwrap_or_else(|e| format!("error serializing results: {e}")),
-        is_error: false, // The parallel executor itself succeeded, individual tasks may have failed
-        ui_resource_uri: None,
+        Err(e) => ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_parallel_subagents".to_string(),
+            output: e,
+            is_error: true,
+            ui_resource_uri: None,
+        },
     }
 }
 pub(super) async fn handle_cancel_subagent_tool(

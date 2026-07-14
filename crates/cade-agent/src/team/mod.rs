@@ -1,10 +1,12 @@
 pub mod config;
+pub mod executor;
 pub mod context;
 pub mod discovery;
 pub mod member;
 pub mod mode;
 pub mod task;
 pub use config::TeamConfig;
+pub use executor::{TeamExecutor, TeamResultItem, SubagentRunner, LlmCompleter};
 pub use context::{MemberInteraction, TeamRunContext};
 pub use discovery::{TeamDef, discover_all_teams, find_team};
 pub use member::{MemberDef, MemberScope, MemberTools};
