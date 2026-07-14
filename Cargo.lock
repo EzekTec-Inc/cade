@@ -972,6 +972,7 @@ name = "cade-cli"
 version = "0.2.4"
 dependencies = [
  "arboard",
+ "async-trait",
  "base64 0.22.1",
  "cade-agent",
  "cade-ai",
@@ -995,6 +996,7 @@ dependencies = [
  "self_update",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tracing",
