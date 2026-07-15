@@ -483,6 +483,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -688,6 +689,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -1005,6 +1007,7 @@ fn seed_basic_agent(db: &cade_store::sqlite::Db, agent_id: &str) {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -1135,6 +1138,7 @@ async fn build_context_subtracts_full_system_prompt_and_memory() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -1326,6 +1330,7 @@ async fn build_context_message_budget_reflects_real_token_overhead() {
                 compaction_model: None,
                 theme: None,
                 active_plan_json: None,
+                parent_id: None,
             },
         )
         .unwrap();
@@ -1405,6 +1410,7 @@ async fn build_context_token_overhead_frees_more_budget_than_chars() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -1463,6 +1469,7 @@ async fn build_context_records_telemetry_with_fits_budget_true() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -1510,6 +1517,7 @@ async fn build_context_records_native_token_counts() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -1570,6 +1578,7 @@ async fn skills_section_lives_in_static_system_block() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();

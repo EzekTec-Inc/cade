@@ -1,8 +1,10 @@
 // region:    --- Modules
 
 pub mod config;
+pub mod coordinator;
 
 pub use config::SubagentConfig;
+pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 
 use crate::Result;
 use std::path::{Path, PathBuf};

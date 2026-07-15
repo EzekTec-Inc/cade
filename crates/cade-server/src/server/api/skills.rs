@@ -319,6 +319,7 @@ mod tests {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         }
     }
 

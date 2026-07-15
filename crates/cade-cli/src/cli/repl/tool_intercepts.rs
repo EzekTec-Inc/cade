@@ -16,197 +16,70 @@ impl Repl {
         let mut cfg = SubagentConfig::from_args(args);
         cfg.silent_stream |= self.settings.lock().silent_subagents();
 
-        if let Err(reason) = cfg.validate() {
-            return Ok(cade_agent::tools::ToolResult {
-                tool_call_id: call_id.to_string(),
-                tool_name: "subagent".to_string(),
-                output: reason,
-                is_error: true,
-                ui_resource_uri: None,
-            });
-        }
-
-        // 1. Check if action mode
-        if let Some(action) = &cfg.action {
-            match action.as_str() {
-                "list" => {
-                    let defs = discover_all_subagents(&self.cwd);
-                    let mut out = String::from("Available subagents:\n");
-                    for d in defs {
-                        out.push_str(&format!("- {}: {} ({})\n", d.name, d.description, d.tools));
-                    }
-                    return Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: "subagent".to_string(),
-                        output: out,
-                        is_error: false,
-                        ui_resource_uri: None,
-                    });
-                }
-                "cancel" | "cancel_subagent" | "interrupt" => {
-                    let subagent_id = cfg.id.clone().or_else(|| cfg.agent_id.clone()).unwrap_or_default();
-                    if subagent_id.is_empty() {
-                        return Ok(cade_agent::tools::ToolResult {
-                            tool_call_id: call_id.to_string(),
-                            tool_name: "subagent".to_string(),
-                            output: "error: 'id' is required for cancel/interrupt".to_string(),
-                            is_error: true,
-                            ui_resource_uri: None,
-                        });
-                    }
-                    let tx_opt = {
-                        let map = self.subagent_cancellations.lock().await;
-                        map.get(&subagent_id).cloned()
-                    };
-                    if let Some(tx) = tx_opt {
-                        let _ = tx.send(()).await;
-                        return Ok(cade_agent::tools::ToolResult {
-                            tool_call_id: call_id.to_string(),
-                            tool_name: "subagent".to_string(),
-                            output: format!("Cancel signal sent to subagent {subagent_id}"),
-                            is_error: false,
-                            ui_resource_uri: None,
-                        });
-                    } else {
-                        return Ok(cade_agent::tools::ToolResult {
-                            tool_call_id: call_id.to_string(),
-                            tool_name: "subagent".to_string(),
-                            output: format!("error: no active subagent found with ID {subagent_id}"),
-                            is_error: true,
-                            ui_resource_uri: None,
-                        });
-                    }
-                }
-                "doctor" => {
-                    return Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: "subagent".to_string(),
-                        output: "Subagent system status: OK. Multi-agent concurrency slots available.".to_string(),
-                        is_error: false,
-                        ui_resource_uri: None,
-                    });
-                }
-                other => {
-                    return Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: "subagent".to_string(),
-                        output: format!("error: unsupported action: {other}"),
-                        is_error: true,
-                        ui_resource_uri: None,
-                    });
-                }
-            }
-        }
-
-        // 2. Check if chain mode
         if let Some(chain_val) = &cfg.chain {
-            if chain_val.is_empty() {
-                return Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: "subagent".to_string(),
-                    output: "error: 'chain' array cannot be empty".to_string(),
-                    is_error: true,
-                    ui_resource_uri: None,
-                });
+            if !chain_val.is_empty() {
+                self.tui_dim(format!(
+                    "  Launching sequential subagent chain ({} steps)…",
+                    chain_val.len()
+                ));
+            }
+        } else if let Some(tasks_val) = &cfg.tasks
+            && !tasks_val.is_empty() {
+                self.tui_dim(format!(
+                    "  Launching {} parallel subagents…",
+                    tasks_val.len()
+                ));
             }
 
-            self.tui_dim(format!("  Launching sequential subagent chain ({} steps)…", chain_val.len()));
-
-            let mut previous_output = String::new();
-            for (idx, step_args) in chain_val.iter().enumerate() {
-                let step_call_id = format!("{}_{}", call_id, idx);
-                let mut step_args_c = step_args.clone();
-                let task_val = if step_args_c.get("task").is_some() {
-                    step_args_c.get_mut("task")
-                } else {
-                    step_args_c.get_mut("prompt")
-                };
-                if let Some(task_val) = task_val
-                    && let Some(task_str) = task_val.as_str() {
-                        let replaced = task_str.replace("{previous}", &previous_output);
-                        *task_val = serde_json::Value::String(replaced);
-                    }
-
-                let step_res = self.handle_subagent_single_inner(&step_call_id, &step_args_c, true).await?;
-                if step_res.is_error {
-                    return Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: "subagent".to_string(),
-                        output: format!("Chain stopped at step {} because of error: {}", idx + 1, step_res.output),
-                        is_error: true,
-                        ui_resource_uri: None,
-                    });
-                }
-                previous_output = step_res.output;
-            }
-
-            return Ok(cade_agent::tools::ToolResult {
-                tool_call_id: call_id.to_string(),
-                tool_name: "subagent".to_string(),
-                output: previous_output,
-                is_error: false,
-                ui_resource_uri: None,
-            });
-        }
-
-        // 3. Check if parallel mode
-        if let Some(tasks_val) = &cfg.tasks {
-            if tasks_val.is_empty() {
-                return Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: "subagent".to_string(),
-                    output: "error: 'tasks' array cannot be empty".to_string(),
-                    is_error: true,
-                    ui_resource_uri: None,
-                });
-            }
-
-            self.tui_dim(format!("  Launching {} parallel subagents…", tasks_val.len()));
-
-            let mut futures = Vec::new();
-            for (idx, task_args) in tasks_val.iter().enumerate() {
-                let task_call_id = format!("{}_{}", call_id, idx);
-                let task_args_c = task_args.clone();
-                futures.push(async move {
-                    self.handle_subagent_single_inner(&task_call_id, &task_args_c, true).await
-                });
-            }
-
-            let results = futures::future::join_all(futures).await;
-
-            let mut aggregated = Vec::new();
-            for (idx, res) in results.into_iter().enumerate() {
-                match res {
-                    Ok(tr) => {
-                        aggregated.push(serde_json::json!({
-                            "task_index": idx,
-                            "output": tr.output,
-                            "is_error": tr.is_error,
-                        }));
-                    }
-                    Err(e) => {
-                        aggregated.push(serde_json::json!({
-                            "task_index": idx,
-                            "output": format!("task failed: {e}"),
-                            "is_error": true,
-                        }));
-                    }
-                }
-            }
-
-            return Ok(cade_agent::tools::ToolResult {
-                tool_call_id: call_id.to_string(),
-                tool_name: "subagent".to_string(),
-                output: serde_json::to_string_pretty(&aggregated)
-                    .unwrap_or_else(|e| format!("error serializing results: {e}")),
-                is_error: false,
-                ui_resource_uri: None,
-            });
-        }
-
-        // 4. Default: single mode
-        self.handle_subagent_single_inner(call_id, args, false).await
+        cade_agent::subagents::SubagentCoordinator::coordinate(self, call_id, args)
+            .await
+            .map_err(|e| crate::error::Error::custom(e.to_string()))
     }
+}
+
+#[async_trait::async_trait]
+impl cade_agent::subagents::SubagentSingleRunner for Repl {
+    async fn run_single(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+        force_sync: bool,
+    ) -> std::result::Result<cade_agent::tools::ToolResult, cade_agent::Error> {
+        self.handle_subagent_single_inner(call_id, args, force_sync)
+            .await
+            .map_err(|e| cade_agent::Error::custom(e.to_string()))
+    }
+
+    fn list_subagents(&self) -> std::result::Result<String, cade_agent::Error> {
+        let defs = discover_all_subagents(&self.cwd);
+        let mut out = String::from("Available subagents:\n");
+        for d in defs {
+            out.push_str(&format!("- {}: {} ({})\n", d.name, d.description, d.tools));
+        }
+        Ok(out)
+    }
+
+    async fn cancel_subagent(&self, subagent_id: &str) -> std::result::Result<String, cade_agent::Error> {
+        let tx_opt = {
+            let map = self.subagent_cancellations.lock().await;
+            map.get(subagent_id).cloned()
+        };
+        if let Some(tx) = tx_opt {
+            let _ = tx.send(()).await;
+            Ok(format!("Cancel signal sent to subagent {subagent_id}"))
+        } else {
+            Err(cade_agent::Error::custom(format!(
+                "no active subagent found with ID {subagent_id}"
+            )))
+        }
+    }
+
+    fn doctor_status(&self) -> std::result::Result<String, cade_agent::Error> {
+        Ok("Subagent system status: OK. Multi-agent concurrency slots available.".to_string())
+    }
+}
+
+impl Repl {
 
     pub(crate) async fn handle_subagent_single_inner(
         &self,
@@ -726,6 +599,4 @@ impl Repl {
             }),
         }
     }
-
-
 }

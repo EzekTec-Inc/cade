@@ -294,6 +294,7 @@ mod tests {
                 theme: None,
                 active_plan_json: None,
                 created_at: Some(chrono::Utc::now().timestamp()),
+                parent_id: None,
             },
         )
         .unwrap();

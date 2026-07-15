@@ -104,7 +104,9 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             description TEXT,
             system_prompt TEXT,
             created_at  INTEGER NOT NULL,
-            memory_turn_counter INTEGER NOT NULL DEFAULT 0
+            memory_turn_counter INTEGER NOT NULL DEFAULT 0,
+            parent_id   TEXT,
+            FOREIGN KEY (parent_id) REFERENCES agents(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS runs (
@@ -846,6 +848,11 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 18", [])?;
     }
 
+    if current_version < 19 {
+        let _ = conn.execute("ALTER TABLE agents ADD COLUMN parent_id TEXT", []);
+        conn.execute("PRAGMA user_version = 19", [])?;
+    }
+
     Ok(())
 }
 
@@ -880,6 +887,9 @@ pub struct AgentRow {
     /// Optional active plan serialized as JSON.
     #[serde(default)]
     pub active_plan_json: Option<String>,
+    /// Optional parent agent ID.
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 pub mod agents;

@@ -111,6 +111,7 @@ pub async fn dispatch_workflow(
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         };
         if let Err(e) = sqlite::create_agent(&state.db, &row) {
             return (

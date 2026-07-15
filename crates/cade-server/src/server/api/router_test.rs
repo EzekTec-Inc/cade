@@ -341,6 +341,7 @@ async fn test_create_conversation_fork() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();

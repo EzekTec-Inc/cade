@@ -220,13 +220,13 @@ pub(crate) fn render_frame(
 
     let chunks = if plan_h > 0 {
         Layout::vertical([
-            Constraint::Fill(1),                    // [0] content  (fluid)
-            Constraint::Length(0),                  // [1] unused
-            Constraint::Length(plan_h),             // [2] plan panel
-            Constraint::Length(1),                  // [3] status
-            Constraint::Length(1),                  // [4] top separator
-            Constraint::Length(input_rows),         // [5] input or question
-            Constraint::Length(1),                  // [6] bottom separator
+            Constraint::Fill(1),                                   // [0] content  (fluid)
+            Constraint::Length(0),                                 // [1] unused
+            Constraint::Length(plan_h),                            // [2] plan panel
+            Constraint::Length(1),                                 // [3] status
+            Constraint::Length(1),                                 // [4] top separator
+            Constraint::Length(input_rows),                        // [5] input or question
+            Constraint::Length(1),                                 // [6] bottom separator
             Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
         ])
         .split(main_area)
@@ -234,13 +234,13 @@ pub(crate) fn render_frame(
         // No question: same 6-slot layout, pad with two dummy zero-height slots
         // so all index references below are uniform (we only use 0,3..7 in this branch).
         Layout::vertical([
-            Constraint::Fill(1),                    // [0] content
-            Constraint::Length(0),                  // [1] (unused)
-            Constraint::Length(0),                  // [2] (unused)
-            Constraint::Length(1),                  // [3] status
-            Constraint::Length(1),                  // [4] top separator
-            Constraint::Length(input_rows),         // [5] input or question
-            Constraint::Length(1),                  // [6] bottom separator
+            Constraint::Fill(1),                                   // [0] content
+            Constraint::Length(0),                                 // [1] (unused)
+            Constraint::Length(0),                                 // [2] (unused)
+            Constraint::Length(1),                                 // [3] status
+            Constraint::Length(1),                                 // [4] top separator
+            Constraint::Length(input_rows),                        // [5] input or question
+            Constraint::Length(1),                                 // [6] bottom separator
             Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
         ])
         .split(main_area)

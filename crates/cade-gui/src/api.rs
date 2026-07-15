@@ -616,7 +616,7 @@ where
         while let Some(pos) = buffer.find("\n\n") {
             let event_str = buffer[..pos].to_string();
             buffer = buffer[pos + 2..].to_string();
-            
+
             for line in event_str.lines() {
                 if let Some(data_str) = line.strip_prefix("data:") {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim()) {

@@ -289,6 +289,7 @@ fn setup_db() -> Db {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     )
     .unwrap();
@@ -870,6 +871,7 @@ async fn test_merge_session_summaries_mocked() {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         },
     );
 

@@ -3,8 +3,8 @@ use super::*;
 pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
     let conn = db.get()?;
     conn.execute(
-        "INSERT INTO agents (id, name, model, description, system_prompt, created_at, active_plan_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO agents (id, name, model, description, system_prompt, created_at, active_plan_json, parent_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             row.id,
             row.name,
@@ -12,7 +12,8 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
             row.description,
             row.system_prompt,
             now_ts(),
-            row.active_plan_json
+            row.active_plan_json,
+            row.parent_id
         ],
     )?;
     Ok(())
@@ -21,7 +22,7 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
 pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
     let conn = db.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme, active_plan_json FROM agents WHERE id = ?1",
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme, active_plan_json, parent_id FROM agents WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
@@ -35,6 +36,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
             compaction_model: row.get(6)?,
             theme: row.get(7)?,
             active_plan_json: row.get(8)?,
+            parent_id: row.get(9)?,
         }))
     } else {
         Ok(None)
@@ -44,7 +46,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
 pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
     let conn = db.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme, active_plan_json FROM agents ORDER BY created_at DESC"
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme, active_plan_json, parent_id FROM agents ORDER BY created_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AgentRow {
@@ -57,6 +59,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
             compaction_model: row.get(6)?,
             theme: row.get(7)?,
             active_plan_json: row.get(8)?,
+            parent_id: row.get(9)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -210,6 +213,7 @@ mod tests {
             compaction_model: None,
             theme: None,
             active_plan_json: None,
+            parent_id: None,
         }
     }
 

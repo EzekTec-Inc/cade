@@ -15,7 +15,6 @@ use syntect::highlighting::Style as SyntectStyle;
 #[cfg(feature = "syntax-highlighting")]
 use syntect::parsing::SyntaxSet;
 
-
 #[cfg(feature = "syntax-highlighting")]
 pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> =
     LazyLock::new(SyntaxSet::load_defaults_newlines);
@@ -568,19 +567,31 @@ pub fn parse_markdown_lines_with_theme(
                                         let c = style.foreground;
                                         let tc = ratatui::style::Color::Rgb(c.r, c.g, c.b);
                                         let mut s = Style::default().fg(tc);
-                                        if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                                        if style
+                                            .font_style
+                                            .contains(syntect::highlighting::FontStyle::BOLD)
+                                        {
                                             s = s.add_modifier(Modifier::BOLD);
                                         }
-                                        if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+                                        if style
+                                            .font_style
+                                            .contains(syntect::highlighting::FontStyle::ITALIC)
+                                        {
                                             s = s.add_modifier(Modifier::ITALIC);
                                         }
                                         spans.push(Span::styled(text.replace('\n', ""), s));
                                     }
                                 } else {
-                                    spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                                    spans.push(Span::styled(
+                                        raw_line.to_string(),
+                                        colors.text_primary(),
+                                    ));
                                 }
                             } else {
-                                spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                                spans.push(Span::styled(
+                                    raw_line.to_string(),
+                                    colors.text_primary(),
+                                ));
                             }
                         }
                         #[cfg(not(feature = "syntax-highlighting"))]
@@ -601,10 +612,15 @@ pub fn parse_markdown_lines_with_theme(
                     }
 
                     if should_collapse {
-                        let spans = vec![prefix_span.clone(), Span::styled(
-                            format!("... [code block collapsed ({total_lines} lines) — Press Ctrl+G to expand] ..."),
-                            colors.text_dim().add_modifier(Modifier::ITALIC),
-                        )];
+                        let spans = vec![
+                            prefix_span.clone(),
+                            Span::styled(
+                                format!(
+                                    "... [code block collapsed ({total_lines} lines) — Press Ctrl+G to expand] ..."
+                                ),
+                                colors.text_dim().add_modifier(Modifier::ITALIC),
+                            ),
+                        ];
                         if in_blockquote {
                             let mut b_spans = vec![Span::styled(
                                 format!("{INDENT}▎ "),

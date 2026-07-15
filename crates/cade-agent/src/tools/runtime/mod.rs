@@ -560,7 +560,10 @@ mod tests {
         assert!(result.is_some());
         let res = result.unwrap();
         assert!(!res.is_error);
-        assert!(res.output.contains("No third-party MCP tools matched search query 'postgres'"));
+        assert!(
+            res.output
+                .contains("No third-party MCP tools matched search query 'postgres'")
+        );
     }
 }
 

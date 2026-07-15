@@ -1,10 +1,10 @@
 use super::config::TeamConfig;
 use super::discovery::TeamDef;
 use super::mode::TeamMode;
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
 use async_trait::async_trait;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamResultItem {
@@ -110,10 +110,7 @@ impl TeamExecutor {
                 };
 
                 let mut member_args = serde_json::Map::new();
-                member_args.insert(
-                    "prompt".to_string(),
-                    Value::String(custom_prompt),
-                );
+                member_args.insert("prompt".to_string(), Value::String(custom_prompt));
                 member_args.insert(
                     "description".to_string(),
                     Value::String(format!(
@@ -130,16 +127,10 @@ impl TeamExecutor {
                     );
                 }
                 if let Some(model) = &member.model {
-                    member_args.insert(
-                        "model".to_string(),
-                        Value::String(model.clone()),
-                    );
+                    member_args.insert("model".to_string(), Value::String(model.clone()));
                 }
                 if config.isolation {
-                    member_args.insert(
-                        "_enforce_isolation".to_string(),
-                        Value::Bool(true),
-                    );
+                    member_args.insert("_enforce_isolation".to_string(), Value::Bool(true));
                 }
 
                 let task_args_json = Value::Object(member_args);
@@ -176,10 +167,7 @@ impl TeamExecutor {
         let mut tasks_val = Vec::new();
         for member in &members_to_run {
             let mut member_args = serde_json::Map::new();
-            member_args.insert(
-                "prompt".to_string(),
-                Value::String(prompt_val.clone()),
-            );
+            member_args.insert("prompt".to_string(), Value::String(prompt_val.clone()));
             member_args.insert(
                 "description".to_string(),
                 Value::String(format!(
@@ -194,16 +182,10 @@ impl TeamExecutor {
                 );
             }
             if let Some(model) = &member.model {
-                member_args.insert(
-                    "model".to_string(),
-                    Value::String(model.clone()),
-                );
+                member_args.insert("model".to_string(), Value::String(model.clone()));
             }
             if config.isolation {
-                member_args.insert(
-                    "_enforce_isolation".to_string(),
-                    Value::Bool(true),
-                );
+                member_args.insert("_enforce_isolation".to_string(), Value::Bool(true));
             }
             tasks_val.push(Value::Object(member_args));
         }
@@ -292,10 +274,10 @@ impl Default for TeamExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::team::member::MemberDef;
     use crate::team::discovery::TeamDef;
-    use crate::team::member::MemberTools;
+    use crate::team::member::MemberDef;
     use crate::team::member::MemberScope;
+    use crate::team::member::MemberTools;
     use crate::tools::manager::ToolResult;
     use std::sync::{Arc, Mutex};
 
@@ -310,7 +292,10 @@ mod tests {
             task_call_id: &str,
             args: &Value,
         ) -> Result<ToolResult, String> {
-            self.calls.lock().unwrap().push((task_call_id.to_string(), args.clone()));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((task_call_id.to_string(), args.clone()));
             Ok(ToolResult {
                 tool_call_id: task_call_id.to_string(),
                 tool_name: "run_subagent".to_string(),
@@ -385,10 +370,14 @@ mod tests {
         let config = TeamConfig::from_args(&args);
 
         let calls = Arc::new(Mutex::new(vec![]));
-        let runner = MockRunner { calls: calls.clone() };
+        let runner = MockRunner {
+            calls: calls.clone(),
+        };
 
         let completions = Arc::new(Mutex::new(vec![]));
-        let llm = MockLlm { completions: completions.clone() };
+        let llm = MockLlm {
+            completions: completions.clone(),
+        };
 
         let executor = TeamExecutor::new();
         let results = executor

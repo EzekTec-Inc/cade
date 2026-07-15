@@ -70,7 +70,8 @@ fn App() -> Element {
     let mut global_error = use_signal(|| Option::<String>::None);
     let active_stream_id = use_signal(|| Option::<String>::None);
     let active_stream = use_signal(types::SafeAbortHandle::default);
-    let parsed_messages = use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
+    let parsed_messages =
+        use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
 
     // Provide individual signals and composite state to all children
     use_context_provider(|| api_key);
@@ -151,61 +152,73 @@ fn App() -> Element {
             // Real-time SSE event loop
             loop {
                 let client_inst = crate::api::CadeApiClient::new(key());
-                
-                let sse_res = client_inst.listen_global_events(|event| {
-                    let event_type = event["event_type"].as_str().unwrap_or("");
-                    match event_type {
-                        "conversation_created" => {
-                            let agent_id = event["agent_id"].as_str().unwrap_or("");
-                            if let Some(curr) = selected() {
-                                if curr.id == agent_id {
-                                    if let Ok(conv) = serde_json::from_value::<cade_api_types::ConversationInfo>(event["conversation"].clone()) {
+
+                let sse_res = client_inst
+                    .listen_global_events(|event| {
+                        let event_type = event["event_type"].as_str().unwrap_or("");
+                        match event_type {
+                            "conversation_created" => {
+                                let agent_id = event["agent_id"].as_str().unwrap_or("");
+                                if let Some(curr) = selected() {
+                                    if curr.id == agent_id {
+                                        if let Ok(conv) = serde_json::from_value::<
+                                            cade_api_types::ConversationInfo,
+                                        >(
+                                            event["conversation"].clone()
+                                        ) {
+                                            let mut list = convs();
+                                            if !list.contains(&conv) {
+                                                list.push(conv);
+                                                convs.set(list);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "conversation_deleted" => {
+                                let agent_id = event["agent_id"].as_str().unwrap_or("");
+                                let conv_id = event["conversation_id"].as_str().unwrap_or("");
+                                if let Some(curr) = selected() {
+                                    if curr.id == agent_id {
                                         let mut list = convs();
-                                        if !list.contains(&conv) {
-                                            list.push(conv);
-                                            convs.set(list);
+                                        list.retain(|c| c.id != conv_id);
+                                        convs.set(list);
+                                        if active_conversation() == Some(conv_id.to_string()) {
+                                            active_conversation.set(None);
                                         }
                                     }
                                 }
                             }
-                        }
-                        "conversation_deleted" => {
-                            let agent_id = event["agent_id"].as_str().unwrap_or("");
-                            let conv_id = event["conversation_id"].as_str().unwrap_or("");
-                            if let Some(curr) = selected() {
-                                if curr.id == agent_id {
-                                    let mut list = convs();
-                                    list.retain(|c| c.id != conv_id);
-                                    convs.set(list);
-                                    if active_conversation() == Some(conv_id.to_string()) {
-                                        active_conversation.set(None);
-                                    }
-                                }
-                            }
-                        }
-                        "message_created" => {
-                            let m_agent_id = event["agent_id"].as_str().unwrap_or("");
-                            let m_conv_id = event["conversation_id"].as_str();
-                            if let Some(curr_agent) = selected() {
-                                if curr_agent.id == m_agent_id && active_conversation() == m_conv_id.map(String::from) {
-                                    if let Ok(msg) = serde_json::from_value::<cade_api_types::ChatMessage>(event["message"].clone()) {
-                                        let mut list = messages();
-                                        if !list.iter().any(|m| m.id == msg.id) {
-                                            list.push(msg);
-                                            messages.set(list);
+                            "message_created" => {
+                                let m_agent_id = event["agent_id"].as_str().unwrap_or("");
+                                let m_conv_id = event["conversation_id"].as_str();
+                                if let Some(curr_agent) = selected() {
+                                    if curr_agent.id == m_agent_id
+                                        && active_conversation() == m_conv_id.map(String::from)
+                                    {
+                                        if let Ok(msg) =
+                                            serde_json::from_value::<cade_api_types::ChatMessage>(
+                                                event["message"].clone(),
+                                            )
+                                        {
+                                            let mut list = messages();
+                                            if !list.iter().any(|m| m.id == msg.id) {
+                                                list.push(msg);
+                                                messages.set(list);
+                                            }
                                         }
                                     }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                }).await;
+                    })
+                    .await;
 
                 if let Err(e) = sse_res {
                     global_error.set(Some(format!("Server connection lost: {e}")));
                     gloo_timers::future::TimeoutFuture::new(3000).await;
-                    
+
                     // Re-sync on reconnect
                     if let Ok(list) = api::list_agents(&key()).await {
                         global_error.set(None);

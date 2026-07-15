@@ -211,7 +211,8 @@ pub(crate) fn render_assistant_item(
         (text.to_string(), None)
     };
 
-    let md_lines = crate::markdown::parse_markdown_lines_with_theme(&body, colors, width, expand_all);
+    let md_lines =
+        crate::markdown::parse_markdown_lines_with_theme(&body, colors, width, expand_all);
     out.extend(md_lines);
 
     if let Some(sp) = scratchpad {

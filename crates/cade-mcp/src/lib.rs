@@ -902,8 +902,8 @@ fn extract_content_text(content: &[rmcp::model::Content]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
     use std::collections::HashMap;
+    use std::ffi::OsStr;
 
     #[test]
     fn test_sandboxed_command_env() {
@@ -912,7 +912,9 @@ mod tests {
             args: vec!["hello".to_string()],
             ..Default::default()
         };
-        config.env.insert("AUTHORIZED_VAR".to_string(), "authorized-value".to_string());
+        config
+            .env
+            .insert("AUTHORIZED_VAR".to_string(), "authorized-value".to_string());
 
         // Case 1: Sandboxed by default (None -> true)
         let cmd = McpManager::build_stdio_command(&config);
@@ -922,7 +924,7 @@ mod tests {
         // CARGO_MANIFEST_DIR must be explicitly cleared (set to None or absent)
         assert!(
             envs.get(OsStr::new("CARGO_MANIFEST_DIR")).is_none()
-            || envs.get(OsStr::new("CARGO_MANIFEST_DIR")) == Some(&None)
+                || envs.get(OsStr::new("CARGO_MANIFEST_DIR")) == Some(&None)
         );
 
         // AUTHORIZED_VAR must be explicitly set
@@ -935,7 +937,8 @@ mod tests {
         config.sandboxed = Some(false);
         let cmd_unsandboxed = McpManager::build_stdio_command(&config);
         let std_cmd_unsandboxed = cmd_unsandboxed.as_std();
-        let envs_unsandboxed: HashMap<&OsStr, Option<&OsStr>> = std_cmd_unsandboxed.get_envs().collect();
+        let envs_unsandboxed: HashMap<&OsStr, Option<&OsStr>> =
+            std_cmd_unsandboxed.get_envs().collect();
 
         // Since it's not sandboxed, CARGO_MANIFEST_DIR should not be explicitly cleared
         assert_ne!(

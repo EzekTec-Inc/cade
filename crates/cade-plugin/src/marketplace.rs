@@ -60,7 +60,11 @@ pub async fn install_plugin(
         }
         if paths.len() == 1 && paths[0].is_dir() {
             let nested_dir = &paths[0];
-            let temp_dir_name = format!("{}_temp_{}", plugin_id.replace('/', "_"), uuid::Uuid::new_v4());
+            let temp_dir_name = format!(
+                "{}_temp_{}",
+                plugin_id.replace('/', "_"),
+                uuid::Uuid::new_v4()
+            );
             let temp_dir = target_dir.join(temp_dir_name);
             if std::fs::rename(nested_dir, &temp_dir).is_ok() {
                 let _ = std::fs::remove_dir_all(&plugin_dir);

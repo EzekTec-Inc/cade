@@ -1,8 +1,8 @@
 use crate::Result;
-use std::process::Command;
-use std::path::PathBuf;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+use std::process::Command;
 
 #[async_trait]
 pub trait UpdateBackend: Send + Sync {
@@ -37,7 +37,10 @@ impl UpdateBackend for CargoUpdateBackend {
             eprintln!("\r\n[*] Successfully updated via cargo.");
             Ok(true)
         } else {
-            Err(crate::error::Error::custom(format!("Cargo update failed with status: {}", status)))
+            Err(crate::error::Error::custom(format!(
+                "Cargo update failed with status: {}",
+                status
+            )))
         }
     }
 }
@@ -54,11 +57,16 @@ pub struct GithubUpdateBackend {
 
 impl GithubUpdateBackend {
     pub fn new() -> Result<Self> {
-        let current_exe = std::env::current_exe().map_err(|e| crate::error::Error::custom(e.to_string()))?;
+        let current_exe =
+            std::env::current_exe().map_err(|e| crate::error::Error::custom(e.to_string()))?;
         let is_windows = cfg!(windows);
 
         let cli_bin_name = if is_windows { "cade.exe" } else { "cade" };
-        let server_bin_name = if is_windows { "cade-server.exe" } else { "cade-server" };
+        let server_bin_name = if is_windows {
+            "cade-server.exe"
+        } else {
+            "cade-server"
+        };
 
         let mut server_exe = current_exe.clone();
         server_exe.set_file_name(server_bin_name);
@@ -84,8 +92,14 @@ impl UpdateBackend for GithubUpdateBackend {
             .build()
             .map_err(|e| crate::error::Error::custom(e.to_string()))?;
 
-        let latest = update_builder.get_latest_release().map_err(|e| crate::error::Error::custom(e.to_string()))?;
-        let is_greater = self_update::version::bump_is_greater(self_update::cargo_crate_version!(), &latest.version).unwrap_or(false);
+        let latest = update_builder
+            .get_latest_release()
+            .map_err(|e| crate::error::Error::custom(e.to_string()))?;
+        let is_greater = self_update::version::bump_is_greater(
+            self_update::cargo_crate_version!(),
+            &latest.version,
+        )
+        .unwrap_or(false);
         Ok(is_greater)
     }
 
@@ -119,17 +133,30 @@ impl UpdateBackend for GithubUpdateBackend {
                 .build()
                 .map_err(|e| crate::error::Error::custom(e.to_string()))?;
 
-            update_builder_cli.get_latest_release().map_err(|e| crate::error::Error::custom(e.to_string()))?
+            update_builder_cli
+                .get_latest_release()
+                .map_err(|e| crate::error::Error::custom(e.to_string()))?
         };
 
-        let is_greater = self_update::version::bump_is_greater(self_update::cargo_crate_version!(), &latest.version).unwrap_or(false);
+        let is_greater = self_update::version::bump_is_greater(
+            self_update::cargo_crate_version!(),
+            &latest.version,
+        )
+        .unwrap_or(false);
 
         if !is_greater {
-            eprintln!("\r\n[*] CADE is already up-to-date (v{}).", self_update::cargo_crate_version!());
+            eprintln!(
+                "\r\n[*] CADE is already up-to-date (v{}).",
+                self_update::cargo_crate_version!()
+            );
             return Ok(false);
         }
 
-        eprintln!("\r\n[*] Found new version: v{} (current: v{}).", latest.version, self_update::cargo_crate_version!());
+        eprintln!(
+            "\r\n[*] Found new version: v{} (current: v{}).",
+            latest.version,
+            self_update::cargo_crate_version!()
+        );
         eprintln!("[*] Downloading and updating CLI...");
 
         // 2. Perform download with self_update (scoped to drop update_builder_cli before await)
@@ -143,44 +170,60 @@ impl UpdateBackend for GithubUpdateBackend {
                 .build()
                 .map_err(|e| crate::error::Error::custom(e.to_string()))?;
 
-            update_builder_cli.update_extended().map_err(|e| crate::error::Error::custom(e.to_string()))?
+            update_builder_cli
+                .update_extended()
+                .map_err(|e| crate::error::Error::custom(e.to_string()))?
         };
 
         // 3. Cryptographic Checksum Integrity Verification (Opportunity 2)
         // If a SHA256 checksum file is present for CADE CLI in the release assets, we verify it.
-        if let Some(asset) = latest.assets.iter().find(|a| a.name.contains(&self.cli_bin_name) && !a.name.ends_with(".sha256"))
-            && let Some(sha_asset) = latest.assets.iter().find(|a| a.name == format!("{}.sha256", asset.name)) {
-                eprintln!("[*] Verifying CLI cryptographic signature integrity...");
-                
-                // Fetch the remote SHA256 checksum text
-                let client = reqwest::Client::new();
-                let sha_resp = client.get(&sha_asset.download_url).send().await
-                    .map_err(|e| crate::error::Error::custom(format!("Failed to download checksum: {e}")))?;
-                
-                if sha_resp.status().is_success() {
-                    let expected_sha = sha_resp.text().await
-                        .map_err(|e| crate::error::Error::custom(e.to_string()))?
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("")
-                        .to_string();
+        if let Some(asset) = latest
+            .assets
+            .iter()
+            .find(|a| a.name.contains(&self.cli_bin_name) && !a.name.ends_with(".sha256"))
+            && let Some(sha_asset) = latest
+                .assets
+                .iter()
+                .find(|a| a.name == format!("{}.sha256", asset.name))
+        {
+            eprintln!("[*] Verifying CLI cryptographic signature integrity...");
 
-                    // Read the updated local CLI file and compute its SHA256 hash
-                    if let Ok(bytes) = std::fs::read(&self.current_exe) {
-                        let mut hasher = Sha256::new();
-                        hasher.update(&bytes);
-                        let computed_sha = format!("{:x}", hasher.finalize());
+            // Fetch the remote SHA256 checksum text
+            let client = reqwest::Client::new();
+            let sha_resp = client
+                .get(&sha_asset.download_url)
+                .send()
+                .await
+                .map_err(|e| {
+                    crate::error::Error::custom(format!("Failed to download checksum: {e}"))
+                })?;
 
-                        if computed_sha != expected_sha {
-                            return Err(crate::error::Error::custom(
+            if sha_resp.status().is_success() {
+                let expected_sha = sha_resp
+                    .text()
+                    .await
+                    .map_err(|e| crate::error::Error::custom(e.to_string()))?
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+
+                // Read the updated local CLI file and compute its SHA256 hash
+                if let Ok(bytes) = std::fs::read(&self.current_exe) {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&bytes);
+                    let computed_sha = format!("{:x}", hasher.finalize());
+
+                    if computed_sha != expected_sha {
+                        return Err(crate::error::Error::custom(
                                 "CRITICAL SECURITY ERROR: Cryptographic signature mismatch! \
                                 The downloaded binary has been tampered with or corrupted. Aborting update.".to_string()
                             ));
-                        }
-                        eprintln!("  ✓ CLI Integrity hash verified successfully!");
                     }
+                    eprintln!("  ✓ CLI Integrity hash verified successfully!");
                 }
             }
+        }
 
         // 4. Update Server
         let mut server_old_exe = None;
@@ -213,7 +256,9 @@ impl UpdateBackend for GithubUpdateBackend {
                     if let Some(old) = &server_old_exe {
                         let _ = std::fs::rename(old, &self.server_exe);
                     }
-                    eprintln!("\r\n[!] Warning: Failed to update cade-server (it may be running and locked).");
+                    eprintln!(
+                        "\r\n[!] Warning: Failed to update cade-server (it may be running and locked)."
+                    );
                     eprintln!("[!] Please stop cade-server and try again. Error: {}", e);
                     false
                 }
@@ -222,34 +267,43 @@ impl UpdateBackend for GithubUpdateBackend {
 
         // Server Cryptographic Checksum Integrity Verification (Opportunity 2)
         if server_status
-            && let Some(asset) = latest.assets.iter().find(|a| a.name.contains(&self.server_bin_name) && !a.name.ends_with(".sha256"))
-                && let Some(sha_asset) = latest.assets.iter().find(|a| a.name == format!("{}.sha256", asset.name)) {
-                    eprintln!("[*] Verifying Server cryptographic signature integrity...");
-                    
-                    let client = reqwest::Client::new();
-                    if let Ok(sha_resp) = client.get(&sha_asset.download_url).send().await
-                        && sha_resp.status().is_success() && let Ok(expected_sha_raw) = sha_resp.text().await {
-                            let expected_sha = expected_sha_raw
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or("")
-                                .to_string();
+            && let Some(asset) = latest
+                .assets
+                .iter()
+                .find(|a| a.name.contains(&self.server_bin_name) && !a.name.ends_with(".sha256"))
+            && let Some(sha_asset) = latest
+                .assets
+                .iter()
+                .find(|a| a.name == format!("{}.sha256", asset.name))
+        {
+            eprintln!("[*] Verifying Server cryptographic signature integrity...");
 
-                            if let Ok(bytes) = std::fs::read(&self.server_exe) {
-                                let mut hasher = Sha256::new();
-                                hasher.update(&bytes);
-                                let computed_sha = format!("{:x}", hasher.finalize());
+            let client = reqwest::Client::new();
+            if let Ok(sha_resp) = client.get(&sha_asset.download_url).send().await
+                && sha_resp.status().is_success()
+                && let Ok(expected_sha_raw) = sha_resp.text().await
+            {
+                let expected_sha = expected_sha_raw
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
 
-                                if computed_sha != expected_sha {
-                                    return Err(crate::error::Error::custom(
+                if let Ok(bytes) = std::fs::read(&self.server_exe) {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&bytes);
+                    let computed_sha = format!("{:x}", hasher.finalize());
+
+                    if computed_sha != expected_sha {
+                        return Err(crate::error::Error::custom(
                                         "CRITICAL SECURITY ERROR: Server cryptographic signature mismatch! \
                                         The downloaded binary has been tampered with or corrupted. Aborting update.".to_string()
                                     ));
-                                }
-                                eprintln!("  ✓ Server Integrity hash verified successfully!");
-                            }
-                        }
+                    }
+                    eprintln!("  ✓ Server Integrity hash verified successfully!");
                 }
+            }
+        }
 
         Ok::<bool, crate::error::Error>(cli_status.updated() || server_status)
     }
@@ -258,8 +312,9 @@ impl UpdateBackend for GithubUpdateBackend {
 // ── Resolver / Factory Helper ─────────────────────────────────────────────────
 
 pub fn get_update_backend() -> Result<Box<dyn UpdateBackend>> {
-    let current_exe = std::env::current_exe().map_err(|e| crate::error::Error::custom(e.to_string()))?;
-    
+    let current_exe =
+        std::env::current_exe().map_err(|e| crate::error::Error::custom(e.to_string()))?;
+
     // Heuristic: Is CADE installed via cargo? (Path component contains .cargo)
     let is_cargo_install = current_exe
         .components()

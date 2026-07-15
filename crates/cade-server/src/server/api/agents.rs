@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use axum::response::sse::{Event, Sse};
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, Sse};
 use futures::stream::StreamExt;
 use once_cell::sync::Lazy;
 use tokio::sync::broadcast;
@@ -28,16 +28,17 @@ pub fn broadcast_global_event(event: Value) {
 
 pub async fn stream_global_events() -> impl axum::response::IntoResponse {
     let rx = GLOBAL_EVENTS_TX.subscribe();
-    let stream = BroadcastStream::new(rx)
-        .filter_map(|res| async move {
-            match res {
-                Ok(val) => {
-                    let data = val.to_string();
-                    Some(Ok::<Event, std::convert::Infallible>(Event::default().data(data)))
-                }
-                Err(_) => None,
+    let stream = BroadcastStream::new(rx).filter_map(|res| async move {
+        match res {
+            Ok(val) => {
+                let data = val.to_string();
+                Some(Ok::<Event, std::convert::Infallible>(
+                    Event::default().data(data),
+                ))
             }
-        });
+            Err(_) => None,
+        }
+    });
     Sse::new(stream).into_response()
 }
 
@@ -133,6 +134,7 @@ pub async fn create_agent(
         compaction_model: None,
         theme: None,
         active_plan_json: None,
+        parent_id: None,
     };
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;

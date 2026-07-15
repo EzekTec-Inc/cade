@@ -236,39 +236,31 @@ pub(super) async fn execute_turn_tools(
         let arguments = tc.arguments.clone();
 
         // Send tool-start progress notification
-        let _ = tx.send(Ok(axum::response::sse::Event::default().data(json!({
-            "message_type": "tool_progress_message",
-            "tool_progress": {
-                "id": tc.id,
-                "name": tc.name,
-                "status": "started",
-                "message": format!("Executing tool '{}'...", tc.name)
-            }
-        }).to_string()))).await;
+        let _ = tx
+            .send(Ok(axum::response::sse::Event::default().data(
+                json!({
+                    "message_type": "tool_progress_message",
+                    "tool_progress": {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "status": "started",
+                        "message": format!("Executing tool '{}'...", tc.name)
+                    }
+                })
+                .to_string(),
+            )))
+            .await;
 
         let result = if tc.name == "run_sequential_tasks" {
             handle_sequential_workflow(state, agent_id, &tc.id, &arguments, &runtime).await
-        } else if tc.name == "subagent" {
-            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
-                .await
-        } else if tc.name == "run_subagent" {
-            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
-                .await
-        } else if tc.name == "run_parallel_subagents" {
-            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
-                .await
+        } else if tc.name == "subagent"
+            || tc.name == "run_subagent"
+            || tc.name == "run_parallel_subagents"
+            || tc.name == "cancel_subagent"
+        {
+            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
         } else if tc.name == "run_team" {
-            subagent::handle_run_team_tool(
-                state,
-                agent_id,
-                &tc.id,
-                &arguments,
-                tx.clone(),
-            )
-            .await
-        } else if tc.name == "cancel_subagent" {
-            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone())
-                .await
+            subagent::handle_run_team_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
         } else {
             // ... other legacy tool handlers
             runtime
@@ -291,15 +283,20 @@ pub(super) async fn execute_turn_tools(
         };
 
         // Send tool-complete progress notification
-        let _ = tx.send(Ok(axum::response::sse::Event::default().data(json!({
-            "message_type": "tool_progress_message",
-            "tool_progress": {
-                "id": tc.id,
-                "name": tc.name,
-                "status": "completed",
-                "message": ""
-            }
-        }).to_string()))).await;
+        let _ = tx
+            .send(Ok(axum::response::sse::Event::default().data(
+                json!({
+                    "message_type": "tool_progress_message",
+                    "tool_progress": {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "status": "completed",
+                        "message": ""
+                    }
+                })
+                .to_string(),
+            )))
+            .await;
 
         turn_results.push((result, arguments));
     }
