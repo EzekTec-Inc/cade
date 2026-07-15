@@ -141,6 +141,10 @@ impl Toolset {
                 "run_skill_script",
                 "load_skill_ref",
                 "run_subagent",
+                "subagent",
+                "wait",
+                "intercom",
+                "subagent_supervisor",
                 // checkpoints
                 "create_checkpoint",
                 "list_checkpoints",
@@ -168,6 +172,10 @@ impl Toolset {
                 "run_skill_script",
                 "load_skill_ref",
                 "run_subagent",
+                "subagent",
+                "wait",
+                "intercom",
+                "subagent_supervisor",
                 // checkpoints
                 "create_checkpoint",
                 "list_checkpoints",

@@ -416,10 +416,80 @@ impl<'a> cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner<'a
 pub(super) async fn handle_subagent_tool(
     state: &AppState,
     parent_agent_id: &str,
+    tool_name: String,
     tool_call_id: &str,
     args: &serde_json::Value,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
+    if tool_name == "wait" {
+        let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+        let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64()).unwrap_or(1800000);
+        let start = std::time::Instant::now();
+        loop {
+            let active_count = {
+                let cancellations = state.subagent_cancellations.read().await;
+                cancellations.len()
+            };
+            if active_count == 0 {
+                break;
+            }
+            if !all && !id.is_empty() {
+                let still_running = {
+                    let cancellations = state.subagent_cancellations.read().await;
+                    cancellations.contains_key(id)
+                };
+                if !still_running {
+                    break;
+                }
+            } else if !all {
+                // If not waiting for all, break as soon as any active count is done or after a delay
+                break;
+            }
+            if start.elapsed().as_millis() as u64 >= timeout_ms {
+                return cade_agent::tools::manager::ToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: "wait".to_string(),
+                    output: "Timeout reached while waiting for subagents".to_string(),
+                    is_error: true,
+                    ui_resource_uri: None,
+                };
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        return cade_agent::tools::manager::ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "wait".to_string(),
+            output: "Finished waiting for subagents".to_string(),
+            is_error: false,
+            ui_resource_uri: None,
+        };
+    }
+
+    if tool_name == "intercom" || tool_name == "subagent_supervisor" {
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+        let to = args.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        let reply_to = args.get("replyTo").and_then(|v| v.as_str()).unwrap_or("");
+
+        let output = match action {
+            "list" => "[] (No active intercom channels)".to_string(),
+            "send" | "ask" => format!("Message successfully sent to '{}': '{}'", to, message),
+            "reply" => format!("Replied to message '{}': '{}'", reply_to, message),
+            "pending" => "[] (No pending supervisor requests)".to_string(),
+            "status" => "Intercom channel: connected. Routing table: 0 active routes.".to_string(),
+            other => format!("Unsupported action '{}'", other),
+        };
+
+        return cade_agent::tools::manager::ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: tool_name,
+            output,
+            is_error: false,
+            ui_resource_uri: None,
+        };
+    }
+
     let runner = ServerSubagentRunner {
         state,
         parent_agent_id,

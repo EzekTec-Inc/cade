@@ -49,6 +49,9 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_load_skill_ref(),
         schema_run_subagent(),
         schema_subagent(),
+        schema_wait(),
+        schema_intercom(),
+        schema_subagent_supervisor(),
         schema_run_parallel_subagents(),
         schema_run_team(),
         schema_cancel_subagent(),
@@ -445,7 +448,7 @@ fn schema_subagent() -> Value {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "Management or control action. Valid values: 'list', 'get', 'create', 'update', 'delete', 'status', 'interrupt', 'cancel_subagent', 'doctor'."
+                    "description": "Management or control action. Valid values: 'list', 'get', 'create', 'update', 'delete', 'eject', 'disable', 'enable', 'reset', 'status', 'interrupt', 'resume', 'steer', 'append-step', 'doctor', 'models'."
                 },
                 "agent": {
                     "type": "string",
@@ -463,7 +466,11 @@ fn schema_subagent() -> Value {
                         "properties": {
                             "agent": { "type": "string", "description": "Name of the agent" },
                             "task": { "type": "string", "description": "Focused task for this agent" },
-                            "cwd": { "type": "string", "description": "Optional custom working directory" }
+                            "cwd": { "type": "string", "description": "Optional custom working directory" },
+                            "count": { "type": "integer", "description": "Optional replication count" },
+                            "output": { "type": "string", "description": "Optional output path or boolean" },
+                            "reads": { "type": "array", "items": { "type": "string" }, "description": "Optional allowed files" },
+                            "progress": { "type": "boolean", "description": "Optional show progress" }
                         },
                         "required": ["agent", "task"]
                     }
@@ -476,10 +483,60 @@ fn schema_subagent() -> Value {
                         "properties": {
                             "agent": { "type": "string" },
                             "task": { "type": "string" },
-                            "cwd": { "type": "string" }
-                        },
-                        "required": ["agent", "task"]
+                            "cwd": { "type": "string" },
+                            "parallel": {
+                                "type": "array",
+                                "description": "Optional parallel fan-out steps inside a chain step",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "agent": { "type": "string" },
+                                        "task": { "type": "string" },
+                                        "cwd": { "type": "string" }
+                                    },
+                                    "required": ["agent", "task"]
+                                }
+                            }
+                        }
                     }
+                },
+                "concurrency": {
+                    "type": "integer",
+                    "description": "Top-level concurrency limit for parallel execution."
+                },
+                "worktree": {
+                    "type": "boolean",
+                    "description": "Create isolated git worktrees for parallel tasks (requires clean git state)."
+                },
+                "context": {
+                    "type": "string",
+                    "enum": ["fresh", "fork"],
+                    "description": "Context inheritance strategy: 'fresh' or 'fork'. Override per-agent defaults."
+                },
+                "timeoutMs": {
+                    "type": "integer",
+                    "description": "Optional run-level max timeout in milliseconds."
+                },
+                "maxRuntimeMs": {
+                    "type": "integer",
+                    "description": "Optional alias of timeoutMs."
+                },
+                "toolBudget": {
+                    "type": "object",
+                    "properties": {
+                        "hard": { "type": "integer" },
+                        "soft": { "type": "integer" },
+                        "block": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["hard"]
+                },
+                "turnBudget": {
+                    "type": "object",
+                    "properties": {
+                        "maxTurns": { "type": "integer" },
+                        "graceTurns": { "type": "integer" }
+                    },
+                    "required": ["maxTurns"]
                 },
                 "async": {
                     "type": "boolean",
@@ -487,9 +544,99 @@ fn schema_subagent() -> Value {
                 },
                 "id": {
                     "type": "string",
-                    "description": "Optional: subagent ID for status or interrupt/cancel actions."
+                    "description": "Optional: subagent ID for status, steer, or interrupt/cancel actions."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Optional: follow-up or guidance message for resume or steer actions."
+                },
+                "config": {
+                    "type": "object",
+                    "description": "Optional config for create/update actions."
                 }
             }
+        }
+    })
+}
+
+fn schema_wait() -> Value {
+    json!({
+        "name": "wait",
+        "description": "Block until background (async) subagent runs started in this session finish, then return.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "all": {
+                    "type": "boolean",
+                    "description": "Wait for ALL active runs to finish. Default false: return as soon as the first run finishes."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Run id or prefix to wait for one specific run."
+                },
+                "timeoutMs": {
+                    "type": "integer",
+                    "description": "Give up waiting after this many milliseconds (default 30 minutes)."
+                }
+            }
+        }
+    })
+}
+
+fn schema_intercom() -> Value {
+    json!({
+        "name": "intercom",
+        "description": "Native pi-subagents supervisor channel. Use reply/pending/status to answer child subagent requests.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "Interaction action. Valid values: 'list', 'send', 'ask', 'reply', 'pending', 'status'."
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Target subagent or supervisor ID."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message content."
+                },
+                "replyTo": {
+                    "type": "string",
+                    "description": "Target message ID being replied to."
+                }
+            },
+            "required": ["action"]
+        }
+    })
+}
+
+fn schema_subagent_supervisor() -> Value {
+    json!({
+        "name": "subagent_supervisor",
+        "description": "Native pi-subagents supervisor channel. Use reply/pending/status to answer child subagent requests without overriding pi-intercom.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "Supervisor action. Valid values: 'list', 'send', 'ask', 'reply', 'pending', 'status'."
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Target subagent or supervisor ID."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message content."
+                },
+                "replyTo": {
+                    "type": "string",
+                    "description": "Target message ID being replied to."
+                }
+            },
+            "required": ["action"]
         }
     })
 }

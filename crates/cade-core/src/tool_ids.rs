@@ -63,6 +63,9 @@ pub const LOAD_SKILL_REF: &str = "load_skill_ref";
 
 pub const RUN_SUBAGENT: &str = "run_subagent";
 pub const SUBAGENT_TOOL: &str = "subagent";
+pub const WAIT: &str = "wait";
+pub const INTERCOM: &str = "intercom";
+pub const SUBAGENT_SUPERVISOR: &str = "subagent_supervisor";
 pub const SEARCH_TOOLS: &str = "search_tools";
 pub const LIST_AGENTS: &str = "list_agents";
 pub const MESSAGE_AGENT: &str = "message_agent";
@@ -145,6 +148,9 @@ pub const META_TOOL_IDS: &[&str] = &[
     LOAD_SKILL_REF,
     RUN_SUBAGENT,
     SUBAGENT_TOOL,
+    WAIT,
+    INTERCOM,
+    SUBAGENT_SUPERVISOR,
     LIST_AGENTS,
     MESSAGE_AGENT,
     SEARCH_TOOLS,

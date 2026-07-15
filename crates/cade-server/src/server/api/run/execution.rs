@@ -257,8 +257,11 @@ pub(super) async fn execute_turn_tools(
             || tc.name == "run_subagent"
             || tc.name == "run_parallel_subagents"
             || tc.name == "cancel_subagent"
+            || tc.name == "wait"
+            || tc.name == "intercom"
+            || tc.name == "subagent_supervisor"
         {
-            subagent::handle_subagent_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
+            subagent::handle_subagent_tool(state, agent_id, tc.name.clone(), &tc.id, &arguments, tx.clone()).await
         } else if tc.name == "run_team" {
             subagent::handle_run_team_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
         } else {
