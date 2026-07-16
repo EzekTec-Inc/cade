@@ -13,6 +13,7 @@ use crate::server::state::AppState;
 use cade_store::sqlite;
 
 pub mod accumulator;
+pub mod knowledge_lifting;
 
 /// Resolve the output directory for memory exports readable by cade-rag-mcp.
 ///
@@ -841,42 +842,12 @@ async fn auto_extract_facts(
         return;
     }
 
-    let prompt = format!(
-        "You are a memory extraction sub-agent. Based on this consolidation summary, \
-         extract durable facts, decisions, and constraints into a JSON array.\n\
-         \n\
-         Each object in the array must have:\n\
-         - \"label\": a short snake_case identifier (e.g. \"project_convention_auth\", \"decision_db_sqlite\")\n\
-         - \"memory_type\": exactly one of [\"decision\", \"convention\", \"project_fact\", \"constraint\"]\n\
-         - \"value\": a concise, factual description\n\
-         - \"confidence\": a number between 0.0 and 1.0 (default to 1.0)\n\
-         \n\
-         Only extract durable knowledge that will be useful across sessions. Do NOT extract transient state.\n\
-         If there are no new durable facts, return exactly: []\n\
-         \n\
-         SUMMARY:\n\
-         {summary}"
-    );
-
-    let req = CompletionRequest {
-        model: compaction_model.to_string(),
-        messages: vec![LlmMessage {
-            role: "user".to_string(),
-            content: prompt,
-            tool_call_id: None,
-            tool_calls: None,
-            images: None,
-        }],
-        tools: vec![],
-        max_tokens: 1000,
-        reasoning_effort: None,
-    };
-
-    let response_text = match state.llm.complete(&req).await {
-        Ok(resp) => resp.content.unwrap_or_default().trim().to_string(),
+    let engine = knowledge_lifting::KnowledgeLiftingEngine::new(state.llm.clone(), compaction_model.to_string());
+    let facts = match engine.extract_from_text(summary).await {
+        Ok(f) => f,
         Err(e) => {
             tracing::debug!(
-                "consolidate [{}]: Phase B auto_extract_facts LLM failed: {}",
+                "consolidate [{}]: Phase B auto_extract_facts failed: {}",
                 agent_id,
                 e
             );
@@ -884,79 +855,54 @@ async fn auto_extract_facts(
         }
     };
 
-    let clean_json = response_text
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    if clean_json.is_empty() || clean_json == "[]" {
-        return;
-    }
-
-    if let Ok(facts) = serde_json::from_str::<Vec<serde_json::Value>>(clean_json) {
-        let mut count = 0;
-        for fact in facts {
-            let label = fact["label"].as_str().unwrap_or("").to_string();
-            let memory_type = fact["memory_type"]
-                .as_str()
-                .unwrap_or("generic")
-                .to_string();
-            let value = fact["value"].as_str().unwrap_or("").to_string();
-            let confidence = fact["confidence"].as_f64().unwrap_or(1.0);
-
-            if label.is_empty() || value.is_empty() {
-                continue;
-            }
-
-            if let Err(e) = sqlite::upsert_memory_block_typed(
+    let mut count = 0;
+    for fact in facts {
+        if let Err(e) = sqlite::upsert_memory_block_typed(
+            &state.db,
+            agent_id,
+            &fact.label,
+            &fact.value,
+            Some("Auto-extracted by Phase B Consolidation"),
+            Some(1000),
+            Some(&fact.memory_type),
+            Some(fact.confidence),
+        ) {
+            tracing::debug!(
+                "consolidate [{}]: auto-extraction failed to save block {}: {}",
+                agent_id,
+                fact.label,
+                e
+            );
+        } else {
+            // A2 Provenance: we attribute it to the consolidation turn
+            let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+            cade_store::sqlite::memory::stamp_provenance(
                 &state.db,
                 agent_id,
-                &label,
-                &value,
-                Some("Auto-extracted by Phase B Consolidation"),
-                Some(1000),
-                Some(&memory_type),
-                Some(confidence),
-            ) {
-                tracing::debug!(
-                    "consolidate [{}]: auto-extraction failed to save block {}: {}",
-                    agent_id,
-                    label,
-                    e
-                );
-            } else {
-                // A2 Provenance: we attribute it to the consolidation turn
-                let turn = cade_store::sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
-                cade_store::sqlite::memory::stamp_provenance(
-                    &state.db,
-                    agent_id,
-                    &label,
-                    Some(turn),
-                    None,
-                    Some("auto_extraction"),
-                    None,
-                );
-                // Chunk it for semantic search
-                cade_store::sqlite::memory::rechunk_block(
-                    &state.db,
-                    agent_id,
-                    &label,
-                    &value,
-                    state.embedder.as_ref().map(|e| e.as_ref()),
-                );
-                count += 1;
-            }
-        }
-        if count > 0 {
-            tracing::info!(
-                "consolidate [{}]: Phase B auto-extracted {} durable facts from summary",
-                agent_id,
-                count
+                &fact.label,
+                Some(turn),
+                None,
+                Some("auto_extraction"),
+                None,
             );
+            // Chunk it for semantic search
+            cade_store::sqlite::memory::rechunk_block(
+                &state.db,
+                agent_id,
+                &fact.label,
+                &fact.value,
+                state.embedder.as_ref().map(|e| e.as_ref()),
+            );
+            count += 1;
         }
-    } else {
-        tracing::debug!(agent_id = %agent_id, "consolidate:  Phase B auto-extraction failed to parse JSON");
+    }
+
+    if count > 0 {
+        tracing::info!(
+            "consolidate [{}]: Phase B auto-extracted {} durable facts from summary",
+            agent_id,
+            count
+        );
     }
 }
 
