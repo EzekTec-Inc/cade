@@ -781,7 +781,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         embedder: None,
     };
 
-    let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
+    let (_model, messages, _tools) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
         .await
         .expect("build_context");
     let big_msg = messages
@@ -1181,7 +1181,7 @@ async fn build_context_subtracts_full_system_prompt_and_memory() {
         as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
+    let (_model, messages, _tools) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
         .await
         .expect("build_context");
 
@@ -1352,10 +1352,10 @@ async fn build_context_message_budget_reflects_real_token_overhead() {
     let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let (_m1, msgs_small, _) = super::context::build_context(&state, small_id, None, false)
+    let (_m1, msgs_small, _) = super::context::build_context(state.clone(), small_id.to_string(), None, false)
         .await
         .unwrap();
-    let (_m2, msgs_big, _) = super::context::build_context(&state, big_id, None, false)
+    let (_m2, msgs_big, _) = super::context::build_context(state.clone(), big_id.to_string(), None, false)
         .await
         .unwrap();
 
@@ -1437,7 +1437,7 @@ async fn build_context_token_overhead_frees_more_budget_than_chars() {
     let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let (_m, messages, _t) = super::context::build_context(&state, agent_id, None, false)
+    let (_m, messages, _t) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
         .await
         .unwrap();
     let history_msgs = messages.iter().filter(|m| m.role != "system").count();
@@ -1485,7 +1485,7 @@ async fn build_context_records_telemetry_with_fits_budget_true() {
     let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let _ = super::context::build_context(&state, agent_id, None, false)
+    let _ = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
         .await
         .unwrap();
 
@@ -1536,7 +1536,7 @@ async fn build_context_records_native_token_counts() {
     let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let _ = super::context::build_context(&state, agent_id, None, false)
+    let _ = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
         .await
         .unwrap();
 
@@ -1597,7 +1597,7 @@ async fn skills_section_lives_in_static_system_block() {
         loaded.insert(agent_id.to_string(), vec!["kpx-marker".to_string()]);
     }
 
-    let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
+    let (_model, messages, _tools) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
         .await
         .expect("build_context");
 

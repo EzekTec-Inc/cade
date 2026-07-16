@@ -806,12 +806,12 @@ impl<'a> ContextCompactionEngine<'a> {
 /// This is safe to call concurrently for different agents; all DB access is
 /// through the existing `Arc<parking_lot::Mutex<Connection>>` pool.
 pub async fn consolidate_agent(
-    state: &AppState,
-    agent_id: &str,
-    conversation_id: Option<&str>,
+    state: AppState,
+    agent_id: String,
+    conversation_id: Option<String>,
     override_history_budget: Option<usize>,
 ) -> Option<usize> {
-    let engine = ContextCompactionEngine::new(state, agent_id, conversation_id);
+    let engine = ContextCompactionEngine::new(&state, &agent_id, conversation_id.as_deref());
     engine.compact_context(override_history_budget).await
 }
 
@@ -1599,7 +1599,7 @@ impl SleeptimeAgent {
                     let sem_c = sem.clone();
                     tokio::spawn(async move {
                         let _permit = sem_c.acquire().await;
-                        consolidate_agent(&state_c, &agent_id, conv_id.as_deref(), None).await;
+                        consolidate_agent(state_c, agent_id, conv_id, None).await;
                     });
                 }
             }

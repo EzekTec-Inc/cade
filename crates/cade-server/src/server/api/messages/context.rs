@@ -283,9 +283,9 @@ pub(crate) async fn complete_with_overflow_recovery(
             // compounding stack usage that caused the tokio worker thread
             // overflow on archival/historic content access.
             Box::pin(crate::server::consolidation::consolidate_agent(
-                state,
-                agent_id,
-                conversation_id,
+                state.clone(),
+                agent_id.to_string(),
+                conversation_id.map(String::from),
                 None,
             ))
             .await;
@@ -301,9 +301,9 @@ pub(crate) async fn complete_with_overflow_recovery(
             // Box::pin: same rationale as above — build_context holds
             // Vec<Vec<LlmMessage>>, Vec<MessageRow>, and multiple HashMaps.
             let (model, mut new_messages, new_tools) = match Box::pin(build_context(
-                state,
-                agent_id,
-                conversation_id,
+                state.clone(),
+                agent_id.to_string(),
+                conversation_id.map(String::from),
                 is_tool_return,
             ))
             .await
@@ -400,16 +400,16 @@ pub(crate) fn group_into_turns(
 
 #[allow(clippy::collapsible_if)]
 pub(crate) async fn build_context(
-    state: &AppState,
-    agent_id: &str,
-    conversation_id: Option<&str>,
+    state: AppState,
+    agent_id: String,
+    conversation_id: Option<String>,
     is_tool_return: bool,
 ) -> core::result::Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
     let build_started = std::time::Instant::now();
 
     let db_pool = state.db.clone();
-    let agent_id_clone = agent_id.to_string();
-    let conv_id_clone = conversation_id.map(String::from);
+    let agent_id_clone = agent_id.clone();
+    let conv_id_clone = conversation_id.clone();
     let state_clone = state.clone();
 
     let (agent, mut system_static, system_dynamic) = tokio::task::spawn_blocking(move || {
@@ -450,7 +450,7 @@ pub(crate) async fn build_context(
 
         // 1. Explicitly loaded skills
         let agent_skills = state.agent_skills.read().await;
-        if let Some(loaded_ids) = agent_skills.get(agent_id) {
+        if let Some(loaded_ids) = agent_skills.get(&agent_id) {
             all_requested_skills.extend(loaded_ids.iter().cloned());
         }
 
@@ -534,8 +534,8 @@ pub(crate) async fn build_context(
     };
 
     let db_pool2 = state.db.clone();
-    let agent_id_clone2 = agent_id.to_string();
-    let conv_id_clone2 = conversation_id.map(String::from);
+    let agent_id_clone2 = agent_id.clone();
+    let conv_id_clone2 = conversation_id.clone();
     let max_rowid = tokio::task::spawn_blocking(move || {
         sqlite::get_max_rowid(&db_pool2, &agent_id_clone2, conv_id_clone2.as_deref()).unwrap_or(0)
     })
@@ -579,7 +579,7 @@ pub(crate) async fn build_context(
         },
     ];
 
-    let context_char_budget = calculate_context_budget(state, agent_id, &agent.model);
+    let context_char_budget = calculate_context_budget(&state, &agent_id, &agent.model);
 
     // ── Budget-based, turn-aware history assembly ──────────────────────────
     //
@@ -593,8 +593,8 @@ pub(crate) async fn build_context(
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
     let db_pool = state.db.clone();
-    let agent_id_clone = agent_id.to_string();
-    let conv_id_clone = conversation_id.map(|s| s.to_string());
+    let agent_id_clone = agent_id.clone();
+    let conv_id_clone = conversation_id.clone();
     let all_rows = tokio::task::spawn_blocking(move || {
         sqlite::get_context_window(
             &db_pool,
@@ -849,13 +849,13 @@ pub(crate) async fn build_context(
                 crate::server::state::AgentActivity {
                     last_active_ts: chrono::Utc::now().timestamp(),
                     needs_consolidation: true,
-                    conversation_id: conversation_id.map(String::from),
+                    conversation_id: conversation_id.clone(),
                     last_consolidation_turn: 0,
                 },
             );
             entry.needs_consolidation = true;
             if conversation_id.is_some() {
-                entry.conversation_id = conversation_id.map(String::from);
+                entry.conversation_id = conversation_id.clone();
             }
 
             // Eager-consolidation decision is made under the same lock so two
@@ -879,9 +879,9 @@ pub(crate) async fn build_context(
             tracing::info!(agent_id = %agent_id, "build_context:  eager consolidation triggered (turn-count path)");
             tokio::spawn(async move {
                 crate::server::consolidation::consolidate_agent(
-                    &state_eager,
-                    &agent_eager,
-                    conv_for_eager.as_deref(),
+                    state_eager,
+                    agent_eager,
+                    conv_for_eager,
                     None,
                 )
                 .await;
@@ -1014,7 +1014,7 @@ pub(crate) async fn build_context(
     // Tool schemas — use agent-specific tools if wired, else all tools.
     // Carry tags alongside each schema so ITS decisions are tag-driven
     // (no hardcoded tool name lists).
-    let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id).unwrap_or_default();
+    let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, &agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
     let tagged_schemas: Vec<(Value, Vec<String>)> = if agent_tool_ids.is_empty() {
         all_tools

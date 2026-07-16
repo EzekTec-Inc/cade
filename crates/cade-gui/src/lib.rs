@@ -20,9 +20,9 @@ fn App() -> Element {
     let mut initial_agent_id = Option::<String>::None;
     let mut initial_conv_id = Option::<String>::None;
 
-    if let Some(window) = web_sys::window() {
-        if let Ok(search) = window.location().search() {
-            if !search.is_empty() {
+    if let Some(window) = web_sys::window()
+        && let Ok(search) = window.location().search()
+            && !search.is_empty() {
                 let query = search.trim_start_matches('?');
                 for pair in query.split('&') {
                     let parts: Vec<&str> = pair.split('=').collect();
@@ -40,8 +40,6 @@ fn App() -> Element {
                     }
                 }
             }
-        }
-    }
 
     let initial_page = if initial_agent_id.is_some() {
         SelectedPage::Chat
@@ -67,7 +65,7 @@ fn App() -> Element {
     let conversations = use_signal(Vec::<cade_api_types::ConversationInfo>::new);
     let active_conversation = use_signal(|| initial_conv_id);
     let toasts = use_signal(Vec::<types::ToastMessage>::new);
-    let mut global_error = use_signal(|| Option::<String>::None);
+    let global_error = use_signal(|| Option::<String>::None);
     let active_stream_id = use_signal(|| Option::<String>::None);
     let active_stream = use_signal(types::SafeAbortHandle::default);
     let parsed_messages =
@@ -159,9 +157,9 @@ fn App() -> Element {
                         match event_type {
                             "conversation_created" => {
                                 let agent_id = event["agent_id"].as_str().unwrap_or("");
-                                if let Some(curr) = selected() {
-                                    if curr.id == agent_id {
-                                        if let Ok(conv) = serde_json::from_value::<
+                                if let Some(curr) = selected()
+                                    && curr.id == agent_id
+                                        && let Ok(conv) = serde_json::from_value::<
                                             cade_api_types::ConversationInfo,
                                         >(
                                             event["conversation"].clone()
@@ -172,14 +170,12 @@ fn App() -> Element {
                                                 convs.set(list);
                                             }
                                         }
-                                    }
-                                }
                             }
                             "conversation_deleted" => {
                                 let agent_id = event["agent_id"].as_str().unwrap_or("");
                                 let conv_id = event["conversation_id"].as_str().unwrap_or("");
-                                if let Some(curr) = selected() {
-                                    if curr.id == agent_id {
+                                if let Some(curr) = selected()
+                                    && curr.id == agent_id {
                                         let mut list = convs();
                                         list.retain(|c| c.id != conv_id);
                                         convs.set(list);
@@ -187,16 +183,14 @@ fn App() -> Element {
                                             active_conversation.set(None);
                                         }
                                     }
-                                }
                             }
                             "message_created" => {
                                 let m_agent_id = event["agent_id"].as_str().unwrap_or("");
                                 let m_conv_id = event["conversation_id"].as_str();
-                                if let Some(curr_agent) = selected() {
-                                    if curr_agent.id == m_agent_id
+                                if let Some(curr_agent) = selected()
+                                    && curr_agent.id == m_agent_id
                                         && active_conversation() == m_conv_id.map(String::from)
-                                    {
-                                        if let Ok(msg) =
+                                        && let Ok(msg) =
                                             serde_json::from_value::<cade_api_types::ChatMessage>(
                                                 event["message"].clone(),
                                             )
@@ -207,8 +201,6 @@ fn App() -> Element {
                                                 messages.set(list);
                                             }
                                         }
-                                    }
-                                }
                             }
                             _ => {}
                         }

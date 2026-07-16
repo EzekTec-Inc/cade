@@ -46,11 +46,11 @@ fn substitute_step_arguments(args: &mut Value, step_results: &[ToolResult]) {
 
 /// Executes a sequential workflow defined by the `run_sequential_tasks` tool.
 async fn handle_sequential_workflow(
-    _state: &AppState,
-    _agent_id: &str,
-    tool_call_id: &str,
-    arguments: &Value,
-    runtime: &ToolRuntime,
+    _state: AppState,
+    _agent_id: String,
+    tool_call_id: String,
+    arguments: Value,
+    runtime: Arc<ToolRuntime>,
 ) -> ToolResult {
     let steps = match arguments.get("steps").and_then(|s| s.as_array()) {
         Some(s) => s,
@@ -134,10 +134,10 @@ async fn handle_sequential_workflow(
 }
 
 pub(super) async fn execute_turn_tools(
-    state: &AppState,
-    agent_id: &str,
-    _conv_id: Option<&str>,
-    input: &str,
+    state: AppState,
+    agent_id: String,
+    _conv_id: Option<String>,
+    input: String,
     tool_calls: Vec<LlmToolCall>,
     tx: SseTx,
 ) -> Vec<(ToolResult, Value)> {
@@ -159,7 +159,7 @@ pub(super) async fn execute_turn_tools(
     }
 
     let router_req = AgentRequest {
-        prompt: input.to_string(),
+        prompt: input.clone(),
     };
 
     let mut turn_results: Vec<(ToolResult, Value)> = Vec::new();
@@ -174,135 +174,193 @@ pub(super) async fn execute_turn_tools(
         }
     }
 
-    let runtime = ToolRuntime::new(
+    let runtime = Arc::new(ToolRuntime::new(
         Arc::new(storage_impl::ServerStorageBackend {
             state: state.clone(),
         }),
         Arc::clone(&state.mcp),
-        agent_id.to_string(),
+        agent_id.clone(),
         std::env::current_dir().unwrap_or_default(),
-    );
+    ));
 
-    if !moa_tool_calls.is_empty() {
-        let selected_agents = router.route(&router_req).unwrap_or_default();
-        let mut execution_futures = Vec::new();
+        if !moa_tool_calls.is_empty() {
+            let selected_agents = router.route(&router_req).unwrap_or_default();
+            let mut execution_futures = Vec::new();
 
-        for agent in selected_agents {
-            for tc in &moa_tool_calls {
-                if agent.supported_tools().contains(&tc.name.as_str()) {
-                    let exec_req = AgentRequest {
-                        prompt: format!("{} {}", tc.name, tc.arguments),
-                    };
-                    let tool_call_id = tc.id.clone();
-                    let tool_name = tc.name.clone();
-                    let arguments = tc.arguments.clone();
-                    let agent_clone = agent.clone();
-                    execution_futures.push(async move {
-                        (
-                            tool_call_id,
-                            tool_name,
-                            arguments,
-                            agent_clone.execute(&exec_req).await,
-                        )
-                    });
+            for agent in selected_agents {
+                for tc in &moa_tool_calls {
+                    if agent.supported_tools().contains(&tc.name.as_str()) {
+                        let exec_req = AgentRequest {
+                            prompt: format!("{} {}", tc.name, tc.arguments),
+                        };
+                        let tool_call_id = tc.id.clone();
+                        let tool_name = tc.name.clone();
+                        let arguments = tc.arguments.clone();
+                        let agent_clone = agent.clone();
+                        execution_futures.push(async move {
+                            (
+                                tool_call_id,
+                                tool_name,
+                                arguments,
+                                agent_clone.execute(&exec_req).await,
+                            )
+                        });
+                    }
                 }
+            }
+
+            let moa_results = future::join_all(execution_futures).await;
+
+            for (tool_call_id, tool_name, arguments, result) in moa_results {
+                let tool_result = match result {
+                    Ok(response) => ToolResult {
+                        tool_call_id,
+                        tool_name,
+                        output: response.content,
+                        is_error: false,
+                        ui_resource_uri: None,
+                    },
+                    Err(e) => ToolResult {
+                        tool_call_id,
+                        tool_name,
+                        output: e.to_string(),
+                        is_error: true,
+                        ui_resource_uri: None,
+                    },
+                };
+                turn_results.push((tool_result, arguments));
             }
         }
 
-        let moa_results = future::join_all(execution_futures).await;
+        for tc in legacy_tool_calls {
+            let tool_name = tc.name;
+            let tool_call_id = tc.id;
+            let arguments = tc.arguments;
 
-        for (tool_call_id, tool_name, arguments, result) in moa_results {
-            let tool_result = match result {
-                Ok(response) => ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    output: response.content,
-                    is_error: false,
-                    ui_resource_uri: None,
-                },
-                Err(e) => ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    output: e.to_string(),
+            // Send tool-start progress notification
+            let _ = tx
+                .send(Ok(axum::response::sse::Event::default().data(
+                    json!({
+                        "message_type": "tool_progress_message",
+                        "tool_progress": {
+                            "id": tool_call_id,
+                            "name": tool_name,
+                            "status": "started",
+                            "message": format!("Executing tool '{}'...", tool_name)
+                        }
+                    })
+                    .to_string(),
+                )))
+                .await;
+
+            let result = if tool_name == "run_sequential_tasks" {
+                let state_c = state.clone();
+                let agent_id_c = agent_id.clone();
+                let tool_call_id_c = tool_call_id.clone();
+                let arguments_c = arguments.clone();
+                let runtime_c = Arc::clone(&runtime);
+                let handle = tokio::spawn(async move {
+                    handle_sequential_workflow(state_c, agent_id_c, tool_call_id_c, arguments_c, runtime_c).await
+                });
+                handle.await.unwrap_or_else(|e| ToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: "run_sequential_tasks".to_string(),
+                    output: format!("Task join error: {e}"),
                     is_error: true,
                     ui_resource_uri: None,
-                },
+                })
+            } else if tool_name == "subagent"
+                || tool_name == "run_subagent"
+                || tool_name == "run_parallel_subagents"
+                || tool_name == "cancel_subagent"
+                || tool_name == "wait"
+                || tool_name == "intercom"
+                || tool_name == "subagent_supervisor"
+            {
+                let state_c = state.clone();
+                let agent_id_c = agent_id.clone();
+                let tool_name_c = tool_name.clone();
+                let tool_call_id_c = tool_call_id.clone();
+                let arguments_c = arguments.clone();
+                let tx_c = tx.clone();
+                let handle = tokio::spawn(async move {
+                    subagent::handle_subagent_tool(state_c, agent_id_c, tool_name_c, tool_call_id_c, arguments_c, tx_c).await
+                });
+                handle.await.unwrap_or_else(|e| ToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: tool_name.clone(),
+                    output: format!("Task join error: {e}"),
+                    is_error: true,
+                    ui_resource_uri: None,
+                })
+            } else if tool_name == "run_team" {
+                let state_c = state.clone();
+                let agent_id_c = agent_id.clone();
+                let tool_call_id_c = tool_call_id.clone();
+                let arguments_c = arguments.clone();
+                let tx_c = tx.clone();
+                let handle = tokio::spawn(async move {
+                    subagent::handle_run_team_tool(state_c, agent_id_c, tool_call_id_c, arguments_c, tx_c).await
+                });
+                handle.await.unwrap_or_else(|e| ToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: "run_team".to_string(),
+                    output: format!("Task join error: {e}"),
+                    is_error: true,
+                    ui_resource_uri: None,
+                })
+            } else {
+                // ... other legacy tool handlers
+                let runtime_c = Arc::clone(&runtime);
+                let tool_call_id_c = tool_call_id.clone();
+                let tool_name_c = tool_name.clone();
+                let arguments_c = arguments.clone();
+                let handle = tokio::spawn(async move {
+                    runtime_c
+                        .execute(tool_call_id_c.clone(), &tool_name_c, &arguments_c)
+                        .await
+                        .map(|r| ToolResult {
+                            tool_call_id: r.tool_call_id,
+                            tool_name: r.tool_name,
+                            output: r.output,
+                            is_error: r.is_error,
+                            ui_resource_uri: r.ui_resource_uri,
+                        })
+                        .unwrap_or_else(|| ToolResult {
+                            tool_call_id: tool_call_id_c,
+                            tool_name: tool_name_c,
+                            output: "Tool execution failed".to_string(),
+                            is_error: true,
+                            ui_resource_uri: None,
+                        })
+                });
+                handle.await.unwrap_or_else(|e| ToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: tool_name.clone(),
+                    output: format!("Task join error: {e}"),
+                    is_error: true,
+                    ui_resource_uri: None,
+                })
             };
-            turn_results.push((tool_result, arguments));
+
+            // Send tool-complete progress notification
+            let _ = tx
+                .send(Ok(axum::response::sse::Event::default().data(
+                    json!({
+                        "message_type": "tool_progress_message",
+                        "tool_progress": {
+                            "id": tool_call_id,
+                            "name": tool_name,
+                            "status": "completed",
+                            "message": ""
+                        }
+                    })
+                    .to_string(),
+                )))
+                .await;
+
+            turn_results.push((result, arguments));
         }
+
+        turn_results
     }
-
-    for tc in legacy_tool_calls {
-        let arguments = tc.arguments.clone();
-
-        // Send tool-start progress notification
-        let _ = tx
-            .send(Ok(axum::response::sse::Event::default().data(
-                json!({
-                    "message_type": "tool_progress_message",
-                    "tool_progress": {
-                        "id": tc.id,
-                        "name": tc.name,
-                        "status": "started",
-                        "message": format!("Executing tool '{}'...", tc.name)
-                    }
-                })
-                .to_string(),
-            )))
-            .await;
-
-        let result = if tc.name == "run_sequential_tasks" {
-            handle_sequential_workflow(state, agent_id, &tc.id, &arguments, &runtime).await
-        } else if tc.name == "subagent"
-            || tc.name == "run_subagent"
-            || tc.name == "run_parallel_subagents"
-            || tc.name == "cancel_subagent"
-            || tc.name == "wait"
-            || tc.name == "intercom"
-            || tc.name == "subagent_supervisor"
-        {
-            subagent::handle_subagent_tool(state, agent_id, tc.name.clone(), &tc.id, &arguments, tx.clone()).await
-        } else if tc.name == "run_team" {
-            subagent::handle_run_team_tool(state, agent_id, &tc.id, &arguments, tx.clone()).await
-        } else {
-            // ... other legacy tool handlers
-            runtime
-                .execute(tc.id.clone(), &tc.name, &arguments)
-                .await
-                .map(|r| ToolResult {
-                    tool_call_id: r.tool_call_id,
-                    tool_name: r.tool_name,
-                    output: r.output,
-                    is_error: r.is_error,
-                    ui_resource_uri: r.ui_resource_uri,
-                })
-                .unwrap_or_else(|| ToolResult {
-                    tool_call_id: tc.id.clone(),
-                    tool_name: tc.name.clone(),
-                    output: "Tool execution failed".to_string(),
-                    is_error: true,
-                    ui_resource_uri: None,
-                })
-        };
-
-        // Send tool-complete progress notification
-        let _ = tx
-            .send(Ok(axum::response::sse::Event::default().data(
-                json!({
-                    "message_type": "tool_progress_message",
-                    "tool_progress": {
-                        "id": tc.id,
-                        "name": tc.name,
-                        "status": "completed",
-                        "message": ""
-                    }
-                })
-                .to_string(),
-            )))
-            .await;
-
-        turn_results.push((result, arguments));
-    }
-
-    turn_results
-}

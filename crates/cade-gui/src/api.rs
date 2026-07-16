@@ -140,11 +140,10 @@ where
     let mut buffer = String::new();
 
     loop {
-        if let Some(token) = &cancel_token {
-            if token.load(std::sync::atomic::Ordering::Acquire) {
+        if let Some(token) = &cancel_token
+            && token.load(std::sync::atomic::Ordering::Acquire) {
                 return Err("aborted".to_string());
             }
-        }
         let result = JsFuture::from(reader.read())
             .await
             .map_err(|e| format!("{:?}", e))?;
@@ -618,11 +617,10 @@ where
             buffer = buffer[pos + 2..].to_string();
 
             for line in event_str.lines() {
-                if let Some(data_str) = line.strip_prefix("data:") {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim()) {
+                if let Some(data_str) = line.strip_prefix("data:")
+                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim()) {
                         on_event(val);
                     }
-                }
             }
         }
     }

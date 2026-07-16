@@ -731,9 +731,9 @@ impl SubagentCoordinator {
             let concurrency = args.get("concurrency").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
             let use_worktree = args.get("worktree").and_then(|v| v.as_bool()).unwrap_or(false);
 
-            let mut stream = stream::iter(tasks_val.iter().enumerate().map(|(idx, task_args)| {
+            let tasks_owned: Vec<Value> = tasks_val.to_vec();
+            let mut stream = stream::iter(tasks_owned.into_iter().enumerate().map(|(idx, mut task_args_c)| {
                 let task_call_id = format!("{}_{}", call_id, idx);
-                let mut task_args_c = task_args.clone();
                 if use_worktree {
                     task_args_c["enforce_isolation"] = Value::Bool(true);
                     task_args_c["_enforce_isolation"] = Value::Bool(true);

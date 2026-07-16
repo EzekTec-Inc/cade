@@ -31,11 +31,10 @@ pub fn ChatView() -> Element {
         active_stream.set(crate::types::SafeAbortHandle::default());
 
         spawn(async move {
-            if !agent_id.is_empty() {
-                if let Ok(list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await {
+            if !agent_id.is_empty()
+                && let Ok(list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await {
                     msgs.set(list);
                 }
-            }
         });
     });
 
@@ -93,11 +92,10 @@ fn chat_sidebar(
         let api = cp_api_client;
         let mut cps = checkpoints;
         spawn(async move {
-            if !a_id.is_empty() {
-                if let Ok(data) = api().list_checkpoints(&a_id).await {
+            if !a_id.is_empty()
+                && let Ok(data) = api().list_checkpoints(&a_id).await {
                     cps.set(data);
                 }
-            }
         });
     });
 
@@ -235,7 +233,7 @@ fn chat_sidebar(
                         let id_del = conv_id.clone();
                         let title = conv_title.clone();
                         let is_active = *is_active;
-                        let del = delete_conv.clone();
+                        let del = delete_conv;
                         rsx! {
                             div {
                                 class: if is_active {
@@ -328,11 +326,10 @@ fn messages_panel(
     // Auto-scroll to bottom when messages change
     use_effect(move || {
         let _ = messages();
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(el) = doc.get_element_by_id("chat-messages-panel") {
+        if let Some(doc) = web_sys::window().and_then(|w| w.document())
+            && let Some(el) = doc.get_element_by_id("chat-messages-panel") {
                 el.set_scroll_top(el.scroll_height());
             }
-        }
     });
 
     rsx! {
@@ -346,7 +343,7 @@ fn messages_panel(
                 }
             } else {
                 for m in messages().iter() {
-                    message_bubble { key: "{m.id}", message: m.clone() }
+                    message_bubble { key: "{m.id}", id: m.id.clone() }
                 }
             }
         }
@@ -370,7 +367,14 @@ fn split_reasoning(text: &str) -> Option<(String, String)> {
 }
 
 #[component]
-fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
+fn message_bubble(id: String) -> Element {
+    let mut state = use_context::<AppState>();
+    let messages = state.messages.read();
+    let message = match messages.iter().find(|m| m.id == id) {
+        Some(m) => m,
+        None => return rsx! {},
+    };
+
     let is_user = message.role == "user";
     let is_tool = message.role == "tool";
     let is_streaming = message.id.starts_with("streaming-");
@@ -489,7 +493,6 @@ fn message_bubble(message: cade_api_types::ChatMessage) -> Element {
             }
         }
     } else {
-        let mut state = use_context::<AppState>();
         let content_str;
         let content_val = if let Some(s) = message.content.as_str() {
             s
@@ -781,8 +784,7 @@ fn input_area(
                     oninput: move |e| {
                         let val = e.value();
                         input_text.set(val.clone());
-                        if val.starts_with('/') {
-                            let query = &val[1..];
+                        if let Some(query) = val.strip_prefix('/') {
                             let cmds = vec![
                                 "/help".to_string(),
                                 "/memory".to_string(),

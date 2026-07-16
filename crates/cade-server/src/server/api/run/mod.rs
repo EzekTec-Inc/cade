@@ -136,8 +136,8 @@ fn pricing_registry() -> &'static cade_ai::ModelRegistry {
 /// P7: lookup the agent's current model id for pricing.  Returns empty
 /// string on lookup failure so `pricing_for_model` falls back to the
 /// zero default (= no guardrail trigger, fail-open).
-async fn model_for_pricing(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
-    cade_store::sqlite::agents::get_agent(db, agent_id)
+async fn model_for_pricing(db: &cade_store::sqlite::Db, agent_id: String) -> String {
+    cade_store::sqlite::agents::get_agent(db, &agent_id)
         .ok()
         .flatten()
         .map(|r| r.model)
@@ -301,9 +301,9 @@ pub(crate) async fn run_agent_loop(
         let tx = tx.clone();
         let ev = Event::default().data(data.to_string());
         async move {
-            let _ = tx.send(Ok(ev)).await;
-        }
-    };
+                let _ = tx.send(Ok(ev)).await;
+            }
+        };
 
     // ── stream_start ──────────────────────────────────────────────────
     send(json!({
@@ -438,7 +438,7 @@ pub(crate) async fn run_agent_loop(
             let map = state2.agent_metrics.clone();
             if let Some(m) = map.get(&agent_id2) {
                 let pricing = pricing_registry()
-                    .pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
+                    .pricing_for_model(&model_for_pricing(&state2.db, agent_id2.clone()).await);
                 let cost = m.compute_cost_usd(&pricing);
                 if cost >= cap {
                     send(json!({
@@ -466,9 +466,9 @@ pub(crate) async fn run_agent_loop(
         // consolidation + LLM streaming futures overflows the tokio worker
         // thread stack when processing large archival/historic queries.
         let (model, messages, tools) = match Box::pin(build_context(
-            &state2,
-            &agent_id2,
-            conv_id2.as_deref(),
+            state2.clone(),
+            agent_id2.clone(),
+            conv_id2.clone(),
             is_tool_return,
         ))
         .await
@@ -531,9 +531,9 @@ pub(crate) async fn run_agent_loop(
                 // in run_agent_loop's state machine, contributing to
                 // the stack overflow on archival/historic content access.
                 Box::pin(crate::server::consolidation::consolidate_agent(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
+                    state2.clone(),
+                    agent_id2.clone(),
+                    conv_id2.clone(),
                     None,
                 ))
                 .await;
@@ -549,9 +549,9 @@ pub(crate) async fn run_agent_loop(
                 // and prevents the overflow recovery path from doubling
                 // the stack pressure of the main build_context call.
                 let (model2, mut messages2, tools2) = match Box::pin(build_context(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
+                    state2.clone(),
+                    agent_id2.clone(),
+                    conv_id2.clone(),
                     is_tool_return, // reuse — never double-increment on retry
                 ))
                 .await
@@ -737,10 +737,10 @@ pub(crate) async fn run_agent_loop(
         // One runtime instance is reused across all tool calls in this turn,
         // avoiding redundant Arc::new + AppState clones per tool call.
         let turn_results = execution::execute_turn_tools(
-            &state2,
-            &agent_id2,
-            conv_id2.as_deref(),
-            &input,
+            state2.clone(),
+            agent_id2.clone(),
+            conv_id2.clone(),
+            input.clone(),
             tool_calls,
             tx.clone(),
         )

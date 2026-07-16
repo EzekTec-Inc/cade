@@ -1161,10 +1161,10 @@ mod advanced_execution_tests {
         ];
 
         let results = execute_turn_tools(
-            &state,
-            "test-agent",
-            Some("test-conv"),
-            "read Cargo.toml and run a sequence",
+            state,
+            "test-agent".to_string(),
+            Some("test-conv".to_string()),
+            "read Cargo.toml and run a sequence".to_string(),
             tool_calls,
             tx,
         )

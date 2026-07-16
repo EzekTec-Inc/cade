@@ -151,11 +151,10 @@ pub fn ProvidersView() -> Element {
         if let Some(url) = preset.get("base_url").and_then(|v| v.as_str()) {
             form_base_url.set(url.to_string());
         }
-        if let Some(name) = preset.get("name").and_then(|v| v.as_str()) {
-            if form_name().is_empty() {
+        if let Some(name) = preset.get("name").and_then(|v| v.as_str())
+            && form_name().is_empty() {
                 form_name.set(name.to_string());
             }
-        }
         if let Some(model) = preset.get("default_model").and_then(|v| v.as_str()) {
             form_model.set(model.to_string());
         }

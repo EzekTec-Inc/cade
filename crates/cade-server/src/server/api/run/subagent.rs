@@ -358,14 +358,14 @@ impl SubagentExecutor for CadeSubagentExecutor {
     }
 }
 
-struct ServerSubagentRunner<'a> {
-    state: &'a AppState,
-    parent_agent_id: &'a str,
+struct ServerSubagentRunner {
+    state: AppState,
+    parent_agent_id: String,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 }
 
 #[async_trait]
-impl<'a> cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner<'a> {
+impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
     async fn run_single(
         &self,
         call_id: &str,
@@ -373,8 +373,8 @@ impl<'a> cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner<'a
         _force_sync: bool,
     ) -> Result<cade_agent::tools::ToolResult, cade_agent::Error> {
         let res = handle_subagent_single_inner_tool(
-            self.state,
-            self.parent_agent_id,
+            &self.state,
+            &self.parent_agent_id,
             call_id,
             args,
             self.sse_tx.clone(),
@@ -396,7 +396,7 @@ impl<'a> cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner<'a
 
     async fn cancel_subagent(&self, subagent_id: &str) -> Result<String, cade_agent::Error> {
         let res = handle_cancel_subagent_tool(
-            self.state,
+            &self.state,
             "cancel_call",
             &serde_json::json!({ "subagent_id": subagent_id }),
         )
@@ -414,11 +414,11 @@ impl<'a> cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner<'a
 }
 
 pub(super) async fn handle_subagent_tool(
-    state: &AppState,
-    parent_agent_id: &str,
+    state: AppState,
+    parent_agent_id: String,
     tool_name: String,
-    tool_call_id: &str,
-    args: &serde_json::Value,
+    tool_call_id: String,
+    args: serde_json::Value,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
     if tool_name == "wait" {
@@ -448,7 +448,7 @@ pub(super) async fn handle_subagent_tool(
             }
             if start.elapsed().as_millis() as u64 >= timeout_ms {
                 return cade_agent::tools::manager::ToolResult {
-                    tool_call_id: tool_call_id.to_string(),
+                    tool_call_id: tool_call_id.clone(),
                     tool_name: "wait".to_string(),
                     output: "Timeout reached while waiting for subagents".to_string(),
                     is_error: true,
@@ -458,7 +458,7 @@ pub(super) async fn handle_subagent_tool(
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         return cade_agent::tools::manager::ToolResult {
-            tool_call_id: tool_call_id.to_string(),
+            tool_call_id: tool_call_id.clone(),
             tool_name: "wait".to_string(),
             output: "Finished waiting for subagents".to_string(),
             is_error: false,
@@ -482,7 +482,7 @@ pub(super) async fn handle_subagent_tool(
         };
 
         return cade_agent::tools::manager::ToolResult {
-            tool_call_id: tool_call_id.to_string(),
+            tool_call_id: tool_call_id.clone(),
             tool_name: tool_name,
             output,
             is_error: false,
@@ -490,18 +490,30 @@ pub(super) async fn handle_subagent_tool(
         };
     }
 
-    let runner = ServerSubagentRunner {
-        state,
-        parent_agent_id,
+    let runner_owned = ServerSubagentRunner {
+        state: state.clone(),
+        parent_agent_id: parent_agent_id.clone(),
         sse_tx,
     };
-    match cade_agent::subagents::SubagentCoordinator::coordinate(&runner, tool_call_id, args).await {
-        Ok(res) => res,
+    let tool_call_id_c = tool_call_id.clone();
+    let args_c = args.clone();
+    let handle = tokio::spawn(async move {
+        cade_agent::subagents::SubagentCoordinator::coordinate(&runner_owned, &tool_call_id_c, &args_c).await
+    });
+    match handle.await {
+        Ok(Ok(res)) => res,
+        Ok(Err(e)) => cade_agent::tools::manager::ToolResult {
+            tool_call_id: tool_call_id.clone(),
+            tool_name: "subagent".to_string(),
+            output: format!("Coordinator error: {e}"),
+            is_error: true,
+            ui_resource_uri: None,
+        },
         Err(e) => {
             cade_agent::tools::manager::ToolResult {
-                tool_call_id: tool_call_id.to_string(),
+                tool_call_id: tool_call_id.clone(),
                 tool_name: "subagent".to_string(),
-                output: format!("Coordinator error: {e}"),
+                output: format!("Coordinator task join error: {e}"),
                 is_error: true,
                 ui_resource_uri: None,
             }
@@ -1513,25 +1525,25 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
 }
 
 pub(super) async fn handle_run_team_tool(
-    state: &AppState,
-    parent_agent_id: &str,
-    tool_call_id: &str,
-    args: &serde_json::Value,
+    state: AppState,
+    parent_agent_id: String,
+    tool_call_id: String,
+    args: serde_json::Value,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::team::{TeamConfig, TeamExecutor};
     use cade_agent::tools::manager::ToolResult;
 
-    let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
+    let parent_model = cade_store::sqlite::get_agent(&state.db, &parent_agent_id)
         .ok()
         .flatten()
         .map(|a| a.model)
         .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
 
-    let config = TeamConfig::from_args(args);
+    let config = TeamConfig::from_args(&args);
     if let Err(e) = config.validate() {
         return ToolResult {
-            tool_call_id: tool_call_id.to_string(),
+            tool_call_id: tool_call_id.clone(),
             tool_name: "run_team".to_string(),
             output: e,
             is_error: true,
@@ -1546,7 +1558,7 @@ pub(super) async fn handle_run_team_tool(
         Some(t) => t,
         None => {
             return ToolResult {
-                tool_call_id: tool_call_id.to_string(),
+                tool_call_id: tool_call_id.clone(),
                 tool_name: "run_team".to_string(),
                 output: format!("error: team not found: {}", config.team_id),
                 is_error: true,
@@ -1557,7 +1569,7 @@ pub(super) async fn handle_run_team_tool(
 
     let runner = CadeSubagentRunner {
         state: state.clone(),
-        parent_agent_id: parent_agent_id.to_string(),
+        parent_agent_id: parent_agent_id.clone(),
         sse_tx: sse_tx.clone(),
     };
     let llm = CadeLlmCompleter {
@@ -1570,7 +1582,7 @@ pub(super) async fn handle_run_team_tool(
             team_def,
             &config,
             &parent_model,
-            tool_call_id,
+            &tool_call_id,
             &runner,
             &llm,
         )
@@ -1586,7 +1598,7 @@ pub(super) async fn handle_run_team_tool(
                 }));
             }
             ToolResult {
-                tool_call_id: tool_call_id.to_string(),
+                tool_call_id: tool_call_id.clone(),
                 tool_name: "run_team".to_string(),
                 output: serde_json::to_string_pretty(&aggregated_json).unwrap_or_default(),
                 is_error: false,
@@ -1594,7 +1606,7 @@ pub(super) async fn handle_run_team_tool(
             }
         }
         Err(e) => ToolResult {
-            tool_call_id: tool_call_id.to_string(),
+            tool_call_id: tool_call_id.clone(),
             tool_name: "run_team".to_string(),
             output: e,
             is_error: true,

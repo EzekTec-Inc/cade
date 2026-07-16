@@ -165,7 +165,7 @@ static ENDPOINTS: &[EndpointDef] = &[
 pub fn CodeView() -> Element {
     let state = use_context::<AppState>();
 
-    let mut selected_group = use_signal(|| String::new());
+    let mut selected_group = use_signal(String::new);
     let mut selected_endpoint = use_signal(|| Option::<usize>::None);
     let mut agent_id_input = use_signal(String::new);
     let mut request_body = use_signal(String::new);
@@ -351,12 +351,11 @@ pub fn CodeView() -> Element {
                                             let result = api::api_request(&ms, &pc, body.as_deref(), &key).await;
                                             match result {
                                                 Ok(body) => {
-                                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
-                                                        if let Ok(pretty) = serde_json::to_string_pretty(&val) {
+                                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body)
+                                                        && let Ok(pretty) = serde_json::to_string_pretty(&val) {
                                                             response_output.set(pretty);
                                                             return;
                                                         }
-                                                    }
                                                     response_output.set(body);
                                                 }
                                                 Err(e) => {

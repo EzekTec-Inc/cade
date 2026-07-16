@@ -591,7 +591,7 @@ async fn m4_consolidation_round_trip_writes_pinned_session_summary() {
     let state = mk_state(db.clone(), llm_trait);
 
     // ── act ─────────────────────────────────────────────────────────
-    consolidate_agent(&state, agent_id, None, None).await;
+    consolidate_agent(state.clone(), agent_id.to_string(), None, None).await;
 
     // ── assert ──────────────────────────────────────────────────────
 
@@ -659,7 +659,7 @@ async fn f2_consolidation_caches_dropped_turns_to_archival() {
     let llm_trait: Arc<dyn LlmProvider> = llm.clone();
     let state = mk_state(db.clone(), llm_trait);
 
-    consolidate_agent(&state, agent_id, None, None).await;
+    consolidate_agent(state.clone(), agent_id.to_string(), None, None).await;
 
     // The raw seed text included `compute_<n>` tokens for each turn —
     // every dropped turn's user message contains one. Searching archival
@@ -726,7 +726,7 @@ async fn f2_archival_cache_survives_llm_failure() {
     let llm: Arc<dyn LlmProvider> = Arc::new(FailingLlm);
     let state = mk_state(db.clone(), llm);
 
-    consolidate_agent(&state, agent_id, None, None).await;
+    consolidate_agent(state.clone(), agent_id.to_string(), None, None).await;
 
     // No session_summary was written (LLM failed) — but the archival cache
     // must still hold the raw dropped turns.
