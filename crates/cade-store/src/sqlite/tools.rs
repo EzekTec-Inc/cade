@@ -102,25 +102,7 @@ pub fn has_compaction_marker(
     agent_id: &str,
     conversation_id: Option<&str>,
 ) -> Result<bool> {
-    let conn = db.get()?;
-    let count: i64 = if let Some(cid) = conversation_id {
-        conn.query_row(
-            "SELECT COUNT(*) FROM messages
-             WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'",
-            params![agent_id, cid],
-            |r| r.get(0),
-        )
-        .unwrap_or(0)
-    } else {
-        conn.query_row(
-            "SELECT COUNT(*) FROM messages
-             WHERE agent_id = ?1 AND role = 'compaction'",
-            params![agent_id],
-            |r| r.get(0),
-        )
-        .unwrap_or(0)
-    };
-    Ok(count > 0)
+    super::horizon::TimelineHorizon::has_compaction_marker(db, agent_id, conversation_id)
 }
 
 /// Search messages using FTS5 with BM25 ranking and context snippets.

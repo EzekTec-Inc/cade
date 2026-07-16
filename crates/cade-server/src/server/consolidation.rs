@@ -701,65 +701,21 @@ impl<'a> ContextCompactionEngine<'a> {
         };
 
         if let Some(ref bid) = boundary_msg_id {
-            let marker_ts = {
-                let Ok(conn) = state.db.get() else {
-                    tracing::warn!("consolidate_agent: pool get failed; skipping marker");
-                    return None;
-                };
-                conn.query_row(
-                    "SELECT created_at FROM messages WHERE id = ?1",
-                    rusqlite::params![bid],
-                    |r| r.get::<_, i64>(0),
-                )
-                .unwrap_or_else(|_| {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64
-                })
-            };
-
-            let marker_content = serde_json::json!({
-                "content": format!(
-                    "[Compaction marker: {} turns summarised into session_summary]",
-                    dropped,
-                ),
-            });
-
-            let marker = sqlite::MessageRow {
-                id: format!("compact-{}", uuid::Uuid::new_v4()),
-                agent_id: agent_id.to_string(),
-                conversation_id: conversation_id.map(String::from),
-                role: "compaction".to_string(),
-                content: marker_content,
-                char_count: 0,
-            };
-
-            {
-                let Ok(conn) = state.db.get() else {
-                    tracing::warn!("consolidate_agent: pool get failed; skipping marker insert");
-                    return None;
-                };
-                let _ = conn.execute(
-                    "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    rusqlite::params![
-                        marker.id,
-                        marker.agent_id,
-                        marker.conversation_id,
-                        marker.role,
-                        marker.content.to_string(),
-                        marker_ts,
-                        0i64,
-                    ],
-                );
-                tracing::debug!(
-                    "consolidate [{}]: inserted compaction marker '{}' at ts={}",
-                    agent_id,
-                    marker.id,
-                    marker_ts,
-                );
+            if let Err(e) = sqlite::TimelineHorizon::advance(
+                &state.db,
+                agent_id,
+                conversation_id,
+                bid,
+                dropped,
+            ) {
+                tracing::warn!("consolidate [{}]: failed to advance timeline horizon: {}", agent_id, e);
+                return None;
             }
+            tracing::debug!(
+                "consolidate [{}]: successfully advanced timeline horizon to boundary_msg_id='{}'",
+                agent_id,
+                bid,
+            );
         }
 
         let metrics = state.agent_metrics.clone();

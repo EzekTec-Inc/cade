@@ -132,62 +132,7 @@ pub fn list_messages_since_last_compaction(
     conversation_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MessageRow>> {
-    let conn = db.get()?;
-
-    let sql = if conversation_id.is_some() {
-        "WITH boundary AS (
-             SELECT COALESCE(
-                 (SELECT created_at FROM messages
-                  WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
-                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 -1
-             ) AS marker_ts
-         )
-         SELECT id, agent_id, conversation_id, role, content, char_count
-         FROM messages
-         WHERE agent_id = ?1 AND conversation_id = ?2
-           AND role != 'compaction'
-           AND created_at > (SELECT marker_ts FROM boundary)
-         ORDER BY created_at ASC, rowid ASC
-         LIMIT ?3"
-    } else {
-        "WITH boundary AS (
-             SELECT COALESCE(
-                 (SELECT created_at FROM messages
-                  WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
-                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 -1
-             ) AS marker_ts
-         )
-         SELECT id, agent_id, conversation_id, role, content, char_count
-         FROM messages
-         WHERE agent_id = ?1 AND conversation_id IS NULL
-           AND role != 'compaction'
-           AND created_at > (SELECT marker_ts FROM boundary)
-         ORDER BY created_at ASC, rowid ASC
-         LIMIT ?3"
-    };
-
-    let mut stmt = conn.prepare(sql)?;
-    let conv_placeholder = conversation_id.unwrap_or("");
-    let rows = stmt
-        .query_map(params![agent_id, conv_placeholder, limit as i64], |row| {
-            Ok(MessageRow {
-                id: row.get(0)?,
-                agent_id: row.get(1)?,
-                conversation_id: row.get(2)?,
-                role: row.get(3)?,
-                content: {
-                    let s: String = row.get(4)?;
-                    serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
-                },
-                char_count: row.get::<_, i64>(5).unwrap_or(0).max(0) as usize,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(rows)
+    super::horizon::TimelineHorizon::get_visible_messages(db, agent_id, conversation_id, limit)
 }
 
 /// Page through messages with limit/offset, newest-first at the SQL level,
