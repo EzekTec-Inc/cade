@@ -12,6 +12,8 @@ use cade_ai::{CompletionRequest, LlmMessage, catalogue};
 use crate::server::state::AppState;
 use cade_store::sqlite;
 
+pub mod accumulator;
+
 /// Resolve the output directory for memory exports readable by cade-rag-mcp.
 ///
 /// Precedence:
@@ -56,6 +58,7 @@ const SESSION_SUMMARY_MAX_CHARS: usize = 8_000;
 /// the long-term tier. When the ring fills, the oldest is evicted and a
 /// one-line excerpt is appended to the pinned `session_index` block.
 /// P5: raised from 5 → 8 for longer project continuity.
+#[allow(dead_code)]
 const SESSION_SUMMARY_RING_CAP: usize = 8;
 
 /// Max chars retained per rotated `session_summary_N` block. Lower than the
@@ -565,92 +568,92 @@ impl<'a> ContextCompactionEngine<'a> {
             .unwrap_or("");
 
         let (new_read, new_mod) = extract_touched_files(&all_rows);
-        let (mut accum_read, mut mut_mod) = parse_existing_touched_files(existing);
-
-        for r in new_read {
-            accum_read.insert(r);
-        }
-        for m in new_mod {
-            mut_mod.insert(m);
-        }
-
-        let mut accum_read_vec: Vec<String> = accum_read.into_iter().collect();
-        let mut mut_mod_vec: Vec<String> = mut_mod.into_iter().collect();
-        accum_read_vec.sort();
-        mut_mod_vec.sort();
-
-        let files_metadata = format_touched_files_section(&accum_read_vec, &mut_mod_vec);
-
-        let clean_existing = strip_touched_files_section(existing);
-        let clean_final_summary = strip_touched_files_section(&final_summary);
-
-        let new_value = if clean_existing.is_empty() {
-            format!("{clean_final_summary}{files_metadata}")
-        } else {
-            let combined = format!("{clean_existing}\n\n---\n\n{clean_final_summary}");
-            if combined.chars().count() > SESSION_SUMMARY_MAX_CHARS {
-                tracing::info!(
-                    "consolidate [{}]: merging existing and new summaries ({} chars total)",
-                    agent_id,
-                    combined.chars().count()
-                );
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    merge_session_summaries(
-                        state.clone(),
-                        agent_id.to_string(),
-                        clean_existing,
-                        clean_final_summary,
-                    ),
-                )
-                .await
-                {
-                    Ok(Ok(merged)) => {
-                        tracing::info!(
-                            "consolidate [{}]: successfully merged summaries ({} chars)",
-                            agent_id,
-                            merged.chars().count()
-                        );
-                        format!("{merged}{files_metadata}")
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!(
-                            "consolidate [{}]: failed to merge summaries: {}. Falling back to ring rotation.",
-                            agent_id,
-                            e
-                        );
-                        rotate_and_archive_session_summary(state, agent_id, existing);
-                        format!("{final_summary}{files_metadata}")
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            "consolidate [{}]: merge summaries timed out. Falling back to ring rotation.",
-                            agent_id
-                        );
-                        rotate_and_archive_session_summary(state, agent_id, existing);
-                        format!("{final_summary}{files_metadata}")
-                    }
-                }
-            } else {
-                format!("{combined}{files_metadata}")
-            }
+        let touched_files = accumulator::TouchedFiles {
+            read: new_read,
+            modified: new_mod,
         };
 
-        if let Err(e) = sqlite::upsert_memory_block(
-            &state.db,
-            agent_id,
-            "session_summary",
-            &new_value,
-            Some("Auto-generated summary of older conversation turns (Sleeptime consolidation)"),
-            Some(SESSION_SUMMARY_MAX_CHARS),
-        ) {
-            tracing::warn!(
-                "consolidate [{}]: failed to write session_summary: {}",
-                agent_id,
-                e
-            );
-            return None;
-        }
+        let compaction_model = agent
+            .compaction_model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| default_compaction_model(&agent.model));
+
+        // Construct functional core accumulator
+        let acc = accumulator::SummaryAccumulator::new(state.llm.clone(), compaction_model.clone());
+
+        // Convert existing blocks to (label, value) pairs
+        let existing_blocks_pairs: Vec<(String, String)> = existing_blocks
+            .iter()
+            .map(|(label, val, _)| (label.clone(), val.clone()))
+            .collect();
+
+        // Run in-memory accumulation
+        let acc_result = acc.accumulate(existing, &final_summary, touched_files, &existing_blocks_pairs).await;
+
+        let new_value = match acc_result {
+            accumulator::AccumulationResult::Merged(val) => {
+                // Simply upsert
+                if let Err(e) = sqlite::upsert_memory_block(
+                    &state.db,
+                    agent_id,
+                    "session_summary",
+                    &val,
+                    Some("Auto-generated summary of older conversation turns (Sleeptime consolidation)"),
+                    Some(SESSION_SUMMARY_MAX_CHARS),
+                ) {
+                    tracing::warn!("consolidate [{}]: failed to write session_summary: {}", agent_id, e);
+                    return None;
+                }
+                val
+            }
+            accumulator::AccumulationResult::Rotated(plan) => {
+                // Execute rotation plan in safe transactional order
+                if let Some(ref archive) = plan.archive_content {
+                    let tags = vec!["evicted-session-summary".to_string()];
+                    let _ = sqlite::insert_archival_memory(&state.db, agent_id, archive, &tags);
+                }
+
+                if let Some(ref index_line) = plan.append_to_index {
+                    append_to_session_index_db(&state.db, agent_id, index_line);
+                }
+
+                // Delete old blocks
+                for del_label in plan.deletes {
+                    let _ = sqlite::delete_memory_block(&state.db, agent_id, &del_label);
+                }
+
+                // Upsert new blocks
+                for (up_label, up_val) in &plan.upserts {
+                    let cap_limit = if up_label == "session_summary" {
+                        SESSION_SUMMARY_MAX_CHARS
+                    } else {
+                        SESSION_SUMMARY_ARCHIVED_MAX_CHARS
+                    };
+                    if let Err(e) = sqlite::upsert_memory_block(
+                        &state.db,
+                        agent_id,
+                        up_label,
+                        up_val,
+                        Some("Rotated session summary (Phase C ring)"),
+                        Some(cap_limit),
+                    ) {
+                        tracing::warn!("consolidate [{}]: failed to upsert {}: {}", agent_id, up_label, e);
+                    }
+                    if up_label != "session_summary" {
+                        let _ = sqlite::set_memory_tier(&state.db, agent_id, up_label, "long", false);
+                    }
+                }
+
+                // Extract new live value
+                plan.upserts
+                    .iter()
+                    .find(|(l, _)| l == "session_summary")
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default()
+            }
+        };
 
         let _ = sqlite::set_memory_tier(&state.db, agent_id, "session_summary", "pinned", true);
 
@@ -1018,109 +1021,7 @@ async fn auto_extract_facts(
 ///
 /// All DB errors are logged at debug/warn and swallowed — rotation is
 /// best-effort and must never break the main consolidation path.
-fn rotate_and_archive_session_summary(state: &AppState, agent_id: &str, prev_live: &str) {
-    rotate_and_archive_session_summary_db(&state.db, agent_id, prev_live);
-}
 
-fn rotate_and_archive_session_summary_db(
-    db: &cade_store::sqlite::Db,
-    agent_id: &str,
-    prev_live: &str,
-) {
-    if prev_live.trim().is_empty() {
-        return;
-    }
-
-    let blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
-    let label_for = |n: usize| format!("session_summary_{n}");
-
-    // Step 1: evict oldest slot if occupied.
-    let oldest_label = label_for(SESSION_SUMMARY_RING_CAP);
-    if let Some((_, val, _)) = blocks.iter().find(|(l, _, _)| l == &oldest_label) {
-        // A7: archive the full evicted content to archival_memory for recovery.
-        if !val.trim().is_empty() {
-            let tags = vec!["evicted-session-summary".to_string()];
-            let _ = sqlite::insert_archival_memory(db, agent_id, val, &tags);
-        }
-
-        // A7: use a 500-char excerpt instead of first_nonempty_line (~200 chars).
-        let excerpt = truncate_head_to(val, 500);
-        let excerpt = excerpt.trim();
-        if !excerpt.is_empty() {
-            append_to_session_index_db(db, agent_id, excerpt);
-        }
-        if let Err(e) = sqlite::delete_memory_block(db, agent_id, &oldest_label) {
-            tracing::debug!(
-                "consolidate [{}]: failed to evict {}: {}",
-                agent_id,
-                oldest_label,
-                e
-            );
-        }
-    }
-
-    // Step 2: shift N → N+1, from N=RING_CAP-1 down to 1.
-    for n in (1..SESSION_SUMMARY_RING_CAP).rev() {
-        let src = label_for(n);
-        let dst = label_for(n + 1);
-        if let Some((_, val, _)) = blocks.iter().find(|(l, _, _)| l == &src) {
-            if let Err(e) = sqlite::upsert_memory_block(
-                db,
-                agent_id,
-                &dst,
-                val,
-                Some("Rotated session summary (Phase C ring)"),
-                Some(SESSION_SUMMARY_ARCHIVED_MAX_CHARS),
-            ) {
-                tracing::debug!(
-                    "consolidate [{}]: failed to shift {} → {}: {}",
-                    agent_id,
-                    src,
-                    dst,
-                    e
-                );
-                continue;
-            }
-            let _ = sqlite::set_memory_tier(db, agent_id, &dst, "long", false);
-            if let Err(e) = sqlite::delete_memory_block(db, agent_id, &src) {
-                tracing::debug!(
-                    "consolidate [{}]: failed to delete old {}: {}",
-                    agent_id,
-                    src,
-                    e
-                );
-            }
-        }
-    }
-
-    // Step 3: write prev_live into slot 1 (head-truncated to preserve tail).
-    let capped = truncate_head_to(prev_live, SESSION_SUMMARY_ARCHIVED_MAX_CHARS);
-    let slot1 = label_for(1);
-    if let Err(e) = sqlite::upsert_memory_block(
-        db,
-        agent_id,
-        &slot1,
-        &capped,
-        Some("Rotated session summary (Phase C ring)"),
-        Some(SESSION_SUMMARY_ARCHIVED_MAX_CHARS),
-    ) {
-        tracing::debug!(
-            "consolidate [{}]: failed to write {}: {}",
-            agent_id,
-            slot1,
-            e
-        );
-        return;
-    }
-    let _ = sqlite::set_memory_tier(db, agent_id, &slot1, "long", false);
-
-    tracing::debug!(
-        "consolidate [{}]: rotated session_summary ({} chars) → {}",
-        agent_id,
-        capped.chars().count(),
-        slot1,
-    );
-}
 
 /// Append a one-line excerpt to the pinned `session_index` block, evicting
 /// oldest lines FIFO when the block exceeds `SESSION_INDEX_MAX_CHARS`.

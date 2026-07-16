@@ -1,5 +1,49 @@
 use super::*;
 
+fn rotate_and_archive_session_summary_db(
+    db: &sqlite::Db,
+    agent_id: &str,
+    prev_live: &str,
+) {
+    struct MockLlm;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for MockLlm {
+        async fn complete(&self, _: &cade_ai::CompletionRequest) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            unreachable!()
+        }
+        async fn stream(&self, _: &cade_ai::CompletionRequest) -> cade_ai::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>>> {
+            unreachable!()
+        }
+    }
+
+    let acc = accumulator::SummaryAccumulator::new(std::sync::Arc::new(MockLlm), "mock".to_string());
+    let existing_blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
+    let existing_blocks_pairs: Vec<(String, String)> = existing_blocks
+        .iter()
+        .map(|(label, val, _)| (label.clone(), val.clone()))
+        .collect();
+
+    let plan = acc.plan_rotation(prev_live, "", String::new(), &existing_blocks_pairs);
+
+    // Apply the plan to the DB
+    if let Some(archive) = plan.archive_content {
+        let tags = vec!["evicted-session-summary".to_string()];
+        let _ = sqlite::insert_archival_memory(db, agent_id, &archive, &tags);
+    }
+    if let Some(index_line) = plan.append_to_index {
+        append_to_session_index_db(db, agent_id, &index_line);
+    }
+    for del in plan.deletes {
+        let _ = sqlite::delete_memory_block(db, agent_id, &del);
+    }
+    for (up_label, up_val) in plan.upserts {
+        // Exclude upsert of session_summary itself, as the old rotation method didn't write it.
+        if up_label != "session_summary" {
+            let _ = sqlite::upsert_memory_block(db, agent_id, &up_label, &up_val, None, None);
+        }
+    }
+}
+
 fn m(role: &str, text: &str) -> (String, String) {
     (role.to_string(), text.to_string())
 }
