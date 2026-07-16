@@ -1040,117 +1040,7 @@ fn extract_touched_files(rows: &[sqlite::MessageRow]) -> (Vec<String>, Vec<Strin
     (r_vec, m_vec)
 }
 
-/// Parse any existing touched files from the existing summary block.
-fn parse_existing_touched_files(
-    summary: &str,
-) -> (
-    std::collections::HashSet<String>,
-    std::collections::HashSet<String>,
-) {
-    let mut read = std::collections::HashSet::new();
-    let mut modified = std::collections::HashSet::new();
 
-    for line in summary.lines() {
-        if line.starts_with("* Read: [") && line.ends_with(']') {
-            let content = &line["* Read: [".len()..line.len() - 1];
-            for p in content.split(',') {
-                let cleaned = p.trim().to_string();
-                if !cleaned.is_empty() {
-                    read.insert(cleaned);
-                }
-            }
-        } else if line.starts_with("* Modified: [") && line.ends_with(']') {
-            let content = &line["* Modified: [".len()..line.len() - 1];
-            for p in content.split(',') {
-                let cleaned = p.trim().to_string();
-                if !cleaned.is_empty() {
-                    modified.insert(cleaned);
-                }
-            }
-        }
-    }
-
-    (read, modified)
-}
-
-/// Format the touched files section to append to the summary.
-fn format_touched_files_section(read: &[String], modified: &[String]) -> String {
-    if read.is_empty() && modified.is_empty() {
-        return String::new();
-    }
-
-    let mut section = String::new();
-    section.push_str("\n\n### Files Checked in this Session:\n");
-    if !read.is_empty() {
-        section.push_str(&format!("* Read: [{}]\n", read.join(", ")));
-    }
-    if !modified.is_empty() {
-        section.push_str(&format!("* Modified: [{}]\n", modified.join(", ")));
-    }
-    section
-}
-
-/// Strip the touched files section from a summary block to keep it pure for synthesis.
-fn strip_touched_files_section(summary: &str) -> String {
-    if let Some(pos) = summary.find("### Files Checked in this Session:") {
-        summary[..pos].trim().to_string()
-    } else {
-        summary.to_string()
-    }
-}
-
-/// Synthesizes the previous session summary and the newest conversation summary
-/// into a single, high-density, cohesive summary under the SESSION_SUMMARY_MAX_CHARS limit.
-pub(super) async fn merge_session_summaries(
-    state: AppState,
-    agent_id: String,
-    old_summary: String,
-    new_summary: String,
-) -> Result<String, String> {
-    let prompt = format!(
-        "You are an expert context consolidation agent. Your task is to merge an older session summary with a newly generated summary of the most recent conversation turns into a single, high-density, cohesive summary.\n\n\
-         CRITICAL CONSTRAINTS:\n\
-         1. The combined summary must preserve all critical decisions, key file changes, error traces, and architectural goals.\n\
-         2. It must be written in a high-density, professional, and concise format.\n\
-         3. The final output must be strictly less than 6,500 characters so that it safely fits within CADE's active memory block buffers.\n\
-         4. Do not include any intro, outro, preamble, or markdown code block wrappers (like ```markdown). Respond ONLY with the raw merged summary text.\n\n\
-         OLDER SESSION SUMMARY:\n{old_summary}\n\n\
-         NEW CONVERSATION SUMMARY:\n{new_summary}"
-    );
-
-    let model = sqlite::get_agent(&state.db, &agent_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Agent not found".to_string())?
-        .model;
-
-    // Resolve the cheapest capable model for compaction (GPT-4o-mini, Gemini-2.5-flash, etc.)
-    let compaction_model = default_compaction_model(&model);
-
-    let req = CompletionRequest {
-        model: compaction_model,
-        messages: vec![LlmMessage {
-            role: "user".to_string(),
-            content: prompt,
-            tool_call_id: None,
-            tool_calls: None,
-            images: None,
-        }],
-        tools: vec![],
-        max_tokens: 1500,
-        reasoning_effort: None,
-    };
-
-    match state.llm.complete(&req).await {
-        Ok(resp) => {
-            if let Some(content) = resp.content {
-                Ok(content.trim().to_string())
-            } else {
-                Err("Empty response from consolidation model".to_string())
-            }
-        }
-        Err(e) => Err(format!("LLM completion failed: {e}")),
-    }
-}
 
 /// Sanitize a line for inclusion in `session_index`: strip newlines,
 /// collapse internal whitespace, cap at 200 chars.
@@ -1159,17 +1049,7 @@ fn sanitize_index_line(s: &str) -> String {
     collapsed.chars().take(200).collect()
 }
 
-/// Truncate `s` from the head so the result has at most `max_chars` chars.
-/// Preserves the tail (most recent content). If already within cap, returns
-/// `s` unchanged.
-fn truncate_head_to(s: &str, max_chars: usize) -> String {
-    let total = s.chars().count();
-    if total <= max_chars {
-        return s.to_string();
-    }
-    let skip = total - max_chars;
-    s.chars().skip(skip).collect()
-}
+
 
 /// Returns `true` if the summary is inflated relative to the source text — i.e.,
 /// the summary is ≥ 80% of the dropped-content size and should be rejected.

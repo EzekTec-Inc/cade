@@ -483,7 +483,7 @@ pub(super) async fn handle_subagent_tool(
 
         return cade_agent::tools::manager::ToolResult {
             tool_call_id: tool_call_id.clone(),
-            tool_name: tool_name,
+            tool_name,
             output,
             is_error: false,
             ui_resource_uri: None,

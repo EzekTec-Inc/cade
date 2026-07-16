@@ -898,7 +898,7 @@ pub(crate) async fn build_context(
             const PRUNE_MIN_CHARS: usize = 200; // only compact outputs > 200 chars
             let db_pool = state.db.clone();
             let agent_id_clone = agent_id.to_string();
-            let conv_id_clone = conversation_id.map(String::from);
+            let conv_id_clone = conversation_id.clone();
             let prune_res = tokio::task::spawn_blocking(move || {
                 sqlite::compact_old_tool_outputs(
                     &db_pool,

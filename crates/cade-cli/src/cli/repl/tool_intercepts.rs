@@ -237,6 +237,7 @@ impl Repl {
 
         let buffer = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
 
+        #[allow(clippy::type_complexity)]
         let on_output: Option<
             std::sync::Arc<dyn for<'a> Fn(crate::cli::headless::HeadlessEvent<'a>) + Send + Sync>,
         > = if let Some(idx) = live_idx {
