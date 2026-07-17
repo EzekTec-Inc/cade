@@ -1,3 +1,6 @@
+CONTEXT.md
+AGENT.md
+AGENTS.md
 PLAN.md
 /target
 .cade-db.key
@@ -29,6 +32,7 @@ crates/cade-gui/pkg/
 
 # Development debris
 CADE_AUDIT.md
+CADE_AUDIT.md*
 fix_models.py
 test_partition
 test_partition.rs
