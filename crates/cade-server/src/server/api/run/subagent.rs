@@ -424,7 +424,10 @@ pub(super) async fn handle_subagent_tool(
     if tool_name == "wait" {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
-        let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64()).unwrap_or(1800000);
+        let timeout_ms = args
+            .get("timeoutMs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1800000);
         let start = std::time::Instant::now();
         loop {
             let active_count = {
@@ -467,7 +470,10 @@ pub(super) async fn handle_subagent_tool(
     }
 
     if tool_name == "intercom" || tool_name == "subagent_supervisor" {
-        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("list");
         let to = args.get("to").and_then(|v| v.as_str()).unwrap_or("");
         let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
         let reply_to = args.get("replyTo").and_then(|v| v.as_str()).unwrap_or("");
@@ -498,7 +504,12 @@ pub(super) async fn handle_subagent_tool(
     let tool_call_id_c = tool_call_id.clone();
     let args_c = args.clone();
     let handle = tokio::spawn(async move {
-        cade_agent::subagents::SubagentCoordinator::coordinate(&runner_owned, &tool_call_id_c, &args_c).await
+        cade_agent::subagents::SubagentCoordinator::coordinate(
+            &runner_owned,
+            &tool_call_id_c,
+            &args_c,
+        )
+        .await
     });
     match handle.await {
         Ok(Ok(res)) => res,
@@ -509,15 +520,13 @@ pub(super) async fn handle_subagent_tool(
             is_error: true,
             ui_resource_uri: None,
         },
-        Err(e) => {
-            cade_agent::tools::manager::ToolResult {
-                tool_call_id: tool_call_id.clone(),
-                tool_name: "subagent".to_string(),
-                output: format!("Coordinator task join error: {e}"),
-                is_error: true,
-                ui_resource_uri: None,
-            }
-        }
+        Err(e) => cade_agent::tools::manager::ToolResult {
+            tool_call_id: tool_call_id.clone(),
+            tool_name: "subagent".to_string(),
+            output: format!("Coordinator task join error: {e}"),
+            is_error: true,
+            ui_resource_uri: None,
+        },
     }
 }
 

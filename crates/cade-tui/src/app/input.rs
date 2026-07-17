@@ -10,6 +10,47 @@ use crate::autocomplete::AutocompleteProvider;
 impl TuiApp {
     // -- Input loop
 
+    /// Returns `true` if any UI animation (spinner, progress bar, toast) is actively running.
+    pub fn is_animating(&self) -> bool {
+        // 1. Thinking / reasoning spinner active
+        if self.thinking.is_some() {
+            return true;
+        }
+
+        // 2. Active toast displayed
+        if self.toast.is_some() {
+            return true;
+        }
+
+        // 3. UI slot requires active tick execution (animations or interactive controls)
+        if self.slots.requires_tick() {
+            return true;
+        }
+
+        // 4. MCP servers starting up (animate loading card)
+        if let Some(ref progress) = self.mcp_boot_status {
+            let boot_map = progress.lock();
+            let mut show_card = false;
+            for status in boot_map.values() {
+                if matches!(status, ServerBootStatus::Loading) {
+                    show_card = true;
+                    break;
+                }
+            }
+            if show_card && !boot_map.is_empty() && !self.mcp_closed {
+                return true;
+            }
+            if let Some(settled) = self.mcp_all_settled_at
+                && settled.elapsed() < std::time::Duration::from_secs(3)
+                && !self.mcp_closed
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Block until the user submits input or presses Ctrl+D.
     /// Returns `None` on Ctrl+D (exit signal).
     pub fn read_input(
@@ -31,8 +72,15 @@ impl TuiApp {
                 self.draw()?;
             }
 
-            // 50 ms poll: allows animation ticks without burning CPU.
-            if !event::poll(std::time::Duration::from_millis(50))? {
+            // Dynamically govern the polling timeout:
+            // High-frequency 50ms ticks for smooth animations; relaxed 2000ms ticks when completely idle.
+            let poll_timeout = if self.is_animating() {
+                std::time::Duration::from_millis(50)
+            } else {
+                std::time::Duration::from_millis(2000)
+            };
+
+            if !event::poll(poll_timeout)? {
                 // Trigger redraw if any MCP server is loading (for spinner animation)
                 // or if we are displaying the settled results before hiding the card.
                 if let Some(ref progress) = self.mcp_boot_status {

@@ -112,10 +112,9 @@ mod native_impl {
                     Err(e) => Err(crate::Error::custom(format!("stream_err: {e}"))),
                 })
                 .filter(|r| {
-                    futures_util::future::ready(match r {
-                        Err(e) if e.to_string().contains("DONE") => false,
-                        _ => true,
-                    })
+                    futures_util::future::ready(
+                        !matches!(r, Err(e) if e.to_string().contains("DONE")),
+                    )
                 });
 
             Ok(s.boxed())

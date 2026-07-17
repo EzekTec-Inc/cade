@@ -41,12 +41,8 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_search_memory(),
         schema_search_tools(),
         schema_recall(),
-        schema_load_skill(),
-        schema_unload_skill(),
         schema_install_skill(),
         schema_install_plugin(),
-        schema_run_skill_script(),
-        schema_load_skill_ref(),
         schema_run_subagent(),
         schema_subagent(),
         schema_wait(),
@@ -260,40 +256,6 @@ fn schema_answer() -> Value {
 
 // region:    --- Skill schemas
 
-fn schema_load_skill() -> Value {
-    json!({
-        "name": "load_skill",
-        "description": "Load the full content of a skill into context. Call this when starting a task that matches one of the available skills listed in your system prompt.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The skill ID to load (from the Available Skills list)"
-                }
-            },
-            "required": ["id"]
-        }
-    })
-}
-
-fn schema_unload_skill() -> Value {
-    json!({
-        "name": "unload_skill",
-        "description": "Unload a previously loaded skill from context to free up context window budget. The skill body will no longer be injected into the system prompt on the next turn. Use when a skill is no longer needed for the current task.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The skill ID to unload (must be currently loaded)"
-                }
-            },
-            "required": ["id"]
-        }
-    })
-}
-
 fn schema_install_skill() -> Value {
     json!({
         "name": "install_skill",
@@ -331,53 +293,6 @@ fn schema_install_plugin() -> Value {
                 "plugin_id": { "type": "string", "description": "Unique ID of the plugin (e.g. '@author/name')" }
             },
             "required": ["url", "plugin_id"]
-        }
-    })
-}
-
-fn schema_run_skill_script() -> Value {
-    json!({
-        "name": "run_skill_script",
-        "description": "Execute a script from a skill's scripts/ directory. Use after load_skill to run deterministic tooling bundled with the skill.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "skill_id": {
-                    "type": "string",
-                    "description": "The skill ID that owns the script"
-                },
-                "script": {
-                    "type": "string",
-                    "description": "Script name (filename stem, e.g. 'explain_error')"
-                },
-                "args": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Optional arguments to pass to the script"
-                }
-            },
-            "required": ["skill_id", "script"]
-        }
-    })
-}
-
-fn schema_load_skill_ref() -> Value {
-    json!({
-        "name": "load_skill_ref",
-        "description": "Lazy-load a reference document from a skill's references/ directory. Use only when you need deep documentation to solve a specific problem — avoids injecting tokens unnecessarily.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "skill_id": {
-                    "type": "string",
-                    "description": "The skill ID that owns the reference"
-                },
-                "doc": {
-                    "type": "string",
-                    "description": "Reference doc name (filename stem, e.g. 'dictionary_of_pain')"
-                }
-            },
-            "required": ["skill_id", "doc"]
         }
     })
 }

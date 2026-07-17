@@ -95,10 +95,9 @@ mod tests {
         let meta_names: Vec<&str> = meta.iter().map(tool_name).collect();
         let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
-        // Core always has memory, checkpoint, skill tools
+        // Core always has memory, checkpoint tools
         assert!(meta_names.contains(&"update_memory"));
         assert!(meta_names.contains(&"create_checkpoint"));
-        assert!(meta_names.contains(&"load_skill"));
 
         // Core excludes optional packs
         assert!(!meta_names.contains(&"web_search"));

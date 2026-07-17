@@ -141,9 +141,10 @@ where
 
     loop {
         if let Some(token) = &cancel_token
-            && token.load(std::sync::atomic::Ordering::Acquire) {
-                return Err("aborted".to_string());
-            }
+            && token.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("aborted".to_string());
+        }
         let result = JsFuture::from(reader.read())
             .await
             .map_err(|e| format!("{:?}", e))?;
@@ -618,9 +619,10 @@ where
 
             for line in event_str.lines() {
                 if let Some(data_str) = line.strip_prefix("data:")
-                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim()) {
-                        on_event(val);
-                    }
+                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim())
+                {
+                    on_event(val);
+                }
             }
         }
     }

@@ -1535,7 +1535,7 @@ fn upsert_with_none_embedder_leaves_embedding_null() -> Result<()> {
 
 #[test]
 fn backfill_embeddings_populates_null_rows() -> Result<()> {
-    use crate::sqlite::embedding::{backfill_embeddings, Embedder};
+    use crate::sqlite::embedding::{Embedder, backfill_embeddings};
     struct OneEmbedder;
     impl Embedder for OneEmbedder {
         fn embed(&self, _t: &str) -> crate::error::Result<Vec<f32>> {
@@ -1589,7 +1589,7 @@ fn backfill_embeddings_populates_null_rows() -> Result<()> {
 
 #[test]
 fn search_memory_semantic_ranks_by_cosine_similarity() -> Result<()> {
-    use crate::sqlite::embedding::{search_memory_semantic, Embedder};
+    use crate::sqlite::embedding::{Embedder, search_memory_semantic};
     use crate::sqlite::memory::upsert_memory_block_with_embedder;
 
     /// Maps the first byte of the input string to a fixed direction vector,
@@ -1657,7 +1657,7 @@ fn search_memory_semantic_ranks_by_cosine_similarity() -> Result<()> {
 
 #[test]
 fn search_memory_semantic_skips_null_embedding_rows() -> Result<()> {
-    use crate::sqlite::embedding::{search_memory_semantic, Embedder};
+    use crate::sqlite::embedding::{Embedder, search_memory_semantic};
 
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;

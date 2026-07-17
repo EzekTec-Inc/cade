@@ -53,7 +53,7 @@ use cade_core::permissions::PermissionMode;
 use layout::helpers::{abbreviate_cwd, display_tool_name};
 pub use layout::helpers::{cycle_mode, cycle_mode_back, truncate_str};
 pub use reducer::TuiAction;
-use render::{count_wrapped_rows, render_frame};
+use render::{RenderContext, count_wrapped_rows, render_frame};
 
 // -- Constants
 
@@ -1444,45 +1444,48 @@ impl TuiApp {
 
         let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
-            let (m_skip, cur_pos, msg_area) = render_frame(
-                frame,
+            let render_ctx = RenderContext {
                 lines,
-                streaming.as_deref(),
+                streaming: streaming.as_deref(),
                 scroll,
                 expand_all,
-                &mut textarea,
                 input_mode,
                 mode,
                 agent_name,
                 model,
                 last_status,
-                thinking_text.as_deref(),
+                thinking_text: thinking_text.as_deref(),
                 thinking_elapsed,
-                overlay_stack
+                top_overlay: overlay_stack
                     .last()
                     .map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
                 pending_lines,
                 queued_count,
                 cwd,
                 context_pct,
-                self.session_tokens,
-                self.session_cost_usd,
+                session_tokens: self.session_tokens,
+                session_cost_usd: self.session_cost_usd,
                 turn_count,
                 token_history,
                 header_lines,
-                footer_extra.as_deref(),
+                footer_extra: footer_extra.as_deref(),
                 reasoning_effort,
-                active_plan_snap.as_ref(),
+                active_plan: active_plan_snap.as_ref(),
                 toast,
-                self.copy_highlight,
-                None,
+                copy_highlight: self.copy_highlight,
+                mouse_selection: None,
                 expanded_items,
                 colors,
-                &mut self.last_input_width,
                 nerd,
-                &self.subagent_trackers,
+                subagent_trackers: &self.subagent_trackers,
+                content_version: self.content_version,
+            };
+            let (m_skip, cur_pos, msg_area) = render_frame(
+                frame,
+                render_ctx,
+                &mut textarea,
+                &mut self.last_input_width,
                 &mut self.layout_engine,
-                self.content_version,
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;
@@ -1795,9 +1798,16 @@ impl TuiApp {
     ) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
         let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
 
-        // Try cache for the non-streaming portion.
-        let mut prepared = self
-            .layout_engine
+        let streaming = if self.streaming_active {
+            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
+            let reveal = self.streaming_reveal_len.min(full.len());
+            Some(full[..reveal].to_string())
+        } else {
+            None
+        };
+
+        self.layout_engine.set_active_stream(streaming.as_deref());
+        self.layout_engine
             .layout_items(
                 &self.lines,
                 timeline_w,
@@ -1807,42 +1817,7 @@ impl TuiApp {
                 self.use_nerd_fonts,
                 self.content_version,
             )
-            .to_vec();
-
-        // Streaming entry (always rebuilt — changes every tick, not cached).
-        if self.streaming_active {
-            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
-            let reveal = self.streaming_reveal_len.min(full.len());
-            let visible_streaming = &full[..reveal];
-            let next_index = self.lines.len();
-            let streaming_entry =
-                crate::app::timeline::TimelineEntry::streaming(next_index, visible_streaming);
-            let mut stream_lines = Vec::new();
-            let effective_w = timeline_w.saturating_sub(2);
-            streaming_entry.render_with_state(
-                effective_w,
-                self.expand_all,
-                &self.expanded_items,
-                &mut stream_lines,
-                &self.colors,
-                self.use_nerd_fonts,
-            );
-            // Pre-wrap streaming lines just like we do for standard cached lines in LayoutEngine,
-            // avoiding paragraph layout overflow.
-            let mut pre_wrapped_stream_lines = Vec::new();
-            for l in stream_lines {
-                pre_wrapped_stream_lines
-                    .extend(crate::app::timeline::wrap_line(l, effective_w as u16));
-            }
-            let stream_rows = pre_wrapped_stream_lines.len() as u16;
-            prepared.push(crate::app::timeline::PreparedTimelineEntry {
-                lines: pre_wrapped_stream_lines,
-                rows: stream_rows,
-                card_style: crate::app::timeline::CardStyle::Assistant,
-            });
-        }
-
-        prepared
+            .to_vec()
     }
 
     /// Extract highlighted character range from active buffer, copy it, and clear state

@@ -38,8 +38,7 @@ use super::layout::cursor::{calc_input_rows, input_mode_badge};
 use super::layout::sidebar::{SidebarState, render_sidebar};
 use super::layout::toast::render_toast;
 use super::timeline::{
-    PreparedTimelineEntry, TimelineEntry, TimelineKey, TimelineLayoutEngine,
-    build_timeline_entries, render_timeline_viewport,
+    TimelineKey, TimelineLayoutEngine, build_timeline_entries, render_timeline_viewport,
 };
 use super::{
     BRAILLE, DOTS, FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT,
@@ -105,69 +104,79 @@ pub(crate) fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
 
 // -- Frame renderer
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct RenderContext<'a> {
+    pub(crate) lines: &'a [RenderLine],
+    pub(crate) streaming: Option<&'a str>,
+    pub(crate) scroll: usize,
+    pub(crate) expand_all: bool,
+    pub(crate) input_mode: InputMode,
+    pub(crate) mode: PermissionMode,
+    pub(crate) agent_name: &'a str,
+    pub(crate) model: &'a str,
+    pub(crate) last_status: &'a Option<String>,
+    pub(crate) thinking_text: Option<&'a str>,
+    pub(crate) thinking_elapsed: Option<std::time::Duration>,
+    pub(crate) top_overlay: Option<&'a dyn crate::overlay_component::OverlayComponent>,
+    pub(crate) pending_lines: usize,
+    pub(crate) queued_count: usize,
+    pub(crate) cwd: &'a str,
+    pub(crate) context_pct: Option<u8>,
+    pub(crate) session_tokens: (u64, u64),
+    pub(crate) session_cost_usd: f64,
+    pub(crate) turn_count: u32,
+    pub(crate) token_history: &'a [u8],
+    pub(crate) header_lines: &'a [RenderLine],
+    pub(crate) footer_extra: Option<&'a str>,
+    pub(crate) reasoning_effort: Option<&'a str>,
+    pub(crate) active_plan: Option<&'a PlanState>,
+    pub(crate) toast: Option<&'a Toast>,
+    pub(crate) copy_highlight: Option<(usize, std::time::Instant)>,
+    pub(crate) mouse_selection: Option<usize>,
+    pub(crate) expanded_items: &'a std::collections::HashSet<TimelineKey>,
+    pub(crate) colors: &'a ThemeColors,
+    pub(crate) nerd: bool,
+    pub(crate) subagent_trackers: &'a [crate::subagent_tracker::SubagentTracker],
+    pub(crate) content_version: u64,
+}
+
 pub(crate) fn render_frame(
     frame: &mut Frame,
-    lines: &[RenderLine],
-    streaming: Option<&str>,
-    scroll: usize,
-    expand_all: bool,
+    ctx: RenderContext<'_>,
     textarea: &mut tui_textarea::TextArea<'static>,
-    input_mode: InputMode,
-    mode: PermissionMode,
-    agent_name: &str,
-    model: &str,
-    last_status: &Option<String>,
-    thinking_text: Option<&str>,
-    thinking_elapsed: Option<std::time::Duration>,
-    top_overlay: Option<&dyn crate::overlay_component::OverlayComponent>,
-    pending_lines: usize,
-    queued_count: usize,
-    cwd: &str,
-    context_pct: Option<u8>,
-    session_tokens: (u64, u64),
-    session_cost_usd: f64,
-    turn_count: u32,
-    token_history: &[u8],
-    header_lines: &[RenderLine],
-    footer_extra: Option<&str>,
-    reasoning_effort: Option<&str>,
-    active_plan: Option<&PlanState>,
-    toast: Option<&Toast>,
-    copy_highlight: Option<(usize, std::time::Instant)>,
-    mouse_selection: Option<usize>,
-    expanded_items: &std::collections::HashSet<TimelineKey>,
-    colors: &ThemeColors,
     last_input_width: &mut u16,
-    nerd: bool,
-    subagent_trackers: &[crate::subagent_tracker::SubagentTracker],
     layout_engine: &mut TimelineLayoutEngine,
-    content_version: u64,
 ) -> (u16, Option<(u16, u16)>, ratatui::layout::Rect) {
+    let RenderContext {
+        lines,
+        streaming,
+        scroll,
+        expand_all,
+        mode,
+        agent_name,
+        model,
+        cwd,
+        context_pct,
+        turn_count,
+        token_history,
+        header_lines,
+        footer_extra,
+        reasoning_effort,
+        active_plan,
+        toast,
+        copy_highlight,
+        mouse_selection,
+        expanded_items,
+        colors,
+        nerd,
+        subagent_trackers,
+        content_version,
+        ..
+    } = ctx;
+
     // returns max_skip for V-04 scroll clamping + messages_area for click-to-copy
     let area = frame.area();
     if area.width < 40 || area.height < 10 {
-        use crate::colors::ThemeColorsExt;
-        use ratatui::layout::Alignment;
-        use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(colors.border_muted())
-            .style(colors.style_base());
-        let msg = if area.width >= 34 {
-            "Resize terminal to render CADE"
-        } else if area.width >= 20 {
-            "Resize terminal"
-        } else {
-            "..."
-        };
-        let paragraph = Paragraph::new(msg)
-            .alignment(Alignment::Center)
-            .block(block)
-            .style(colors.text_dim());
-        frame.render_widget(paragraph, area);
+        render_fallback_too_small(frame, area, colors);
         return (0, None, ratatui::layout::Rect::default());
     }
 
@@ -182,10 +191,11 @@ pub(crate) fn render_frame(
     let w = main_area.width as usize;
 
     let input = textarea.lines().join("\n");
-    let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
+    let (input_badge, _input_badge_color) = input_mode_badge(ctx.input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
     let available_w = main_area.width;
-    let inline_h = top_overlay
+    let inline_h = ctx
+        .top_overlay
         .map(|o| o.inline_height(main_area.height))
         .unwrap_or(0);
     let mut input_rows =
@@ -231,8 +241,6 @@ pub(crate) fn render_frame(
         ])
         .split(main_area)
     } else {
-        // No question: same 6-slot layout, pad with two dummy zero-height slots
-        // so all index references below are uniform (we only use 0,3..7 in this branch).
         Layout::vertical([
             Constraint::Fill(1),                                   // [0] content
             Constraint::Length(0),                                 // [1] (unused)
@@ -246,33 +254,10 @@ pub(crate) fn render_frame(
         .split(main_area)
     };
 
-    // -- A-02: Header strip — pinned above the scrollable messages pane
-    let content_w = main_area.width.max(1);
-    let (header_area_opt, messages_area) = {
-        let mut header_text: Vec<Line<'static>> = Vec::new();
-        for entry in build_timeline_entries(header_lines) {
-            entry.render_into(w, false, &mut header_text, colors, nerd);
-        }
-        if header_text.is_empty() {
-            (None, chunks[0])
-        } else {
-            let hh: u16 = header_text
-                .iter()
-                .map(|l| count_wrapped_rows(l, content_w))
-                .sum::<u16>()
-                .min(chunks[0].height / 3)
-                .max(1);
-            let split =
-                Layout::vertical([Constraint::Length(hh), Constraint::Min(0)]).split(chunks[0]);
-            // Render the pinned header now (before message rendering).
-            frame.render_widget(
-                Paragraph::new(header_text).wrap(Wrap { trim: false }),
-                split[0],
-            );
-            (Some(split[0]), split[1])
-        }
-    };
-    let _ = header_area_opt; // used above for rendering
+    // -- Pinned header & viewport layout splits
+    let (header_area_opt, messages_area) =
+        render_pinned_header(frame, chunks[0], header_lines, w, colors, nerd);
+    let _ = header_area_opt;
 
     // -- Breadcrumb bar (only on narrow terminals where sidebar is absent)
     let messages_area = if sidebar_area.is_none() && messages_area.height > 4 {
@@ -295,56 +280,155 @@ pub(crate) fn render_frame(
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
-    let mut prepared = layout_engine
-        .layout_items(
-            lines,
-            timeline_w,
-            expand_all,
-            expanded_items,
-            colors,
-            nerd,
-            content_version,
-        )
-        .to_vec();
-    if let Some(s) = streaming {
-        let next_index = lines.len();
-        let streaming_entry = TimelineEntry::streaming(next_index, s);
-        let mut lines = Vec::new();
-        let effective_w = timeline_w.saturating_sub(2);
-        streaming_entry.render_with_state(
-            effective_w,
-            expand_all,
-            expanded_items,
-            &mut lines,
-            colors,
-            nerd,
-        );
-        let mut pre_wrapped_lines = Vec::new();
-        for l in lines {
-            pre_wrapped_lines.extend(crate::app::timeline::wrap_line(l, effective_w as u16));
-        }
-        let rows = pre_wrapped_lines.len() as u16;
-        prepared.push(PreparedTimelineEntry {
-            lines: pre_wrapped_lines,
-            rows,
-            card_style: crate::app::timeline::CardStyle::Assistant,
-        });
-    }
+    layout_engine.set_active_stream(streaming);
+    let prepared = layout_engine.layout_items(
+        lines,
+        timeline_w,
+        expand_all,
+        expanded_items,
+        colors,
+        nerd,
+        content_version,
+    );
 
     let max_skip = render_timeline_viewport(
         frame,
         messages_area,
-        &prepared,
+        prepared,
         scroll,
         colors,
         copy_highlight,
         mouse_selection,
     );
 
-    // File picker and theme picker overlays are now rendered by the
-    // dynamic overlay stack in TuiApp::draw().
-
     // -- Status row
+    render_status_row(frame, chunks[3], &ctx, colors);
+
+    // -- Separators
+    render_separators(frame, main_area, &chunks, &ctx, colors);
+
+    // -- Input area or Question Panel
+    let input_cursor_pos =
+        render_input_or_question(frame, chunks[5], textarea, last_input_width, &ctx, colors);
+
+    // -- Footer bars & Hotkeys
+    render_footer_bars(frame, &chunks, &ctx, footer_extra_h, colors);
+
+    // -- Sidebar
+    if let Some(sidebar) = sidebar_area {
+        let sidebar_state = SidebarState {
+            mode,
+            input_mode: ctx.input_mode,
+            agent_name,
+            model,
+            reasoning_effort,
+            cwd,
+            context_pct,
+            turn_count,
+            token_history,
+            queued_count: ctx.queued_count,
+            thinking_text: ctx.thinking_text,
+            thinking_elapsed: ctx.thinking_elapsed,
+            active_plan,
+            session_cost_usd: ctx.session_cost_usd,
+        };
+        render_sidebar(frame, sidebar, &sidebar_state, colors);
+    }
+
+    // -- Toast notifications
+    if let Some(toast) = toast {
+        render_toast(frame, main_area, toast, colors);
+    }
+
+    // -- Todos / Active Plan checklist
+    if let Some(plan) = active_plan
+        && plan.is_visible
+    {
+        render_active_plan(frame, chunks[2], plan, colors);
+    }
+
+    // -- Subagent Floating Cards
+    if !subagent_trackers.is_empty() {
+        render_subagent_trackers(frame, main_area, subagent_trackers, colors);
+    }
+
+    (max_skip, input_cursor_pos, messages_area)
+}
+
+// ── Sectional Rendering Helpers ──────────────────────────────────────────────
+
+fn render_fallback_too_small(frame: &mut Frame, area: ratatui::layout::Rect, colors: &ThemeColors) {
+    use crate::colors::ThemeColorsExt;
+    use ratatui::layout::Alignment;
+    use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(colors.border_muted())
+        .style(colors.style_base());
+    let msg = if area.width >= 34 {
+        "Resize terminal to render CADE"
+    } else if area.width >= 20 {
+        "Resize terminal"
+    } else {
+        "..."
+    };
+    let paragraph = Paragraph::new(msg)
+        .alignment(Alignment::Center)
+        .block(block)
+        .style(colors.text_dim());
+    frame.render_widget(paragraph, area);
+}
+
+fn render_pinned_header(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    header_lines: &[RenderLine],
+    w: usize,
+    colors: &ThemeColors,
+    nerd: bool,
+) -> (Option<ratatui::layout::Rect>, ratatui::layout::Rect) {
+    let content_w = area.width.max(1);
+    let mut header_text: Vec<Line<'static>> = Vec::new();
+    for entry in build_timeline_entries(header_lines) {
+        entry.render_into(w, false, &mut header_text, colors, nerd);
+    }
+    if header_text.is_empty() {
+        (None, area)
+    } else {
+        let hh: u16 = header_text
+            .iter()
+            .map(|l| count_wrapped_rows(l, content_w))
+            .sum::<u16>()
+            .min(area.height / 3)
+            .max(1);
+        let split = Layout::vertical([Constraint::Length(hh), Constraint::Min(0)]).split(area);
+        frame.render_widget(
+            Paragraph::new(header_text).wrap(Wrap { trim: false }),
+            split[0],
+        );
+        (Some(split[0]), split[1])
+    }
+}
+
+fn render_status_row(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    ctx: &RenderContext<'_>,
+    colors: &ThemeColors,
+) {
+    let RenderContext {
+        thinking_text,
+        thinking_elapsed,
+        last_status,
+        queued_count,
+        scroll,
+        streaming,
+        pending_lines,
+        ..
+    } = ctx;
+
     let (status_text, status_style) = if let Some(t) = thinking_text {
         let (spinner_text, fg_color) = if let Some(elapsed) = thinking_elapsed {
             let ms = elapsed.as_millis();
@@ -375,51 +459,52 @@ pub(crate) fn render_frame(
         (String::new(), Style::default())
     };
 
-    // Append queued-message badge so the user knows their input was accepted.
-    let status_text = if queued_count > 0 {
+    let mut status_text = if *queued_count > 0 {
         format!("{status_text}  · {queued_count} queued")
     } else {
         status_text
     };
 
-    // V-02: Append scroll indicator when user is scrolled up and content is arriving.
-    let status_text = if scroll > 0 {
+    if *scroll > 0 {
         let hint = if streaming.is_some() {
             "  ↓ streaming…  (Shift+J to follow)".to_string()
-        } else if pending_lines > 0 {
+        } else if *pending_lines > 0 {
             format!("  ↓ {pending_lines} new  (Shift+J to follow)")
         } else {
             String::new()
         };
-        if hint.is_empty() {
-            status_text
-        } else {
-            format!("{status_text}{hint}")
+        if !hint.is_empty() {
+            status_text = format!("{status_text}{hint}");
         }
-    } else {
-        status_text
-    };
+    }
 
-    // B5: Truncate status text to available width so it doesn't bleed
-    // into other regions on narrow terminals.
-    let status_text = truncate_str(&status_text, chunks[3].width as usize);
+    let status_text = truncate_str(&status_text, area.width as usize);
 
     frame.render_widget(
         Paragraph::new(Span::styled(status_text, status_style)),
-        chunks[3],
+        area,
     );
+}
 
-    // -- Separators
-    // U-02: Top separator pulses cyan when the agent is thinking or streaming,
-    // giving a peripheral activity signal without cluttering the status bar.
-    // Bottom separator always uses the mode color (stable reference point).
-    let mode_color = mode_sep_color(mode, colors);
+fn render_separators(
+    frame: &mut Frame,
+    main_area: ratatui::layout::Rect,
+    chunks: &[ratatui::layout::Rect],
+    ctx: &RenderContext<'_>,
+    colors: &ThemeColors,
+) {
+    let RenderContext {
+        mode,
+        thinking_elapsed,
+        streaming,
+        ..
+    } = ctx;
+
+    let mode_color = mode_sep_color(*mode, colors);
     let top_sep_color = if let Some(elapsed) = thinking_elapsed {
-        // Thinking / tool-calling: animated cyan pulse matching the spinner.
         let ms = elapsed.as_millis();
         spinner_color(ms, colors)
     } else if streaming.is_some() {
-        // Pure text streaming (thinking animation already stopped): fixed bright cyan.
         colors.c_primary()
     } else {
         mode_color
@@ -436,22 +521,40 @@ pub(crate) fn render_frame(
         Paragraph::new(Span::styled(sep, Style::default().fg(mode_color))),
         chunks[6],
     );
+}
 
-    let mut input_cursor_pos: Option<(u16, u16)> = None;
-    // -- Input area or Question Panel
+fn render_input_or_question(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    textarea: &mut tui_textarea::TextArea<'static>,
+    last_input_width: &mut u16,
+    ctx: &RenderContext<'_>,
+    colors: &ThemeColors,
+) -> Option<(u16, u16)> {
+    let RenderContext {
+        input_mode,
+        queued_count,
+        top_overlay,
+        ..
+    } = ctx;
+
+    let inline_h = top_overlay
+        .map(|o| o.inline_height(frame.area().height))
+        .unwrap_or(0);
+
     if inline_h > 0 {
         if let Some(top) = top_overlay {
-            top.render_inline(frame, chunks[5], colors);
+            top.render_inline(frame, area, colors);
         }
+        None
     } else {
-        // Clear the entire input chunk to prevent any leftover characters or artifacts
-        frame.render_widget(ratatui::widgets::Clear, chunks[5]);
+        frame.render_widget(ratatui::widgets::Clear, area);
 
-        let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
+        let (badge_text, badge_color) = input_mode_badge(*input_mode, colors);
         let prefix_w = badge_text.chars().count() as u16 + 3;
 
-        let input_chunks = Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)])
-            .split(chunks[5]);
+        let input_chunks =
+            Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)]).split(area);
 
         let prefix_spans = vec![
             Span::styled(
@@ -471,7 +574,7 @@ pub(crate) fn render_frame(
 
         let input_placeholder = if !textarea.is_empty() {
             String::new()
-        } else if queued_count > 0 {
+        } else if *queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
             "Type a message or paste code…".to_string()
@@ -485,21 +588,20 @@ pub(crate) fn render_frame(
                 .fg(colors.c_bg_base())
                 .bg(colors.c_primary()),
         );
-        // Apply default base style so the whole row is transparent
         textarea.set_style(Style::default());
 
         frame.render_widget(&*textarea, input_chunks[1]);
 
-        // Calculate visual cursor taking text wrapping into account to prevent hardware shadow cursors.
+        let input = textarea.lines().join("\n");
+
         let (visual_x, visual_y) = super::layout::cursor::calc_visual_cursor(
             &input,
             textarea.cursor().0,
             textarea.cursor().1,
-            available_w,
+            input_chunks[1].width,
             prefix_w,
         );
 
-        // Compute relative visual Y taking tui_textarea's vertical scrolling into account
         let relative_visual_y = if visual_y >= input_chunks[1].height {
             let scroll_top = visual_y
                 .saturating_sub(input_chunks[1].height)
@@ -509,42 +611,49 @@ pub(crate) fn render_frame(
             visual_y
         };
 
-        input_cursor_pos = Some((
+        *last_input_width = input_chunks[1].width;
+
+        Some((
             input_chunks[1].x + visual_x,
             input_chunks[1].y + relative_visual_y,
-        ));
-
-        *last_input_width = input_chunks[1].width;
+        ))
     }
+}
 
-    // -- Footer
-    let (left_label, left_glyph, left_color) = mode_footer_left(mode, colors);
-    let sidebar_open = sidebar_area.is_some();
-    let right_agent = if sidebar_open {
-        String::new()
-    } else {
-        agent_name.to_string()
-    };
-    let right_model = if sidebar_open {
-        String::new()
-    } else {
-        format!(" [{}]", truncate_str(model, 30))
-    };
-    let right_reasoning = if sidebar_open {
-        String::new()
-    } else {
-        reasoning_effort
-            .map(|r| format!(" [{r}]"))
-            .unwrap_or_default()
-    };
+fn render_footer_bars(
+    frame: &mut Frame,
+    chunks: &[ratatui::layout::Rect],
+    ctx: &RenderContext<'_>,
+    footer_extra_h: u16,
+    colors: &ThemeColors,
+) {
+    let RenderContext {
+        mode,
+        agent_name,
+        model,
+        reasoning_effort,
+        cwd,
+        context_pct,
+        session_tokens,
+        footer_extra,
+        top_overlay,
+        streaming,
+        ..
+    } = ctx;
+
+    let (left_label, left_glyph, left_color) = mode_footer_left(*mode, colors);
+    let right_agent = agent_name.to_string();
+    let right_model = format!(" [{}]", truncate_str(model, 30));
+    let right_reasoning = reasoning_effort
+        .map(|r| format!(" [{r}]"))
+        .unwrap_or_default();
     let (right_ctx, right_ctx_color) = match context_pct {
-        Some(p) if p >= 90 => (format!(" {p}%"), colors.c_error()),
-        Some(p) if p >= 80 => (format!(" {p}%"), colors.c_warning()),
+        Some(p) if *p >= 90 => (format!(" {p}%"), colors.c_error()),
+        Some(p) if *p >= 80 => (format!(" {p}%"), colors.c_warning()),
         Some(p) => (format!(" {p}%"), colors.c_text_muted()),
         None => (String::new(), colors.c_text_muted()),
     };
-    // Token counter: show cumulative output tokens in compact form.
-    let right_tokens = if sidebar_open || session_tokens == (0, 0) {
+    let right_tokens = if *session_tokens == (0, 0) {
         String::new()
     } else {
         let total = session_tokens.0 + session_tokens.1;
@@ -563,17 +672,15 @@ pub(crate) fn render_frame(
         + right_reasoning.chars().count()
         + right_ctx.chars().count()
         + right_tokens.chars().count()) as u16;
-    // B6: Truncate cwd to fit when terminal is narrow, keeping at least
-    // left label and the fixed right-side segments visible.
     let footer_w = chunks[7].width as usize;
     let available_for_cwd = footer_w
         .saturating_sub(left_base_len as usize)
         .saturating_sub(right_fixed_len as usize)
-        .saturating_sub(1); // at least 1 char padding
+        .saturating_sub(1);
     let mid_cwd = if mid_cwd.chars().count() > available_for_cwd && available_for_cwd > 4 {
         truncate_str(&mid_cwd, available_for_cwd)
     } else if available_for_cwd <= 4 {
-        String::new() // too tight — drop cwd entirely
+        String::new()
     } else {
         mid_cwd
     };
@@ -616,7 +723,6 @@ pub(crate) fn render_frame(
         footer.push(Span::styled(right_tokens, colors.text_dim()));
     }
 
-    // Live Connection Latency Indicator (Option 3)
     footer.push(Span::styled(
         "  Server: 14ms 🟢",
         Style::default()
@@ -626,7 +732,6 @@ pub(crate) fn render_frame(
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
 
-    // -- A-02: Footer extra row / selected-block action bar
     if let Some(extra) = footer_extra {
         let extra_rect = ratatui::layout::Rect {
             x: chunks[7].x,
@@ -643,7 +748,6 @@ pub(crate) fn render_frame(
         );
     }
 
-    // -- Contextual Hotkey Footer Bar (TUI ShortcutsGauge)
     let hotkey_rect = ratatui::layout::Rect {
         x: chunks[7].x,
         y: chunks[7].y + 1 + footer_extra_h,
@@ -688,171 +792,143 @@ pub(crate) fn render_frame(
         ]
     };
     frame.render_widget(Paragraph::new(Line::from(hotkey_spans)), hotkey_rect);
+}
 
-    if let Some(sidebar) = sidebar_area {
-        let sidebar_state = SidebarState {
-            mode,
-            input_mode,
-            agent_name,
-            model,
-            reasoning_effort,
-            cwd,
-            context_pct,
-            turn_count,
-            token_history,
-            queued_count,
-            thinking_text,
-            thinking_elapsed,
-            active_plan,
-            session_cost_usd,
+fn render_active_plan(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    plan: &PlanState,
+    colors: &ThemeColors,
+) {
+    use ratatui::widgets::{
+        List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    };
+
+    let mut items = Vec::new();
+    for step in &plan.steps {
+        let (prefix, color) = if step.is_done {
+            ("[✓] ", colors.c_text_muted())
+        } else {
+            ("[ ] ", colors.c_success())
         };
-        render_sidebar(frame, sidebar, &sidebar_state, colors);
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(color)),
+            Span::styled(
+                format!("{}. {}", step.id, step.description),
+                Style::default().fg(if step.is_done {
+                    colors.c_text_muted()
+                } else {
+                    colors.c_text_primary()
+                }),
+            ),
+        ])));
     }
 
-    if let Some(toast) = toast {
-        render_toast(frame, main_area, toast, colors);
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let total_steps = plan.steps.len();
+    let needs_scrollbar = total_steps > visible_rows;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(colors.c_border_style())
+        .title(format!(
+            " Todos ({}/{}) ",
+            plan.steps.iter().filter(|s| s.is_done).count(),
+            total_steps,
+        ))
+        .title_style(colors.primary_bold())
+        .border_style(colors.border_base());
+
+    let list = List::new(items).block(block);
+    let mut list_state = ListState::default().with_offset(plan.scroll_offset);
+    frame.render_stateful_widget(list, area, &mut list_state);
+
+    if needs_scrollbar {
+        let mut scrollbar_state = ScrollbarState::new(total_steps.saturating_sub(visible_rows))
+            .position(plan.scroll_offset);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
     }
+}
 
-    // Command palette and summary overlays are now rendered by the
-    // dynamic overlay stack in TuiApp::draw().
+fn render_subagent_trackers(
+    frame: &mut Frame,
+    main_area: ratatui::layout::Rect,
+    trackers: &[crate::subagent_tracker::SubagentTracker],
+    colors: &ThemeColors,
+) {
+    use ratatui::widgets::Clear;
+    let mut y_offset = main_area.y + 1;
 
-    if let Some(plan) = active_plan
-        && plan.is_visible
-    {
-        use ratatui::widgets::{
-            List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    for tracker in trackers {
+        let elapsed = tracker.started.elapsed().as_secs();
+        let tool_info = if let Some(ref tool) = tracker.current_tool {
+            format!(" · {} tools · {}", tracker.tool_calls, tool)
+        } else {
+            format!(" · {} tools", tracker.tool_calls)
         };
+        let text = format!("⟳ Subagent [{}] · {}s{}", tracker.mode, elapsed, tool_info);
+        let width = text.chars().count() as u16 + 4;
+        let height = 3;
+        let x = main_area.x + main_area.width.saturating_sub(width + 2);
 
-        let mut items = Vec::new();
-        for step in &plan.steps {
-            let (prefix, color) = if step.is_done {
-                ("[✓] ", colors.c_text_muted())
-            } else {
-                ("[ ] ", colors.c_success())
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(color)),
-                Span::styled(
-                    format!("{}. {}", step.id, step.description),
-                    Style::default().fg(if step.is_done {
-                        colors.c_text_muted()
-                    } else {
-                        colors.c_text_primary()
-                    }),
-                ),
-            ])));
-        }
+        let rect = ratatui::layout::Rect::new(x, y_offset, width, height);
 
-        let plan_area = chunks[2];
-        let visible_rows = plan_area.height.saturating_sub(2) as usize; // subtract border
-        let total_steps = plan.steps.len();
-        let needs_scrollbar = total_steps > visible_rows;
+        let shadow_rect = ratatui::layout::Rect::new(x + 1, y_offset + 1, width, height);
+        let shadow_text = vec![
+            Line::from(Span::styled(
+                "█".repeat(width as usize),
+                Style::default().fg(colors.c_text_dim())
+            ));
+            height as usize
+        ];
+        frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
+
+        frame.render_widget(Clear, rect);
+
+        let border_color = match tracker.mode.as_str() {
+            "plan" => colors.success(),
+            "build" => colors.warning(),
+            _ => colors.primary(),
+        };
 
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(colors.c_border_style())
-            .title(format!(
-                " Todos ({}/{}) ",
-                plan.steps.iter().filter(|s| s.is_done).count(),
-                total_steps,
-            ))
-            .title_style(colors.primary_bold())
-            .border_style(colors.border_base());
+            .style(colors.style_surface1())
+            .border_style(border_color);
 
-        let list = List::new(items).block(block);
-
-        // Use ListState with offset for scrolling
-        let mut list_state = ListState::default().with_offset(plan.scroll_offset);
-
-        frame.render_stateful_widget(list, plan_area, &mut list_state);
-
-        // Render scrollbar when content overflows
-        if needs_scrollbar {
-            let mut scrollbar_state = ScrollbarState::new(total_steps.saturating_sub(visible_rows))
-                .position(plan.scroll_offset);
-
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("↑"))
-                .end_symbol(Some("↓"))
-                .track_symbol(Some("│"))
-                .thumb_symbol("█");
-
-            // Render inside the border (inset by 1 vertical for top/bottom border)
-            frame.render_stateful_widget(
-                scrollbar,
-                plan_area.inner(ratatui::layout::Margin {
-                    vertical: 1,
-                    horizontal: 0,
-                }),
-                &mut scrollbar_state,
-            );
+        let mut spans = vec![
+            Span::styled("⟳ ", colors.warning()),
+            Span::styled(
+                format!("Subagent [{}]", tracker.mode),
+                colors.text_primary_bold(),
+            ),
+            Span::styled(
+                format!(" · {elapsed}s · {} tools", tracker.tool_calls),
+                colors.text_dim(),
+            ),
+        ];
+        if let Some(ref tool) = tracker.current_tool {
+            spans.push(Span::styled(format!(" · {tool}"), colors.warning()));
         }
+        let p = Paragraph::new(Line::from(spans)).block(block);
+
+        frame.render_widget(p, rect);
+
+        y_offset += height + 1;
     }
-
-    if !subagent_trackers.is_empty() {
-        use ratatui::widgets::Clear;
-        let mut y_offset = main_area.y + 1; // start near top
-
-        for tracker in subagent_trackers {
-            let elapsed = tracker.started.elapsed().as_secs();
-            let tool_info = if let Some(ref tool) = tracker.current_tool {
-                format!(" · {} tools · {}", tracker.tool_calls, tool)
-            } else {
-                format!(" · {} tools", tracker.tool_calls)
-            };
-            let text = format!("⟳ Subagent [{}] · {}s{}", tracker.mode, elapsed, tool_info);
-            let width = text.chars().count() as u16 + 4;
-            let height = 3;
-            let x = main_area.x + main_area.width.saturating_sub(width + 2);
-
-            let rect = ratatui::layout::Rect::new(x, y_offset, width, height);
-
-            // Drop shadow
-            let shadow_rect = ratatui::layout::Rect::new(x + 1, y_offset + 1, width, height);
-            let shadow_text = vec![
-                Line::from(Span::styled(
-                    "█".repeat(width as usize),
-                    Style::default().fg(colors.c_text_dim())
-                ));
-                height as usize
-            ];
-            frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
-
-            frame.render_widget(Clear, rect);
-
-            let border_color = match tracker.mode.as_str() {
-                "plan" => colors.success(),
-                "build" => colors.warning(),
-                _ => colors.primary(),
-            };
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(colors.c_border_style())
-                .style(colors.style_surface1())
-                .border_style(border_color);
-
-            let mut spans = vec![
-                Span::styled("⟳ ", colors.warning()),
-                Span::styled(
-                    format!("Subagent [{}]", tracker.mode),
-                    colors.text_primary_bold(),
-                ),
-                Span::styled(
-                    format!(" · {elapsed}s · {} tools", tracker.tool_calls),
-                    colors.text_dim(),
-                ),
-            ];
-            if let Some(ref tool) = tracker.current_tool {
-                spans.push(Span::styled(format!(" · {tool}"), colors.warning()));
-            }
-            let p = Paragraph::new(Line::from(spans)).block(block);
-
-            frame.render_widget(p, rect);
-
-            y_offset += height + 1;
-        }
-    }
-
-    (max_skip, input_cursor_pos, messages_area) // V-04 + click-to-copy
 }

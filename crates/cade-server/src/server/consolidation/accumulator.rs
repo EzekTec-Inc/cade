@@ -1,6 +1,6 @@
+use cade_ai::{CompletionRequest, LlmMessage, LlmProvider};
 use std::collections::HashSet;
 use std::sync::Arc;
-use cade_ai::{CompletionRequest, LlmMessage, LlmProvider};
 
 // Constants moved from consolidation.rs to establish locality
 const SESSION_SUMMARY_MAX_CHARS: usize = 8_000;
@@ -114,12 +114,24 @@ impl SummaryAccumulator {
                     "SummaryAccumulator: LLM summary merge failed: {}. Falling back to ring rotation.",
                     e
                 );
-                let rotation_plan = self.plan_rotation(existing_summary, &clean_new_summary, files_metadata, existing_blocks);
+                let rotation_plan = self.plan_rotation(
+                    existing_summary,
+                    &clean_new_summary,
+                    files_metadata,
+                    existing_blocks,
+                );
                 AccumulationResult::Rotated(rotation_plan)
             }
             Err(_) => {
-                tracing::warn!("SummaryAccumulator: LLM summary merge timed out. Falling back to ring rotation.");
-                let rotation_plan = self.plan_rotation(existing_summary, &clean_new_summary, files_metadata, existing_blocks);
+                tracing::warn!(
+                    "SummaryAccumulator: LLM summary merge timed out. Falling back to ring rotation."
+                );
+                let rotation_plan = self.plan_rotation(
+                    existing_summary,
+                    &clean_new_summary,
+                    files_metadata,
+                    existing_blocks,
+                );
                 AccumulationResult::Rotated(rotation_plan)
             }
         }
@@ -185,7 +197,7 @@ impl SummaryAccumulator {
     }
 
     /// Asynchronously merges the summaries using the LLM provider.
-    async fn merge_session_summaries(
+    pub(crate) async fn merge_session_summaries(
         &self,
         old_summary: &str,
         new_summary: &str,

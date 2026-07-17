@@ -32,9 +32,10 @@ pub fn ChatView() -> Element {
 
         spawn(async move {
             if !agent_id.is_empty()
-                && let Ok(list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await {
-                    msgs.set(list);
-                }
+                && let Ok(list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await
+            {
+                msgs.set(list);
+            }
         });
     });
 
@@ -93,9 +94,10 @@ fn chat_sidebar(
         let mut cps = checkpoints;
         spawn(async move {
             if !a_id.is_empty()
-                && let Ok(data) = api().list_checkpoints(&a_id).await {
-                    cps.set(data);
-                }
+                && let Ok(data) = api().list_checkpoints(&a_id).await
+            {
+                cps.set(data);
+            }
         });
     });
 
@@ -327,9 +329,10 @@ fn messages_panel(
     use_effect(move || {
         let _ = messages();
         if let Some(doc) = web_sys::window().and_then(|w| w.document())
-            && let Some(el) = doc.get_element_by_id("chat-messages-panel") {
-                el.set_scroll_top(el.scroll_height());
-            }
+            && let Some(el) = doc.get_element_by_id("chat-messages-panel")
+        {
+            el.set_scroll_top(el.scroll_height());
+        }
     });
 
     rsx! {

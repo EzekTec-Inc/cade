@@ -721,6 +721,8 @@ pub(crate) struct TimelineLayoutEngine {
     pub(crate) timeline_w: usize,
     pub(crate) expand_all: bool,
     pub(crate) expanded_hash: u64,
+    pub(crate) streaming_text: Option<String>,
+    pub(crate) streaming_entry: Option<PreparedTimelineEntry>,
 }
 
 impl TimelineLayoutEngine {
@@ -732,6 +734,8 @@ impl TimelineLayoutEngine {
             timeline_w: 0,
             expand_all: false,
             expanded_hash: 0,
+            streaming_text: None,
+            streaming_entry: None,
         }
     }
 
@@ -743,6 +747,8 @@ impl TimelineLayoutEngine {
         self.timeline_w = 0;
         self.expand_all = false;
         self.expanded_hash = 0;
+        self.streaming_text = None;
+        self.streaming_entry = None;
     }
 
     pub fn prepare_entries(
@@ -763,6 +769,44 @@ impl TimelineLayoutEngine {
             nerd,
             &mut self.item_cache,
         )
+    }
+
+    pub fn set_active_stream(&mut self, streaming: Option<&str>) {
+        if self.streaming_text.as_deref() != streaming {
+            self.streaming_text = streaming.map(String::from);
+            self.streaming_entry = None; // Invalidate the single-entry streaming cache
+        }
+    }
+
+    fn prepare_streaming_entry(&mut self, next_index: usize, colors: &ThemeColors, nerd: bool) {
+        if self.streaming_entry.is_some() {
+            return;
+        }
+
+        if let Some(ref s) = self.streaming_text {
+            let streaming_entry = TimelineEntry::streaming(next_index, s);
+            let mut lines = Vec::new();
+            let effective_w = self.timeline_w.saturating_sub(2);
+            streaming_entry.render_with_state(
+                effective_w,
+                self.expand_all,
+                &Default::default(), // Streaming assistant is never collapsed
+                &mut lines,
+                colors,
+                nerd,
+            );
+
+            let mut pre_wrapped_lines = Vec::new();
+            for l in lines {
+                pre_wrapped_lines.extend(wrap_line(l, effective_w as u16));
+            }
+            let rows = pre_wrapped_lines.len() as u16;
+            self.streaming_entry = Some(PreparedTimelineEntry {
+                lines: pre_wrapped_lines,
+                rows,
+                card_style: CardStyle::Assistant,
+            });
+        }
     }
 
     /// Evaluates layout for a sequence of conversation lines, automatically managing caching.
@@ -792,20 +836,38 @@ impl TimelineLayoutEngine {
             h.finish()
         };
 
-        if self.version == content_version
+        // Check if historical layout remains exactly the same
+        let history_clean = self.version == content_version
             && self.timeline_w == timeline_w
             && self.expand_all == expand_all
-            && self.expanded_hash == expanded_hash
-        {
-            // Cache hit
+            && self.expanded_hash == expanded_hash;
+
+        if history_clean {
+            // Check if the streaming entry has also been prepared
+            let next_index = lines.len();
+            if self.streaming_entry.is_none() && self.streaming_text.is_some() {
+                self.prepare_streaming_entry(next_index, colors, nerd);
+
+                // If we now have a new streaming entry, we need to reconstruct self.entries!
+                // Since the historical portion was clean, we can simply truncate any previous streaming entry,
+                // and append the new one.
+                if let Some(ref entry) = self.streaming_entry {
+                    self.entries.truncate(next_index);
+                    self.entries.push(entry.clone());
+                }
+            } else if self.streaming_text.is_none() {
+                // No active stream, ensure we truncated any old stream
+                self.entries.truncate(next_index);
+            }
             &self.entries
         } else {
-            // Cache miss — rebuild entries
+            // Cache miss for history — rebuild everything
             if self.timeline_w != timeline_w {
                 self.item_cache.clear();
+                self.streaming_entry = None; // clear streaming cache as width changed
             }
             let entries = build_timeline_entries(lines);
-            let p = prepare_timeline_entries(
+            let mut p = prepare_timeline_entries(
                 &entries,
                 timeline_w,
                 expand_all,
@@ -814,11 +876,20 @@ impl TimelineLayoutEngine {
                 nerd,
                 &mut self.item_cache,
             );
-            self.entries = p;
+
             self.version = content_version;
             self.timeline_w = timeline_w;
             self.expand_all = expand_all;
             self.expanded_hash = expanded_hash;
+
+            // Prepare and append the streaming entry if present
+            let next_index = lines.len();
+            self.prepare_streaming_entry(next_index, colors, nerd);
+            if let Some(ref entry) = self.streaming_entry {
+                p.push(entry.clone());
+            }
+
+            self.entries = p;
             &self.entries
         }
     }

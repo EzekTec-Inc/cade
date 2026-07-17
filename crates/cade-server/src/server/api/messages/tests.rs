@@ -781,9 +781,10 @@ async fn build_context_caps_oversize_tool_result_messages() {
         embedder: None,
     };
 
-    let (_model, messages, _tools) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
-        .await
-        .expect("build_context");
+    let (_model, messages, _tools) =
+        super::context::build_context(state.clone(), agent_id.to_string(), None, false)
+            .await
+            .expect("build_context");
     let big_msg = messages
         .iter()
         .find(|m| m.role == "assistant" && m.content.len() > 100)
@@ -1181,9 +1182,10 @@ async fn build_context_subtracts_full_system_prompt_and_memory() {
         as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let (_model, messages, _tools) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
-        .await
-        .expect("build_context");
+    let (_model, messages, _tools) =
+        super::context::build_context(state.clone(), agent_id.to_string(), None, false)
+            .await
+            .expect("build_context");
 
     // Both system messages (static + dynamic) must be present.
     let sys_count = messages.iter().filter(|m| m.role == "system").count();
@@ -1352,12 +1354,14 @@ async fn build_context_message_budget_reflects_real_token_overhead() {
     let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let (_m1, msgs_small, _) = super::context::build_context(state.clone(), small_id.to_string(), None, false)
-        .await
-        .unwrap();
-    let (_m2, msgs_big, _) = super::context::build_context(state.clone(), big_id.to_string(), None, false)
-        .await
-        .unwrap();
+    let (_m1, msgs_small, _) =
+        super::context::build_context(state.clone(), small_id.to_string(), None, false)
+            .await
+            .unwrap();
+    let (_m2, msgs_big, _) =
+        super::context::build_context(state.clone(), big_id.to_string(), None, false)
+            .await
+            .unwrap();
 
     let sum_chars = |v: &Vec<cade_ai::LlmMessage>| -> usize {
         v.iter().map(|m| m.content.chars().count()).sum()
@@ -1437,9 +1441,10 @@ async fn build_context_token_overhead_frees_more_budget_than_chars() {
     let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_minimal_state(db, llm);
 
-    let (_m, messages, _t) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
-        .await
-        .unwrap();
+    let (_m, messages, _t) =
+        super::context::build_context(state.clone(), agent_id.to_string(), None, false)
+            .await
+            .unwrap();
     let history_msgs = messages.iter().filter(|m| m.role != "system").count();
     // With token-based accounting the system prompt costs ~prose_tokens × 3
     // chars instead of prose_chars; this should leave room for *all* 40
@@ -1597,9 +1602,10 @@ async fn skills_section_lives_in_static_system_block() {
         loaded.insert(agent_id.to_string(), vec!["kpx-marker".to_string()]);
     }
 
-    let (_model, messages, _tools) = super::context::build_context(state.clone(), agent_id.to_string(), None, false)
-        .await
-        .expect("build_context");
+    let (_model, messages, _tools) =
+        super::context::build_context(state.clone(), agent_id.to_string(), None, false)
+            .await
+            .expect("build_context");
 
     assert!(messages.len() >= 2, "must have 2 system messages");
     let static_sys = &messages[0].content;

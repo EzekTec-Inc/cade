@@ -29,9 +29,13 @@ pub async fn compact_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conversation_id = params.get("conversation_id").map(String::as_str);
 
-    let compacted_chars =
-        crate::server::consolidation::consolidate_agent(state.clone(), agent_id.clone(), conversation_id.map(String::from), None)
-            .await;
+    let compacted_chars = crate::server::consolidation::consolidate_agent(
+        state.clone(),
+        agent_id.clone(),
+        conversation_id.map(String::from),
+        None,
+    )
+    .await;
 
     Ok(Json(json!({
         "agent_id":             agent_id,

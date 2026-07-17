@@ -22,24 +22,25 @@ fn App() -> Element {
 
     if let Some(window) = web_sys::window()
         && let Ok(search) = window.location().search()
-            && !search.is_empty() {
-                let query = search.trim_start_matches('?');
-                for pair in query.split('&') {
-                    let parts: Vec<&str> = pair.split('=').collect();
-                    if parts.len() == 2 {
-                        let key = parts[0];
-                        let val = urlencoding::decode(parts[1])
-                            .unwrap_or_default()
-                            .into_owned();
-                        match key {
-                            "api_key" => initial_key = val,
-                            "agent_id" => initial_agent_id = Some(val),
-                            "conversation_id" => initial_conv_id = Some(val),
-                            _ => {}
-                        }
-                    }
+        && !search.is_empty()
+    {
+        let query = search.trim_start_matches('?');
+        for pair in query.split('&') {
+            let parts: Vec<&str> = pair.split('=').collect();
+            if parts.len() == 2 {
+                let key = parts[0];
+                let val = urlencoding::decode(parts[1])
+                    .unwrap_or_default()
+                    .into_owned();
+                match key {
+                    "api_key" => initial_key = val,
+                    "agent_id" => initial_agent_id = Some(val),
+                    "conversation_id" => initial_conv_id = Some(val),
+                    _ => {}
                 }
             }
+        }
+    }
 
     let initial_page = if initial_agent_id.is_some() {
         SelectedPage::Chat
@@ -159,48 +160,49 @@ fn App() -> Element {
                                 let agent_id = event["agent_id"].as_str().unwrap_or("");
                                 if let Some(curr) = selected()
                                     && curr.id == agent_id
-                                        && let Ok(conv) = serde_json::from_value::<
-                                            cade_api_types::ConversationInfo,
-                                        >(
-                                            event["conversation"].clone()
-                                        ) {
-                                            let mut list = convs();
-                                            if !list.contains(&conv) {
-                                                list.push(conv);
-                                                convs.set(list);
-                                            }
-                                        }
+                                    && let Ok(conv) =
+                                        serde_json::from_value::<cade_api_types::ConversationInfo>(
+                                            event["conversation"].clone(),
+                                        )
+                                {
+                                    let mut list = convs();
+                                    if !list.contains(&conv) {
+                                        list.push(conv);
+                                        convs.set(list);
+                                    }
+                                }
                             }
                             "conversation_deleted" => {
                                 let agent_id = event["agent_id"].as_str().unwrap_or("");
                                 let conv_id = event["conversation_id"].as_str().unwrap_or("");
                                 if let Some(curr) = selected()
-                                    && curr.id == agent_id {
-                                        let mut list = convs();
-                                        list.retain(|c| c.id != conv_id);
-                                        convs.set(list);
-                                        if active_conversation() == Some(conv_id.to_string()) {
-                                            active_conversation.set(None);
-                                        }
+                                    && curr.id == agent_id
+                                {
+                                    let mut list = convs();
+                                    list.retain(|c| c.id != conv_id);
+                                    convs.set(list);
+                                    if active_conversation() == Some(conv_id.to_string()) {
+                                        active_conversation.set(None);
                                     }
+                                }
                             }
                             "message_created" => {
                                 let m_agent_id = event["agent_id"].as_str().unwrap_or("");
                                 let m_conv_id = event["conversation_id"].as_str();
                                 if let Some(curr_agent) = selected()
                                     && curr_agent.id == m_agent_id
-                                        && active_conversation() == m_conv_id.map(String::from)
-                                        && let Ok(msg) =
-                                            serde_json::from_value::<cade_api_types::ChatMessage>(
-                                                event["message"].clone(),
-                                            )
-                                        {
-                                            let mut list = messages();
-                                            if !list.iter().any(|m| m.id == msg.id) {
-                                                list.push(msg);
-                                                messages.set(list);
-                                            }
-                                        }
+                                    && active_conversation() == m_conv_id.map(String::from)
+                                    && let Ok(msg) =
+                                        serde_json::from_value::<cade_api_types::ChatMessage>(
+                                            event["message"].clone(),
+                                        )
+                                {
+                                    let mut list = messages();
+                                    if !list.iter().any(|m| m.id == msg.id) {
+                                        list.push(msg);
+                                        messages.set(list);
+                                    }
+                                }
                             }
                             _ => {}
                         }

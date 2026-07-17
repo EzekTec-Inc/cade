@@ -61,9 +61,10 @@ pub fn ToolsView() -> Element {
                     add_toast(&st, ToastLevel::Success, msg, format!("Request ID: {}", id));
                     // Refresh the pending list
                     if let Ok(data) = api_client.list_approvals().await
-                        && let Some(arr) = data.get("approvals").and_then(|v| v.as_array()) {
-                            apprs.set(arr.clone());
-                        }
+                        && let Some(arr) = data.get("approvals").and_then(|v| v.as_array())
+                    {
+                        apprs.set(arr.clone());
+                    }
                 }
                 Err(e) => add_toast(&st, ToastLevel::Error, "Action failed", e),
             }

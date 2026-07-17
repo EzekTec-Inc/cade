@@ -1,11 +1,11 @@
-use async_trait::async_trait;
-use serde_json::{Value, json};
 use crate::Result;
 use crate::tools::ToolResult;
-use std::path::PathBuf;
-use std::fs;
+use async_trait::async_trait;
 use futures::future::join_all;
 use futures::stream::{self, StreamExt};
+use serde_json::{Value, json};
+use std::fs;
+use std::path::PathBuf;
 
 /// A trait that defines the interface for running a single subagent.
 /// Both the CLI client and the server implement this to execute single runs
@@ -13,12 +13,8 @@ use futures::stream::{self, StreamExt};
 #[async_trait]
 pub trait SubagentSingleRunner: Send + Sync {
     /// Executes a single subagent run.
-    async fn run_single(
-        &self,
-        call_id: &str,
-        args: &Value,
-        force_sync: bool,
-    ) -> Result<ToolResult>;
+    async fn run_single(&self, call_id: &str, args: &Value, force_sync: bool)
+    -> Result<ToolResult>;
 
     /// Lists all available subagents.
     fn list_subagents(&self) -> Result<String>;
@@ -37,7 +33,10 @@ fn global_dir() -> Option<PathBuf> {
 
 /// Helper to resolve the project .cade/subagents/ directory
 fn project_dir() -> PathBuf {
-    std::env::current_dir().unwrap_or_default().join(".cade").join("subagents")
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join(".cade")
+        .join("subagents")
 }
 
 /// The unified subagent coordinator module.
@@ -75,7 +74,10 @@ impl SubagentCoordinator {
                     );
                     let mut out = String::from("Executable agents:\n");
                     for d in defs {
-                        out.push_str(&format!("- {} ({}): {} ({})\n", d.name, d.scope, d.description, d.tools));
+                        out.push_str(&format!(
+                            "- {} ({}): {} ({})\n",
+                            d.name, d.scope, d.description, d.tools
+                        ));
                     }
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
@@ -95,7 +97,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'agent' or 'id' parameter is required for 'get' action".to_string(),
+                            output: "error: 'agent' or 'id' parameter is required for 'get' action"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -151,8 +154,16 @@ impl SubagentCoordinator {
                     });
                 }
                 "create" | "update" => {
-                    let config_val = args.get("config").cloned().unwrap_or(Value::Object(Default::default()));
-                    let name = config_val.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                    let config_val = args
+                        .get("config")
+                        .cloned()
+                        .unwrap_or(Value::Object(Default::default()));
+                    let name = config_val
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
                     if name.is_empty() {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
@@ -169,10 +180,24 @@ impl SubagentCoordinator {
                         .unwrap_or("")
                         .trim()
                         .to_string();
-                    let description = config_val.get("description").and_then(|v| v.as_str()).unwrap_or("Custom user subagent").to_string();
-                    let model = config_val.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let tools = config_val.get("tools").and_then(|v| v.as_str()).unwrap_or("all").to_string();
-                    let scope_str = config_val.get("agentScope").and_then(|v| v.as_str()).unwrap_or("project");
+                    let description = config_val
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Custom user subagent")
+                        .to_string();
+                    let model = config_val
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let tools = config_val
+                        .get("tools")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("all")
+                        .to_string();
+                    let scope_str = config_val
+                        .get("agentScope")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("project");
 
                     let target_dir = if scope_str == "user" {
                         if let Some(dir) = global_dir() {
@@ -245,7 +270,9 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'agent' or 'id' parameter is required for 'delete' action".to_string(),
+                            output:
+                                "error: 'agent' or 'id' parameter is required for 'delete' action"
+                                    .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -290,7 +317,10 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: format!("error: no custom subagent definition found for '{}'", name),
+                            output: format!(
+                                "error: no custom subagent definition found for '{}'",
+                                name
+                            ),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -306,7 +336,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'agent' parameter is required for 'eject' action".to_string(),
+                            output: "error: 'agent' parameter is required for 'eject' action"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -371,7 +402,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'agent' parameter is required for 'disable' action".to_string(),
+                            output: "error: 'agent' parameter is required for 'disable' action"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -424,7 +456,10 @@ impl SubagentCoordinator {
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: format!("error: no custom subagent found to disable for '{}'", name),
+                        output: format!(
+                            "error: no custom subagent found to disable for '{}'",
+                            name
+                        ),
                         is_error: true,
                         ui_resource_uri: None,
                     });
@@ -439,7 +474,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'agent' parameter is required for 'enable' action".to_string(),
+                            output: "error: 'agent' parameter is required for 'enable' action"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -492,7 +528,10 @@ impl SubagentCoordinator {
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: format!("error: no disabled subagent definition found for '{}'", name),
+                        output: format!(
+                            "error: no disabled subagent definition found for '{}'",
+                            name
+                        ),
                         is_error: true,
                         ui_resource_uri: None,
                     });
@@ -507,7 +546,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'agent' parameter is required for 'reset' action".to_string(),
+                            output: "error: 'agent' parameter is required for 'reset' action"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -563,7 +603,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'id' and 'message' are required for steering".to_string(),
+                            output: "error: 'id' and 'message' are required for steering"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -643,7 +684,9 @@ impl SubagentCoordinator {
                 }
 
                 // Check for parallel step inside chain
-                let step_res = if let Some(parallel_tasks) = step_args_c.get("parallel").and_then(|v| v.as_array()) {
+                let step_res = if let Some(parallel_tasks) =
+                    step_args_c.get("parallel").and_then(|v| v.as_array())
+                {
                     let mut futures = Vec::new();
                     for (p_idx, p_task_args) in parallel_tasks.iter().enumerate() {
                         let p_call_id = format!("{}_p{}", step_call_id, p_idx);
@@ -660,7 +703,9 @@ impl SubagentCoordinator {
                         }
                         let runner_ref = runner;
                         futures.push(async move {
-                            runner_ref.run_single(&p_call_id, &p_task_args_c, true).await
+                            runner_ref
+                                .run_single(&p_call_id, &p_task_args_c, true)
+                                .await
                         });
                     }
                     let parallel_results = join_all(futures).await;
@@ -728,23 +773,33 @@ impl SubagentCoordinator {
                 });
             }
 
-            let concurrency = args.get("concurrency").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
-            let use_worktree = args.get("worktree").and_then(|v| v.as_bool()).unwrap_or(false);
+            let concurrency = args
+                .get("concurrency")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(4) as usize;
+            let use_worktree = args
+                .get("worktree")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let tasks_owned: Vec<Value> = tasks_val.to_vec();
-            let mut stream = stream::iter(tasks_owned.into_iter().enumerate().map(|(idx, mut task_args_c)| {
-                let task_call_id = format!("{}_{}", call_id, idx);
-                if use_worktree {
-                    task_args_c["enforce_isolation"] = Value::Bool(true);
-                    task_args_c["_enforce_isolation"] = Value::Bool(true);
-                }
-                let runner_ref = runner;
-                let task_call_id_c = task_call_id.clone();
-                async move {
-                    let res = runner_ref.run_single(&task_call_id_c, &task_args_c, true).await;
-                    (idx, res)
-                }
-            }))
+            let mut stream = stream::iter(tasks_owned.into_iter().enumerate().map(
+                |(idx, mut task_args_c)| {
+                    let task_call_id = format!("{}_{}", call_id, idx);
+                    if use_worktree {
+                        task_args_c["enforce_isolation"] = Value::Bool(true);
+                        task_args_c["_enforce_isolation"] = Value::Bool(true);
+                    }
+                    let runner_ref = runner;
+                    let task_call_id_c = task_call_id.clone();
+                    async move {
+                        let res = runner_ref
+                            .run_single(&task_call_id_c, &task_args_c, true)
+                            .await;
+                        (idx, res)
+                    }
+                },
+            ))
             .buffer_unordered(concurrency);
 
             let mut results = Vec::new();

@@ -1,22 +1,33 @@
+use super::accumulator::{
+    SummaryAccumulator, format_touched_files_section, parse_existing_touched_files,
+    strip_touched_files_section, truncate_head_to,
+};
 use super::*;
 
-fn rotate_and_archive_session_summary_db(
-    db: &sqlite::Db,
-    agent_id: &str,
-    prev_live: &str,
-) {
+fn rotate_and_archive_session_summary_db(db: &sqlite::Db, agent_id: &str, prev_live: &str) {
     struct MockLlm;
     #[async_trait::async_trait]
     impl cade_ai::LlmProvider for MockLlm {
-        async fn complete(&self, _: &cade_ai::CompletionRequest) -> cade_ai::Result<cade_ai::CompletionResponse> {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
             unreachable!()
         }
-        async fn stream(&self, _: &cade_ai::CompletionRequest) -> cade_ai::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>>> {
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
             unreachable!()
         }
     }
 
-    let acc = accumulator::SummaryAccumulator::new(std::sync::Arc::new(MockLlm), "mock".to_string());
+    let acc =
+        accumulator::SummaryAccumulator::new(std::sync::Arc::new(MockLlm), "mock".to_string());
     let existing_blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
     let existing_blocks_pairs: Vec<(String, String)> = existing_blocks
         .iter()
@@ -897,6 +908,23 @@ fn default_compaction_anthropic_uses_current_haiku_model_id() {
         default_compaction_model("anthropic/claude-opus-4-6"),
         "anthropic/claude-haiku-4-5"
     );
+}
+
+async fn merge_session_summaries(
+    state: AppState,
+    agent_id: String,
+    old_summary: String,
+    new_summary: String,
+) -> Result<String, String> {
+    let model = sqlite::get_agent(&state.db, &agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Agent not found".to_string())?
+        .model;
+
+    let compaction_model = default_compaction_model(&model);
+    let acc = SummaryAccumulator::new(state.llm.clone(), compaction_model);
+    acc.merge_session_summaries(&old_summary, &new_summary)
+        .await
 }
 
 #[tokio::test]

@@ -952,7 +952,10 @@ ui_resource_uri: None,
             "run_parallel_subagents" => Some(self.handle_subagent(call_id, args).await),
             "wait" => Some(self.handle_wait(call_id, args).await),
             "intercom" => Some(self.handle_intercom("intercom", call_id, args).await),
-            "subagent_supervisor" => Some(self.handle_intercom("subagent_supervisor", call_id, args).await),
+            "subagent_supervisor" => Some(
+                self.handle_intercom("subagent_supervisor", call_id, args)
+                    .await,
+            ),
             "run_team" => Some(Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: "run_team".to_string(),

@@ -175,17 +175,17 @@ impl Repl {
                     .map(|s| s.to_context_block());
                 if let Some(body) = skill_body {
                     let mut prompt =
-                        format!("[Skill invoked: /{skill_id}]\n\nFollow this skill:\n\n{body}");
+                        format!("[Skill invoked: /skill:{skill_id}]\n\nFollow this skill:\n\n{body}");
                     if let Some(prompt_str) = &user_prompt {
                         prompt.push_str("\n\nUser request:\n\n");
                         prompt.push_str(prompt_str);
                     }
                     if let Some(prompt_str) = &user_prompt {
                         self.tui_sys(format!(
-                            "  Running skill: /{skill_id} with prompt: {prompt_str}"
+                            "  Running skill: /skill:{skill_id} with prompt: {prompt_str}"
                         ));
                     } else {
-                        self.tui_sys(format!("  Running skill: /{skill_id}"));
+                        self.tui_sys(format!("  Running skill: /skill:{skill_id}"));
                     }
                     self.agent_turn(stdout, &prompt).await?;
                 } else {

@@ -1,5 +1,4 @@
 use super::*;
-use cade_core::skills::discover_all_skills;
 use serde_json::Value;
 
 impl ToolRuntime {
@@ -53,101 +52,17 @@ impl ToolRuntime {
         }
     }
 
-    pub(crate) async fn handle_run_skill_script(&self, args: &Value) -> (String, bool) {
-        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
-        let script = args["script"].as_str().unwrap_or("").trim().to_string();
-        let script_args: Vec<String> = args["args"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if skill_id.is_empty() || script.is_empty() {
-            return (
-                "Error: 'skill_id' and 'script' are required".to_string(),
-                true,
-            );
-        }
-
-        let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
-        let Some(skill) = skills.into_iter().find(|s| s.id == skill_id) else {
-            return (format!("Skill '{skill_id}' not found"), true);
-        };
-
-        let Some(sk) = skill.scripts.iter().find(|s| s.name == script).cloned() else {
-            let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
-            let list = if available.is_empty() {
-                "none".to_string()
-            } else {
-                available.join(", ")
-            };
-            return (
-                format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"),
-                true,
-            );
-        };
-
-        let mut cmd = tokio::process::Command::new(&sk.path);
-        cade_core::agent_env::apply_agent_env(&mut cmd);
-        cade_core::askpass::apply_askpass_env(&mut cmd);
-        match cmd.args(&script_args).output().await {
-            Err(e) => (format!("Failed to run script: {e}"), true),
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = if stderr.is_empty() {
-                    stdout
-                } else {
-                    format!("{stdout}\n[stderr]\n{stderr}")
-                };
-                let is_err = !out.status.success();
-                (combined, is_err)
-            }
-        }
+    pub(crate) async fn handle_run_skill_script(&self, _args: &Value) -> (String, bool) {
+        (
+            "run_skill_script is deprecated and removed from your schema. Please use the standard `bash` tool to execute scripts directly from their path instead.".to_string(),
+            true,
+        )
     }
 
-    pub(crate) fn handle_load_skill_ref(&self, args: &Value) -> (String, bool) {
-        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
-        let doc = args["doc"].as_str().unwrap_or("").trim().to_string();
-
-        if skill_id.is_empty() || doc.is_empty() {
-            return ("Error: 'skill_id' and 'doc' are required".to_string(), true);
-        }
-
-        let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
-        let Some(skill) = skills.into_iter().find(|s| s.id == skill_id) else {
-            return (format!("Skill '{skill_id}' not found"), true);
-        };
-
-        let Some(r) = skill
-            .references
-            .iter()
-            .find(|r| {
-                r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
-            })
-            .cloned()
-        else {
-            let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
-            let list = if available.is_empty() {
-                "none".to_string()
-            } else {
-                available.join(", ")
-            };
-            return (
-                format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"),
-                true,
-            );
-        };
-
-        match std::fs::read_to_string(&r.path) {
-            Ok(content) => (
-                format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"),
-                false,
-            ),
-            Err(e) => (format!("Failed to read reference '{doc}': {e}"), true),
-        }
+    pub(crate) fn handle_load_skill_ref(&self, _args: &Value) -> (String, bool) {
+        (
+            "load_skill_ref is deprecated and removed from your schema. Please use the standard `read` tool to read reference documents directly from their path instead.".to_string(),
+            true,
+        )
     }
 }

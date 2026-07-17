@@ -591,7 +591,14 @@ impl<'a> ContextCompactionEngine<'a> {
             .collect();
 
         // Run in-memory accumulation
-        let acc_result = acc.accumulate(existing, &final_summary, touched_files, &existing_blocks_pairs).await;
+        let acc_result = acc
+            .accumulate(
+                existing,
+                &final_summary,
+                touched_files,
+                &existing_blocks_pairs,
+            )
+            .await;
 
         let new_value = match acc_result {
             accumulator::AccumulationResult::Merged(val) => {
@@ -601,10 +608,16 @@ impl<'a> ContextCompactionEngine<'a> {
                     agent_id,
                     "session_summary",
                     &val,
-                    Some("Auto-generated summary of older conversation turns (Sleeptime consolidation)"),
+                    Some(
+                        "Auto-generated summary of older conversation turns (Sleeptime consolidation)",
+                    ),
                     Some(SESSION_SUMMARY_MAX_CHARS),
                 ) {
-                    tracing::warn!("consolidate [{}]: failed to write session_summary: {}", agent_id, e);
+                    tracing::warn!(
+                        "consolidate [{}]: failed to write session_summary: {}",
+                        agent_id,
+                        e
+                    );
                     return None;
                 }
                 val
@@ -640,10 +653,16 @@ impl<'a> ContextCompactionEngine<'a> {
                         Some("Rotated session summary (Phase C ring)"),
                         Some(cap_limit),
                     ) {
-                        tracing::warn!("consolidate [{}]: failed to upsert {}: {}", agent_id, up_label, e);
+                        tracing::warn!(
+                            "consolidate [{}]: failed to upsert {}: {}",
+                            agent_id,
+                            up_label,
+                            e
+                        );
                     }
                     if up_label != "session_summary" {
-                        let _ = sqlite::set_memory_tier(&state.db, agent_id, up_label, "long", false);
+                        let _ =
+                            sqlite::set_memory_tier(&state.db, agent_id, up_label, "long", false);
                     }
                 }
 
@@ -702,14 +721,14 @@ impl<'a> ContextCompactionEngine<'a> {
         };
 
         if let Some(ref bid) = boundary_msg_id {
-            if let Err(e) = sqlite::TimelineHorizon::advance(
-                &state.db,
-                agent_id,
-                conversation_id,
-                bid,
-                dropped,
-            ) {
-                tracing::warn!("consolidate [{}]: failed to advance timeline horizon: {}", agent_id, e);
+            if let Err(e) =
+                sqlite::TimelineHorizon::advance(&state.db, agent_id, conversation_id, bid, dropped)
+            {
+                tracing::warn!(
+                    "consolidate [{}]: failed to advance timeline horizon: {}",
+                    agent_id,
+                    e
+                );
                 return None;
             }
             tracing::debug!(
@@ -842,7 +861,10 @@ async fn auto_extract_facts(
         return;
     }
 
-    let engine = knowledge_lifting::KnowledgeLiftingEngine::new(state.llm.clone(), compaction_model.to_string());
+    let engine = knowledge_lifting::KnowledgeLiftingEngine::new(
+        state.llm.clone(),
+        compaction_model.to_string(),
+    );
     let facts = match engine.extract_from_text(summary).await {
         Ok(f) => f,
         Err(e) => {
@@ -923,7 +945,6 @@ async fn auto_extract_facts(
 ///
 /// All DB errors are logged at debug/warn and swallowed — rotation is
 /// best-effort and must never break the main consolidation path.
-
 
 /// Append a one-line excerpt to the pinned `session_index` block, evicting
 /// oldest lines FIFO when the block exceeds `SESSION_INDEX_MAX_CHARS`.
@@ -1040,16 +1061,12 @@ fn extract_touched_files(rows: &[sqlite::MessageRow]) -> (Vec<String>, Vec<Strin
     (r_vec, m_vec)
 }
 
-
-
 /// Sanitize a line for inclusion in `session_index`: strip newlines,
 /// collapse internal whitespace, cap at 200 chars.
 fn sanitize_index_line(s: &str) -> String {
     let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed.chars().take(200).collect()
 }
-
-
 
 /// Returns `true` if the summary is inflated relative to the source text — i.e.,
 /// the summary is ≥ 80% of the dropped-content size and should be rejected.

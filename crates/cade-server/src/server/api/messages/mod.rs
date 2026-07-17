@@ -419,7 +419,14 @@ async fn handle_tool_return_blocking(
         _ => {}
     }
 
-    let (model, messages, tools) = match build_context(state.clone(), agent_id.to_string(), conv_id.map(String::from), true).await {
+    let (model, messages, tools) = match build_context(
+        state.clone(),
+        agent_id.to_string(),
+        conv_id.map(String::from),
+        true,
+    )
+    .await
+    {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
@@ -559,11 +566,17 @@ pub async fn stream_message(
     }
 
     // 3. Build context from DB
-    let (model, mut messages, tools) =
-        match build_context(state.clone(), agent_id.clone(), conv_id.clone(), is_tool_return).await {
-            Ok(ctx) => ctx,
-            Err(e) => return err(StatusCode::NOT_FOUND, &e),
-        };
+    let (model, mut messages, tools) = match build_context(
+        state.clone(),
+        agent_id.clone(),
+        conv_id.clone(),
+        is_tool_return,
+    )
+    .await
+    {
+        Ok(ctx) => ctx,
+        Err(e) => return err(StatusCode::NOT_FOUND, &e),
+    };
 
     // 3b. Ephemeral messages were not persisted — inject into context so the
     // LLM actually sees them.  Without this the re-prompt text is silently

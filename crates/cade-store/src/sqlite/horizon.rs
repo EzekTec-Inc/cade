@@ -1,6 +1,6 @@
-use crate::error::Result;
 use super::Db;
 use super::runs::MessageRow;
+use crate::error::Result;
 use rusqlite::params;
 
 pub struct TimelineHorizon;
@@ -19,16 +19,18 @@ impl TimelineHorizon {
         let conn = db.get()?;
 
         // Fetch the timestamp of the boundary message
-        let marker_ts: i64 = conn.query_row(
-            "SELECT created_at FROM messages WHERE id = ?1",
-            params![boundary_msg_id],
-            |r| r.get(0),
-        ).unwrap_or_else(|_| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64
-        });
+        let marker_ts: i64 = conn
+            .query_row(
+                "SELECT created_at FROM messages WHERE id = ?1",
+                params![boundary_msg_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64
+            });
 
         let marker_id = format!("compact-{}", uuid::Uuid::new_v4());
         let marker_content = serde_json::json!({
@@ -123,7 +125,11 @@ impl TimelineHorizon {
     }
 
     /// Check if the agent has any compaction markers in history.
-    pub fn has_compaction_marker(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<bool> {
+    pub fn has_compaction_marker(
+        db: &Db,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<bool> {
         let conn = db.get()?;
         let count: i64 = if let Some(cid) = conversation_id {
             conn.query_row(

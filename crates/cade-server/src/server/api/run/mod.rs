@@ -301,9 +301,9 @@ pub(crate) async fn run_agent_loop(
         let tx = tx.clone();
         let ev = Event::default().data(data.to_string());
         async move {
-                let _ = tx.send(Ok(ev)).await;
-            }
-        };
+            let _ = tx.send(Ok(ev)).await;
+        }
+    };
 
     // ── stream_start ──────────────────────────────────────────────────
     send(json!({

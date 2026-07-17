@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use cade_ai::{CompletionRequest, LlmMessage, LlmProvider};
 use serde_json::Value;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ExtractedFact {

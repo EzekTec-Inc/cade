@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use cade_core::skills::discover_all_skills;
 
 use cade_core::tool_ids::*;
 
@@ -274,19 +273,11 @@ impl ToolRuntime {
 
     // region:    --- Skill handlers
 
-    fn handle_load_skill(&self, args: &Value) -> (String, bool) {
-        let id = args["id"].as_str().unwrap_or("").trim().to_string();
-        if id.is_empty() {
-            return ("Error: 'id' is required".to_string(), true);
-        }
-        let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
-        match skills.into_iter().find(|s| s.id == id) {
-            Some(s) => (s.to_context_block(), false),
-            None => (
-                format!("Skill '{id}' not found. Use /skills to list available skills."),
-                true,
-            ),
-        }
+    fn handle_load_skill(&self, _args: &Value) -> (String, bool) {
+        (
+            "load_skill is deprecated and removed from your schema. Please use the standard `read` tool to read the skill's `SKILL.md` file from the path provided in your system prompt instead.".to_string(),
+            true,
+        )
     }
 
     // region:    --- Checkpoint handlers

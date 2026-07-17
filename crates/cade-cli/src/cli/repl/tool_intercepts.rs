@@ -24,12 +24,13 @@ impl Repl {
                 ));
             }
         } else if let Some(tasks_val) = &cfg.tasks
-            && !tasks_val.is_empty() {
-                self.tui_dim(format!(
-                    "  Launching {} parallel subagents…",
-                    tasks_val.len()
-                ));
-            }
+            && !tasks_val.is_empty()
+        {
+            self.tui_dim(format!(
+                "  Launching {} parallel subagents…",
+                tasks_val.len()
+            ));
+        }
 
         cade_agent::subagents::SubagentCoordinator::coordinate(self, call_id, args)
             .await
@@ -43,11 +44,18 @@ impl Repl {
     ) -> Result<cade_agent::tools::ToolResult> {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
-        let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64()).unwrap_or(1800000);
+        let timeout_ms = args
+            .get("timeoutMs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1800000);
         let start = std::time::Instant::now();
         self.tui_dim(format!(
             "  Waiting for subagents{}…",
-            if !id.is_empty() { format!(" (ID: {})", id) } else { "".to_string() }
+            if !id.is_empty() {
+                format!(" (ID: {})", id)
+            } else {
+                "".to_string()
+            }
         ));
         loop {
             let active_count = {
@@ -94,7 +102,10 @@ impl Repl {
         call_id: &str,
         args: &serde_json::Value,
     ) -> Result<cade_agent::tools::ToolResult> {
-        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("list");
         let to = args.get("to").and_then(|v| v.as_str()).unwrap_or("");
         let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
         let reply_to = args.get("replyTo").and_then(|v| v.as_str()).unwrap_or("");
@@ -140,7 +151,10 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
         Ok(out)
     }
 
-    async fn cancel_subagent(&self, subagent_id: &str) -> std::result::Result<String, cade_agent::Error> {
+    async fn cancel_subagent(
+        &self,
+        subagent_id: &str,
+    ) -> std::result::Result<String, cade_agent::Error> {
         let tx_opt = {
             let map = self.subagent_cancellations.lock().await;
             map.get(subagent_id).cloned()
@@ -161,7 +175,6 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
 }
 
 impl Repl {
-
     pub(crate) async fn handle_subagent_single_inner(
         &self,
         call_id: &str,
