@@ -147,3 +147,10 @@ A global, session-scoped in-memory cache in the `cade-gui` web client that store
 #### SSEEventDispatchLoop
 
 A persistent, real-time Server-Sent Events stream managed at the root of the `cade-gui` client that replaces periodic polling with instantaneous, reactive updates from the server.
+
+#### Intelligent Tool Selection (ITS)
+
+An automated, server-side context pruning and optimization mechanism. It operates dynamically inside `build_context` on every request. ITS conserves prompt tokens by applying two defense layers on long conversations (> 20 messages):
+1. **Universal Adaptive Pruning**: Entirely prunes unused third-party/MCP tool schemas (`["mcp"]` tag) that have not been called within the recent conversation window, preserving only recently active tools to radically lower active prompt token overhead.
+2. **Schema Compression**: Truncates top-level descriptions and strips nested per-property parameter comments and examples from unused third-party schemas.
+ITS never prunes or compresses CADE's native core or meta-capabilities (`["cade"]` and `["meta"]` tags), guaranteeing the agent's central identity remains uncompromised.

@@ -1032,8 +1032,7 @@ pub(crate) async fn build_context(
     // ── ITS Layer 1: prune + compress ─────────────────────────────────────
     //
     // On long sessions (> RECENT_WINDOW messages):
-    //   1. Prune: MCP tools unused in the recent window are removed entirely
-    //      when they belong to an "extended" prefix group (e.g. desktop_*).
+    //   1. Prune: MCP tools (tagged "mcp") unused in the recent window are removed entirely.
     //   2. Compress: MCP tools (tagged "mcp") that haven't been called
     //      recently get their descriptions truncated to save prompt tokens.
     //   3. CADE-owned tools (tagged "cade" without "mcp") are NEVER pruned
@@ -1066,9 +1065,8 @@ pub(crate) async fn build_context(
                 if !is_mcp {
                     return true;
                 }
-                // MCP tools with a desktop_* prefix are pruned if unused.
-                let is_desktop = name.starts_with("desktop_");
-                !is_desktop || recently_used.contains(name)
+                // Universal Adaptive Pruning: Any MCP tool is pruned if not recently used.
+                recently_used.contains(name)
             })
             // Compress unused MCP tool schemas.  CADE-owned tools keep full
             // descriptions; MCP tools not called recently get truncated.

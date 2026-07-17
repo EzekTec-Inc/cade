@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod artifacts;
 pub mod conversations;
 pub mod marketplace;
 pub mod mcp;

@@ -93,20 +93,7 @@ impl Repl {
                 self.tui_dim("  No artifacts stored yet.".to_string());
             }
             Ok(arts) => {
-                self.tui_hdr(format!("  Artifacts ({}):", arts.len()));
-                for a in arts.iter().take(20) {
-                    let id = a["id"].as_str().unwrap_or("?");
-                    let kind = a["kind"].as_str().unwrap_or("?");
-                    let size = a["size_bytes"].as_i64().unwrap_or(0);
-                    let ts = a["created_at"].as_i64().unwrap_or(0);
-                    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-                        .map(|d| d.format("%m-%d %H:%M").to_string())
-                        .unwrap_or_default();
-                    self.tui_dim(format!(
-                        "    {kind:<12}  {size:>6}B  {dt}  {}",
-                        &id[..12.min(id.len())]
-                    ));
-                }
+                self.artifacts_picker(std::sync::Arc::clone(&self.app), arts, &agent_id).await?;
             }
         }
         Ok(false)

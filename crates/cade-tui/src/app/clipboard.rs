@@ -257,4 +257,48 @@ impl TuiApp {
         self.handle_image_paste(media_type, b64, w, h);
         true
     }
+
+    /// Check if the pasted text looks like a `file://` URI or standard file path.
+    /// If it points to an existing file, normalize it relative to CWD.
+    /// Returns `Some("@path")` if it is inside the project workspace,
+    /// `Some("/absolute/path")` if outside, or `None` if it is not a valid file path.
+    pub(crate) fn try_normalize_pasted_file_path(&self, text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.contains('\n') {
+            return None;
+        }
+
+        let path_str = if let Some(rest) = trimmed.strip_prefix("file://") {
+            rest.trim_start_matches("localhost")
+                .trim_start_matches('/')
+                .to_string()
+        } else {
+            trimmed.to_string()
+        };
+
+        // Ensure absolute path starts with '/'
+        let mut path_buf = std::path::PathBuf::from(&path_str);
+        if !path_buf.exists() && !path_str.starts_with('/') {
+            let alt_path = format!("/{path_str}");
+            let alt_buf = std::path::PathBuf::from(&alt_path);
+            if alt_buf.exists() {
+                path_buf = alt_buf;
+            }
+        }
+
+        if path_buf.exists() {
+            // Try to make it relative to self.cwd
+            let cwd_path = std::path::Path::new(&self.cwd);
+            if let Ok(rel) = path_buf.strip_prefix(cwd_path) {
+                let rel_str = rel.to_string_lossy().to_string();
+                Some(format!("@{}", rel_str))
+            } else if let Ok(abs) = path_buf.canonicalize() {
+                Some(abs.to_string_lossy().to_string())
+            } else {
+                Some(path_buf.to_string_lossy().to_string())
+            }
+        } else {
+            None
+        }
+    }
 }

@@ -246,6 +246,41 @@ impl HttpTransport {
         Ok(resp.json().await?)
     }
 
+    /// Get details of an artifact (including its data_text).
+    pub async fn get_artifact(&self, agent_id: &str, art_id: &str) -> Result<serde_json::Value> {
+        let resp = self
+            .client
+            .get(self.url(&format!("/agents/{agent_id}/artifacts/{art_id}")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "get_artifact failed {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Delete an artifact.
+    pub async fn delete_artifact(&self, agent_id: &str, art_id: &str) -> Result<bool> {
+        let resp = self
+            .client
+            .delete(self.url(&format!("/agents/{agent_id}/artifacts/{art_id}")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "delete_artifact failed {}",
+                resp.status()
+            )));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        Ok(v["deleted"].as_bool().unwrap_or(false))
+    }
+
     // -- Evals
 
     /// Create an eval task.

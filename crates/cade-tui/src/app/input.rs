@@ -169,6 +169,9 @@ impl TuiApp {
                     let trimmed = text.trim();
                     if self.try_paste_image_file_path(trimmed) {
                         // Image file was loaded — skip normal text paste.
+                    } else if let Some(normalized_path) = self.try_normalize_pasted_file_path(trimmed) {
+                        self.editor.handle_paste(&normalized_path);
+                        self.last_status = None;
                     } else {
                         self.editor.handle_paste(&text);
                         self.last_status = None;
