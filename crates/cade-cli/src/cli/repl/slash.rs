@@ -457,7 +457,10 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "compaction-model" => Some(SlashCmd::CompactionModel(arg.unwrap_or_default())),
         "compact" | "consolidate" => Some(SlashCmd::Compact),
         "gui" | "dashboard" => Some(SlashCmd::Gui),
-        // Skill slash commands: /skill:commit, /skill:review, etc.
+        // Skill slash commands: /skill:commit, /skill:review, or just /commit, /review, etc.
+        other if skill_ids.contains(&other.to_string()) => {
+            Some(SlashCmd::RunSkill(other.to_string(), arg))
+        }
         other if other.starts_with("skill:") => {
             let id = other.strip_prefix("skill:").unwrap_or("").to_string();
             if !id.is_empty() && skill_ids.contains(&id) {

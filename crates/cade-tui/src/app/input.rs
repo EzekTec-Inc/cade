@@ -688,13 +688,32 @@ impl TuiApp {
                                 }
                             }
                             if let KeyCode::Char('@') = k.code {
+                                let input_text = self.editor.text();
                                 let cursor_pos = self.editor.cursor_pos();
-                                let at_pos = cursor_pos.saturating_sub(1);
-                                self.overlays.push(Box::new(crate::app::PickerState::new(
-                                    at_pos,
-                                    String::new(),
-                                    &self.file_ac,
-                                )));
+                                let before = &input_text[..cursor_pos];
+                                let is_start_or_after_space = before.is_empty() || before.ends_with(|c: char| c.is_whitespace());
+
+                                if is_start_or_after_space {
+                                    if self.editor_input_mode() != crate::editor::InputMode::SlashCommand {
+                                        let at_pos = cursor_pos.saturating_sub(1);
+                                        self.overlays.push(Box::new(crate::app::PickerState::new(
+                                            at_pos,
+                                            String::new(),
+                                            &self.file_ac,
+                                        )));
+                                    } else {
+                                        let suggestions = self.slash_ac.at_completions("");
+                                        if !suggestions.is_empty() {
+                                            self.overlays.push(Box::new(
+                                                crate::autocomplete::AutocompleteOverlay::new(
+                                                    suggestions,
+                                                    cursor_pos.saturating_sub(1),
+                                                    cursor_pos,
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                }
                             }
                         }
                         return Ok(None);
