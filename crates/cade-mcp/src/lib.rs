@@ -923,7 +923,7 @@ mod tests {
 
         // CARGO_MANIFEST_DIR must be explicitly cleared (set to None or absent)
         assert!(
-            envs.get(OsStr::new("CARGO_MANIFEST_DIR")).is_none()
+            !envs.contains_key(OsStr::new("CARGO_MANIFEST_DIR"))
                 || envs.get(OsStr::new("CARGO_MANIFEST_DIR")) == Some(&None)
         );
 
