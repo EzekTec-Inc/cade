@@ -113,6 +113,21 @@ The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in
 `cade-core::permissions::rules` denies writes here even in YOLO mode.
 
+## AST-Based Code Modification & Serena Rules
+
+To prevent syntax errors, corrupt diffs, and preserve strict project conventions, CADE supports and enforces **AST-based (Abstract Syntax Tree) code modifications** over raw text-based string replacements (such as generic regex edits or basic `edit_file` tools).
+
+### The Serena AST Engine
+CADE integrates with the **Serena Agent AST Engine** to parse, inspect, and mutate codebase symbols. Serena provides structural mutations including:
+- `serena__replace_content`: Replaces structural code fragments using AST boundaries.
+- `serena__insert_after_symbol`: Appends new code immediately after structural symbols (e.g. after a struct, function, or enum definition) safely without breaking curly braces or parentheses.
+- `serena__replace_symbol_body`: Surgically replaces the inner block of a structural symbol while preserving its signature and doc comments.
+
+### Enforcement
+When working on registered coding projects, local PreToolUse hooks enforce that any modifications to source files (e.g. `*.rs`, `*.ts`, `*.js`, `*.py`, `*.lua`) must bypass generic text editors. The agent is forced to use Serena AST-based tools to perform clean, parseable syntax trees mutations.
+
+---
+
 ## REST API surface (selected)
 
 | Method | Path | Purpose |

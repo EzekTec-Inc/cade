@@ -216,6 +216,9 @@ CADE stores state per-project so you pick up right where you left off:
 
 ## Advanced Features
 
+- **Active Project Constitutions** — Integrates with the **Serena Agent AST Engine** to enforce clean Abstract Syntax Tree modifications, bypassing generic text editor errors in `*.rs`, `*.ts`, `*.js`, `*.py`, and `*.lua` files.
+
+
 - **Intelligent Tool Selection (ITS)** — A local ONNX cross-encoder reranks and filters tools before each LLM call, so the model only sees what's relevant. [Learn more →](docs/intelligent-tool-selection.md)
 - **Dynamic MCP Auto-Discovery** — Connect any third-party Model Context Protocol server, and CADE will automatically discover and register its tools dynamically, featuring prefix-agnostic routing and output budget regulation. [Learn more →](docs/mcp-servers.md)
 - **Semantic Memory Search** — Hybrid keyword + cosine similarity search via local embeddings (`fastembed` + `sqlite-vec`), merged with Reciprocal Rank Fusion.

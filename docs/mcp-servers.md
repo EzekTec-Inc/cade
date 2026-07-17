@@ -133,6 +133,20 @@ This centralized model eliminates process starvation, port collisions, and cold-
 
 4. **Live Hot-Reload Settings Watcher**: To keep the centralized processes strictly synchronized with user actions, `cade-server` runs its own background file-system watcher. When a user toggles a server (via `Space` inside the `/mcp` overlay modal) or manually edits `.cade/settings.json`, the background daemon instantly detects the write, hot-reloads the settings, and starts or stops the running MCP subprocesses centrally. This ensures the central daemon always reflects your active settings without requiring any server or session restarts.
 
+## Troubleshooting Common Loading Errors
+
+When dynamically loading third-party MCP servers, extensions, or packages (using loaders like `jiti`), you may encounter path resolution errors.
+
+### 1. `Cannot find module ... pi-ai/dist/index.js/compat`
+- **Symptom:** The console throws an error claiming it cannot locate `/compat` inside `@earendil-works/pi-ai/dist/index.js`.
+- **Cause:** This occurs on older versions of `@earendil-works/pi-ai` (specifically `< v0.80.0` like `v0.74.2`), where the compatibility subpath does not exist because all fallback functions (e.g. `complete`, `StringEnum`) are exported directly from the root module, but the environment resolver (such as `jiti`) tries to append `/compat` directly to the `main` file.
+- **Resolution:**
+  1. Add subpath aliases for `@earendil-works/pi-ai/compat` and `@mariozechner/pi-ai/compat` mapping directly to the root `piAiEntry` in `VIRTUAL_MODULES` and `_aliases` sections of `loader.js` (inside `@earendil-works/pi-coding-agent`).
+  2. Map `"./compat"` inside `@earendil-works/pi-ai`'s `package.json` under the `"exports"` property.
+  3. Create physical fallback `compat.js` and `compat.d.ts` proxy files at the package root and `dist` directory of `pi-ai` that re-export from the root entry point.
+
+---
+
 ## Security notes
 
 - MCP servers run with **the agent's privileges**. Trust the binaries
