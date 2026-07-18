@@ -6687,15 +6687,6 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.38.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.39.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
@@ -7870,16 +7861,15 @@ dependencies = [
 
 [[package]]
 name = "self_update"
-version = "0.44.0"
+version = "1.0.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e79722b5a505d4ddc77527455a97244e9e8c4c07533ff44cf4421cce7bb6d17"
+checksum = "5b7cc0b87814417b0e0697ae582dfc5f614f469fbac9b138e40457d88913187d"
 dependencies = [
  "either",
  "flate2",
  "http 1.4.2",
  "indicatif",
  "log",
- "quick-xml 0.38.4",
  "regex",
  "reqwest 0.13.4",
  "self-replace",
@@ -11021,9 +11011,9 @@ dependencies = [
 
 [[package]]
 name = "zipsign-api"
-version = "0.1.5"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dba6063ff82cdbd9a765add16d369abe81e520f836054e997c2db217ceca40c0"
+checksum = "32a55ebb27e67d9a9d116dd3a19637ee8cc0570c8ef816fb504c453f15448c99"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",

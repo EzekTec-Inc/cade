@@ -47,7 +47,7 @@ async-trait.workspace   = true
 cade-plugin = { version = "0.2.4", path = "../cade-plugin" }
 mlua = { version = "0.11.6", features = ["lua54", "vendored", "serialize", "send"] }
 sha2 = "0.10"
-self_update = { version = "0.44.0", features = ["archive-tar", "compression-flate2", "rustls"] }
+self_update = { version = "1.0.0-rc.6", features = ["archive-tar", "flate2", "rustls"] }
 
 [lints.rust]
 unsafe_code = "forbid"

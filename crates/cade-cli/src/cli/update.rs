@@ -92,12 +92,15 @@ impl UpdateBackend for GithubUpdateBackend {
             .build()
             .map_err(|e| crate::error::Error::custom(e.to_string()))?;
 
-        let latest = update_builder
+        let latest_releases = update_builder
             .get_latest_release()
             .map_err(|e| crate::error::Error::custom(e.to_string()))?;
+        let latest = latest_releases.latest().ok_or_else(|| {
+            crate::error::Error::custom("No releases found".to_string())
+        })?;
         let is_greater = self_update::version::bump_is_greater(
             self_update::cargo_crate_version!(),
-            &latest.version,
+            latest.version(),
         )
         .unwrap_or(false);
         Ok(is_greater)
@@ -123,7 +126,7 @@ impl UpdateBackend for GithubUpdateBackend {
         }
 
         // 1. Fetch latest release details
-        let latest = {
+        let latest_releases = {
             let update_builder_cli = self_update::backends::github::Update::configure()
                 .repo_owner("EzekTec-Inc")
                 .repo_name("cade")
@@ -137,10 +140,13 @@ impl UpdateBackend for GithubUpdateBackend {
                 .get_latest_release()
                 .map_err(|e| crate::error::Error::custom(e.to_string()))?
         };
+        let latest = latest_releases.latest().ok_or_else(|| {
+            crate::error::Error::custom("No releases found".to_string())
+        })?;
 
         let is_greater = self_update::version::bump_is_greater(
             self_update::cargo_crate_version!(),
-            &latest.version,
+            latest.version(),
         )
         .unwrap_or(false);
 
@@ -154,7 +160,7 @@ impl UpdateBackend for GithubUpdateBackend {
 
         eprintln!(
             "\r\n[*] Found new version: v{} (current: v{}).",
-            latest.version,
+            latest.version(),
             self_update::cargo_crate_version!()
         );
         eprintln!("[*] Downloading and updating CLI...");
@@ -178,20 +184,20 @@ impl UpdateBackend for GithubUpdateBackend {
         // 3. Cryptographic Checksum Integrity Verification (Opportunity 2)
         // If a SHA256 checksum file is present for CADE CLI in the release assets, we verify it.
         if let Some(asset) = latest
-            .assets
+            .assets()
             .iter()
-            .find(|a| a.name.contains(&self.cli_bin_name) && !a.name.ends_with(".sha256"))
+            .find(|a| a.name().contains(&self.cli_bin_name) && !a.name().ends_with(".sha256"))
             && let Some(sha_asset) = latest
-                .assets
+                .assets()
                 .iter()
-                .find(|a| a.name == format!("{}.sha256", asset.name))
+                .find(|a| a.name() ==  format!("{}.sha256", asset.name()))
         {
             eprintln!("[*] Verifying CLI cryptographic signature integrity...");
 
             // Fetch the remote SHA256 checksum text
             let client = reqwest::Client::new();
             let sha_resp = client
-                .get(&sha_asset.download_url)
+                .get(sha_asset.download_url())
                 .send()
                 .await
                 .map_err(|e| {
@@ -251,7 +257,7 @@ impl UpdateBackend for GithubUpdateBackend {
                 .map_err(|e| crate::error::Error::custom(e.to_string()))?;
 
             match update_builder_server.update_extended() {
-                Ok(s) => s.updated(),
+                Ok(s) => s.is_updated(),
                 Err(e) => {
                     if let Some(old) = &server_old_exe {
                         let _ = std::fs::rename(old, &self.server_exe);
@@ -268,18 +274,18 @@ impl UpdateBackend for GithubUpdateBackend {
         // Server Cryptographic Checksum Integrity Verification (Opportunity 2)
         if server_status
             && let Some(asset) = latest
-                .assets
+                .assets()
                 .iter()
-                .find(|a| a.name.contains(&self.server_bin_name) && !a.name.ends_with(".sha256"))
+                .find(|a| a.name().contains(&self.server_bin_name) && !a.name().ends_with(".sha256"))
             && let Some(sha_asset) = latest
-                .assets
+                .assets()
                 .iter()
-                .find(|a| a.name == format!("{}.sha256", asset.name))
+                .find(|a| a.name() ==  format!("{}.sha256", asset.name()))
         {
             eprintln!("[*] Verifying Server cryptographic signature integrity...");
 
             let client = reqwest::Client::new();
-            if let Ok(sha_resp) = client.get(&sha_asset.download_url).send().await
+            if let Ok(sha_resp) = client.get(sha_asset.download_url()).send().await
                 && sha_resp.status().is_success()
                 && let Ok(expected_sha_raw) = sha_resp.text().await
             {
@@ -305,7 +311,7 @@ impl UpdateBackend for GithubUpdateBackend {
             }
         }
 
-        Ok::<bool, crate::error::Error>(cli_status.updated() || server_status)
+        Ok::<bool, crate::error::Error>(cli_status.is_updated() || server_status)
     }
 }
 
