@@ -134,7 +134,7 @@ pub async fn reflect_agent(
             content: prompt,
             tool_call_id: None,
             tool_calls: None,
-            images: None,
+            images: None, cache_control: None,
         }],
         tools: vec![],
         max_tokens: REFLECTION_MAX_TOKENS,

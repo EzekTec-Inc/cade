@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod bootstrap;
+pub mod compaction;
 pub mod config;
 pub mod consolidation;
 pub mod defragment;

@@ -113,15 +113,14 @@ impl AnthropicProvider {
             if m.content.is_empty() {
                 continue;
             }
-            system_blocks.push(json!({
+            let mut block = json!({
                 "type": "text",
                 "text": m.content,
-            }));
-        }
-
-        // Apply cache_control to the first system block (static context)
-        if let Some(first) = system_blocks.first_mut() {
-            first["cache_control"] = json!({ "type": "ephemeral" });
+            });
+            if let Some(cc) = &m.cache_control {
+                block["cache_control"] = json!({ "type": cc });
+            }
+            system_blocks.push(block);
         }
 
         // Anthropic rule: all tool_result blocks for a given assistant turn MUST be
@@ -167,7 +166,39 @@ impl AnthropicProvider {
                 _ => {
                     // When images are attached, build a multi-part content array.
                     // Anthropic format: [{"type":"image","source":{…}}, {"type":"text","text":"…"}]
-                    if let Some(images) = &m.images
+                    if let Some(cc) = &m.cache_control {
+                        let content_val = if let Some(images) = &m.images
+                            && !images.is_empty()
+                        {
+                            let mut blocks: Vec<Value> = images
+                                .iter()
+                                .map(|img| {
+                                    json!({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": img.media_type,
+                                            "data": img.data
+                                        }
+                                    })
+                                })
+                                .collect();
+                            blocks.push(json!({
+                                "type": "text",
+                                "text": m.content,
+                                "cache_control": { "type": cc }
+                            }));
+                            json!(blocks)
+                        } else {
+                            json!([{
+                                "type": "text",
+                                "text": m.content,
+                                "cache_control": { "type": cc }
+                            }])
+                        };
+                        anthropic_messages.push(json!({"role": m.role, "content": content_val}));
+                        i += 1;
+                    } else if let Some(images) = &m.images
                         && !images.is_empty()
                     {
                         let mut blocks: Vec<Value> = images
@@ -188,34 +219,16 @@ impl AnthropicProvider {
                         }
                         anthropic_messages.push(json!({"role": m.role, "content": blocks}));
                         i += 1;
-                        continue;
+                    } else {
+                        anthropic_messages.push(json!({"role": m.role, "content": m.content}));
+                        i += 1;
                     }
-                    anthropic_messages.push(json!({"role": m.role, "content": m.content}));
-                    i += 1;
                 }
             }
         }
 
-        // -- Prompt caching
-        // Anthropic charges ~90% less for tokens served from the prompt cache.
-        // We mark two stable, large anchors with cache_control so Anthropic
-        // pins them in its KV cache across turns:
-        //
-        //   1. System prompt  — static for the entire session; always ≥1 024 tok.
-        //   2. Last tool def  — tool schemas are fixed per session; marking the
-        //                       last entry caches the entire tools array prefix.
-        //
-        // The cache TTL is 5 minutes (refreshed on every cache hit).  For a
-        // typical coding session the system prompt + tool schemas are re-used
-        // on every turn, so hit-rate is near 100% after the first request.
-        //
-        // Requirement: prompt-caching beta header must be sent (added in the
-        // HTTP call sites below). claude-3-5+ supports it natively but the
-        // header is harmless for all models.
-
-        // Build tools array in Anthropic format, injecting cache_control on
-        // the last entry so the full tools prefix is cached.
-        let mut tools: Vec<Value> = req
+        // Build tools array in Anthropic format, mapping cache_control annotations directly
+        let tools: Vec<Value> = req
             .tools
             .iter()
             .map(|schema| {
@@ -225,43 +238,17 @@ impl AnthropicProvider {
                     .or_else(|| schema.get("input_schema").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-                json!({
+                let mut tool_obj = json!({
                     "name": schema["name"],
                     "description": schema["description"],
                     "input_schema": params
-                })
+                });
+                if let Some(cc) = schema.get("cache_control") {
+                    tool_obj["cache_control"] = cc.clone();
+                }
+                tool_obj
             })
             .collect();
-
-        // Mark the last tool with cache_control to cache the entire tools list.
-        if let Some(last) = tools.last_mut() {
-            last["cache_control"] = json!({"type": "ephemeral"});
-        }
-
-        // 3. Historical context caching
-        // Place a cache_control breakpoint on the second-to-last user message
-        // (the last historical user turn, skipping the current request).
-        let mut user_count = 0;
-        for msg in anthropic_messages.iter_mut().rev() {
-            if msg["role"] == "user" {
-                user_count += 1;
-                if user_count == 2 {
-                    // Convert content to array if it isn't one.
-                    if let Some(content_str) = msg["content"].as_str() {
-                        msg["content"] = json!([{
-                            "type": "text",
-                            "text": content_str,
-                            "cache_control": { "type": "ephemeral" }
-                        }]);
-                    } else if let Some(arr) = msg["content"].as_array_mut()
-                        && let Some(last_block) = arr.last_mut()
-                    {
-                        last_block["cache_control"] = json!({ "type": "ephemeral" });
-                    }
-                    break;
-                }
-            }
-        }
 
         let mut body = json!({
             "model": bare_model(&req.model),
@@ -738,14 +725,14 @@ mod tests {
                     content: "You are a helpful assistant.".into(),
                     tool_call_id: None,
                     tool_calls: None,
-                    images: None,
+                    images: None, cache_control: None,
                 },
                 super::super::LlmMessage {
                     role: "user".into(),
                     content: "Hello".into(),
                     tool_call_id: None,
                     tool_calls: None,
-                    images: None,
+                    images: None, cache_control: None,
                 },
             ],
             tools: vec![],
@@ -772,14 +759,14 @@ mod tests {
     fn build_body_with_tools_adds_cache_control() -> Result<()> {
         // -- Setup & Fixtures
         let provider = AnthropicProvider::new("sk-test".into());
-        let req = CompletionRequest {
+        let mut req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
             messages: vec![super::super::LlmMessage {
                 role: "user".into(),
                 content: "Hello".into(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None,
+                images: None, cache_control: None,
             }],
             tools: vec![json!({
                 "name": "bash",
@@ -789,6 +776,8 @@ mod tests {
             max_tokens: 8192,
             reasoning_effort: None,
         };
+        let manager = crate::resolve_prompt_cache_manager(&req.model);
+        manager.optimize(&mut req);
         let body = provider.build_body(&req, false);
         // -- Check
         let tools = body["tools"].as_array().ok_or("Should have tools array")?;
@@ -809,7 +798,7 @@ mod tests {
                 content: "Think hard".into(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None,
+                images: None, cache_control: None,
             }],
             tools: vec![],
             max_tokens: 8192,
@@ -835,7 +824,7 @@ mod tests {
                 content: "Think hard".into(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None,
+                images: None, cache_control: None,
             }],
             tools: vec![],
             max_tokens: 8192,
@@ -882,7 +871,7 @@ mod tests {
                     content: "Do two things".into(),
                     tool_call_id: None,
                     tool_calls: None,
-                    images: None,
+                    images: None, cache_control: None,
                 },
                 super::super::LlmMessage {
                     role: "assistant".into(),
@@ -902,21 +891,21 @@ mod tests {
                             thought_signature: None,
                         },
                     ]),
-                    images: None,
+                    images: None, cache_control: None,
                 },
                 super::super::LlmMessage {
                     role: "tool".into(),
                     content: "result 1".into(),
                     tool_call_id: Some("t1".into()),
                     tool_calls: None,
-                    images: None,
+                    images: None, cache_control: None,
                 },
                 super::super::LlmMessage {
                     role: "tool".into(),
                     content: "result 2".into(),
                     tool_call_id: Some("t2".into()),
                     tool_calls: None,
-                    images: None,
+                    images: None, cache_control: None,
                 },
             ],
             tools: vec![],

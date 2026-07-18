@@ -781,14 +781,14 @@ pub(super) async fn handle_run_subagent_tool_inner(
             content: system_prompt_full,
             tool_calls: None,
             tool_call_id: None,
-            images: None,
+            images: None, cache_control: None,
         },
         LlmMessage {
             role: "user".to_string(),
             content: prompt.clone(),
             tool_calls: None,
             tool_call_id: None,
-            images: None,
+            images: None, cache_control: None,
         },
     ];
 
@@ -997,7 +997,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     content: steering_content,
                     tool_calls: None,
                     tool_call_id: None,
-                    images: None,
+                    images: None, cache_control: None,
                 });
             }
             if let Some(budget) = cfg.max_tokens_budget {
@@ -1229,7 +1229,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 content: resp.content.clone().unwrap_or_default(),
                 tool_calls: Some(resp.tool_calls.clone()),
                 tool_call_id: None,
-                images: None,
+                images: None, cache_control: None,
             });
 
             if stagnation_detected {
@@ -1239,7 +1239,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         content: stagnated_intervention_message.clone(),
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
-                        images: None,
+                        images: None, cache_control: None,
                     });
                 }
                 continue; // Skip actual tool execution, let the model process the intervention
@@ -1369,7 +1369,7 @@ ui_resource_uri: None,
                     content: tool_result.output.clone(),
                     tool_calls: None,
                     tool_call_id: Some(tool_result.tool_call_id.clone()),
-                    images: None,
+                    images: None, cache_control: None,
                 });
             }
         }
@@ -1501,7 +1501,7 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
                 content: sys.to_string(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None,
+                images: None, cache_control: None,
             });
         }
         messages.push(cade_ai::LlmMessage {
@@ -1509,7 +1509,7 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
             content: prompt.to_string(),
             tool_call_id: None,
             tool_calls: None,
-            images: None,
+            images: None, cache_control: None,
         });
 
         let req = cade_ai::CompletionRequest {
@@ -1703,7 +1703,7 @@ pub(super) async fn smart_memory_merge(
             content: prompt,
             tool_call_id: None,
             tool_calls: None,
-            images: None,
+            images: None, cache_control: None,
         }],
         tools: vec![],
         max_tokens: 4000,

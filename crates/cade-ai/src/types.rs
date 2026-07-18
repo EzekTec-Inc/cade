@@ -40,6 +40,9 @@ pub struct LlmMessage {
     /// When present the provider serialises a multi-part content array.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<MessageImage>>,
+    /// Provider-agnostic prompt caching metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

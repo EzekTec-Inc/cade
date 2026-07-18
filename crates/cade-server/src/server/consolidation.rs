@@ -486,7 +486,7 @@ impl<'a> ContextCompactionEngine<'a> {
                 content: prompt,
                 tool_call_id: None,
                 tool_calls: None,
-                images: None,
+                images: None, cache_control: None,
             }],
             tools: vec![],
             max_tokens: SUMMARY_MAX_TOKENS,

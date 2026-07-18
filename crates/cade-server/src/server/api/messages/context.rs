@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::state::AppState;
+use crate::server::compaction::ContextCompactionEngine;
 use axum::{
     Json,
     extract::{Path, State},
@@ -49,7 +50,7 @@ pub(crate) fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
                         content,
                         tool_call_id: Some(id.clone()),
                         tool_calls: None,
-                        images: None,
+                        images: None, cache_control: None,
                     });
                 }
 
@@ -128,10 +129,7 @@ pub(crate) fn render_skills_section(
     render_skills_section_filtered(loaded, &Default::default(), budget, body_cap)
 }
 
-/// P5: maximum chars retained in a top-level tool `description` after
-/// compression.  The model sees enough to remember the tool's purpose
-/// (≈ first sentence) without paying for the full reference docs every turn.
-pub(crate) const COMPRESSED_DESCRIPTION_CHAR_CAP: usize = 80;
+
 
 /// P5: compress a tool schema for a long-session, unused, non-pinned tool.
 ///
@@ -148,36 +146,7 @@ pub(crate) const COMPRESSED_DESCRIPTION_CHAR_CAP: usize = 80;
 ///     (all needed for valid JSON-schema validation on the provider side).
 ///
 /// Idempotent: compressing an already-compressed schema is a no-op.
-pub(crate) fn compress_tool_schema(mut schema: Value) -> Value {
-    // Truncate top-level description.
-    if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
-        let trimmed: String = desc
-            .split('\n')
-            .next()
-            .unwrap_or(desc)
-            .chars()
-            .take(COMPRESSED_DESCRIPTION_CHAR_CAP)
-            .collect();
-        schema["description"] = Value::String(trimmed);
-    }
 
-    // Strip per-property descriptions and examples in parameters / input_schema.
-    for params_key in ["parameters", "input_schema"] {
-        if let Some(params) = schema.get_mut(params_key)
-            && let Some(props) = params.get_mut("properties")
-            && let Some(obj) = props.as_object_mut()
-        {
-            for (_, prop_val) in obj.iter_mut() {
-                if let Some(prop_obj) = prop_val.as_object_mut() {
-                    prop_obj.remove("description");
-                    prop_obj.remove("examples");
-                }
-            }
-        }
-    }
-
-    schema
-}
 
 /// Like [`render_skills_section`] but skips any skill whose ID is in
 /// `disabled_ids`.  Called from `build_context` after loading the per-agent
@@ -506,15 +475,7 @@ pub(crate) async fn build_context(
         }
     }
 
-    // Pad system_static to the nearest 512-character boundary to maximize prompt cache hits.
-    let len = system_static.len();
-    if len > 0 {
-        let remainder = len % 512;
-        if remainder > 0 {
-            let padding_len = 512 - remainder;
-            system_static.push_str(&" ".repeat(padding_len));
-        }
-    }
+
 
     // Memory-change detection: cache the assembled static system_core per agent.
     let system_prompt_static = {
@@ -568,14 +529,14 @@ pub(crate) async fn build_context(
             content: system_prompt_static,
             tool_call_id: None,
             tool_calls: None,
-            images: None,
+            images: None, cache_control: None,
         },
         LlmMessage {
             role: "system".to_string(),
             content: system_dynamic,
             tool_call_id: None,
             tool_calls: None,
-            images: None,
+            images: None, cache_control: None,
         },
     ];
 
@@ -620,16 +581,6 @@ pub(crate) async fn build_context(
         .max_tokens_per_turn
         .map(cade_ai::chars_for_tokens)
         .unwrap_or(64_000);
-    let mut turns = group_into_turns(&all_llm_msgs, max_turn_chars);
-
-    // If the window cut off mid-turn, the oldest turn might not start with a user or assistant message.
-    // Drop it to ensure we never split tool_call/tool_result pairs.
-    if let Some(first_msg) = turns.first().and_then(|t| t.first())
-        && first_msg.role != "user"
-        && first_msg.role != "assistant"
-    {
-        turns.remove(0);
-    }
 
     let budget_manager = PromptBudgetManager::new();
 
@@ -661,125 +612,18 @@ pub(crate) async fn build_context(
     };
     let message_budget = context_char_budget.saturating_sub(system_overhead_chars);
 
-    let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
-    let mut budget_used: usize = 0;
-    let mut omitted_turns: usize = 0;
+    // Run polymorphic, synchronous context compaction
+    let compactor = crate::server::compaction::DefaultContextCompactor;
+    let compaction_res = compactor.compact_inline(
+        &agent.model,
+        &all_llm_msgs,
+        message_budget,
+        max_turn_chars,
+    );
 
-    let turns_len = turns.len();
+    let selected_messages = compaction_res.selected_messages;
+    let omitted_turns = compaction_res.omitted_turns;
 
-    for mut turn in turns.into_iter().rev() {
-        let turn_cost_toks = budget_manager.turn_cost(&agent.model, &turn);
-        let fallback_chars = budget_manager.turn_cost_fallback_chars(&turn);
-        let raw_chars = if turn_cost_toks == 0 && fallback_chars > 0 {
-            fallback_chars
-        } else {
-            budget_manager.chars_for_tokens(turn_cost_toks)
-        };
-
-        let mut turn_chars = raw_chars;
-
-        if selected.is_empty() {
-            // Always include the most-recent turn regardless of size.
-            selected.push(turn);
-            budget_used += turn_chars;
-        } else if budget_used + turn_chars <= message_budget {
-            selected.push(turn);
-            budget_used += turn_chars;
-        } else {
-            // Attempt Tool Result Truncation before dropping the turn
-            let deficit = (budget_used + turn_chars).saturating_sub(message_budget);
-            let tool_results_chars: usize = turn
-                .iter()
-                .filter(|m| m.role == "tool")
-                .map(|m| m.content.chars().count())
-                .sum();
-
-            let margin = 200; // minimum characters remaining plus truncation text length
-            if tool_results_chars > deficit + margin {
-                let to_cut = deficit + margin;
-                let mut cut_remaining = to_cut;
-
-                for m in turn.iter_mut().filter(|m| m.role == "tool") {
-                    let len = m.content.chars().count();
-                    if len > margin && cut_remaining > 0 {
-                        let cut_here = cut_remaining.min(len.saturating_sub(margin));
-                        let keep = len - cut_here;
-                        let keep_head = (keep as f64 * 0.2) as usize;
-                        let keep_tail = keep.saturating_sub(keep_head);
-                        let mut new_content: String = m.content.chars().take(keep_head).collect();
-                        new_content.push_str(&format!(
-                            "\n... [{} chars truncated to fit context window] ...\n",
-                            cut_here
-                        ));
-                        let tail: String = m
-                            .content
-                            .chars()
-                            .skip(keep_head + cut_here)
-                            .take(keep_tail)
-                            .collect();
-                        new_content.push_str(&tail);
-                        m.content = new_content;
-                        cut_remaining -= cut_here;
-                    }
-                    if cut_remaining == 0 {
-                        break;
-                    }
-                }
-
-                if cut_remaining == 0 {
-                    turn_chars -= to_cut;
-                    if budget_used + turn_chars <= message_budget {
-                        selected.push(turn);
-                        budget_used += turn_chars;
-                        continue;
-                    }
-                }
-            }
-
-            omitted_turns += 1;
-        }
-    }
-
-    // ── P1-2: Pre-flight overflow guard ───────────────────────────────────
-    // The turn-walk above guarantees the most-recent turn is included even
-    // when oversized.  PER_MESSAGE_CHAR_CAP shrinks individual messages, but
-    // their *combined* size may still exceed `message_budget` (e.g. a single
-    // huge turn plus several earlier ones still under cap).  If so, drop
-    // oldest selected turns (everything except the most recent — which is at
-    // index 0 because `selected` was built newest-first) until it fits.
-    //
-    // After this block, `selected` is guaranteed to satisfy:
-    //     sum(turn_chars) + system_chars  ≤  context_char_budget
-    // unless even the lone most-recent turn cannot fit, in which case the
-    // provider call is unavoidable but PER_MESSAGE_CHAR_CAP has bounded its
-    // size, and P1-3 (recovery loop) will handle the 4xx response.
-    let mut preflight_dropped = 0usize;
-    while selected.len() > 1 && budget_used > message_budget {
-        // selected[0] is the most-recent turn (pushed first in the rev-walk).
-        // Pop the oldest, which is the last element.
-        if let Some(dropped) = selected.pop() {
-            let turn_cost_toks = budget_manager.turn_cost(&agent.model, &dropped);
-            let fallback_chars = budget_manager.turn_cost_fallback_chars(&dropped);
-            let chars = if turn_cost_toks == 0 && fallback_chars > 0 {
-                fallback_chars
-            } else {
-                budget_manager.chars_for_tokens(turn_cost_toks)
-            };
-            budget_used = budget_used.saturating_sub(chars);
-            preflight_dropped += 1;
-        }
-    }
-    if preflight_dropped > 0 {
-        omitted_turns += preflight_dropped;
-        tracing::warn!(
-            "build_context [{}]: pre-flight overflow guard dropped {} additional turn(s) \
-             to fit budget ({} chars used / {} budget)",
-            agent_id,
-            preflight_dropped,
-            budget_used,
-            message_budget,
-        );
-    }
     // ── Proactive overflow signal ──────────────────────────────────────────
     // Trigger consolidation early when context usage crosses
     // PROACTIVE_CONSOLIDATION_THRESHOLD (70% as of F4, 2026-04-30), even if
@@ -787,9 +631,9 @@ pub(crate) async fn build_context(
     // runway to produce a `session_summary` block before the next request
     // actually overflows.
     let total_selected_tokens: usize = system_tokens
-        + selected
+        + selected_messages
             .iter()
-            .map(|turn| budget_manager.turn_cost(&agent.model, turn))
+            .map(|m| budget_manager.turn_cost(&agent.model, std::slice::from_ref(m)))
             .sum::<usize>();
 
     let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
@@ -804,19 +648,17 @@ pub(crate) async fn build_context(
     // This handles the case where the context budget is large enough to fit many turns, but
     // the growing history causes token bloat even before hitting the usage threshold.
     const PROACTIVE_MAX_TURNS: usize = 20;
+    let turns_len = group_into_turns(&all_llm_msgs, max_turn_chars).len();
     let needs_proactive_length = turns_len >= PROACTIVE_MAX_TURNS;
 
     if omitted_turns > 0 || needs_proactive || needs_proactive_length {
         if omitted_turns > 0 {
             tracing::debug!(
-                "build_context [{}]: {}/{} turns fit in budget \
-                 ({} chars used / {} budget); {} older turn(s) omitted — \
+                "build_context [{}]: {}/{} turns fit in budget; {} older turn(s) omitted — \
                  agent can recover them via conversation_search / search_memory",
                 agent_id,
-                selected.len(),
+                group_into_turns(&selected_messages, max_turn_chars).len(),
                 turns_len,
-                budget_used,
-                message_budget,
                 omitted_turns,
             );
         } else {
@@ -878,7 +720,8 @@ pub(crate) async fn build_context(
             let agent_eager = agent_id.to_string();
             tracing::info!(agent_id = %agent_id, "build_context:  eager consolidation triggered (turn-count path)");
             tokio::spawn(async move {
-                crate::server::consolidation::consolidate_agent(
+                let compactor_bg = crate::server::compaction::DefaultContextCompactor;
+                compactor_bg.consolidate_background(
                     state_eager,
                     agent_eager,
                     conv_for_eager,
@@ -900,7 +743,8 @@ pub(crate) async fn build_context(
             let agent_id_clone = agent_id.to_string();
             let conv_id_clone = conversation_id.clone();
             let prune_res = tokio::task::spawn_blocking(move || {
-                sqlite::compact_old_tool_outputs(
+                let compactor_db = crate::server::compaction::DefaultContextCompactor;
+                compactor_db.compact_db_tool_outputs(
                     &db_pool,
                     &agent_id_clone,
                     conv_id_clone.as_deref(),
@@ -944,11 +788,9 @@ pub(crate) async fn build_context(
         }
     }
 
-    // Reverse (was newest-first) back to oldest-first, then flatten.
-    selected.reverse();
-    // Phase 4: capture turn count before we move `selected` into `messages`.
-    let turns_selected_count = selected.len();
-    messages.extend(selected.into_iter().flatten());
+    // Phase 4: capture turn count before we move `selected_messages` into `messages`.
+    let turns_selected_count = group_into_turns(&selected_messages, max_turn_chars).len();
+    messages.extend(selected_messages);
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
     // stray tool_results so Anthropic never sees an invalid sequence.
@@ -1016,75 +858,45 @@ pub(crate) async fn build_context(
     // (no hardcoded tool name lists).
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, &agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
-    let tagged_schemas: Vec<(Value, Vec<String>)> = if agent_tool_ids.is_empty() {
+    let tagged_schemas: Vec<cade_ai::TaggedToolSchema> = if agent_tool_ids.is_empty() {
         all_tools
             .into_iter()
-            .filter_map(|t| t.json_schema.map(|s| (s, t.tags)))
+            .filter_map(|t| {
+                t.json_schema.map(|s| cade_ai::TaggedToolSchema {
+                    schema: s,
+                    tags: t.tags,
+                })
+            })
             .collect()
     } else {
         all_tools
             .into_iter()
             .filter(|t| agent_tool_ids.contains(&t.id))
-            .filter_map(|t| t.json_schema.map(|s| (s, t.tags)))
-            .collect()
-    };
-
-    // ── ITS Layer 1: prune + compress ─────────────────────────────────────
-    //
-    // On long sessions (> RECENT_WINDOW messages):
-    //   1. Prune: MCP tools (tagged "mcp") unused in the recent window are removed entirely.
-    //   2. Compress: MCP tools (tagged "mcp") that haven't been called
-    //      recently get their descriptions truncated to save prompt tokens.
-    //   3. CADE-owned tools (tagged "cade" without "mcp") are NEVER pruned
-    //      or compressed — the LLM needs full descriptions to reliably call
-    //      them.
-    //
-    // Tool classification is discovered from DB registration tags, not from
-    // hardcoded name lists.
-
-    let is_long_session = messages.len() > 1 + RECENT_WINDOW;
-
-    let recently_used: std::collections::HashSet<String> = if is_long_session {
-        let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
-        messages[recent_start..]
-            .iter()
-            .filter_map(|m| m.tool_calls.as_ref())
-            .flat_map(|calls| calls.iter().map(|tc| tc.name.clone()))
-            .collect()
-    } else {
-        std::collections::HashSet::new()
-    };
-
-    let tool_schemas: Vec<Value> = if is_long_session {
-        tagged_schemas
-            .into_iter()
-            .filter(|(schema, tags)| {
-                let name = schema["name"].as_str().unwrap_or("");
-                let is_mcp = tags.contains(&"mcp".to_string());
-                // CADE-owned tools are never pruned.
-                if !is_mcp {
-                    return true;
-                }
-                // Universal Adaptive Pruning: Any MCP tool is pruned if not recently used.
-                recently_used.contains(name)
-            })
-            // Compress unused MCP tool schemas.  CADE-owned tools keep full
-            // descriptions; MCP tools not called recently get truncated.
-            .map(|(schema, tags)| {
-                let name = schema["name"].as_str().unwrap_or("").to_string();
-                let is_mcp = tags.contains(&"mcp".to_string());
-                if !is_mcp || recently_used.contains(&name) {
-                    schema
-                } else {
-                    compress_tool_schema(schema)
-                }
+            .filter_map(|t| {
+                t.json_schema.map(|s| cade_ai::TaggedToolSchema {
+                    schema: s,
+                    tags: t.tags,
+                })
             })
             .collect()
-    } else {
-        tagged_schemas.into_iter().map(|(s, _)| s).collect()
     };
 
     // ── Intelligent tool selection ────────────────────────────────────────────
+    let tool_selector = cade_ai::resolve_tool_selector(&agent.model);
+    let tool_schemas = tool_selector.select_tools(&messages, tagged_schemas);
+
+    // Run polymorphic prompt cache optimization (padding, tagging, alignment)
+    let mut temp_req = cade_ai::CompletionRequest {
+        model: agent.model.clone(),
+        messages,
+        tools: tool_schemas,
+        max_tokens: 0,
+        reasoning_effort: None,
+    };
+    let cache_manager = cade_ai::resolve_prompt_cache_manager(&temp_req.model);
+    cache_manager.optimize(&mut temp_req);
+    let messages = temp_req.messages;
+    let tool_schemas = temp_req.tools;
 
     // Phase 4: capture per-request telemetry so we can prove which
     // defence layers fired and how close to the budget we ended up.
@@ -1927,7 +1739,7 @@ mod head_tail_tests {
             content: original_text.clone(),
             tool_call_id: None,
             tool_calls: None,
-            images: None,
+            images: None, cache_control: None,
         }];
 
         let margin = 200;

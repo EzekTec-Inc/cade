@@ -21,10 +21,6 @@ use cade_store::sqlite::{self, MessageRow};
 
 /// Maximum length for auto-generated conversation titles (chars from first user message).
 const CONV_TITLE_MAX: usize = 60;
-/// Number of recent messages examined when deciding whether to include MCP
-/// tool schemas.  MCP tools (identified by `__` namespace separator) are only
-/// sent when actually called within this window, saving prompt tokens.
-pub(crate) const RECENT_WINDOW: usize = 20;
 /// Minimum character budget for pinned memory blocks (always injected, highest priority).
 pub(crate) const PINNED_BUDGET_MIN: usize = 10_000;
 /// Minimum character budget for short-term active memory blocks (full fidelity).
@@ -328,6 +324,7 @@ pub async fn send_message(
             tool_call_id: None,
             tool_calls: None,
             images: req_images.clone(),
+            cache_control: None,
         });
     }
 
@@ -590,7 +587,7 @@ pub async fn stream_message(
                 content: input.to_string(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None,
+                images: None, cache_control: None,
             });
         }
     }

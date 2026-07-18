@@ -10,6 +10,8 @@ pub mod gemini;
 pub mod observability;
 pub mod ollama;
 pub mod openai;
+pub mod prompt_cache;
+pub mod its;
 pub mod provider_registry;
 pub mod registry;
 #[cfg(feature = "rig-compat")]
@@ -23,6 +25,8 @@ pub mod vcr;
 pub use catalogue::{CATALOGUE, ModelEntry};
 pub use registry::{ModelPricing, ModelRegistry, PricingRule};
 pub use router::*;
+pub use prompt_cache::{PromptCacheManager, resolve_prompt_cache_manager};
+pub use its::{TaggedToolSchema, IntelligentToolSelector, AdaptiveToolSelector, PassThroughToolSelector, resolve_tool_selector};
 pub use tokenizer::{
     ContextBudgetResult, FALLBACK_CHARS_PER_TOKEN, PromptBudgetManager, chars_for_tokens,
     count_tokens,
