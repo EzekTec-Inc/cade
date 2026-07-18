@@ -183,7 +183,7 @@ fn skills_listing_empty() {
 fn skills_listing_nonempty() -> Result<()> {
     let s = make_skill(vec![]);
     let listing = skills_listing(&[s]).ok_or("Should produce listing")?;
-    assert!(listing.contains("Available Skills"));
+    assert!(listing.contains("<available_skills>"));
 
     Ok(())
 }

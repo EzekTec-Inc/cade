@@ -404,7 +404,7 @@ fn db_row_to_llm_falls_back_to_default_when_no_tool_name() {
 #[allow(clippy::assertions_on_constants)]
 fn constants_are_sane() {
     assert!(
-        RECENT_WINDOW >= 10,
+        cade_ai::its::AdaptiveToolSelector::default().recent_window >= 10,
         "recent window too small for useful tool-usage detection"
     );
     assert!(
@@ -1642,11 +1642,11 @@ fn compress_tool_schema_preserves_name_and_parameters_shape() {
             "required": ["path"]
         }
     });
-    let c = super::context::compress_tool_schema(s);
+    let c = cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s);
     assert_eq!(c["name"].as_str(), Some("my_tool"));
     let desc_len = c["description"].as_str().unwrap().chars().count();
     assert!(
-        desc_len <= super::context::COMPRESSED_DESCRIPTION_CHAR_CAP,
+        desc_len <= cade_ai::its::AdaptiveToolSelector::default().char_cap,
         "compressed top-level description too long: {desc_len}"
     );
     // Shape preserved
@@ -1686,7 +1686,7 @@ fn compress_tool_schema_truncates_at_first_newline() {
         "name": "t",
         "description": "First line summary.\nSecond paragraph with extra detail.\n\nMore."
     });
-    let c = super::context::compress_tool_schema(s);
+    let c = cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s);
     assert_eq!(c["description"].as_str(), Some("First line summary."));
 }
 
@@ -1703,7 +1703,7 @@ fn compress_tool_schema_handles_input_schema_variant() {
             }
         }
     });
-    let c = super::context::compress_tool_schema(s);
+    let c = cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s);
     assert!(
         c["input_schema"]["properties"]["q"]
             .get("description")
@@ -1723,8 +1723,8 @@ fn compress_tool_schema_idempotent() {
         "description": "short",
         "parameters": { "type": "object", "properties": {} }
     });
-    let once = super::context::compress_tool_schema(s.clone());
-    let twice = super::context::compress_tool_schema(once.clone());
+    let once = cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s.clone());
+    let twice = cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(once.clone());
     assert_eq!(once, twice);
 }
 
@@ -1732,7 +1732,7 @@ fn compress_tool_schema_idempotent() {
 fn compress_tool_schema_no_description_is_safe() {
     use serde_json::json;
     let s = json!({ "name": "bare", "parameters": { "type": "object", "properties": {} } });
-    let c = super::context::compress_tool_schema(s);
+    let c = cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s);
     assert!(c.get("description").is_none());
     assert_eq!(c["name"].as_str(), Some("bare"));
 }
@@ -1752,7 +1752,7 @@ fn compress_tool_schema_reduces_byte_size_substantially() {
         }
     });
     let before = serde_json::to_string(&s).unwrap().len();
-    let after = serde_json::to_string(&super::context::compress_tool_schema(s))
+    let after = serde_json::to_string(&cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s))
         .unwrap()
         .len();
     assert!(
