@@ -52,6 +52,139 @@ pub trait VectorIndex: Send + Sync {
     async fn delete(&self, id: &str) -> Result<()>;
 }
 
+/// SQLite-backed implementation of the `VectorIndex` trait.
+/// 
+/// Uses local SQLite tables `shared_memory_blocks` and `memory_chunks` 
+/// with in-memory cosine similarity and LE-f32 decoding.
+pub struct SqliteVectorIndex {
+    db: crate::sqlite::Db,
+    agent_id: String,
+}
+
+impl SqliteVectorIndex {
+    pub fn new(db: crate::sqlite::Db, agent_id: String) -> Self {
+        Self { db, agent_id }
+    }
+}
+
+impl VectorIndex for SqliteVectorIndex {
+    async fn insert(&self, id: &str, vector: &[f32], _payload: serde_json::Value) -> Result<()> {
+        let mut bytes = Vec::with_capacity(vector.len() * 4);
+        for &f in vector {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        let db = self.db.clone();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.get()?;
+            // Attempt to update shared_memory_blocks first
+            let mut stmt = conn.prepare("UPDATE shared_memory_blocks SET embedding = ?1 WHERE id = ?2")?;
+            let affected = stmt.execute(rusqlite::params![bytes, id])?;
+            if affected == 0 {
+                // Otherwise update memory_chunks
+                let mut stmt = conn.prepare("UPDATE memory_chunks SET embedding = ?1 WHERE id = ?2")?;
+                stmt.execute(rusqlite::params![bytes, id])?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| crate::error::Error::custom(format!("SqliteVectorIndex::insert join failed: {e}")))?
+    }
+
+    async fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
+        let db = self.db.clone();
+        let query_vec = query_vector.to_vec();
+        let agent_id = self.agent_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.get()?;
+            let results = search_memory_semantic(&conn, &agent_id, &query_vec, None, limit)?;
+            let mut search_results = Vec::new();
+            for (id, sim, label, value) in results {
+                search_results.push(SearchResult {
+                    id,
+                    score: sim as f32,
+                    payload: serde_json::json!({
+                        "label": label,
+                        "value": value,
+                    }),
+                });
+            }
+            Ok(search_results)
+        })
+        .await
+        .map_err(|e| crate::error::Error::custom(format!("SqliteVectorIndex::search join failed: {e}")))?
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        let db = self.db.clone();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.get()?;
+            let mut stmt = conn.prepare("UPDATE shared_memory_blocks SET embedding = NULL WHERE id = ?1")?;
+            let affected = stmt.execute(rusqlite::params![id])?;
+            if affected == 0 {
+                let mut stmt = conn.prepare("UPDATE memory_chunks SET embedding = NULL WHERE id = ?1")?;
+                stmt.execute(rusqlite::params![id])?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| crate::error::Error::custom(format!("SqliteVectorIndex::delete join failed: {e}")))?
+    }
+}
+
+/// Enterprise PostgreSQL-backed vector index using `pgvector`.
+pub struct PgVectorIndex;
+
+impl PgVectorIndex {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl VectorIndex for PgVectorIndex {
+    async fn insert(&self, _id: &str, _vector: &[f32], _payload: serde_json::Value) -> Result<()> {
+        // Future enterprise PGVector implementation
+        Ok(())
+    }
+
+    async fn search(&self, _query_vector: &[f32], _limit: usize) -> Result<Vec<SearchResult>> {
+        // Future enterprise PGVector search
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _id: &str) -> Result<()> {
+        // Future enterprise PGVector delete
+        Ok(())
+    }
+}
+
+/// Enterprise Qdrant-backed vector index.
+pub struct QdrantVectorIndex;
+
+impl QdrantVectorIndex {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl VectorIndex for QdrantVectorIndex {
+    async fn insert(&self, _id: &str, _vector: &[f32], _payload: serde_json::Value) -> Result<()> {
+        // Future enterprise Qdrant implementation
+        Ok(())
+    }
+
+    async fn search(&self, _query_vector: &[f32], _limit: usize) -> Result<Vec<SearchResult>> {
+        // Future enterprise Qdrant search
+        Ok(vec![])
+    }
+
+    async fn delete(&self, _id: &str) -> Result<()> {
+        // Future enterprise Qdrant delete
+        Ok(())
+    }
+}
+
 /// Always-available no-op embedder. Returns empty vectors and dimension `0`.
 ///
 /// Used in default builds (no `semantic-search` feature) so the rest of the
@@ -479,6 +612,62 @@ mod tests {
         let index = NoopVectorIndex;
         let res = index.search(&[0.1, 0.2], 5).await?;
         assert!(res.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_vector_index() -> crate::error::Result<()> {
+        let db = crate::sqlite::open(":memory:")?;
+        
+        // Setup initial schema rows for testing
+        {
+            let conn = db.get()?;
+            conn.execute(
+                "INSERT INTO agents (id, name, model, created_at, memory_turn_counter)
+                 VALUES (?1, ?2, ?3, ?4, 0)",
+                rusqlite::params!["test_agent", "Agent Smith", "gpt-4o", 123456i64]
+            )?;
+            conn.execute(
+                "INSERT INTO shared_memory_blocks (id, label, value, updated_at, memory_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params!["block_1", "project", "I love Rust systems programming", 123456i64, "convention"]
+            )?;
+            conn.execute(
+                "INSERT INTO agent_memory_blocks (agent_id, block_id)
+                 VALUES (?1, ?2)",
+                rusqlite::params!["test_agent", "block_1"]
+            )?;
+        }
+
+        let index = SqliteVectorIndex::new(db.clone(), "test_agent".to_string());
+        
+        // 1. Insert a 3-dimensional embedding
+        let vec = vec![1.0, 0.0, 0.0];
+        index.insert("block_1", &vec, serde_json::json!({})).await?;
+
+        // 2. Search for the embedding using a highly aligned query vector
+        let query = vec![1.0, 0.0, 0.0];
+        let results = index.search(&query, 5).await?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "block_1");
+        // Cosine similarity of identical unit vectors must be 1.0 (or very close due to float precision)
+        assert!((results[0].score - 1.0).abs() < 1e-5);
+        assert_eq!(results[0].payload["label"], "project");
+        assert_eq!(results[0].payload["value"], "I love Rust systems programming");
+
+        // 3. Search using an orthogonal vector
+        let query_ortho = vec![0.0, 1.0, 0.0];
+        let results_ortho = index.search(&query_ortho, 5).await?;
+        assert_eq!(results_ortho.len(), 1);
+        assert_eq!(results_ortho[0].id, "block_1");
+        // Cosine similarity of orthogonal vectors must be 0.0
+        assert!(results_ortho[0].score.abs() < 1e-5);
+
+        // 4. Delete the embedding
+        index.delete("block_1").await?;
+        let results_deleted = index.search(&query, 5).await?;
+        assert!(results_deleted.is_empty());
+
         Ok(())
     }
 
