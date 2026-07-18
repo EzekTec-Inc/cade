@@ -1,13 +1,13 @@
 // region:    --- Modules
 
 use axum::http::{HeaderValue, Method, Request};
-use cade::{Error, Result};
+use cade_core::{Error, Result};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use cade::server::{
+use cade_server::server::{
     api::router,
     config::ServerConfig,
     rate_limit::RateLimiter,
@@ -15,7 +15,7 @@ use cade::server::{
 };
 use cade_store::sqlite::{self, open as open_db};
 
-use cade::settings::SettingsManager;
+use cade_core::settings::SettingsManager;
 use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
 
 // endregion: --- Modules
@@ -380,7 +380,7 @@ async fn async_main() -> Result<()> {
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────
     // Spawn the deep SleeptimeAgent background task to manage automated periodic memory consolidation.
-    let _sleeptime_handle = cade::server::consolidation::SleeptimeAgent::new(state.clone()).spawn();
+    let _sleeptime_handle = cade_server::server::consolidation::SleeptimeAgent::new(state.clone()).spawn();
 
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|req: &Request<_>| {

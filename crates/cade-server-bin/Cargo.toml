@@ -1,0 +1,42 @@
+[package]
+name = "cade-server-bin"
+version = "0.2.4"
+edition = "2024"
+authors = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
+description = "CADE — Centralized HTTP server daemon and agentic loop runtime"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+semantic-search = ["cade-store/semantic-search"]
+
+[dependencies]
+# Workspace Crates
+cade-core = { path = "../cade-core" }
+cade-server = { path = "../cade-server" }
+cade-store = { path = "../cade-store" }
+cade-ai = { path = "../cade-ai" }
+cade-agent = { path = "../cade-agent" }
+cade-askpass = { path = "../cade-askpass", features = ["server"] }
+
+# Shared Dependencies (inherited from Workspace)
+derive_more.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+dotenvy.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+tokio-stream.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+
+# Local Extra Dependencies (copied from root package and cade-tui)
+lru = "0.18"
+dashmap = "6.2.1"
+mlua = { version = "0.11.6", features = ["lua54", "vendored", "serialize", "send"] }

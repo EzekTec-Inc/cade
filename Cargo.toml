@@ -13,8 +13,9 @@ members = [
     "crates/cade-gui",
     "crates/cade-mcp",
     "crates/cade-cli",
-    ".", "crates/cade-ide-mcp", "crates/cade-store",          # root package — owns the two binaries
+    ".", "crates/cade-ide-mcp", "crates/cade-store",          # root package — owns the client binary
     "crates/cade-askpass",
+    "crates/cade-server-bin",
 ]
 resolver = "3"
 
@@ -128,10 +129,6 @@ repository  = "https://github.com/EzekTec-Inc/CADE"
 [[bin]]
 name = "cade"
 path = "src/main.rs"
-
-[[bin]]
-name = "cade-server"
-path = "src/bin/cade-server.rs"
 
 [features]
 default     = ["mcp"]

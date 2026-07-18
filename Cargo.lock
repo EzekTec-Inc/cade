@@ -1181,6 +1181,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "cade-server-bin"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "axum",
+ "cade-agent",
+ "cade-ai",
+ "cade-askpass",
+ "cade-core",
+ "cade-server",
+ "cade-store",
+ "chrono",
+ "clap",
+ "dashmap 6.2.1",
+ "derive_more",
+ "dirs 6.0.0",
+ "dotenvy",
+ "lru 0.18.1",
+ "mlua",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "cade-store"
 version = "0.2.4"
 dependencies = [
