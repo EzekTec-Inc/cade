@@ -96,7 +96,9 @@ pub struct GeminiCacheAdapter;
 impl PromptCacheManager for GeminiCacheAdapter {
     fn optimize(&self, _req: &mut CompletionRequest) {
         // Gemini caching requires explicit creation and references to cachedContent sessions.
-        // Left as a stub for future integration when the networking/REST layer supports it.
+        // This is handled statefully at the transport/provider layer in `GeminiProvider`
+        // (inside `crates/cade-ai/src/gemini.rs`) by dynamically creating and injecting
+        // `cachedContent` session references into the REST payloads sent to Google.
     }
 }
 
@@ -123,5 +125,146 @@ pub fn resolve_prompt_cache_manager(model_id: &str) -> Box<dyn PromptCacheManage
         Box::new(GeminiCacheAdapter)
     } else {
         Box::new(FallbackCacheAdapter)
+    }
+}
+
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LlmMessage;
+    use serde_json::json;
+
+    #[test]
+    fn test_resolve_prompt_cache_manager() {
+        let anthropic = resolve_prompt_cache_manager("anthropic/claude-3-5-sonnet");
+        let mut req = CompletionRequest {
+            model: "claude-3-5-sonnet".to_string(),
+            messages: vec![LlmMessage {
+                role: "system".to_string(),
+                content: "sys".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            }],
+            tools: vec![],
+            max_tokens: 0,
+            reasoning_effort: None,
+        };
+        anthropic.optimize(&mut req);
+        assert_eq!(req.messages[0].cache_control, Some("ephemeral".to_string()));
+
+        let gemini = resolve_prompt_cache_manager("google/gemini-1.5-pro");
+        let mut req_gemini = CompletionRequest {
+            model: "gemini-1.5-pro".to_string(),
+            messages: vec![LlmMessage {
+                role: "system".to_string(),
+                content: "sys".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            }],
+            tools: vec![],
+            max_tokens: 0,
+            reasoning_effort: None,
+        };
+        gemini.optimize(&mut req_gemini);
+        assert_eq!(req_gemini.messages[0].cache_control, None);
+    }
+
+    #[test]
+    fn test_anthropic_cache_optimization() {
+        let adapter = AnthropicCacheAdapter;
+        let mut req = CompletionRequest {
+            model: "claude-3-5-sonnet".to_string(),
+            messages: vec![
+                LlmMessage {
+                    role: "system".to_string(),
+                    content: "static system prompt".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                },
+                LlmMessage {
+                    role: "user".to_string(),
+                    content: "user msg 1".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                },
+                LlmMessage {
+                    role: "assistant".to_string(),
+                    content: "assistant msg 1".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                },
+                LlmMessage {
+                    role: "user".to_string(),
+                    content: "user msg 2".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                },
+            ],
+            tools: vec![
+                json!({
+                    "name": "tool_1",
+                    "description": "desc 1"
+                })
+            ],
+            max_tokens: 0,
+            reasoning_effort: None,
+        };
+
+        adapter.optimize(&mut req);
+
+        // First system message annotated
+        assert_eq!(req.messages[0].cache_control, Some("ephemeral".to_string()));
+
+        // Second-to-last user message annotated (which is req.messages[1], the first user msg)
+        assert_eq!(req.messages[1].cache_control, Some("ephemeral".to_string()));
+
+        // Last tool schema annotated
+        assert_eq!(
+            req.tools[0].get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+    }
+
+    #[test]
+    fn test_openai_cache_optimization_fallback() {
+        let adapter = OpenAiCacheAdapter;
+        let mut req = CompletionRequest {
+            model: "nonexistent-model-so-it-triggers-fallback".to_string(),
+            messages: vec![
+                LlmMessage {
+                    role: "system".to_string(),
+                    content: "system prompt".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                },
+            ],
+            tools: vec![],
+            max_tokens: 0,
+            reasoning_effort: None,
+        };
+
+        adapter.optimize(&mut req);
+
+        // Verify that the system prompt content was padded
+        assert!(req.messages[0].content.starts_with("system prompt"));
+        // Verify that the prompt was padded and length increased
+        assert!(req.messages[0].content.len() > "system prompt".len());
     }
 }
