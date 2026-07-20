@@ -134,27 +134,95 @@ impl VectorIndex for SqliteVectorIndex {
 }
 
 /// Enterprise PostgreSQL-backed vector index using `pgvector`.
+#[cfg(not(feature = "enterprise-postgres"))]
 pub struct PgVectorIndex;
 
+#[cfg(not(feature = "enterprise-postgres"))]
 impl PgVectorIndex {
     pub fn new() -> Self {
         Self
     }
 }
 
+#[cfg(not(feature = "enterprise-postgres"))]
 impl VectorIndex for PgVectorIndex {
     async fn insert(&self, _id: &str, _vector: &[f32], _payload: serde_json::Value) -> Result<()> {
-        // Future enterprise PGVector implementation
         Ok(())
     }
 
     async fn search(&self, _query_vector: &[f32], _limit: usize) -> Result<Vec<SearchResult>> {
-        // Future enterprise PGVector search
         Ok(vec![])
     }
 
     async fn delete(&self, _id: &str) -> Result<()> {
-        // Future enterprise PGVector delete
+        Ok(())
+    }
+}
+
+/// Enterprise PostgreSQL-backed vector index using `pgvector` and `tokio-postgres`.
+#[cfg(feature = "enterprise-postgres")]
+pub struct PgVectorIndex {
+    client: tokio_postgres::Client,
+    table_name: String,
+}
+
+#[cfg(feature = "enterprise-postgres")]
+impl PgVectorIndex {
+    /// Create a new PgVectorIndex wrapping an active postgres Client.
+    pub fn new(client: tokio_postgres::Client, table_name: String) -> Self {
+        Self { client, table_name }
+    }
+}
+
+#[cfg(feature = "enterprise-postgres")]
+impl VectorIndex for PgVectorIndex {
+    async fn insert(&self, id: &str, vector: &[f32], payload: serde_json::Value) -> Result<()> {
+        let query = format!(
+            "INSERT INTO {} (id, embedding, payload)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (id) DO UPDATE SET embedding = $2, payload = $3",
+            self.table_name
+        );
+        let vec_data = pgvector::Vector::from(vector.to_vec());
+        self.client.execute(&query, &[&id, &vec_data, &payload])
+            .await
+            .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::insert failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
+        let query = format!(
+            "SELECT id, embedding <=> $1 AS distance, payload
+             FROM {}
+             ORDER BY distance ASC
+             LIMIT $2",
+            self.table_name
+        );
+        let vec_data = pgvector::Vector::from(query_vector.to_vec());
+        let rows = self.client.query(&query, &[&vec_data, &(limit as i64)])
+            .await
+            .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search failed: {e}")))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let id: String = row.try_get(0)
+                .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search decoding id failed: {e}")))?;
+            let distance: f64 = row.try_get(1)
+                .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search decoding distance failed: {e}")))?;
+            let payload: serde_json::Value = row.try_get(2)
+                .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search decoding payload failed: {e}")))?;
+
+            let score = 1.0 - distance as f32;
+            results.push(SearchResult { id, score, payload });
+        }
+        Ok(results)
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        let query = format!("DELETE FROM {} WHERE id = $1", self.table_name);
+        self.client.execute(&query, &[&id])
+            .await
+            .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::delete failed: {e}")))?;
         Ok(())
     }
 }
@@ -669,6 +737,19 @@ mod tests {
         let results_deleted = index.search(&query, 5).await?;
         assert!(results_deleted.is_empty());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pg_vector_index_stub() -> crate::error::Result<()> {
+        #[cfg(not(feature = "enterprise-postgres"))]
+        {
+            let index = PgVectorIndex::new();
+            index.insert("test_id", &[0.1, 0.2], serde_json::json!({})).await?;
+            let results = index.search(&[0.1, 0.2], 5).await?;
+            assert!(results.is_empty());
+            index.delete("test_id").await?;
+        }
         Ok(())
     }
 

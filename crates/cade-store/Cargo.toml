@@ -9,6 +9,7 @@ bundled-sqlite  = ["rusqlite/bundled", "r2d2_sqlite/bundled"]
 # WI-SEMANTIC: opt-in. Default build does NOT pull fastembed/sqlite-vec.
 semantic-search = ["dep:fastembed", "dep:sqlite-vec"]
 rig-compat      = ["dep:rig-core"]
+enterprise-postgres = ["dep:tokio-postgres", "dep:pgvector"]
 
 [dependencies]
 cade-core = { path = "../cade-core" }
@@ -39,6 +40,10 @@ dirs = { workspace = true }
 
 # Rig compatibility
 rig-core = { workspace = true, optional = true }
+
+# Optional enterprise postgres & pgvector
+tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1"] }
+pgvector = { version = "0.4.2", optional = true, features = ["postgres"] }
 
 [dev-dependencies]
 criterion = "0.8.2"
