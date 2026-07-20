@@ -10,6 +10,7 @@ bundled-sqlite  = ["rusqlite/bundled", "r2d2_sqlite/bundled"]
 semantic-search = ["dep:fastembed", "dep:sqlite-vec"]
 rig-compat      = ["dep:rig-core"]
 enterprise-postgres = ["dep:tokio-postgres", "dep:pgvector"]
+enterprise-qdrant = ["dep:qdrant-client"]
 
 [dependencies]
 cade-core = { path = "../cade-core" }
@@ -21,7 +22,7 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v5"] }
 rusqlite = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
@@ -44,6 +45,7 @@ rig-core = { workspace = true, optional = true }
 # Optional enterprise postgres & pgvector
 tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1"] }
 pgvector = { version = "0.4.2", optional = true, features = ["postgres"] }
+qdrant-client = { version = "1.18", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"

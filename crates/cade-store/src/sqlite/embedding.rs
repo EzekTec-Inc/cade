@@ -228,27 +228,138 @@ impl VectorIndex for PgVectorIndex {
 }
 
 /// Enterprise Qdrant-backed vector index.
+#[cfg(not(feature = "enterprise-qdrant"))]
 pub struct QdrantVectorIndex;
 
+#[cfg(not(feature = "enterprise-qdrant"))]
 impl QdrantVectorIndex {
     pub fn new() -> Self {
         Self
     }
 }
 
+#[cfg(not(feature = "enterprise-qdrant"))]
 impl VectorIndex for QdrantVectorIndex {
     async fn insert(&self, _id: &str, _vector: &[f32], _payload: serde_json::Value) -> Result<()> {
-        // Future enterprise Qdrant implementation
         Ok(())
     }
 
     async fn search(&self, _query_vector: &[f32], _limit: usize) -> Result<Vec<SearchResult>> {
-        // Future enterprise Qdrant search
         Ok(vec![])
     }
 
     async fn delete(&self, _id: &str) -> Result<()> {
-        // Future enterprise Qdrant delete
+        Ok(())
+    }
+}
+
+/// Enterprise Qdrant-backed vector index using `qdrant-client`.
+#[cfg(feature = "enterprise-qdrant")]
+pub struct QdrantVectorIndex {
+    client: std::sync::Arc<qdrant_client::Qdrant>,
+    collection_name: String,
+}
+
+#[cfg(feature = "enterprise-qdrant")]
+impl QdrantVectorIndex {
+    /// Create a new QdrantVectorIndex wrapping an active Qdrant client.
+    pub fn new(client: qdrant_client::Qdrant, collection_name: String) -> Self {
+        Self {
+            client: std::sync::Arc::new(client),
+            collection_name,
+        }
+    }
+}
+
+#[cfg(feature = "enterprise-qdrant")]
+impl VectorIndex for QdrantVectorIndex {
+    async fn insert(&self, id: &str, vector: &[f32], payload: serde_json::Value) -> Result<()> {
+        use qdrant_client::qdrant::{PointStruct, UpsertPointsBuilder};
+        
+        let point_id = if let Ok(parsed_uuid) = uuid::Uuid::parse_str(id) {
+            parsed_uuid.to_string()
+        } else {
+            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, id.as_bytes()).to_string()
+        };
+
+        let qdrant_payload = qdrant_client::Payload::try_from(payload)
+            .map_err(|e| crate::error::Error::custom(format!("Failed to parse Qdrant payload: {e}")))?;
+
+        let point = PointStruct::new(
+            point_id,
+            vector.to_vec(),
+            qdrant_payload,
+        );
+
+        let upsert_points = UpsertPointsBuilder::new(&self.collection_name, vec![point])
+            .wait(true);
+
+        self.client.upsert_points(upsert_points)
+            .await
+            .map_err(|e| crate::error::Error::custom(format!("QdrantVectorIndex::insert failed: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
+        
+
+        use qdrant_client::qdrant::SearchPointsBuilder;
+
+        let search_query = SearchPointsBuilder::new(&self.collection_name, query_vector.to_vec(), limit as u64)
+            .with_payload(true);
+
+        let response = self.client.search_points(search_query)
+            .await
+            .map_err(|e| crate::error::Error::custom(format!("QdrantVectorIndex::search failed: {e}")))?;
+
+        let mut results = Vec::new();
+        for point in response.result {
+            let id = point.id.and_then(|id| {
+                id.point_id_options.map(|opt| match opt {
+                    qdrant_client::qdrant::point_id::PointIdOptions::Num(n) => n.to_string(),
+                    qdrant_client::qdrant::point_id::PointIdOptions::Uuid(u) => u,
+                })
+            }).unwrap_or_default();
+            let score = point.score;
+            
+            let payload_value = serde_json::Value::Object(
+                point.payload
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let json_val = serde_json::to_value(&v)
+                            .unwrap_or(serde_json::Value::Null);
+                        (k, json_val)
+                    })
+                    .collect()
+            );
+
+            results.push(SearchResult { id, score, payload: payload_value });
+        }
+        Ok(results)
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        use qdrant_client::qdrant::DeletePointsBuilder;
+
+        let point_id = if let Ok(parsed_uuid) = uuid::Uuid::parse_str(id) {
+            parsed_uuid.to_string()
+        } else {
+            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, id.as_bytes()).to_string()
+        };
+
+        let qdrant_point_id = qdrant_client::qdrant::PointId::from(point_id);
+        let selector = qdrant_client::qdrant::points_selector::PointsSelectorOneOf::Points(
+            qdrant_client::qdrant::PointsIdsList { ids: vec![qdrant_point_id] }
+        );
+        let delete_points = DeletePointsBuilder::new(&self.collection_name)
+            .points(selector)
+            .wait(true);
+
+        self.client.delete_points(delete_points)
+            .await
+            .map_err(|e| crate::error::Error::custom(format!("QdrantVectorIndex::delete failed: {e}")))?;
+
         Ok(())
     }
 }
@@ -745,6 +856,19 @@ mod tests {
         #[cfg(not(feature = "enterprise-postgres"))]
         {
             let index = PgVectorIndex::new();
+            index.insert("test_id", &[0.1, 0.2], serde_json::json!({})).await?;
+            let results = index.search(&[0.1, 0.2], 5).await?;
+            assert!(results.is_empty());
+            index.delete("test_id").await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_qdrant_vector_index_stub() -> crate::error::Result<()> {
+        #[cfg(not(feature = "enterprise-qdrant"))]
+        {
+            let index = QdrantVectorIndex::new();
             index.insert("test_id", &[0.1, 0.2], serde_json::json!({})).await?;
             let results = index.search(&[0.1, 0.2], 5).await?;
             assert!(results.is_empty());
