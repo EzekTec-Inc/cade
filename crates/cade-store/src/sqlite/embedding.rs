@@ -210,7 +210,7 @@ impl Embedder for NoopEmbedder {
 /// — subsequent calls reuse the cached weights.
 #[cfg(feature = "semantic-search")]
 pub struct FastEmbedder {
-    inner: fastembed::TextEmbedding,
+    inner: parking_lot::Mutex<fastembed::TextEmbedding>,
     dim: usize,
 }
 
@@ -227,15 +227,15 @@ impl FastEmbedder {
         let inner = TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2Q))
             .map_err(|e| crate::error::Error::Custom(format!("fastembed init failed: {e}")))?;
         // MiniLM-L6-v2 produces 384-dim embeddings.
-        Ok(Self { inner, dim: 384 })
+        Ok(Self { inner: parking_lot::Mutex::new(inner), dim: 384 })
     }
 }
 
 #[cfg(feature = "semantic-search")]
 impl Embedder for FastEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let mut out = self
-            .inner
+        let mut inner = self.inner.lock();
+        let mut out = inner
             .embed(vec![text], None)
             .map_err(|e| crate::error::Error::Custom(format!("fastembed embed failed: {e}")))?;
         out.pop()
@@ -243,7 +243,8 @@ impl Embedder for FastEmbedder {
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        self.inner
+        let mut inner = self.inner.lock();
+        inner
             .embed(texts.to_vec(), None)
             .map_err(|e| crate::error::Error::Custom(format!("fastembed embed_batch failed: {e}")))
     }

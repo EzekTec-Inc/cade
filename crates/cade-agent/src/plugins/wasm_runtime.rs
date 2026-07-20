@@ -6,15 +6,19 @@
 
 use crate::Result;
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
 use wasmtime::{
-    Config, Engine, Linker, Module, Store, TypedFunc, WasiConfig, component::ResourceAny,
+    Config, Engine, Linker, Module, Store, TypedFunc,
 };
+use wasmtime_wasi::preview1::{WasiP1Ctx, add_to_linker_async};
+use wasmtime_wasi::WasiCtxBuilder;
+
+struct HostState {
+    wasi: WasiP1Ctx,
+}
 
 /// A pre-loaded WASM plugin with its tool metadata.
 pub struct WasmPlugin {
-    /// The plugin's display name.
+    /// The plugin display name.
     pub name: String,
     /// Tool names this plugin provides.
     pub tools: Vec<String>,
@@ -36,7 +40,6 @@ impl WasmRuntime {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);
-        config.wasm_gc(true);
 
         let engine = Engine::new(&config)
             .map_err(|e| crate::Error::custom(format!("Failed to create Wasmtime engine: {e}")))?;
@@ -118,22 +121,30 @@ impl WasmRuntime {
         let has_export = module.exports().any(|e| e.name() == export_name);
         if !has_export {
             return Err(crate::Error::custom(format!(
-                "Tool '{tool_name}' not exported by plugin '{plugin_name}'"
+                "Plugin '{plugin_name}' does not export tool '{tool_name}'"
             )));
         }
 
         // Set up WASI configuration
-        let mut wasi_config = WasiConfig::new();
-        wasi_config.argv(&["wasm-plugin"]);
-        wasi_config.inherit_stderr();
-        wasi_config.preopen_unstable("/")?;
+        let mut wasi_builder = WasiCtxBuilder::new();
+        wasi_builder.args(&["wasm-plugin"]);
+        wasi_builder.inherit_stderr();
+        wasi_builder.preopened_dir(
+            "/",
+            "/",
+            wasmtime_wasi::DirPerms::all(),
+            wasmtime_wasi::FilePerms::all(),
+        ).map_err(|e| crate::Error::custom(format!("Failed to preopen directory: {e}")))?;
 
-        let mut store = Store::new(&self.engine, wasi_config);
+        let ctx = wasi_builder.build_p1();
 
-        let linker = Linker::new(&self.engine);
-        wasmtime_wasi::add_to_linker(&linker, |s| s)?;
+        let mut store = Store::new(&self.engine, HostState { wasi: ctx });
 
-        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
+        let mut linker = Linker::new(&self.engine);
+        add_to_linker_async(&mut linker, |state: &mut HostState| &mut state.wasi)
+            .map_err(|e| crate::Error::custom(format!("Failed to configure Linker: {e}")))?;
+
+        let instance = linker.instantiate_async(&mut store, &module).await.map_err(|e| {
             crate::Error::custom(format!(
                 "Failed to instantiate WASM plugin '{plugin_name}': {e}"
             ))
@@ -146,7 +157,7 @@ impl WasmRuntime {
             })?;
 
         // Get the memory exported by the WASM module
-        let memory = instance.get_memory(&mut store, "memory").map_err(|_| {
+        let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
             crate::Error::custom(format!("WASM plugin '{plugin_name}' must export 'memory'"))
         })?;
 
@@ -154,7 +165,7 @@ impl WasmRuntime {
         // If malloc is exported, allocate dynamic buffer. Otherwise fallback to static offset 0.
         let arg_ptr = if let Ok(malloc) = instance.get_typed_func::<i32, i32>(&mut store, "malloc")
         {
-            malloc.call(&mut store, arg_len).await.unwrap_or(0)
+            malloc.call_async(&mut store, arg_len).await.unwrap_or(0)
         } else {
             0
         };
@@ -170,7 +181,7 @@ impl WasmRuntime {
 
         // Call the tool function, passing pointer and length
         let result_packed = func
-            .call(&mut store, (arg_ptr, arg_len))
+            .call_async(&mut store, (arg_ptr, arg_len))
             .await
             .map_err(|e| crate::Error::custom(format!("WASM function execution failed: {e}")))?;
 
@@ -193,7 +204,7 @@ impl WasmRuntime {
 
         // Free the returned buffer inside the WASM module (free)
         if let Ok(free) = instance.get_typed_func::<i32, ()>(&mut store, "free") {
-            let _ = free.call(&mut store, res_ptr as i32).await;
+            let _ = free.call_async(&mut store, res_ptr as i32).await;
         }
 
         Ok(result_str)
