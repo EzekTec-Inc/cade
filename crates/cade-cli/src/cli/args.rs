@@ -146,6 +146,14 @@ pub struct Args {
     #[arg(long = "mode", value_name = "MODE")]
     pub mode: Option<String>,
 
+    /// Check for CADE application updates and exit
+    #[arg(long = "check-update")]
+    pub check_update: bool,
+
+    /// Download and apply the latest CADE application update and exit
+    #[arg(long = "update")]
+    pub update: bool,
+
     // -- Package management (delegated to cade package <action>)
     /// Package management: install, remove, list, update
     #[command(subcommand)]

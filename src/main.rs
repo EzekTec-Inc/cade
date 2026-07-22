@@ -141,6 +141,27 @@ async fn async_main() -> Result<()> {
     let mut settings =
         SettingsManager::new(&cwd).map_err(|e| Error::custom(format!("load settings: {e}")))?;
 
+    // -- Check for CADE application updates and exit
+    if args.check_update {
+        let is_greater = cade::cli::update::run_update(true)
+            .await
+            .map_err(|e| Error::custom(format!("check update failed: {e}")))?;
+        if is_greater {
+            println!("A new CADE update is available!");
+        } else {
+            println!("CADE is already up-to-date.");
+        }
+        return Ok(());
+    }
+
+    if args.update {
+        println!("[*] Starting CADE self-update...");
+        cade::cli::update::run_update(false)
+            .await
+            .map_err(|e| Error::custom(format!("update failed: {e}")))?;
+        return Ok(());
+    }
+
     // -- Package subcommand (runs before server connection, no server needed)
     let is_eval_subcommand = matches!(&args.package, Some(PackageSubcommand::Eval { .. }));
     if let Some(PackageSubcommand::Package { action }) = args.package.take() {
