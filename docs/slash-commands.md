@@ -139,3 +139,12 @@ single `SlashCmd` enum and a `parse_slash` matcher. To add one:
 3. Handle it in `crates/cade-cli/src/cli/repl/commands.rs`.
 4. If it should appear in the GUI palette, add a `CmdDef` entry to
    `crates/cade-core/src/resources/palette.rs::CMD_DEFS`.
+
+---
+
+## CLI Update Arguments
+
+In addition to using `/update` inside an active TUI session, CADE can also be checked or updated directly from your terminal shell completely headless and server-free:
+
+* **`cade --check-update`**: Checks if a new release is available and exits immediately.
+* **`cade --update`**: Downloads, cryptographically verifies, and applies the latest CADE update (updating both `cade` and `cade-server-bin`) and exits immediately.
