@@ -736,6 +736,12 @@ impl<'a> ContextCompactionEngine<'a> {
                 agent_id,
                 bid,
             );
+            crate::server::api::agents::broadcast_global_event(serde_json::json!({
+                "event_type": "compaction_completed",
+                "agent_id": agent_id,
+                "conversation_id": conversation_id,
+                "dropped_turns": dropped,
+            }));
         }
 
         let metrics = state.agent_metrics.clone();

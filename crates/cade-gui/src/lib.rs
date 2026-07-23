@@ -65,7 +65,7 @@ fn App() -> Element {
     let is_loading = use_signal(|| false);
     let conversations = use_signal(Vec::<cade_api_types::ConversationInfo>::new);
     let active_conversation = use_signal(|| initial_conv_id);
-    let toasts = use_signal(Vec::<types::ToastMessage>::new);
+    let mut toasts = use_signal(Vec::<types::ToastMessage>::new);
     let global_error = use_signal(|| Option::<String>::None);
     let active_stream_id = use_signal(|| Option::<String>::None);
     let active_stream = use_signal(types::SafeAbortHandle::default);
@@ -202,6 +202,42 @@ fn App() -> Element {
                                         list.push(msg);
                                         messages.set(list);
                                     }
+                                }
+                            }
+                            "compaction_completed" => {
+                                let m_agent_id = event["agent_id"].as_str().unwrap_or("");
+                                let m_conv_id = event["conversation_id"].as_str();
+                                let dropped = event["dropped_turns"].as_u64().unwrap_or(0);
+                                if let Some(curr_agent) = selected()
+                                    && curr_agent.id == m_agent_id
+                                    && active_conversation() == m_conv_id.map(String::from)
+                                {
+                                    // 1. Refresh active messages
+                                    let key_clone = key().clone();
+                                    let agent_id_clone = m_agent_id.to_string();
+                                    let conv_id_clone = m_conv_id.map(String::from);
+                                    let mut messages_sig = messages;
+                                    spawn(async move {
+                                        let c = api::CadeApiClient::new(key_clone);
+                                        if let Ok(list) = c.get_messages(&agent_id_clone, conv_id_clone.as_deref()).await {
+                                            messages_sig.set(list);
+                                        }
+                                    });
+
+                                    // 2. Add a success toast notification
+                                    let mut list = toasts();
+                                    let detail = if dropped == 1 {
+                                        "1 older turn archived to session_summary.".to_string()
+                                    } else {
+                                        format!("{} older turns archived to session_summary.", dropped)
+                                    };
+                                    list.push(types::ToastMessage {
+                                        id: js_sys::Date::now() as u64,
+                                        level: types::ToastLevel::Success,
+                                        title: "✓ Context Compacted".to_string(),
+                                        detail,
+                                    });
+                                    toasts.set(list);
                                 }
                             }
                             _ => {}
