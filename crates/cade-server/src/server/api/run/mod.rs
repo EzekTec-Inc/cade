@@ -183,6 +183,7 @@ async fn update_activity(state: &AppState, agent_id: &str, conv_id: Option<Strin
                 needs_consolidation: false,
                 conversation_id: conv_id.clone(),
                 last_consolidation_turn: 0,
+                last_omitted_turns: 0,
             });
     entry.last_active_ts = chrono::Utc::now().timestamp();
     entry.conversation_id = conv_id;

@@ -273,6 +273,7 @@ pub async fn send_message(
                     needs_consolidation: false,
                     conversation_id: conv_id.clone(),
                     last_consolidation_turn: 0,
+                    last_omitted_turns: 0,
                 });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();
@@ -503,6 +504,7 @@ pub async fn stream_message(
                     needs_consolidation: false,
                     conversation_id: conv_id.clone(),
                     last_consolidation_turn: 0,
+                    last_omitted_turns: 0,
                 });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();
@@ -650,16 +652,37 @@ pub async fn stream_message(
     let usage_acc2 = usage_acc.clone();
     let usage_acc3 = usage_acc.clone();
 
+    // Extract last_omitted_turns if any turns were drop-compacted
+    let last_omitted = {
+        let mut activity = state.agent_activity.write().await;
+        if let Some(entry) = activity.get_mut(&agent_id) {
+            std::mem::take(&mut entry.last_omitted_turns)
+        } else {
+            0
+        }
+    };
+
     // First SSE event: metadata (conversation_id + run_id)
     let meta_event = {
-        let data = json!({
-            "message_type": "stream_start",
-            "conversation_id": conv_str,
-            "run_id": run_id,
-        });
-        futures::stream::once(async move {
-            Ok::<Event, std::convert::Infallible>(Event::default().data(data.to_string()))
-        })
+        let mut events = vec![
+            Ok::<Event, std::convert::Infallible>(
+                Event::default().data(json!({
+                    "message_type": "stream_start",
+                    "conversation_id": conv_str,
+                    "run_id": run_id,
+                }).to_string())
+            )
+        ];
+        if last_omitted > 0 {
+            events.push(Ok::<Event, std::convert::Infallible>(
+                Event::default().data(json!({
+                    "message_type": "system_notice",
+                    "level": "success",
+                    "message": format!("[Compaction: {last_omitted} older turns omitted from active context window]"),
+                }).to_string())
+            ));
+        }
+        futures::stream::iter(events)
     };
 
     let sse_stream =

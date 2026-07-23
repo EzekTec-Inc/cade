@@ -693,8 +693,10 @@ pub(crate) async fn build_context(
                     needs_consolidation: true,
                     conversation_id: conversation_id.clone(),
                     last_consolidation_turn: 0,
+                    last_omitted_turns: 0,
                 },
             );
+            entry.last_omitted_turns = omitted_turns;
             entry.needs_consolidation = true;
             if conversation_id.is_some() {
                 entry.conversation_id = conversation_id.clone();

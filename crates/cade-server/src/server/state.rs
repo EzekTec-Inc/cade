@@ -31,6 +31,7 @@ pub struct AgentActivity {
     /// set across many rapid turns, a fresh run fires only once per
     /// `EAGER_CONSOLIDATION_TURN_THRESHOLD` turns. `0` means "never".
     pub last_consolidation_turn: i64,
+    pub last_omitted_turns: usize,
 }
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
