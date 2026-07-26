@@ -98,6 +98,129 @@ pub trait ErasedBuiltInTool: Send + Sync {
     fn execute_erased(&self, args: Value) -> Result<Value>;
 }
 
+
+/// Structured, machine-readable tool execution outcome.
+///
+/// Encapsulates stdout, stderr, exit status, execution duration,
+/// and truncation flags to support automated LLM error-recovery loops.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StructuredToolOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    pub duration_ms: u64,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_summary: Option<String>,
+}
+
+impl StructuredToolOutput {
+    pub fn success(stdout: impl Into<String>, duration_ms: u64) -> Self {
+        Self {
+            stdout: stdout.into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms,
+            truncated: false,
+            error_summary: None,
+        }
+    }
+
+    pub fn failure(
+        stdout: impl Into<String>,
+        stderr: impl Into<String>,
+        exit_code: i32,
+        duration_ms: u64,
+    ) -> Self {
+        let stderr_str = stderr.into();
+        let summary = if !stderr_str.is_empty() {
+            Some(stderr_str.lines().next().unwrap_or("").to_string())
+        } else {
+            Some(format!("Command exited with non-zero status code: {exit_code}"))
+        };
+
+        Self {
+            stdout: stdout.into(),
+            stderr: stderr_str,
+            exit_code,
+            duration_ms,
+            truncated: false,
+            error_summary: summary,
+        }
+    }
+
+    /// Render formatted string suitable for direct injection into LLM context prompts.
+    pub fn format_for_llm(&self) -> String {
+        let mut out = String::new();
+        if !self.stdout.is_empty() {
+            out.push_str(&self.stdout);
+        }
+        if !self.stderr.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("STDERR:\n");
+            out.push_str(&self.stderr);
+        }
+        if self.exit_code != 0 {
+            if out.is_empty() {
+                out = format!("(exit code {})", self.exit_code);
+            } else {
+                out.push_str(&format!("\n(exit code {})", self.exit_code));
+            }
+        }
+        out
+    }
+}
+
+impl From<cade_core::shell::ShellResult> for StructuredToolOutput {
+    fn from(res: cade_core::shell::ShellResult) -> Self {
+        let summary = if res.exit_code != 0 {
+            if !res.stderr.is_empty() {
+                Some(res.stderr.lines().next().unwrap_or("").to_string())
+            } else {
+                Some(format!("Command exited with code {}", res.exit_code))
+            }
+        } else {
+            None
+        };
+
+        Self {
+            stdout: res.stdout,
+            stderr: res.stderr,
+            exit_code: res.exit_code,
+            duration_ms: res.duration.as_millis() as u64,
+            truncated: res.truncated,
+            error_summary: summary,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_structured_tool_output_success() {
+        let out = StructuredToolOutput::success("Build completed successfully", 150);
+        assert_eq!(out.exit_code, 0);
+        assert_eq!(out.truncated, false);
+        assert_eq!(out.error_summary, None);
+        assert_eq!(out.format_for_llm(), "Build completed successfully");
+    }
+
+    #[test]
+    fn test_structured_tool_output_failure() {
+        let out = StructuredToolOutput::failure("Partial output", "error[E0425]: cannot find function", 1, 200);
+        assert_eq!(out.exit_code, 1);
+        assert_eq!(out.error_summary, Some("error[E0425]: cannot find function".to_string()));
+        let formatted = out.format_for_llm();
+        assert!(formatted.contains("Partial output"));
+        assert!(formatted.contains("STDERR:\nerror[E0425]"));
+        assert!(formatted.contains("(exit code 1)"));
+    }
+}
+
 impl<T> ErasedBuiltInTool for T
 where
     T: BuiltInTool + 'static,
