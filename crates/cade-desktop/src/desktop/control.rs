@@ -12,21 +12,86 @@ pub struct DesktopControl {
 
 #[cfg(feature = "input-control")]
 impl DesktopControl {
-    pub async fn detect() -> Self {
-        Self {
-            enigo: std::sync::Arc::new(tokio::sync::Mutex::new(
-                enigo::Enigo::new(&enigo::Settings::default()).expect("Failed to initialize enigo"),
-            )),
-        }
+    /// Try to initialize desktop input control, returning an error if no display server is connected.
+    pub async fn try_detect() -> Result<Self> {
+        let enigo = enigo::Enigo::new(&enigo::Settings::default())
+            .map_err(|e| Error::custom(format!("Failed to initialize desktop input controller: {e}")))?;
+        Ok(Self {
+            enigo: std::sync::Arc::new(tokio::sync::Mutex::new(enigo)),
+        })
+    }
+
+    /// Backwards-compatible detector returning Option<Self> (none on headless/no-display environments).
+    pub async fn detect() -> Option<Self> {
+        Self::try_detect().await.ok()
     }
 
     pub async fn focus_window(&self, title: &str) -> Result<()> {
-        // Native cross-platform window focusing is not yet supported.
-        // xdotool / wmctrl could be shelled out to on Linux, but that
-        // belongs in a future iteration.
-        Err(Error::custom(format!(
-            "Native cross-platform window focusing not yet implemented. Title: {title}"
-        )))
+        #[cfg(target_os = "windows")]
+        {
+            let ps_script = format!(
+                "(New-Object -ComObject WScript.Shell).AppActivate('{}')",
+                title.replace('\'', "''")
+            );
+            let status = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &ps_script])
+                .status()
+                .map_err(|e| Error::custom(format!("Failed to execute PowerShell AppActivate: {e}")))?;
+
+            if status.success() {
+                return Ok(());
+            }
+            return Err(Error::custom(format!("Could not focus window with title '{title}' on Windows")));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let script = format!(
+                "tell application \"System Events\" to set frontmost of (first process whose name contains \"{}\") to true",
+                title.replace('"', "\\\"")
+            );
+            let status = std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .status()
+                .map_err(|e| Error::custom(format!("Failed to execute osascript: {e}")))?;
+
+            if status.success() {
+                return Ok(());
+            }
+            return Err(Error::custom(format!("Could not focus window with title '{title}' on macOS")));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(status) = std::process::Command::new("wmctrl")
+                .args(["-a", title])
+                .status()
+            {
+                if status.success() {
+                    return Ok(());
+                }
+            }
+
+            if let Ok(status) = std::process::Command::new("xdotool")
+                .args(["search", "--name", title, "windowactivate"])
+                .status()
+            {
+                if status.success() {
+                    return Ok(());
+                }
+            }
+
+            Err(Error::custom(format!(
+                "Could not focus window with title '{title}' on Linux (wmctrl/xdotool not installed or window not found)"
+            )))
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            Err(Error::custom(format!(
+                "Window focusing is unsupported on this operating system. Title: {title}"
+            )))
+        }
     }
 
     pub async fn type_text(&self, text: &str) -> Result<()> {
@@ -92,5 +157,23 @@ impl DesktopControl {
 
     pub fn tool_name(&self) -> &'static str {
         "enigo"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_desktop_control_try_detect_does_not_panic() {
+        let _res = DesktopControl::try_detect().await;
+    }
+
+    #[tokio::test]
+    async fn test_focus_nonexistent_window_returns_error() {
+        if let Ok(ctrl) = DesktopControl::try_detect().await {
+            let res = ctrl.focus_window("nonexistent_unique_window_title_12345").await;
+            assert!(res.is_err(), "Focusing a non-existent window should return an error");
+        }
     }
 }

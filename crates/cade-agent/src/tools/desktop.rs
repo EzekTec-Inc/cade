@@ -123,7 +123,9 @@ impl DesktopControlTool {
             .as_str()
             .ok_or_else(|| crate::Error::custom("desktop_control: missing 'action'".to_string()))?;
 
-        let ctrl = DesktopControl::detect().await;
+        let ctrl = DesktopControl::try_detect()
+            .await
+            .map_err(|e| crate::Error::custom(format!("desktop_control unavailable: {e}")))?;
 
         match action {
             "focus_window" => {
@@ -173,7 +175,7 @@ impl DesktopControlTool {
     pub fn schema() -> Value {
         json!({
             "name": "desktop_control",
-            "description": "Control desktop windows and input. Uses xdotool (X11) or ydotool (Wayland). Actions: focus_window, type_text, key_press, move_mouse, click.",
+            "description": "Control desktop windows and input natively using cross-platform system bindings (enigo/xcap/OS automation). Actions: focus_window, type_text, key_press, move_mouse, click.",
             "parameters": {
                 "type": "object",
                 "properties": {
