@@ -50,6 +50,15 @@ pub fn ToolsView() -> Element {
         let api_client = client();
         let st = state;
         let mut apprs = approvals;
+
+        // Optimistic UI update: instantly remove the approved/denied item from local signal list
+        let current_apprs = apprs();
+        let filtered: Vec<serde_json::Value> = current_apprs
+            .into_iter()
+            .filter(|item| item.get("id").and_then(|v| v.as_str()) != Some(&id))
+            .collect();
+        apprs.set(filtered);
+
         spawn(async move {
             match api_client.action_approval(&id, &action).await {
                 Ok(_) => {
@@ -59,14 +68,16 @@ pub fn ToolsView() -> Element {
                         "Permission denied"
                     };
                     add_toast(&st, ToastLevel::Success, msg, format!("Request ID: {}", id));
-                    // Refresh the pending list
+                }
+                Err(e) => {
+                    add_toast(&st, ToastLevel::Error, "Action failed", e);
+                    // Refresh to restore if failed
                     if let Ok(data) = api_client.list_approvals().await
                         && let Some(arr) = data.get("approvals").and_then(|v| v.as_array())
                     {
                         apprs.set(arr.clone());
                     }
                 }
-                Err(e) => add_toast(&st, ToastLevel::Error, "Action failed", e),
             }
         });
     };
