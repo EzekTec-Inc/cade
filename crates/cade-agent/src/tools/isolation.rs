@@ -1,6 +1,32 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Detailed report generated when a Git merge conflict occurs during sandbox merge-back.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MergeConflictReport {
+    pub branch_name: String,
+    pub conflicting_files: Vec<PathBuf>,
+    pub raw_error: String,
+}
+
+impl std::fmt::Display for MergeConflictReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Git merge conflict on branch '{}'. Conflicting files: [{}] Details: {}",
+            self.branch_name,
+            self.conflicting_files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.raw_error
+        )
+    }
+}
+
+impl std::error::Error for MergeConflictReport {}
+
 /// RAII-managed isolated temporary workspace for concurrent execution.
 /// Clones files from the primary workspace (respecting .gitignore / standard ignore rules),
 /// and supports safely merging modified files back with global file lock coordination.
@@ -56,40 +82,18 @@ impl IsolatedWorkspace {
         if is_git {
             let temp_path = self.temp_dir.path();
 
-            // Setup git repo in temporary sandbox folder
-            let mut success = true;
-            if run_cmd(temp_path, &["init"]).await.is_err() {
-                success = false;
+            let setup_res = async {
+                run_cmd(temp_path, &["init"]).await?;
+                run_cmd(temp_path, &["config", "user.name", "CADE Subagent"]).await?;
+                run_cmd(temp_path, &["config", "user.email", "subagent@cade.ai"]).await?;
+                run_cmd(temp_path, &["checkout", "-b", branch_name]).await?;
+                run_cmd(temp_path, &["add", "-A"]).await?;
+                run_cmd(temp_path, &["commit", "-m", "Initial sandboxed state"]).await?;
+                Ok::<(), io::Error>(())
             }
-            if run_cmd(temp_path, &["config", "user.name", "CADE Subagent"])
-                .await
-                .is_err()
-            {
-                success = false;
-            }
-            if run_cmd(temp_path, &["config", "user.email", "subagent@cade.ai"])
-                .await
-                .is_err()
-            {
-                success = false;
-            }
-            if run_cmd(temp_path, &["checkout", "-b", branch_name])
-                .await
-                .is_err()
-            {
-                success = false;
-            }
-            if run_cmd(temp_path, &["add", "-A"]).await.is_err() {
-                success = false;
-            }
-            if run_cmd(temp_path, &["commit", "-m", "Initial sandboxed state"])
-                .await
-                .is_err()
-            {
-                success = false;
-            }
+            .await;
 
-            if success {
+            if setup_res.is_ok() {
                 self.git_branch = Some(branch_name.to_string());
             }
         }
@@ -118,7 +122,11 @@ impl IsolatedWorkspace {
             let (status_exit, status_out, _) =
                 run_cmd(temp_path, &["status", "--porcelain"]).await?;
             if status_exit == 0 && !status_out.trim().is_empty() {
-                run_cmd(temp_path, &["add", "-A"]).await?;
+                run_cmd(
+                    temp_path,
+                    &["add", "-A"],
+                )
+                .await?;
                 run_cmd(
                     temp_path,
                     &["commit", "-m", "Subagent task completion changes"],
@@ -151,14 +159,31 @@ impl IsolatedWorkspace {
             let (merge_exit, _, merge_err) =
                 run_cmd(&self.primary_dir, &["merge", "FETCH_HEAD", "--no-edit"]).await?;
 
+            if merge_exit != 0 {
+                // Inspect conflicting files via git status --porcelain
+                let mut conflicting_files = Vec::new();
+                if let Ok((_, status_out, _)) = run_cmd(&self.primary_dir, &["status", "--porcelain"]).await {
+                    for line in status_out.lines() {
+                        if line.starts_with("UU ") || line.starts_with("AA ") || line.starts_with("DD ") {
+                            let file_str = line[3..].trim();
+                            conflicting_files.push(PathBuf::from(file_str));
+                        }
+                    }
+                }
+
+                // Abort the failed merge to leave working tree clean
+                let _ = run_cmd(&self.primary_dir, &["merge", "--abort"]).await;
+                let _ = run_cmd(&self.primary_dir, &["remote", "remove", &remote_name]).await;
+
+                return Err(io::Error::other(MergeConflictReport {
+                    branch_name: branch.clone(),
+                    conflicting_files,
+                    raw_error: merge_err,
+                }));
+            }
+
             // Clean up remote
             let _ = run_cmd(&self.primary_dir, &["remote", "remove", &remote_name]).await;
-
-            if merge_exit != 0 {
-                return Err(io::Error::other(format!(
-                    "git merge conflict occurred: {merge_err}. Please resolve manually or accept-edits."
-                )));
-            }
 
             tracing::info!(
                 "Git Branch Sandboxing merged changes back from branch: {}",
@@ -179,7 +204,6 @@ impl IsolatedWorkspace {
                 {
                     let dest_path = self.primary_dir.join(rel_path);
 
-                    // Check if file content differs or does not exist
                     let temp_bytes = std::fs::read(path)?;
                     let host_bytes_opt = std::fs::read(&dest_path).ok();
 
@@ -188,7 +212,6 @@ impl IsolatedWorkspace {
                             std::fs::create_dir_all(parent)?;
                         }
 
-                        // Acquire global file lock during final merge step (ADR 6)
                         let lock_manager = crate::tools::file_lock::FileLockManager::global();
                         let _lock = lock_manager.acquire_lock(&dest_path).await;
 
@@ -210,4 +233,26 @@ async fn run_cmd(dir: &Path, args: &[&str]) -> io::Result<(i32, String, String)>
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     Ok((exit, stdout, stderr))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_isolated_workspace_clone_and_merge() -> io::Result<()> {
+        let temp_host = tempfile::tempdir()?;
+        let file_path = temp_host.path().join("test.txt");
+        std::fs::write(&file_path, "initial content")?;
+
+        let sandbox = IsolatedWorkspace::clone_from(temp_host.path())?;
+        let sandboxed_file = sandbox.path().join("test.txt");
+        assert_eq!(std::fs::read_to_string(&sandboxed_file)?, "initial content");
+
+        std::fs::write(&sandboxed_file, "updated in sandbox")?;
+        sandbox.merge_back().await?;
+
+        assert_eq!(std::fs::read_to_string(&file_path)?, "updated in sandbox");
+        Ok(())
+    }
 }
