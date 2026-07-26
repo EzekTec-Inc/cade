@@ -51,7 +51,7 @@ Expand-Archive -Path $TmpFile -DestinationPath $ExtractDir -Force
 # 4. Install Binaries
 Write-Host "[4/4] Installing to $InstallDir..."
 Move-Item -Path "$ExtractDir\cade.exe" -Destination "$InstallDir\cade.exe" -Force
-Move-Item -Path "$ExtractDir\cade-server.exe" -Destination "$InstallDir\cade-server.exe" -Force
+Move-Item -Path "$ExtractDir\cade-server-bin.exe" -Destination "$InstallDir\cade-server.exe" -Force
 
 # Clean up
 Remove-Item -Path $TmpFile -Force

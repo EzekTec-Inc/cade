@@ -17,8 +17,15 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
 
     let server_bin = std::env::current_exe()
         .ok()
-        .map(|p| p.with_file_name("cade-server"))
-        .filter(|p| p.exists());
+        .and_then(|p| {
+            let bin1 = p.with_file_name("cade-server-bin");
+            if bin1.exists() {
+                Some(bin1)
+            } else {
+                let bin2 = p.with_file_name("cade-server");
+                if bin2.exists() { Some(bin2) } else { None }
+            }
+        });
 
     if let Some(server_bin) = server_bin {
         tracing::info!("cade-server not running — starting…");
