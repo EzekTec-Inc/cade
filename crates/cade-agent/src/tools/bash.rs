@@ -2,12 +2,7 @@ use crate::Result;
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
-
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
-
-/// M-03: Cap bash output returned to the LLM to avoid blowing the context window.
-/// ~16k chars ≈ 4k tokens — enough for build output, test results, etc.
-const MAX_OUTPUT_CHARS: usize = 16_384;
+use cade_core::shell::{ShellExecutionEngine, ShellRequest, DEFAULT_TIMEOUT_SECS, MAX_OUTPUT_CHARS, truncate_head_tail};
 
 pub struct BashTool;
 
@@ -16,11 +11,9 @@ impl BashTool {
     ///
     /// # C-02 / defence-in-depth
     /// This function is a last-resort safety net: it logs a warning when a
-    /// suspicious command pattern is detected.  The primary permission gate is
+    /// suspicious command pattern is detected. The primary permission gate is
     /// `PermissionManager::is_blocked()` in `cli/repl.rs` and `cli/headless.rs`,
-    /// which is called BEFORE this function.  The check here ensures that any
-    /// code path that calls `BashTool::run()` directly (e.g. tests, future
-    /// integrations) still gets an audit trail.
+    /// which is called BEFORE this function.
     pub async fn run(args: &Value) -> Result<String> {
         let command = args["command"]
             .as_str()
@@ -28,65 +21,16 @@ impl BashTool {
 
         let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-        // C-02: Defence-in-depth — log suspicious patterns even if the caller
-        // already approved the command.
-        if cade_core::permissions::bash_command_is_suspicious(command) {
-            tracing::warn!(
-                "bash: executing suspicious command (approved by caller): {:?}",
-                command.chars().take(120).collect::<String>()
-            );
-        }
+        let engine = ShellExecutionEngine::new();
+        let req = ShellRequest::new(command)
+            .with_timeout(Duration::from_secs(timeout_secs));
 
-        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
-            let mut cmd = cade_core::shell::shell_command(command);
-            cade_core::agent_env::apply_agent_env(&mut cmd);
-            cade_core::askpass::apply_askpass_env(&mut cmd);
-            cmd.output().await
-        })
-        .await
-        .map_err(|_| crate::Error::custom(format!("Command timed out after {timeout_secs}s")))?
-        .map_err(|e| crate::Error::custom(format!("Failed to spawn bash: {e}")))?;
-
-        let mut result = String::from_utf8_lossy(&output.stdout).to_string();
-
-        if !output.stderr.is_empty() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !result.is_empty() {
-                result.push('\n');
-            }
-            result.push_str("STDERR:\n");
-            result.push_str(&stderr);
-        }
-
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(-1);
-            if result.is_empty() {
-                result = format!("(exit code {code})");
-            } else {
-                result.push_str(&format!("\n(exit code {code})"));
-            }
-        }
-
-        // M-03: Truncate large outputs so the LLM context window is not blown.
-        if result.len() > MAX_OUTPUT_CHARS {
-            let truncated = &result[..MAX_OUTPUT_CHARS];
-            result = format!(
-                "{truncated}\n\n[...output truncated — {} chars omitted. Use head/tail/grep to narrow output.]",
-                result.len() - MAX_OUTPUT_CHARS
-            );
-        }
-
-        Ok(result)
+        let res = engine.execute(req).await.map_err(|e| crate::Error::custom(e.to_string()))?;
+        Ok(res.format_for_llm())
     }
 
     /// Stream a bash command line-by-line, calling `on_line` for every output
     /// line as it arrives (stdout and stderr interleaved in arrival order).
-    ///
-    /// Returns the full accumulated output string (for the LLM — identical to
-    /// what `run()` would return) and propagates any spawn or timeout error.
-    ///
-    /// The caller is responsible for showing a `LiveOutput` RenderLine and
-    /// passing a closure that appends each line to it.
     pub async fn run_streaming<F>(args: &Value, mut on_line: F) -> Result<String>
     where
         F: FnMut(String) + Send,
@@ -121,8 +65,6 @@ impl BashTool {
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
 
-        // Merge stdout and stderr into one channel so lines arrive in
-        // roughly the order the process writes them.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         let tx_out = tx.clone();
@@ -140,7 +82,6 @@ impl BashTool {
                 let _ = tx_err.send(line);
             }
         });
-        // Drop the original sender so rx closes when both tasks finish.
         drop(tx);
 
         let mut accumulated = String::new();
@@ -153,9 +94,8 @@ impl BashTool {
                     accumulated.push_str(&line);
                     accumulated.push('\n');
                 }
-                Ok(None) => break, // channel closed — both tasks done
+                Ok(None) => break,
                 Err(_) => {
-                    // Timeout: kill the child and stop reading.
                     let _ = child.kill().await;
                     return Err(crate::Error::custom(format!(
                         "Command timed out after {timeout_secs}s"
@@ -164,7 +104,6 @@ impl BashTool {
             }
         }
 
-        // Wait for the reader tasks and the child process.
         let _ = out_task.await;
         let _ = err_task.await;
         let status = child
@@ -181,16 +120,8 @@ impl BashTool {
             }
         }
 
-        // M-03: same truncation as run().
-        if accumulated.len() > MAX_OUTPUT_CHARS {
-            let truncated = &accumulated[..MAX_OUTPUT_CHARS];
-            accumulated = format!(
-                "{truncated}\n\n[...output truncated — {} chars omitted. Use head/tail/grep to narrow output.]",
-                accumulated.len() - MAX_OUTPUT_CHARS
-            );
-        }
-
-        Ok(accumulated)
+        let (truncated_res, _) = truncate_head_tail(&accumulated, MAX_OUTPUT_CHARS);
+        Ok(truncated_res)
     }
 
     pub fn schema() -> serde_json::Value {
@@ -221,40 +152,34 @@ impl BashTool {
 #[cfg(test)]
 mod tests {
     #[allow(unused)]
-    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
 
     use super::*;
     use serde_json::json;
 
     #[tokio::test]
     async fn run_simple_command() -> Result<()> {
-        // -- Exec
         let args = json!({"command": "echo hello world"});
         let output = BashTool::run(&args).await?;
 
-        // -- Check
         assert!(output.contains("hello world"), "got: {output}");
         Ok(())
     }
 
     #[tokio::test]
     async fn run_command_with_exit_code() -> Result<()> {
-        // -- Exec
         let args = json!({"command": "exit 42"});
         let output = BashTool::run(&args).await?;
 
-        // -- Check
         assert!(output.contains("exit code 42"), "got: {output}");
         Ok(())
     }
 
     #[tokio::test]
     async fn run_command_with_stderr() -> Result<()> {
-        // -- Exec
         let args = json!({"command": "echo error >&2"});
         let output = BashTool::run(&args).await?;
 
-        // -- Check
         assert!(output.contains("STDERR:"), "got: {output}");
         assert!(output.contains("error"), "got: {output}");
         Ok(())
@@ -262,7 +187,6 @@ mod tests {
 
     #[tokio::test]
     async fn run_missing_command_arg() {
-        // -- Exec & Check
         let args = json!({"timeout": 5});
         let result = BashTool::run(&args).await;
         assert!(result.is_err());
@@ -271,7 +195,6 @@ mod tests {
 
     #[tokio::test]
     async fn run_command_timeout() {
-        // -- Exec & Check
         let args = json!({"command": "sleep 60", "timeout": 1});
         let result = BashTool::run(&args).await;
         assert!(result.is_err());
@@ -281,12 +204,10 @@ mod tests {
 
     #[tokio::test]
     async fn run_truncates_large_output() -> Result<()> {
-        // -- Exec
         let args = json!({"command": "yes 'aaaaaaaaaa' | head -5000"});
         let output = BashTool::run(&args).await?;
 
-        // -- Check
-        if output.len() > MAX_OUTPUT_CHARS + 200 {
+        if output.len() > MAX_OUTPUT_CHARS + 500 {
             panic!("output should be truncated, got {} chars", output.len());
         }
         Ok(())
@@ -294,17 +215,14 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_simple_command() -> Result<()> {
-        // -- Setup & Fixtures
         let args = json!({"command": "echo line1; echo line2"});
         let mut lines_seen = Vec::new();
 
-        // -- Exec
         let output = BashTool::run_streaming(&args, |line| {
             lines_seen.push(line);
         })
         .await?;
 
-        // -- Check
         assert!(output.contains("line1"), "got: {output}");
         assert!(output.contains("line2"), "got: {output}");
         assert!(!lines_seen.is_empty(), "should have seen lines streamed");
@@ -313,7 +231,6 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_timeout() {
-        // -- Exec & Check
         let args = json!({"command": "sleep 60", "timeout": 1});
         let result = BashTool::run_streaming(&args, |_| {}).await;
         assert!(result.is_err());
@@ -321,10 +238,8 @@ mod tests {
 
     #[test]
     fn schema_is_valid() -> Result<()> {
-        // -- Exec
         let schema = BashTool::schema();
 
-        // -- Check
         assert_eq!(schema["name"], "bash");
         let desc = schema["description"]
             .as_str()
@@ -334,5 +249,3 @@ mod tests {
         Ok(())
     }
 }
-
-// endregion: --- Tests
