@@ -11,6 +11,7 @@ Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent 
 | Doc | When to read it |
 |---|---|
 | [Getting Started](getting-started.md) | You just installed CADE and want to run your first session |
+| [User's Guide PDF](../CADE_User_Guide.pdf) | You want a complete, 2-page visual PDF operations manual |
 | [Usage Guide](usage-guide.md) | You want a tour of what CADE can do day-to-day |
 | [Slash Commands](slash-commands.md) | You need to look up a `/command` |
 | [Keybindings](keybindings.md) | You want to learn the keyboard shortcuts |

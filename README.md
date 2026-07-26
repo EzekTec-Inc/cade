@@ -56,6 +56,8 @@ CADE does:  scaffolds → writes code → runs tests → builds Docker image →
 
 ## Quickstart — Up and Running in 2 Minutes
 
+> 📄 **Looking for the complete manual?** Download the official [CADE User's Guide (PDF)](CADE_User_Guide.pdf) for a complete quick reference on commands, keyboard shortcuts, memory management, and dual-interface operations!
+
 ```bash
 # 1. Clone and build
 git clone https://github.com/EzekTec-Inc/CADE && cd CADE
