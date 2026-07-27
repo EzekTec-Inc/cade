@@ -205,7 +205,7 @@ async fn async_main() -> Result<()> {
     })?;
     let base_url = settings.base_url();
 
-    let client = HttpTransport::new(base_url.clone(), api_key)
+    let mut client = HttpTransport::new(base_url.clone(), api_key)
         .map_err(|e| Error::custom(format!("create CADE server: {e}")))?;
 
     // Determine early whether we are running interactively (affects progress UI).
@@ -232,6 +232,30 @@ async fn async_main() -> Result<()> {
     if !client.health().await.unwrap_or(false) {
         sp_server.set_message("Starting cade-server…");
         auto_start_server(&base_url).await?;
+        if let Some(fresh_key) = settings.api_key() {
+            client.set_api_key(fresh_key);
+        }
+    }
+
+    // Verify client authentication against the server.
+    match client.verify_auth().await {
+        Ok(true) => {}
+        Ok(false) => {
+            // Re-sync token from disk in case of cold-start race
+            if let Some(fresh_key) = cade_core::bootstrap_token::default_token_path()
+                .and_then(|p| cade_core::bootstrap_token::read_existing_token(&p))
+            {
+                client.set_api_key(fresh_key);
+            }
+            if !client.verify_auth().await.unwrap_or(false) {
+                return Err(Error::custom(format!(
+                    "401 Unauthorized: CADE server at '{base_url}' rejected the API key.\n'                     If a stale server process is running from an earlier session, stop it (e.g. 'pkill cade-server' or 'pkill cade-server-bin') and restart 'cade'."
+                )));
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to verify authentication against server: {e}");
+        }
     }
 
     // Version compatibility check: warn if client and server versions differ.

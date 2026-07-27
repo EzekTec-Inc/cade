@@ -182,6 +182,28 @@ impl HttpTransport {
         &self.api_key
     }
 
+    pub fn set_api_key(&mut self, key: impl Into<String>) {
+        self.api_key = key.into();
+    }
+
+    /// Verify that the client's API key is authorized by the server.
+    /// Hits `GET /v1/config` (which requires authentication).
+    /// Returns `Ok(true)` if authorized, `Ok(false)` if 401 Unauthorized, or `Err` on network failure.
+    pub async fn verify_auth(&self) -> Result<bool> {
+        let resp = self
+            .client
+            .get(self.url("/config"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            Ok(false)
+        } else {
+            Ok(resp.status().is_success())
+        }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}/v1{}", self.base_url.trim_end_matches('/'), path)
     }
@@ -662,3 +684,18 @@ pub mod extensions;
 pub mod memory;
 pub mod messages;
 pub mod storage_impl;
+
+
+#[cfg(test)]
+mod client_auth_tests {
+    use super::*;
+
+    #[test]
+    fn test_client_set_api_key() {
+        let mut client = HttpTransport::new("http://localhost:8284".to_string(), "old_key".to_string()).unwrap();
+        assert_eq!(client.api_key(), "old_key");
+
+        client.set_api_key("new_key");
+        assert_eq!(client.api_key(), "new_key");
+    }
+}
