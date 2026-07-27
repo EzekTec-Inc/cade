@@ -112,6 +112,7 @@ CADE utilizes robust, production-grade systems to ensure zero-panic stability, s
 12. **Multi-OS Desktop Automation Adapter**: Deepens `DesktopControl` with native, OS-level window focusing across Windows (PowerShell COM `AppActivate`), macOS (AppleScript `osascript`), and Linux (`wmctrl`/`xdotool`), backed by zero-panic `try_detect()` error handling for headless CI environments.
 13. **Structured Tool Execution & Recovery**: Introduces `StructuredToolOutput` (`stdout`, `stderr`, `exit_code`, `duration_ms`, `truncated`, `error_summary`) to supply structured execution and compiler error metadata directly to LLM recovery routines.
 14. **Structured Git Branch Sandboxing**: Extends `IsolatedWorkspace` with a `MergeConflictReport` engine that inspects `git status --porcelain` on merge failures, returning exact lists of unmerged files (`UU`, `AA`, `DD`) and executing automatic `merge --abort` rollbacks.
+15. **Authenticated Startup Verification & Cold-Start Re-Sync**: On startup, the CLI client performs an authenticated handshake (`verify_auth()`) hitting `GET /v1/config` with Bearer auth. If a cold-start daemon generation occurs during `auto_start_server`, the client re-syncs its Bearer token directly from `~/.cade/api-token` before dispatching agent requests, completely eliminating authentication desynchronization errors.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in
