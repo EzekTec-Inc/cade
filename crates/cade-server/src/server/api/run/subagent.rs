@@ -1372,6 +1372,11 @@ ui_resource_uri: None,
                     images: None, cache_control: None,
                 });
             }
+
+            if iter == max_iters - 1 {
+                llm_err = Some("Subagent exceeded maximum iteration limit without converging.".to_string());
+                break;
+            }
         }
     })
     .await;

@@ -139,6 +139,7 @@ impl TuiApp {
                     if wrote {
                         self.draw_dirty = true;
                     }
+                    self.prune_completed_subagents();
                 }
                 continue;
             }

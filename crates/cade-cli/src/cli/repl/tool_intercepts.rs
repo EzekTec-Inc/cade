@@ -488,13 +488,26 @@ impl Repl {
                     task_id: task_id.clone(),
                     subagent: st,
                     prompt_preview,
-                    result,
+                    result: result.clone(),
                     is_error,
                 });
 
                 {
                     let mut app = bg_app_arc.lock();
-                    app.subagent_trackers.retain(|t| t.task_id != bg_task_id);
+                    if let Some(tracker) = app.subagent_trackers.iter_mut().find(|t| t.task_id == bg_task_id) {
+                        tracker.status = if is_error {
+                            cade_tui::subagent_tracker::SubagentStatus::Failed {
+                                finished_at: std::time::Instant::now(),
+                                error: result.chars().take(120).collect(),
+                            }
+                        } else {
+                            cade_tui::subagent_tracker::SubagentStatus::Completed {
+                                finished_at: std::time::Instant::now(),
+                            }
+                        };
+                    } else {
+                        app.subagent_trackers.retain(|t| t.task_id != bg_task_id);
+                    }
                     app.draw_dirty = true;
                 }
 

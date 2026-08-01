@@ -1025,6 +1025,34 @@ pub struct TuiApp {
 }
 
 impl TuiApp {
+    pub fn prune_completed_subagents(&mut self) {
+        let mut dirty = false;
+        self.subagent_trackers.retain(|t| {
+            match &t.status {
+                crate::subagent_tracker::SubagentStatus::Running => true,
+                crate::subagent_tracker::SubagentStatus::Completed { finished_at } => {
+                    if finished_at.elapsed().as_secs() < 10 {
+                        true
+                    } else {
+                        dirty = true;
+                        false
+                    }
+                }
+                crate::subagent_tracker::SubagentStatus::Failed { finished_at, .. } => {
+                    if finished_at.elapsed().as_secs() < 10 {
+                        true
+                    } else {
+                        dirty = true;
+                        false
+                    }
+                }
+            }
+        });
+        if dirty {
+            self.draw_dirty = true;
+        }
+    }
+
     /// Create the TuiApp and initialise the ratatui terminal
     /// (enters alternate screen + enables raw mode).
     pub fn new(

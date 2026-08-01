@@ -1,5 +1,12 @@
 use std::time::Instant;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentStatus {
+    Running,
+    Completed { finished_at: Instant },
+    Failed { finished_at: Instant, error: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct SubagentTracker {
     pub task_id: String,
@@ -9,6 +16,7 @@ pub struct SubagentTracker {
     pub output_lines: u32,
     /// Name of the tool currently being executed (None when idle/between calls).
     pub current_tool: Option<String>,
+    pub status: SubagentStatus,
 }
 
 impl SubagentTracker {
@@ -20,6 +28,7 @@ impl SubagentTracker {
             tool_calls: 0,
             output_lines: 0,
             current_tool: None,
+            status: SubagentStatus::Running,
         }
     }
 }
