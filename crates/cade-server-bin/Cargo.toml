@@ -1,5 +1,5 @@
 [package]
-name = "cade-server-bin"
+name = "cade-server"
 version = "0.2.4"
 edition = "2024"
 authors = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
@@ -13,7 +13,7 @@ semantic-search = ["cade-store/semantic-search"]
 [dependencies]
 # Workspace Crates
 cade-core = { path = "../cade-core" }
-cade-server = { path = "../cade-server" }
+cade-server = { package = "cade-server-lib", path = "../cade-server" }
 cade-store = { path = "../cade-store" }
 cade-ai = { path = "../cade-ai" }
 cade-agent = { path = "../cade-agent" }

@@ -150,7 +150,7 @@ rig-compat = ["cade-ai/rig-compat", "cade-store/rig-compat"]
 # -- Workspace crates
 cade-core    = { path = "crates/cade-core" }
 cade-ai      = { path = "crates/cade-ai" }
-cade-server  = { path = "crates/cade-server" }
+cade-server  = { package = "cade-server-lib", path = "crates/cade-server" }
 cade-store   = { path = "crates/cade-store" }
 cade-desktop = { path = "crates/cade-desktop", optional = true }
 cade-agent   = { path = "crates/cade-agent", default-features = false }

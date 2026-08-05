@@ -1,5 +1,5 @@
 [package]
-name = "cade-server"
+name = "cade-server-lib"
 version = "0.2.4"
 edition = "2024"
 

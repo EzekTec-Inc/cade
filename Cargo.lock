@@ -911,7 +911,7 @@ dependencies = [
  "cade-desktop",
  "cade-mcp",
  "cade-sdk",
- "cade-server",
+ "cade-server-lib",
  "cade-store",
  "cade-tui",
  "chrono",
@@ -1195,6 +1195,36 @@ dependencies = [
  "axum 0.8.9",
  "cade-agent",
  "cade-ai",
+ "cade-askpass",
+ "cade-core",
+ "cade-server-lib",
+ "cade-store",
+ "chrono",
+ "clap",
+ "dashmap 6.2.1",
+ "derive_more",
+ "dirs",
+ "dotenvy",
+ "lru 0.18.1",
+ "mlua",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "cade-server-lib"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "axum 0.8.9",
+ "cade-agent",
+ "cade-ai",
  "cade-core",
  "cade-desktop",
  "cade-mcp",
@@ -1225,36 +1255,6 @@ dependencies = [
  "tower 0.5.3",
  "tower-http",
  "tracing",
- "uuid",
-]
-
-[[package]]
-name = "cade-server-bin"
-version = "0.2.4"
-dependencies = [
- "async-trait",
- "axum 0.8.9",
- "cade-agent",
- "cade-ai",
- "cade-askpass",
- "cade-core",
- "cade-server",
- "cade-store",
- "chrono",
- "clap",
- "dashmap 6.2.1",
- "derive_more",
- "dirs",
- "dotenvy",
- "lru 0.18.1",
- "mlua",
- "parking_lot",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tower-http",
- "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 

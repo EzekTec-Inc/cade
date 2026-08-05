@@ -66,7 +66,7 @@ tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$TMP_DIR"
 # 5. Install Binaries
 echo "[4/4] Installing to $INSTALL_DIR..."
 mv "$TMP_DIR/cade" "$INSTALL_DIR/"
-mv "$TMP_DIR/cade-server-bin" "$INSTALL_DIR/cade-server"
+mv "$TMP_DIR/cade-server" "$INSTALL_DIR/cade-server"
 chmod +x "$INSTALL_DIR/cade" "$INSTALL_DIR/cade-server"
 
 # Ensure ~/.local/bin is in PATH

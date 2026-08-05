@@ -249,7 +249,7 @@ async fn async_main() -> Result<()> {
             }
             if !client.verify_auth().await.unwrap_or(false) {
                 return Err(Error::custom(format!(
-                    "401 Unauthorized: CADE server at '{base_url}' rejected the API key.\n'                     If a stale server process is running from an earlier session, stop it (e.g. 'pkill cade-server' or 'pkill cade-server-bin') and restart 'cade'."
+                    "401 Unauthorized: CADE server at '{base_url}' rejected the API key.\n'                     If a stale server process is running from an earlier session, stop it (e.g. 'pkill cade-server' or 'pkill -f cade-server') and restart 'cade'."
                 )));
             }
         }

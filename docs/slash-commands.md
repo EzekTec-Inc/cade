@@ -147,4 +147,4 @@ single `SlashCmd` enum and a `parse_slash` matcher. To add one:
 In addition to using `/update` inside an active TUI session, CADE can also be checked or updated directly from your terminal shell completely headless and server-free:
 
 * **`cade --check-update`**: Checks if a new release is available and exits immediately.
-* **`cade --update`**: Downloads, cryptographically verifies, and applies the latest CADE update (updating both `cade` and `cade-server-bin`) and exits immediately.
+* **`cade --update`**: Downloads, cryptographically verifies, and applies the latest CADE update (updating both `cade` and `cade-server`) and exits immediately.
