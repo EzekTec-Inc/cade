@@ -107,7 +107,7 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
 
     if models_url.contains("openrouter.ai") {
         req_builder = req_builder
-            .header("HTTP-Referer", "https://github.com/EzekTec-Inc/CADE")
+            .header("HTTP-Referer", "https://github.com/GovAlta-Lab/cade")
             .header("X-Title", "CADE");
     }
     let req = req_builder.send();
@@ -230,7 +230,7 @@ impl OpenAiProvider {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
                 "HTTP-Referer",
-                reqwest::header::HeaderValue::from_static("https://github.com/EzekTec-Inc/CADE"),
+                reqwest::header::HeaderValue::from_static("https://github.com/GovAlta-Lab/cade"),
             );
             headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
 
@@ -548,7 +548,7 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let provider_label = self.provider_label();
-
+        //NOTE: Stephen Z. Ezekwem -- this is where the api call and response is implemented.
         let resp = retry_with_backoff(
             "OpenAI::stream",
             3,

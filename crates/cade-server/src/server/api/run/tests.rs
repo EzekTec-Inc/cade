@@ -398,7 +398,7 @@ fn filter_subagent_tools_strips_run_subagent_schema() {
         serde_json::json!({"name": "run_subagent"}),
         serde_json::json!({"name": "read_file"}),
     ];
-    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All);
+    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, false);
     let names: Vec<String> = filtered
         .iter()
         .filter_map(|s| s["name"].as_str().map(String::from))
@@ -407,6 +407,31 @@ fn filter_subagent_tools_strips_run_subagent_schema() {
         !names.iter().any(|n| n == "run_subagent"),
         "run_subagent must be stripped, got: {names:?}"
     );
+    assert!(names.iter().any(|n| n == "bash"));
+    assert!(names.iter().any(|n| n == "read_file"));
+}
+
+/// When a subagent definition opts into nesting via `allow_run_subagent`,
+/// the recursion tools stay in the inherited schema (still bounded by the
+/// depth/semaphore caps at dispatch time).
+#[test]
+fn filter_subagent_tools_keeps_run_subagent_when_nesting_allowed() {
+    let schemas = vec![
+        serde_json::json!({"name": "bash"}),
+        serde_json::json!({"name": "run_subagent"}),
+        serde_json::json!({"name": "run_parallel_subagents"}),
+        serde_json::json!({"name": "read_file"}),
+    ];
+    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, true);
+    let names: Vec<String> = filtered
+        .iter()
+        .filter_map(|s| s["name"].as_str().map(String::from))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "run_subagent"),
+        "run_subagent must be kept when nesting is allowed, got: {names:?}"
+    );
+    assert!(names.iter().any(|n| n == "run_parallel_subagents"));
     assert!(names.iter().any(|n| n == "bash"));
     assert!(names.iter().any(|n| n == "read_file"));
 }
@@ -424,7 +449,7 @@ fn filter_subagent_tools_strips_finish_schema() {
         serde_json::json!({"name": "run_subagent"}),
         serde_json::json!({"name": "read_file"}),
     ];
-    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All);
+    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, false);
     let names: Vec<String> = filtered
         .iter()
         .filter_map(|s| s["name"].as_str().map(String::from))

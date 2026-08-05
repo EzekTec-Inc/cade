@@ -10,6 +10,7 @@ pub mod questions;
 pub mod reducer;
 pub mod render;
 pub mod state;
+pub mod subagent_inspector;
 pub mod timeline;
 pub(crate) use timeline::*;
 

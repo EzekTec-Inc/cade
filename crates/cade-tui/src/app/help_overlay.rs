@@ -1,10 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
+    Frame,
 };
 
 use crate::colors::{ThemeColors, ThemeColorsExt};
@@ -42,6 +42,10 @@ impl HelpOverlay {
             (
                 "Ctrl+Y",
                 "Trigger timeline Copy Overlay to select and copy outputs",
+            ),
+            (
+                "F5",
+                "Open the subagent inspector (background child-session viewport)",
             ),
             (
                 "@",

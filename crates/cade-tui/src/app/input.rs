@@ -464,6 +464,18 @@ impl TuiApp {
                 self.draw_dirty = true;
             }
 
+            KeyCode::F(5) => {
+                let trackers = self.subagent_trackers.clone();
+                if !trackers.is_empty() {
+                    self.overlays.push(Box::new(
+                        crate::app::subagent_inspector::SubagentInspectorOverlay::new(trackers),
+                    ));
+                    self.draw_dirty = true;
+                } else {
+                    self.show_toast("No subagents running", ToastLevel::Info);
+                }
+            }
+
             KeyCode::Char('o') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.expand_all = !self.expand_all;
                 self.draw_dirty = true;

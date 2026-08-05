@@ -137,6 +137,14 @@ pub struct SubagentDef {
     pub scope: SubagentScope,
     /// Path to the defining .md file (None for built-ins)
     pub path: Option<PathBuf>,
+    /// Hide from `/subagents list`, `@`-completion, and description routing;
+    /// still invokable by exact name.
+    pub hidden: bool,
+    /// Opt-in to nested subagents. When `true`, `run_subagent` /
+    /// `run_parallel_subagents` stay in the inherited tool schema (bounded by
+    /// the depth/semaphore caps); when `false` (default) they are stripped —
+    /// recursion is banned, matching pre-port behaviour.
+    pub allow_run_subagent: bool,
 }
 
 impl SubagentDef {
@@ -204,6 +212,8 @@ If runtime bridge instructions identify a safe supervisor target and you are blo
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "planner".to_string(),
@@ -257,6 +267,8 @@ If runtime bridge instructions identify a safe supervisor target and you are blo
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "worker".to_string(),
@@ -310,6 +322,8 @@ Recommended next step: N."
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "reviewer".to_string(),
@@ -389,6 +403,8 @@ When reviewing code, cite file paths and line numbers. When reviewing plans, cit
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "context-builder".to_string(),
@@ -435,6 +451,8 @@ If runtime bridge instructions identify a safe supervisor target and you are blo
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "researcher".to_string(),
@@ -486,6 +504,8 @@ If runtime bridge instructions identify a safe supervisor target and you are blo
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "delegate".to_string(),
@@ -500,6 +520,8 @@ If runtime bridge instructions identify a safe supervisor target and you are blo
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "oracle".to_string(),
@@ -573,6 +595,8 @@ Suggested execution prompt:
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "reflection".to_string(),
@@ -599,6 +623,8 @@ Do NOT create memory blocks for transient task details."
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
         SubagentDef {
             name: "recall".to_string(),
@@ -614,6 +640,8 @@ file path and line). If nothing relevant is found, say so clearly."
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         },
     ]
 }
@@ -728,6 +756,82 @@ pub fn resolve_subagent_def<'a>(mode: &str, all: &'a [SubagentDef]) -> Option<&'
     find_subagent(mode, all).or_else(|| find_subagent("worker", all))
 }
 
+// -- Description-based auto-routing
+
+/// Split free text into lowercased terms of length >= 3 for overlap scoring.
+fn description_terms(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() >= 3)
+        .map(String::from)
+        .collect()
+}
+
+/// Pick the best subagent for a task by description overlap, mirroring
+/// OpenCode's "the task tool routes by description" behaviour.
+///
+/// Scoring: for every non-hidden definition, count how many of its
+/// description terms also appear in the task prompt, normalised by the
+/// description length.  Returns the definition with the highest positive
+/// score, or `None` when nothing shares a term (callers fall back to
+/// `worker` / the default prompt).
+///
+/// Hidden defs (§5.1) are skipped so they are only reachable by exact name.
+#[must_use]
+pub fn route_subagent_by_description<'a>(
+    prompt: &str,
+    all: &'a [SubagentDef],
+) -> Option<&'a SubagentDef> {
+    let prompt_terms = description_terms(prompt);
+    if prompt_terms.is_empty() {
+        return None;
+    }
+    all.iter()
+        .filter(|d| !d.hidden)
+        .filter_map(|d| {
+            let desc_terms = description_terms(&d.description);
+            if desc_terms.is_empty() {
+                return None;
+            }
+            let overlap = desc_terms
+                .iter()
+                .filter(|t| prompt_terms.contains(t))
+                .count();
+            let score = overlap as f64 / desc_terms.len() as f64;
+            (score > 0.0).then_some((d, score))
+        })
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(d, _)| d)
+}
+
+/// Resolve the subagent for a `run_subagent` call with description routing.
+///
+/// Selection order:
+/// 1. Exact name match against `all` (custom defs, built-ins like `plan`).
+/// 2. If no exact match and the caller did not pin a real subagent name —
+///    i.e. the mode is the legacy default (`"build"`) or empty — route by
+///    description overlap with the task prompt.
+/// 3. Fallback to the built-in `worker` definition.
+///
+/// `resolve_subagent_def` keeps its original exact-then-worker contract; this
+/// helper adds routing for the un-pinned case used by the run paths.
+#[must_use]
+pub fn resolve_subagent_auto<'a>(
+    mode: &str,
+    prompt: &str,
+    all: &'a [SubagentDef],
+) -> Option<&'a SubagentDef> {
+    if let Some(def) = find_subagent(mode, all) {
+        return Some(def);
+    }
+    if mode.is_empty() || mode == "build" {
+        if let Some(def) = route_subagent_by_description(prompt, all) {
+            return Some(def);
+        }
+    }
+    find_subagent("worker", all)
+}
+
 // -- Parsing
 
 /// Parse a JSON profile file into a [`SubagentDef`].
@@ -802,6 +906,8 @@ fn parse_subagent_json(
         skills,
         scope,
         path: Some(path),
+        hidden: v["hidden"].as_bool().unwrap_or(false),
+        allow_run_subagent: v["allow_run_subagent"].as_bool().unwrap_or(false),
     })
 }
 
@@ -826,6 +932,8 @@ fn parse_subagent_md(
     let mut model = None::<String>;
     let mut tools = SubagentTools::All;
     let mut skills = vec![];
+    let mut hidden = false;
+    let mut allow_run_subagent = false;
 
     for line in fm_str.lines() {
         let line = line.trim();
@@ -838,6 +946,8 @@ fn parse_subagent_md(
                 "model" => model = Some(v.to_string()),
                 "tools" => tools = SubagentTools::from_str(v),
                 "skills" => skills = v.split(',').map(|s| s.trim().to_string()).collect(),
+                "hidden" => hidden = v.eq_ignore_ascii_case("true"),
+                "allow_run_subagent" => allow_run_subagent = v.eq_ignore_ascii_case("true"),
                 _ => {}
             }
         }
@@ -851,6 +961,8 @@ fn parse_subagent_md(
         skills,
         scope,
         path: Some(path),
+        hidden,
+        allow_run_subagent,
         system_prompt: body.trim().to_string(),
     })
 }
@@ -1039,6 +1151,8 @@ mod tests {
             skills: vec![],
             scope: SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         }
     }
 
@@ -1104,5 +1218,103 @@ mod tests {
         let defs = vec![def("worker"), custom];
         let got = resolve_subagent_def("custom-agent", &defs).unwrap();
         assert_eq!(got.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
+    }
+
+    // -- parser: hidden + allow_run_subagent
+
+    #[test]
+    fn parse_json_honours_hidden_and_allow_run_subagent() {
+        let json = r#"{
+            "name": "stealth",
+            "description": "do not surface",
+            "hidden": true,
+            "allow_run_subagent": false,
+            "system_prompt": "shh"
+        }"#;
+        let def = parse_subagent_json("stealth", json, SubagentScope::Project, PathBuf::from("/tmp/x.json"))
+            .expect("valid json profile");
+        assert!(def.hidden);
+        assert!(!def.allow_run_subagent);
+    }
+
+    #[test]
+    fn parse_json_defaults_hidden_false_and_bans_nesting() {
+        let json = r#"{"name": "plain", "description": "x"}"#;
+        let def = parse_subagent_json("plain", json, SubagentScope::Project, PathBuf::from("/tmp/y.json"))
+            .expect("valid json profile");
+        assert!(!def.hidden);
+        assert!(!def.allow_run_subagent);
+    }
+
+    #[test]
+    fn parse_md_frontmatter_honours_hidden_and_allow_run_subagent() {
+        let md = "---\nname: stealth-md\nhidden: true\nallow_run_subagent: false\n---\nbody";
+        let def = parse_subagent_md("stealth-md", md, SubagentScope::Project, PathBuf::from("/tmp/z.md"))
+            .expect("valid md profile");
+        assert!(def.hidden);
+        assert!(!def.allow_run_subagent);
+    }
+
+    // -- description routing
+
+    fn desc_def(name: &str, description: &str) -> SubagentDef {
+        SubagentDef {
+            name: name.to_string(),
+            description: description.to_string(),
+            model: None,
+            tools: SubagentTools::All,
+            system_prompt: format!("prompt-{name}"),
+            skills: vec![],
+            scope: SubagentScope::Builtin,
+            path: None,
+            hidden: false,
+            allow_run_subagent: false,
+        }
+    }
+
+    #[test]
+    fn route_by_description_picks_best_non_hidden_def() {
+        let defs = vec![
+            desc_def("tester", "Runs the test suite and reports failures"),
+            desc_def("writer", "Writes documentation and release notes"),
+        ];
+        let got = route_subagent_by_description("please run the test suite", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("tester"));
+    }
+
+    #[test]
+    fn route_by_description_returns_none_when_no_overlap() {
+        let defs = vec![desc_def("writer", "Writes documentation")];
+        assert!(route_subagent_by_description("deploy to production", &defs).is_none());
+    }
+
+    #[test]
+    fn route_by_description_skips_hidden_defs() {
+        let mut stealth = desc_def("stealth", "Runs the test suite and reports failures");
+        stealth.hidden = true;
+        let defs = vec![stealth, desc_def("tester", "Runs the test suite and reports failures")];
+        let got = route_subagent_by_description("please run the test suite", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("tester"));
+    }
+
+    #[test]
+    fn resolve_auto_exact_name_wins_over_routing() {
+        let defs = vec![desc_def("planner", "Writes documentation"), desc_def("tester", "Runs the test suite")];
+        let got = resolve_subagent_auto("planner", "please run the test suite", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("planner"));
+    }
+
+    #[test]
+    fn resolve_auto_routes_build_default_by_description() {
+        let defs = vec![desc_def("worker", "Implementation agent for normal tasks"), desc_def("tester", "Runs the test suite and reports failures")];
+        let got = resolve_subagent_auto("build", "please run the test suite and report failures", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("tester"));
+    }
+
+    #[test]
+    fn resolve_auto_falls_back_to_worker_when_unknown_pinned_mode() {
+        let defs = vec![desc_def("worker", "Implementation agent for normal tasks")];
+        let got = resolve_subagent_auto("bug-hunter", "please run the test suite", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("worker"));
     }
 }

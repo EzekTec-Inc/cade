@@ -455,6 +455,7 @@ impl Repl {
 
         let subagent_names = cade_agent::subagents::discover_all_subagents(&self.cwd)
             .into_iter()
+            .filter(|s| !s.hidden)
             .map(|s| s.name)
             .collect();
         app.slash_ac.set_at_subagents(subagent_names);
@@ -1202,6 +1203,54 @@ impl Repl {
                     self.set_mcp(mgr).await;
                     self.set_tools_ready();
                 }
+            }
+
+            // @name dispatch: route the whole message to a named subagent.
+            // Exact name lookup (hidden subagents included) — unmatched names
+            // fall through to a normal agent turn.
+            let at_dispatch = {
+                let (name, prompt) = if let Some(rest) = input.strip_prefix('@') {
+                    match rest.split_once(char::is_whitespace) {
+                        Some((n, p)) => (n, p.trim()),
+                        None => (rest.trim(), ""),
+                    }
+                } else {
+                    ("", "")
+                };
+                if !name.is_empty()
+                    && cade_agent::subagents::discover_all_subagents(&self.cwd)
+                        .iter()
+                        .any(|d| d.name == name)
+                {
+                    Some((name.to_string(), prompt.to_string()))
+                } else {
+                    None
+                }
+            };
+            if let Some((name, prompt)) = at_dispatch {
+                self.tui_dim(format!("  Launching subagent [{name}]…"));
+                let call_id = uuid::Uuid::new_v4().to_string();
+                let args = json!({ "mode": name, "prompt": prompt });
+                match self.handle_subagent(&call_id, &args).await {
+                    Ok(result) => {
+                        if result.is_error {
+                            let _ = self
+                                .app
+                                .lock()
+                                .push(RenderLine::ErrorMsg(result.output));
+                        } else {
+                            let _ = self
+                                .app
+                                .lock()
+                                .push(RenderLine::AssistantText(result.output));
+                        }
+                    }
+                    Err(e) => {
+                        self.tui_sys(format!("  ⚠ subagent [{name}] failed: {e}"));
+                    }
+                }
+                let _ = self.app.lock().commit_streaming();
+                continue;
             }
 
             let mut final_input = input.clone();

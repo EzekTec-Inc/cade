@@ -497,6 +497,8 @@ mod tests {
             skills: vec![],
             scope: crate::subagents::SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         };
         let result = cfg.resolve_system_prompt(Some(&def));
         assert!(result.contains("def instructions"));
@@ -643,6 +645,8 @@ mod tests {
             skills: vec![],
             scope: crate::subagents::SubagentScope::Builtin,
             path: None,
+            hidden: false,
+            allow_run_subagent: false,
         };
         assert_eq!(cfg.resolve_model(Some(&def)), Some("claude-haiku-3-5"));
     }

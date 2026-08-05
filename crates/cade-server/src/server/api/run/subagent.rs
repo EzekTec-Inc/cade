@@ -162,6 +162,7 @@ impl Drop for EphemeralEnvironment {
 pub(super) fn filter_subagent_tools(
     schemas: Vec<serde_json::Value>,
     allowed: &cade_agent::subagents::SubagentTools,
+    allow_nesting: bool,
 ) -> Vec<serde_json::Value> {
     schemas
         .into_iter()
@@ -169,9 +170,14 @@ pub(super) fn filter_subagent_tools(
             let name = s["name"].as_str().unwrap_or("");
             // Strip tools that must never appear in a subagent's inherited schema:
             // - run_subagent / run_parallel_subagents: prevent runaway recursion
+            //   unless the subagent explicitly opts in via `allow_run_subagent`
+            //   (the depth/semaphore caps bound the nested case)
             // - finish: injected fresh by the executor; stripping here prevents
             //   the parent's stale schema from leaking in or causing double routing
-            if matches!(name, "run_subagent" | "run_parallel_subagents" | "finish") {
+            if name == "finish" {
+                return false;
+            }
+            if !allow_nesting && matches!(name, "run_subagent" | "run_parallel_subagents") {
                 return false;
             }
             match allowed {
@@ -652,7 +658,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     // Resolve subagent definition + model via shared helpers
     let cwd_for_defs = std::env::current_dir().unwrap_or_default();
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
-    let def_opt = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
+    let def_opt = cade_agent::subagents::resolve_subagent_auto(&cfg.mode, &cfg.prompt, &all_defs);
 
     let is_subagent_readonly = def_opt
         .map(|d| d.tools.is_readonly())
@@ -834,7 +840,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 &cade_agent::subagents::SubagentTools::All
             }
         });
-        let mut filtered = filter_subagent_tools(raw, tools_filter);
+        let allow_nesting = def_opt.map(|d| d.allow_run_subagent).unwrap_or(false);
+        let mut filtered = filter_subagent_tools(raw, tools_filter, allow_nesting);
 
         // REC-4/G4: Inject the built-in `finish` tool so the model has an
         // explicit, canonical way to signal completion.  This replaces the

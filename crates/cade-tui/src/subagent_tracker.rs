@@ -1,5 +1,9 @@
 use std::time::Instant;
 
+/// Upper bound on buffered transcript lines kept per subagent so a
+/// long-running background agent can't grow memory without limit.
+pub const MAX_TRANSCRIPT_LINES: usize = 2000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentStatus {
     Running,
@@ -16,6 +20,9 @@ pub struct SubagentTracker {
     pub output_lines: u32,
     /// Name of the tool currently being executed (None when idle/between calls).
     pub current_tool: Option<String>,
+    /// Last output emitted by this subagent (most recent first), for the
+    /// navigable child-session inspector overlay.
+    pub transcript: Vec<String>,
     pub status: SubagentStatus,
 }
 
@@ -28,7 +35,17 @@ impl SubagentTracker {
             tool_calls: 0,
             output_lines: 0,
             current_tool: None,
+            transcript: Vec::new(),
             status: SubagentStatus::Running,
+        }
+    }
+
+    /// Buffer one output line, dropping the oldest once the cap is hit.
+    pub fn push_output(&mut self, line: String) {
+        self.output_lines += 1;
+        self.transcript.insert(0, line);
+        if self.transcript.len() > MAX_TRANSCRIPT_LINES {
+            self.transcript.truncate(MAX_TRANSCRIPT_LINES);
         }
     }
 }
@@ -43,6 +60,7 @@ mod tests {
         assert!(t.current_tool.is_none());
         assert_eq!(t.tool_calls, 0);
         assert_eq!(t.output_lines, 0);
+        assert!(t.transcript.is_empty());
     }
 
     #[test]
@@ -56,5 +74,26 @@ mod tests {
         // Cleared after tool finishes
         t.current_tool = None;
         assert!(t.current_tool.is_none());
+    }
+
+    #[test]
+    fn push_output_buffers_newest_first() {
+        let mut t = SubagentTracker::new("t3".into(), "worker".into());
+        t.push_output("first".into());
+        t.push_output("second".into());
+        assert_eq!(t.output_lines, 2);
+        // Newest line is at the front for cheap cap truncation.
+        assert_eq!(t.transcript.first().map(|s| s.as_str()), Some("second"));
+        assert_eq!(t.transcript.last().map(|s| s.as_str()), Some("first"));
+    }
+
+    #[test]
+    fn push_output_caps_transcript() {
+        let mut t = SubagentTracker::new("t4".into(), "worker".into());
+        for i in 0..(MAX_TRANSCRIPT_LINES + 50) {
+            t.push_output(format!("line {i}"));
+        }
+        assert_eq!(t.transcript.len(), MAX_TRANSCRIPT_LINES);
+        assert_eq!(t.output_lines, (MAX_TRANSCRIPT_LINES + 50) as u32);
     }
 }

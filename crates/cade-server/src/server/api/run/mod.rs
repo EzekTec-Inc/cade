@@ -836,6 +836,55 @@ pub(crate) async fn run_agent_loop(
             );
         }
 
+        // ── Background subagent write-back ─────────────────────────────────
+        // Drain completed background results for this agent so the parent
+        // sees them on the next LLM iteration.  Each result is persisted as a
+        // `tool` message only when no tool result for that tool_call_id is
+        // already in the conversation — server-side background runs also
+        // return their result synchronously, so this dedupes instead of
+        // double-delivering, and the queue can no longer grow unbounded.
+        let pending_results = {
+            let mut map = state2.pending_subagent_results.write().await;
+            map.remove(&agent_id2).unwrap_or_default()
+        };
+        if !pending_results.is_empty() {
+            let existing_ids: std::collections::HashSet<String> =
+                cade_store::sqlite::list_messages(
+                    &state2.db,
+                    &agent_id2,
+                    conv_id2.as_deref(),
+                    10000,
+                )
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.role == "tool")
+                .filter_map(|m| m.content["tool_call_id"].as_str().map(String::from))
+                .collect();
+
+            for sr in pending_results {
+                if existing_ids.contains(&sr.tool_call_id) {
+                    continue;
+                }
+                let body = format!(
+                    "[background subagent {} {}]\n{}",
+                    sr.subagent_id,
+                    if sr.is_error { "failed" } else { "completed" },
+                    sr.result
+                );
+                persist(
+                    &state2,
+                    &agent_id2,
+                    conv_id2.as_deref(),
+                    "tool",
+                    json!({
+                        "content": body,
+                        "tool_call_id": sr.tool_call_id,
+                        "tool_name": "run_subagent",
+                    }),
+                );
+            }
+        }
+
         // Loop → re-invoke LLM with tool results
     }
 

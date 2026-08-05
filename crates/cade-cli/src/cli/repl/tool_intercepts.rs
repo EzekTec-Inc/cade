@@ -1,7 +1,7 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
 use cade_agent::subagents::{
-    SubagentConfig, discover_all_subagents, resolve_subagent_def, should_emit_completion_bell,
+    SubagentConfig, discover_all_subagents, resolve_subagent_auto, should_emit_completion_bell,
 };
 use std::sync::Arc;
 
@@ -195,7 +195,7 @@ impl Repl {
         }
 
         let all_defs = discover_all_subagents(&self.cwd);
-        let def_opt = resolve_subagent_def(&cfg.mode, &all_defs).cloned();
+        let def_opt = resolve_subagent_auto(&cfg.mode, &cfg.prompt, &all_defs).cloned();
 
         let subagent_mode = cfg.mode.clone();
         let background = cfg.background && !force_synchronous;
@@ -296,8 +296,12 @@ impl Repl {
                 let mut app = app_arc.lock();
                 if let Some(tracker) = app.subagent_trackers.iter_mut().find(|t| t.task_id == tid) {
                     match evt {
-                        crate::cli::headless::HeadlessEvent::Text(_) => {
-                            tracker.output_lines += 1;
+                        crate::cli::headless::HeadlessEvent::Text(text) => {
+                            for line in text.split('\n') {
+                                if !line.is_empty() {
+                                    tracker.push_output(line.to_string());
+                                }
+                            }
                             tracker.current_tool = None;
                         }
                         crate::cli::headless::HeadlessEvent::ToolCall(tname) => {
