@@ -1,12 +1,15 @@
-//! Autonomous SubagentSession Execution Harness (ADR-0021).
+//! Autonomous SubagentSession Execution Harness (ADR-0021 / Issues #49, #50, #51).
 //!
 //! Encapsulates the execution loop, canonical finish tool injection,
-//! dual budget enforcement (max_iters & max_tokens_budget), and structured outcome models.
+//! dual budget enforcement (max_iters & max_tokens_budget), RAII workspace isolation,
+//! real-time telemetry streaming, and structured outcome models.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::Path;
 
 use super::config::SubagentConfig;
+use super::workspace_guard::IsolatedWorkspaceGuard;
 
 /// Canonical finish tool name
 pub const FINISH_TOOL_NAME: &str = "finish";
@@ -78,8 +81,64 @@ impl SubagentOutcome {
     }
 }
 
+/// Real-time event emitted during a subagent session (Issue #51).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SubagentEvent {
+    TurnStarted {
+        turn: usize,
+        max_turns: usize,
+    },
+    ToolExecuting {
+        tool_call_id: String,
+        tool_name: String,
+        arguments: Value,
+    },
+    ToolCompleted {
+        tool_call_id: String,
+        tool_name: String,
+        is_error: bool,
+    },
+    Progress {
+        percent: f64,
+        message: Option<String>,
+    },
+    ApprovalRequired {
+        tool_name: String,
+        arguments: Value,
+        approval_id: String,
+    },
+    OutputChunk {
+        text: String,
+    },
+    Finished {
+        outcome: SubagentOutcome,
+    },
+}
+
+/// Asynchronous event broadcaster for subagents (Issue #51).
+#[derive(Clone, Default)]
+pub struct SubagentEventEmitter {
+    tx: Option<tokio::sync::mpsc::Sender<SubagentEvent>>,
+}
+
+impl SubagentEventEmitter {
+    pub fn new(tx: Option<tokio::sync::mpsc::Sender<SubagentEvent>>) -> Self {
+        Self { tx }
+    }
+
+    pub fn noop() -> Self {
+        Self { tx: None }
+    }
+
+    pub async fn emit(&self, event: SubagentEvent) {
+        if let Some(ref tx) = self.tx {
+            let _ = tx.send(event).await;
+        }
+    }
+}
+
 /// Autonomous session harness for running subagents.
-#[derive(Debug, Clone)]
 pub struct SubagentSession {
     pub session_id: String,
     pub parent_agent_id: String,
@@ -89,6 +148,8 @@ pub struct SubagentSession {
     pub current_iteration: usize,
     pub cumulative_tokens: u64,
     pub total_tool_calls: usize,
+    pub workspace_guard: Option<IsolatedWorkspaceGuard>,
+    pub event_emitter: SubagentEventEmitter,
 }
 
 impl SubagentSession {
@@ -104,6 +165,8 @@ impl SubagentSession {
             current_iteration: 0,
             cumulative_tokens: 0,
             total_tool_calls: 0,
+            workspace_guard: None,
+            event_emitter: SubagentEventEmitter::noop(),
         }
     }
 
@@ -115,6 +178,24 @@ impl SubagentSession {
     pub fn with_max_tokens_budget(mut self, budget: Option<u64>) -> Self {
         self.max_tokens_budget = budget;
         self
+    }
+
+    pub fn with_workspace_guard(mut self, guard: IsolatedWorkspaceGuard) -> Self {
+        self.workspace_guard = Some(guard);
+        self
+    }
+
+    pub fn with_event_emitter(mut self, emitter: SubagentEventEmitter) -> Self {
+        self.event_emitter = emitter;
+        self
+    }
+
+    /// Return the execution working directory for tools (isolated if active, else primary).
+    pub fn execution_path<'a>(&'a self, fallback_primary: &'a Path) -> &'a Path {
+        self.workspace_guard
+            .as_ref()
+            .and_then(|g| g.path())
+            .unwrap_or(fallback_primary)
     }
 
     /// Check if either iteration or token budget limits have been reached.
@@ -137,10 +218,39 @@ impl SubagentSession {
     }
 
     /// Record turn step progress and token usage.
-    pub fn record_turn(&mut self, tokens_used: u64, tool_calls_count: usize) {
+    pub async fn record_turn(&mut self, tokens_used: u64, tool_calls_count: usize) {
         self.current_iteration += 1;
         self.cumulative_tokens += tokens_used;
         self.total_tool_calls += tool_calls_count;
+        self.event_emitter
+            .emit(SubagentEvent::TurnStarted {
+                turn: self.current_iteration,
+                max_turns: self.max_iters,
+            })
+            .await;
+    }
+
+    /// Finalize execution outcome, committing workspace if successful and emitting event.
+    pub async fn finalize_outcome(&mut self, outcome: SubagentOutcome) -> SubagentOutcome {
+        if outcome.is_success()
+            && let Some(ref mut guard) = self.workspace_guard
+            && let Err(e) = guard.commit_and_merge().await
+        {
+            let err_msg = format!("Failed to merge isolated workspace changes back: {e}");
+            let failed_outcome = SubagentOutcome::Failed { error: err_msg };
+            self.event_emitter
+                .emit(SubagentEvent::Finished {
+                    outcome: failed_outcome.clone(),
+                })
+                .await;
+            return failed_outcome;
+        }
+        self.event_emitter
+            .emit(SubagentEvent::Finished {
+                outcome: outcome.clone(),
+            })
+            .await;
+        outcome
     }
 
     /// Inspect a tool call to determine if it is the canonical `finish` tool.
@@ -190,6 +300,7 @@ impl SubagentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_finish_tool_schema_structure() {
@@ -199,8 +310,8 @@ mod tests {
         assert!(schema["parameters"]["properties"]["status"].is_object());
     }
 
-    #[test]
-    fn test_subagent_session_budget_exhaustion() {
+    #[tokio::test]
+    async fn test_subagent_session_budget_exhaustion() {
         let config = SubagentConfig::from_args(&json!({ "prompt": "Test task" }));
         let mut session = SubagentSession::new(config, "parent-1")
             .with_max_iters(3)
@@ -208,10 +319,10 @@ mod tests {
 
         assert!(session.is_budget_exhausted().is_none());
 
-        session.record_turn(40, 1);
+        session.record_turn(40, 1).await;
         assert!(session.is_budget_exhausted().is_none());
 
-        session.record_turn(70, 1); // 110 total > 100
+        session.record_turn(70, 1).await; // 110 total > 100
         assert!(session.is_budget_exhausted().is_some());
     }
 
@@ -228,5 +339,48 @@ mod tests {
         } else {
             panic!("Expected SubagentOutcome::Done");
         }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_session_finalize_workspace_merge() -> std::io::Result<()> {
+        let temp_primary = tempdir()?;
+        let primary_file = temp_primary.path().join("code.rs");
+        std::fs::write(&primary_file, "initial")?;
+
+        let guard = IsolatedWorkspaceGuard::new(temp_primary.path(), None).await?;
+        let config = SubagentConfig::from_args(&json!({ "prompt": "Refactor code" }));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let emitter = SubagentEventEmitter::new(Some(tx));
+
+        let mut session = SubagentSession::new(config, "parent-1")
+            .with_workspace_guard(guard)
+            .with_event_emitter(emitter);
+
+        // Mutate isolated file
+        let isolated_file = session.workspace_guard.as_ref().unwrap().path().unwrap().join("code.rs");
+        std::fs::write(&isolated_file, "refactored")?;
+
+        // Finalize with Success
+        let outcome = SubagentOutcome::Done {
+            summary: "Refactor finished".to_string(),
+            iterations: 1,
+            tool_calls_count: 1,
+            token_usage: 50,
+        };
+        let final_res = session.finalize_outcome(outcome).await;
+        assert!(final_res.is_success());
+
+        // Verify primary received merged content
+        assert_eq!(std::fs::read_to_string(&primary_file)?, "refactored");
+
+        // Verify Finished event was emitted
+        let event = rx.recv().await.expect("Event emitted");
+        if let SubagentEvent::Finished { outcome } = event {
+            assert!(outcome.is_success());
+        } else {
+            panic!("Expected Finished event");
+        }
+        Ok(())
     }
 }

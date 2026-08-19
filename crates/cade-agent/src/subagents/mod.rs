@@ -3,11 +3,14 @@
 pub mod config;
 pub mod coordinator;
 pub mod session;
+pub mod workspace_guard;
 
 pub use config::SubagentConfig;
 pub use session::{
-    canonical_finish_tool_schema, SubagentOutcome, SubagentSession, FINISH_TOOL_NAME,
+    canonical_finish_tool_schema, SubagentEvent, SubagentEventEmitter, SubagentOutcome,
+    SubagentSession, FINISH_TOOL_NAME,
 };
+pub use workspace_guard::IsolatedWorkspaceGuard;
 pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 
 use crate::Result;
