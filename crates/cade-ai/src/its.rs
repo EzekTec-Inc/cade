@@ -92,16 +92,22 @@ impl IntelligentToolSelector for AdaptiveToolSelector {
                 .into_iter()
                 .filter(|tagged| {
                     let name = tagged.schema["name"].as_str().unwrap_or("");
+                    let is_core = tagged.tags.contains(&"core_mcp".to_string())
+                        || tagged.tags.contains(&"meta".to_string())
+                        || tagged.tags.contains(&"core".to_string());
                     let is_mcp = tagged.tags.contains(&"mcp".to_string());
-                    if !is_mcp {
+                    if !is_mcp || is_core {
                         return true;
                     }
                     recently_used.contains(name)
                 })
                 .map(|tagged| {
                     let name = tagged.schema["name"].as_str().unwrap_or("").to_string();
+                    let is_core = tagged.tags.contains(&"core_mcp".to_string())
+                        || tagged.tags.contains(&"meta".to_string())
+                        || tagged.tags.contains(&"core".to_string());
                     let is_mcp = tagged.tags.contains(&"mcp".to_string());
-                    if !is_mcp || recently_used.contains(&name) {
+                    if !is_mcp || is_core || recently_used.contains(&name) {
                         tagged.schema
                     } else {
                         self.compress_tool_schema(tagged.schema)
@@ -282,11 +288,20 @@ mod tests {
                 }),
                 tags: vec!["cade".to_string()],
             },
+            // Unused core_mcp tool (e.g. Serena) -> kept regardless of usage
+            TaggedToolSchema {
+                schema: json!({
+                    "name": "serena__activate_project",
+                    "description": "activate project in serena"
+                }),
+                tags: vec!["cade".to_string(), "mcp".to_string(), "core_mcp".to_string()],
+            },
         ];
 
         let selected = selector.select_tools(&messages, tools);
-        assert_eq!(selected.len(), 2);
+        assert_eq!(selected.len(), 3);
         assert_eq!(selected[0]["name"], "used_mcp_tool");
         assert_eq!(selected[1]["name"], "bash");
+        assert_eq!(selected[2]["name"], "serena__activate_project");
     }
 }
