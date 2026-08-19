@@ -2,8 +2,12 @@
 
 pub mod config;
 pub mod coordinator;
+pub mod session;
 
 pub use config::SubagentConfig;
+pub use session::{
+    canonical_finish_tool_schema, SubagentOutcome, SubagentSession, FINISH_TOOL_NAME,
+};
 pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 
 use crate::Result;
