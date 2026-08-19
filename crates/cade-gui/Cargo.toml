@@ -23,6 +23,7 @@ gloo-timers          = { version = "0.2", features = ["futures"] }
 
 # Dioxus for full responsive HTML/CSS UI
 dioxus = { version = "0.5", features = ["web"] }
+pulldown-cmark.workspace = true
 
 # -- Browser-specific dependencies for random sources
 [target.'cfg(target_arch = "wasm32")'.dependencies]

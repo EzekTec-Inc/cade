@@ -535,11 +535,13 @@ fn message_bubble(id: String) -> Element {
                             p { class: "text-gray-400 mt-1 whitespace-pre-wrap text-xs italic border-l-2 border-yellow-500/30 pl-2", "{reasoning}" }
                         }
                     }
-                    p { class: "text-gray-200 mt-1 whitespace-pre-wrap break-words",
-                        "{display_text}"
-                        if is_streaming {
-                            span { class: "animate-pulse text-gray-500", "\u{2502}" }
+                    if is_streaming {
+                        p { class: "text-gray-200 mt-1 whitespace-pre-wrap break-words",
+                            "{display_text}",
+                            span { class: "animate-pulse text-gray-500 font-mono", "\u{2502}" }
                         }
+                    } else {
+                        crate::components::markdown::MarkdownView { content: display_text }
                     }
                     div { class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition duration-150 select-none",
                         button {

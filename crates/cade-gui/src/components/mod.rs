@@ -4,6 +4,7 @@ pub mod chat;
 pub mod code;
 pub mod dashboard;
 pub mod login;
+pub mod markdown;
 pub mod logs_page;
 pub mod memory;
 pub mod models_page;
