@@ -174,3 +174,23 @@ The standardized result envelope returned by `CapabilityMesh::execute`, encapsul
 
 A concrete provider implementation behind the `CapabilityMesh` seam (e.g. `McpAdapter`, `BuiltinAdapter`, `SkillAdapter`) responsible for protocol negotiation, JSON-RPC communication, and child process lifecycle management.
 ITS never prunes or compresses CADE's native core or meta-capabilities (`["cade"]` and `["meta"]` tags), guaranteeing the agent's central identity remains uncompromised.
+
+---
+
+### 7. Subagent Harness & Lifecycle Sandboxing
+
+#### SubagentSession
+
+The deep execution harness in `cade-agent` responsible for running subagents autonomously from start to convergence. It encapsulates workspace sandboxing, tool filtering, canonical finish detection, token budget enforcement, and event emission behind a single entrypoint (`session.run()`).
+
+#### IsolatedWorkspaceGuard
+
+An RAII-managed temporary workspace guard that clones the active project repository for isolated subagent execution. On successful task completion, it atomically stages and merges verified changes; on failure or drop, it cleans up temporary directories and git worktrees automatically.
+
+#### SubagentOutcome
+
+The structured result envelope returned upon subagent execution completion, categorized as `Done` (with summary and telemetry), `Blocked` (with required questions), `Failed` (with error details), or `Exhausted` (token or iteration limit reached).
+
+#### SubagentEvent
+
+An asynchronous real-time event emitted during a subagent run (e.g. `TurnStarted`, `ToolExecuting`, `Progress`, `ApprovalRequired`, `OutputChunk`, `Finished`) streamed to TUI and client frontends.
