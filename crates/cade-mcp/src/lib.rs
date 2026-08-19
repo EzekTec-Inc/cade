@@ -581,6 +581,8 @@ impl McpManager {
             let mut servers = self.servers.write().await;
             let s = &mut servers[server_idx];
             s.disabled = true;
+            self.schemas_dirty
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             error!(
                 "MCP server '{}' disabled after {MAX_RECONNECT_ATTEMPTS} failed reconnect attempts",
                 s.key

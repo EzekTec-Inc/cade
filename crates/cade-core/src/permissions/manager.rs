@@ -63,6 +63,14 @@ impl PermissionManager {
         }
     }
 
+    /// Invalidate/remove all session allow rules matching a tool prefix (e.g. "github__" or "serena__").
+    /// Called when an asset or server disconnects to prevent stale permissions.
+    pub fn remove_session_allows_for_prefix(&self, prefix: &str) {
+        let prefix_lower = prefix.to_lowercase();
+        let mut rules = self.allow_rules.lock();
+        rules.retain(|r| !r.tool.starts_with(&prefix_lower));
+    }
+
     /// Clear all rules, then load new ones from the given settings.
     /// Note: This resets any session-level allow rules.
     pub fn reload_from_settings(&self, settings: &crate::settings::models::PermissionSettings) {

@@ -981,3 +981,33 @@ async fn test_security_authority_caches_session_consent() {
     let second_res = mgr.resolve("write_file", &args, false);
     assert_eq!(second_res, Verdict::Allow);
 }
+
+#[test]
+fn test_permission_manager_invalidation_on_disconnect() {
+    use crate::permissions::manager::PermissionManager;
+    use crate::permissions::rules::{PermissionMode, Verdict};
+    use serde_json::json;
+
+    let mgr = PermissionManager::new(PermissionMode::Default);
+    let github_args = json!({"repo": "test/repo", "title": "New issue"});
+    let serena_args = json!({"relative_path": "src/main.rs", "content": "fn main() {}"});
+
+    // Add session allow rules for two different MCP servers
+    mgr.add_session_allow("github__create_issue");
+    mgr.add_session_allow("serena__replace_content");
+
+    assert_eq!(mgr.resolve("github__create_issue", &github_args, true), Verdict::Allow);
+    assert_eq!(mgr.resolve("serena__replace_content", &serena_args, true), Verdict::Allow);
+
+    // Invalidate github server session permissions upon disconnect
+    mgr.remove_session_allows_for_prefix("github__");
+
+    // github__create_issue should now revert to Verdict::Ask
+    assert!(matches!(
+        mgr.resolve("github__create_issue", &github_args, true),
+        Verdict::Ask(_)
+    ));
+
+    // serena__replace_content should remain intact
+    assert_eq!(mgr.resolve("serena__replace_content", &serena_args, true), Verdict::Allow);
+}
