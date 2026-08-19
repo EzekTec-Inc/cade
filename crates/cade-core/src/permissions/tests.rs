@@ -933,3 +933,51 @@ async fn test_security_authority_delegates_to_service_on_ask() {
         panic!("Expected Verdict::Deny with feedback");
     }
 }
+
+struct MockConsentService {
+    choice: crate::permissions::service::ConsentChoice,
+}
+
+#[async_trait::async_trait]
+impl crate::permissions::service::PermissionService for MockConsentService {
+    async fn request_permission(
+        &self,
+        _tool_name: &str,
+        _args: &serde_json::Value,
+    ) -> std::result::Result<bool, String> {
+        Ok(true)
+    }
+
+    async fn request_consent(
+        &self,
+        _tool_name: &str,
+        _args: &serde_json::Value,
+    ) -> std::result::Result<crate::permissions::service::ConsentChoice, String> {
+        Ok(self.choice)
+    }
+}
+
+#[tokio::test]
+async fn test_security_authority_caches_session_consent() {
+    use crate::permissions::authority::SecurityAuthority;
+    use crate::permissions::manager::PermissionManager;
+    use crate::permissions::rules::Verdict;
+    use crate::permissions::service::ConsentChoice;
+    use serde_json::json;
+
+    let mgr = PermissionManager::new(crate::permissions::rules::PermissionMode::Default);
+    let args = json!({"path": "src/lib.rs", "content": "pub fn hello() {}"});
+
+    let service = MockConsentService {
+        choice: ConsentChoice::AllowSession,
+    };
+    let authority = SecurityAuthority::new(mgr.clone(), std::sync::Arc::new(service));
+
+    // First call: triggers request_consent and stores AllowSession in mgr
+    let first_res = authority.authorize("write_file", &args, false).await.unwrap();
+    assert_eq!(first_res, Verdict::Allow);
+
+    // Second call: mgr resolves directly to Verdict::Allow via cached session allow rule!
+    let second_res = mgr.resolve("write_file", &args, false);
+    assert_eq!(second_res, Verdict::Allow);
+}
