@@ -193,12 +193,52 @@ async fn async_main() -> Result<()> {
         let mut mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
         let mcp_clone = Arc::clone(&mcp);
         let cwd_clone = cwd.clone();
+        let db_reload = db.clone();
         tokio::spawn(async move {
             while mcp_reload_rx.recv().await.is_some() {
                 tracing::info!("Server MCP settings changed — hot-reloading MCP servers...");
                 if let Ok(settings) = SettingsManager::new(&cwd_clone) {
                     let mcp_configs = settings.merged_mcp_servers();
                     let _summary = mcp_clone.reload(&mcp_configs, None).await;
+
+                    // Sync reloaded MCP schemas into SQLite
+                    let mcp_schemas = mcp_clone.all_tool_schemas().await;
+                    for mut schema in mcp_schemas {
+                        let name = schema["name"].as_str().unwrap_or("").to_string();
+                        if name.is_empty() {
+                            continue;
+                        }
+                        let description = schema["description"].as_str().map(String::from);
+                        let is_core = schema["_is_core"].as_bool().unwrap_or(false);
+                        if let Some(obj) = schema.as_object_mut() {
+                            obj.remove("_is_core");
+                        }
+
+                        let mut tags = vec!["cade".to_string(), "mcp".to_string()];
+                        if is_core {
+                            tags.push("core_mcp".to_string());
+                        }
+
+                        let stub = cade_agent::agent::tools::build_python_stub_from_schema(
+                            &name,
+                            description.as_deref().unwrap_or(""),
+                            &schema["parameters"],
+                        );
+
+                        let row = cade_store::sqlite::ToolRow {
+                            id: format!("tool-mcp-{}", name),
+                            name: name.clone(),
+                            description,
+                            source_code: Some(stub),
+                            json_schema: Some(schema),
+                            tags,
+                        };
+
+                        if let Err(e) = cade_store::sqlite::upsert_tool(&db_reload, &row) {
+                            tracing::warn!("Failed to update MCP tool {}: {}", name, e);
+                        }
+                    }
+
                     tracing::info!("Server MCP hot-reload complete");
                 }
             }

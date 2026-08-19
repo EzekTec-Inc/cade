@@ -824,10 +824,10 @@ pub fn resolve_subagent_auto<'a>(
     if let Some(def) = find_subagent(mode, all) {
         return Some(def);
     }
-    if mode.is_empty() || mode == "build" {
-        if let Some(def) = route_subagent_by_description(prompt, all) {
-            return Some(def);
-        }
+    if (mode.is_empty() || mode == "build")
+        && let Some(def) = route_subagent_by_description(prompt, all)
+    {
+        return Some(def);
     }
     find_subagent("worker", all)
 }

@@ -66,19 +66,17 @@ impl DesktopControl {
             if let Ok(status) = std::process::Command::new("wmctrl")
                 .args(["-a", title])
                 .status()
+                && status.success()
             {
-                if status.success() {
-                    return Ok(());
-                }
+                return Ok(());
             }
 
             if let Ok(status) = std::process::Command::new("xdotool")
                 .args(["search", "--name", title, "windowactivate"])
                 .status()
+                && status.success()
             {
-                if status.success() {
-                    return Ok(());
-                }
+                return Ok(());
             }
 
             Err(Error::custom(format!(

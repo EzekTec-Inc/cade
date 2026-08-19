@@ -135,6 +135,7 @@ impl VectorIndex for SqliteVectorIndex {
 
 /// Enterprise PostgreSQL-backed vector index using `pgvector`.
 #[cfg(not(feature = "enterprise-postgres"))]
+#[derive(Default)]
 pub struct PgVectorIndex;
 
 #[cfg(not(feature = "enterprise-postgres"))]
@@ -229,6 +230,7 @@ impl VectorIndex for PgVectorIndex {
 
 /// Enterprise Qdrant-backed vector index.
 #[cfg(not(feature = "enterprise-qdrant"))]
+#[derive(Default)]
 pub struct QdrantVectorIndex;
 
 #[cfg(not(feature = "enterprise-qdrant"))]

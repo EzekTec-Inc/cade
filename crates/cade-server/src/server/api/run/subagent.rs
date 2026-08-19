@@ -825,7 +825,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         let parent_tool_ids =
             cade_store::sqlite::get_agent_tool_ids(&state.db, parent_agent_id).unwrap_or_default();
         let all = cade_store::sqlite::list_tools(&state.db).unwrap_or_default();
-        let raw: Vec<serde_json::Value> = if parent_tool_ids.is_empty() {
+        let mut raw: Vec<serde_json::Value> = if parent_tool_ids.is_empty() {
             all.into_iter().filter_map(|t| t.json_schema).collect()
         } else {
             all.into_iter()
@@ -833,6 +833,18 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 .filter_map(|t| t.json_schema)
                 .collect()
         };
+        // Dynamically include live MCP tool schemas from active McpManager
+        let live_mcp = state.mcp.all_tool_schemas().await;
+        for mut s in live_mcp {
+            let name = s["name"].as_str().unwrap_or("").to_string();
+            if name.is_empty() || raw.iter().any(|r| r["name"].as_str() == Some(&name)) {
+                continue;
+            }
+            if let Some(obj) = s.as_object_mut() {
+                obj.remove("_is_core");
+            }
+            raw.push(s);
+        }
         let tools_filter = def_opt.map(|d| &d.tools).unwrap_or_else(|| {
             if cfg.mode == "plan" {
                 &cade_agent::subagents::SubagentTools::Readonly

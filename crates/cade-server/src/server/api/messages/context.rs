@@ -860,7 +860,7 @@ pub(crate) async fn build_context(
     // (no hardcoded tool name lists).
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, &agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
-    let tagged_schemas: Vec<cade_ai::TaggedToolSchema> = if agent_tool_ids.is_empty() {
+    let mut tagged_schemas: Vec<cade_ai::TaggedToolSchema> = if agent_tool_ids.is_empty() {
         all_tools
             .into_iter()
             .filter_map(|t| {
@@ -882,6 +882,34 @@ pub(crate) async fn build_context(
             })
             .collect()
     };
+
+    // Dynamically inject live MCP tool schemas from active McpManager connections
+    let live_mcp_schemas = state.mcp.all_tool_schemas().await;
+    for mut schema in live_mcp_schemas {
+        let name = schema["name"].as_str().unwrap_or("").to_string();
+        if name.is_empty() {
+            continue;
+        }
+        // Avoid duplicate schemas if already registered in SQLite
+        if tagged_schemas
+            .iter()
+            .any(|ts| ts.schema["name"].as_str() == Some(&name))
+        {
+            continue;
+        }
+        let is_core = schema["_is_core"].as_bool().unwrap_or(false);
+        if let Some(obj) = schema.as_object_mut() {
+            obj.remove("_is_core");
+        }
+        let mut tags = vec!["cade".to_string(), "mcp".to_string()];
+        if is_core {
+            tags.push("core_mcp".to_string());
+        }
+        tagged_schemas.push(cade_ai::TaggedToolSchema {
+            schema,
+            tags,
+        });
+    }
 
     // ── Intelligent tool selection ────────────────────────────────────────────
     let tool_selector = cade_ai::resolve_tool_selector(&agent.model);

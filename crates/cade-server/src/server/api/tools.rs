@@ -73,7 +73,7 @@ pub async fn list_tools(
             Json(json!({"detail": e.to_string()})),
         )
     })?;
-    let tools: Vec<Value> = rows
+    let mut tools: Vec<Value> = rows
         .iter()
         .map(|t| {
             json!({
@@ -83,6 +83,22 @@ pub async fn list_tools(
             })
         })
         .collect();
+
+    // Dynamically append live MCP tool definitions
+    let mcp_schemas = state.mcp.all_tool_schemas().await;
+    for s in mcp_schemas {
+        let name = s["name"].as_str().unwrap_or("").to_string();
+        if name.is_empty() || tools.iter().any(|t| t["name"].as_str() == Some(&name)) {
+            continue;
+        }
+        let description = s["description"].as_str().map(String::from);
+        tools.push(json!({
+            "id": format!("tool-mcp-{}", name),
+            "name": name,
+            "description": description
+        }));
+    }
+
     Ok(Json(json!(tools)))
 }
 

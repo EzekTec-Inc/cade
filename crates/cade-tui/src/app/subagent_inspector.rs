@@ -147,7 +147,7 @@ impl SubagentInspectorOverlay {
                         },
                     ),
                     Span::styled(
-                        format!("{}", t.mode),
+                        t.mode.to_string(),
                         Style::default()
                             .add_modifier(Modifier::BOLD)
                             .fg(if is_selected {
