@@ -153,4 +153,24 @@ A persistent, real-time Server-Sent Events stream managed at the root of the `ca
 An automated, server-side context pruning and optimization mechanism. It operates dynamically inside `build_context` on every request. ITS conserves prompt tokens by applying two defense layers on long conversations (> 20 messages):
 1. **Universal Adaptive Pruning**: Entirely prunes unused third-party/MCP tool schemas (`["mcp"]` tag) that have not been called within the recent conversation window, preserving only recently active tools to radically lower active prompt token overhead.
 2. **Schema Compression**: Truncates top-level descriptions and strips nested per-property parameter comments and examples from unused third-party schemas.
+
+---
+
+### 6. Capability Mesh & Dynamic Execution
+
+#### CapabilityMesh
+
+The deep module in `cade-core` acting as the canonical execution and schema boundary between agent reasoning loops and all executable assets (built-in native tools, MCP child processes, declarative skills, and subagents). It encapsulates tool discovery, schema transformation, ITS tag decoration, asynchronous SQLite mirroring, and permission governance behind a small, high-leverage interface.
+
+#### CapabilityIntent
+
+A structured, transport-agnostic invocation request containing the target capability identifier, input arguments, tool call ID, and execution context.
+
+#### CapabilityOutput
+
+The standardized result envelope returned by `CapabilityMesh::execute`, encapsulating text output, error indicators, and optional UI resource URIs.
+
+#### CapabilityAdapter
+
+A concrete provider implementation behind the `CapabilityMesh` seam (e.g. `McpAdapter`, `BuiltinAdapter`, `SkillAdapter`) responsible for protocol negotiation, JSON-RPC communication, and child process lifecycle management.
 ITS never prunes or compresses CADE's native core or meta-capabilities (`["cade"]` and `["meta"]` tags), guaranteeing the agent's central identity remains uncompromised.
