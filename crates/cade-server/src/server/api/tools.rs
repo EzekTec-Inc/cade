@@ -84,16 +84,18 @@ pub async fn list_tools(
         })
         .collect();
 
-    // Dynamically append live MCP tool definitions
-    let mcp_schemas = state.mcp.all_tool_schemas().await;
-    for s in mcp_schemas {
-        let name = s["name"].as_str().unwrap_or("").to_string();
+    // Dynamically append live capability definitions from CapabilityMesh seam (ADR-0020)
+    use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
+    let cap_cx = CapabilityExecutionContext::new("api");
+    let mesh_schemas = state.mcp.active_catalog(&cap_cx).await;
+    for cap_s in mesh_schemas {
+        let name = cap_s.schema["name"].as_str().unwrap_or("").to_string();
         if name.is_empty() || tools.iter().any(|t| t["name"].as_str() == Some(&name)) {
             continue;
         }
-        let description = s["description"].as_str().map(String::from);
+        let description = cap_s.schema["description"].as_str().map(String::from);
         tools.push(json!({
-            "id": format!("tool-mcp-{}", name),
+            "id": format!("tool-mesh-{}", name),
             "name": name,
             "description": description
         }));

@@ -883,31 +883,24 @@ pub(crate) async fn build_context(
             .collect()
     };
 
-    // Dynamically inject live MCP tool schemas from active McpManager connections
-    let live_mcp_schemas = state.mcp.all_tool_schemas().await;
-    for mut schema in live_mcp_schemas {
-        let name = schema["name"].as_str().unwrap_or("").to_string();
+    // Dynamically inject live capability schemas from CapabilityMesh seam (ADR-0020)
+    use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
+    let cap_cx = CapabilityExecutionContext::new(agent_id.to_string());
+    let live_mesh_schemas = state.mcp.active_catalog(&cap_cx).await;
+    for cap_schema in live_mesh_schemas {
+        let name = cap_schema.schema["name"].as_str().unwrap_or("").to_string();
         if name.is_empty() {
             continue;
         }
-        // Avoid duplicate schemas if already registered in SQLite
         if tagged_schemas
             .iter()
             .any(|ts| ts.schema["name"].as_str() == Some(&name))
         {
             continue;
         }
-        let is_core = schema["_is_core"].as_bool().unwrap_or(false);
-        if let Some(obj) = schema.as_object_mut() {
-            obj.remove("_is_core");
-        }
-        let mut tags = vec!["cade".to_string(), "mcp".to_string()];
-        if is_core {
-            tags.push("core_mcp".to_string());
-        }
         tagged_schemas.push(cade_ai::TaggedToolSchema {
-            schema,
-            tags,
+            schema: cap_schema.schema,
+            tags: cap_schema.tags,
         });
     }
 

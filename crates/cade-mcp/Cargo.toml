@@ -17,6 +17,8 @@ serde.workspace        = true
 serde_json.workspace = true
 # -- Logging
 tracing.workspace      = true
+# -- Async
+async-trait.workspace   = true
 tokio = { workspace = true, features = ["full"] }
 # -- MCP
 rmcp.workspace         = true

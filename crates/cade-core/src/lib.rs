@@ -5,6 +5,7 @@
 mod error;
 
 pub use error::{Error, Result};
+pub use async_trait::async_trait;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent_env;

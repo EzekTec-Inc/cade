@@ -1132,6 +1132,7 @@ dependencies = [
 name = "cade-mcp"
 version = "0.2.4"
 dependencies = [
+ "async-trait",
  "cade-core",
  "derive_more",
  "dirs",

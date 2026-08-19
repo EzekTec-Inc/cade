@@ -6,6 +6,9 @@
 
 use std::collections::HashSet;
 
+pub mod mesh;
+pub use mesh::*;
+
 // region:    --- Capability
 
 /// A single optional capability that can be toggled on or off.

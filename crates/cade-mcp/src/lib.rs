@@ -856,6 +856,70 @@ impl McpManager {
     }
 }
 
+use async_trait::async_trait;
+
+#[async_trait]
+impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
+    async fn execute(
+        &self,
+        intent: cade_core::capabilities::mesh::CapabilityIntent,
+        _cx: &mut cade_core::capabilities::mesh::CapabilityExecutionContext,
+    ) -> core::result::Result<cade_core::capabilities::mesh::CapabilityOutput, cade_core::capabilities::mesh::ExecutionError> {
+        match self.call_tool(&intent.capability_name, &intent.arguments).await {
+            Some(Ok((output, is_error, ui_resource_uri))) => {
+                Ok(cade_core::capabilities::mesh::CapabilityOutput {
+                    tool_call_id: intent.tool_call_id,
+                    capability_name: intent.capability_name,
+                    output,
+                    is_error,
+                    ui_resource_uri,
+                })
+            }
+            Some(Err(e)) => {
+                let err_str = e.to_string();
+                if err_str.contains("disconnected") || err_str.contains("closed") {
+                    Err(cade_core::capabilities::mesh::ExecutionError::Disconnected(
+                        intent.capability_name,
+                        err_str,
+                    ))
+                } else {
+                    Err(cade_core::capabilities::mesh::ExecutionError::ExecutionFailed(
+                        intent.capability_name,
+                        err_str,
+                    ))
+                }
+            }
+            None => Err(cade_core::capabilities::mesh::ExecutionError::NotFound(
+                intent.capability_name,
+            )),
+        }
+    }
+
+    async fn active_catalog(
+        &self,
+        _cx: &cade_core::capabilities::mesh::CapabilityExecutionContext,
+    ) -> Vec<cade_core::capabilities::mesh::TaggedCapabilitySchema> {
+        let schemas = self.all_tool_schemas().await;
+        schemas
+            .into_iter()
+            .map(|mut s| {
+                let is_core = s["_is_core"].as_bool().unwrap_or(false);
+                if let Some(obj) = s.as_object_mut() {
+                    obj.remove("_is_core");
+                }
+                let mut tags = vec!["cade".to_string(), "mcp".to_string()];
+                if is_core {
+                    tags.push("core_mcp".to_string());
+                }
+                cade_core::capabilities::mesh::TaggedCapabilitySchema {
+                    schema: s,
+                    tags,
+                }
+            })
+            .collect()
+    }
+}
+
 // -- Content extraction
 
 fn extract_content_text(content: &[rmcp::model::Content]) -> String {

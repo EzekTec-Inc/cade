@@ -833,17 +833,16 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 .filter_map(|t| t.json_schema)
                 .collect()
         };
-        // Dynamically include live MCP tool schemas from active McpManager
-        let live_mcp = state.mcp.all_tool_schemas().await;
-        for mut s in live_mcp {
-            let name = s["name"].as_str().unwrap_or("").to_string();
+        // Dynamically include live capability schemas from CapabilityMesh seam (ADR-0020)
+        use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
+        let cap_cx = CapabilityExecutionContext::new(parent_agent_id.to_string());
+        let live_mesh = state.mcp.active_catalog(&cap_cx).await;
+        for cap_s in live_mesh {
+            let name = cap_s.schema["name"].as_str().unwrap_or("").to_string();
             if name.is_empty() || raw.iter().any(|r| r["name"].as_str() == Some(&name)) {
                 continue;
             }
-            if let Some(obj) = s.as_object_mut() {
-                obj.remove("_is_core");
-            }
-            raw.push(s);
+            raw.push(cap_s.schema);
         }
         let tools_filter = def_opt.map(|d| &d.tools).unwrap_or_else(|| {
             if cfg.mode == "plan" {
