@@ -1151,11 +1151,13 @@ dependencies = [
 name = "cade-plugin"
 version = "0.2.4"
 dependencies = [
+ "async-trait",
  "cade-agent",
  "cade-core",
  "derive_more",
  "dirs",
  "flate2",
+ "parking_lot",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

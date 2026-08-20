@@ -133,9 +133,19 @@ impl PluginRegistry {
         self.tool_map.values().map(|t| t.schema.clone()).collect()
     }
 
+    /// All resolved plugin tools ready for execution.
+    pub fn list_resolved_tools(&self) -> Vec<ResolvedPluginTool> {
+        self.tool_map.values().map(|t| (**t).clone()).collect()
+    }
+
     /// Check if a tool name belongs to a plugin.
     pub fn has_tool(&self, name: &str) -> bool {
         self.tool_map.contains_key(name)
+    }
+
+    /// Retrieve the executable handler path for a plugin tool.
+    pub fn find_tool_handler(&self, name: &str) -> Option<PathBuf> {
+        self.tool_map.get(name)?.handler.clone()
     }
 
     /// All skills directories from loaded plugins.
@@ -203,7 +213,7 @@ impl PluginRegistry {
 
 // region:    --- Support
 
-async fn execute_plugin_handler(script: &Path, stdin_data: &str) -> (String, bool) {
+pub(crate) async fn execute_plugin_handler(script: &Path, stdin_data: &str) -> (String, bool) {
     use tokio::io::AsyncWriteExt;
 
     let mut child = match Command::new(script)

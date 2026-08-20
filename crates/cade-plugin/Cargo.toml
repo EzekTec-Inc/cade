@@ -18,6 +18,8 @@ serde_json.workspace = true
 # -- Logging
 tracing.workspace    = true
 # -- Async
+async-trait.workspace = true
+parking_lot.workspace = true
 tokio.workspace      = true
 # -- Filesystem
 dirs.workspace       = true
