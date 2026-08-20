@@ -475,6 +475,18 @@ pub(crate) async fn build_context(
         }
     }
 
+    // Invariant: Constraint adherence > Task completion
+    system_static.push_str("
+
+## Constitutional Invariants (CRITICAL)
+");
+    system_static.push_str("1. **Constraint Adherence > Task Completion**: Under no circumstances may you create workarounds, ad-hoc scripts, or subprocesses when a tool or capability is blocked or unavailable.
+");
+    system_static.push_str("2. **Zero Subprocess Emulation**: Never use bash, python, or shell pipes to talk to MCP servers or emulate MCP tools. All MCP calls must occur strictly through native tool declarations.
+");
+    system_static.push_str("3. **Immediate Structural Yield**: If a required capability is missing or an operation is blocked by policy, HALT immediately and yield to the user.
+");
+
 
 
     // Memory-change detection: cache the assembled static system_core per agent.

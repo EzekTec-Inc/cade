@@ -1048,4 +1048,17 @@ async fn test_dynamic_constitution_governor_sniffing() {
         direct_res,
         Err(ConstitutionViolation::BypassAttemptBlocked { .. })
     ));
+
+    // 4. Unauthorized generic write_file on source code (.rs) is blocked by constitution
+    let code_write = json!({"path": "src/main.rs", "content": "fn main() {}"});
+    let code_res = governor.evaluate_intent("write_file", &code_write).await;
+    assert!(matches!(
+        code_res,
+        Err(ConstitutionViolation::InvalidCodeMutationTool { .. })
+    ));
+
+    // 5. Generic write on non-code files (.md, .txt) passes
+    let doc_write = json!({"path": "README.md", "content": "# Docs"});
+    let doc_res = governor.evaluate_intent("write_file", &doc_write).await;
+    assert_eq!(doc_res, Ok(GovernorVerdict::Pass));
 }

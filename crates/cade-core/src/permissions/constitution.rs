@@ -161,6 +161,47 @@ impl DynamicConstitutionGovernor {
 
         None
     }
+
+    /// Check if an unauthorized generic tool attempts to mutate source code files.
+    pub fn sniff_code_mutation(
+        &self,
+        capability_name: &str,
+        arguments: &Value,
+    ) -> Option<ConstitutionViolation> {
+        let is_generic_write = matches!(
+            capability_name,
+            "write_file"
+                | "edit_file"
+                | "replace_in_file"
+                | "developer__write_file"
+                | "developer__replace_in_file"
+        );
+
+        if !is_generic_write {
+            return None;
+        }
+
+        let target_path = arguments
+            .get("path")
+            .or_else(|| arguments.get("relative_path"))
+            .or_else(|| arguments.get("file_path"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if target_path.ends_with(".rs")
+            || target_path.ends_with(".ts")
+            || target_path.ends_with(".js")
+            || target_path.ends_with(".py")
+            || target_path.ends_with(".lua")
+        {
+            return Some(ConstitutionViolation::InvalidCodeMutationTool {
+                tool: capability_name.to_string(),
+                path: target_path.to_string(),
+            });
+        }
+
+        None
+    }
 }
 
 #[async_trait]
@@ -178,6 +219,10 @@ impl ConstitutionGovernor for DynamicConstitutionGovernor {
             if let Some(violation) = self.sniff_shell_command(cmd) {
                 return Err(violation);
             }
+        }
+
+        if let Some(violation) = self.sniff_code_mutation(capability_name, arguments) {
+            return Err(violation);
         }
 
         Ok(GovernorVerdict::Pass)

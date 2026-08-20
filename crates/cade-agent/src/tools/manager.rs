@@ -82,6 +82,24 @@ pub async fn dispatch(
         }
     }
 
+    // Constitutional Guard: Enforce non-negotiable invariants (anti-escape-hatch & mutation gates)
+    let cwd = std::env::current_dir().unwrap_or_default();
+    if let Ok(settings) = cade_core::settings::SettingsManager::new(&cwd) {
+        let mcp_configs = settings.merged_mcp_servers();
+        let governor =
+            cade_core::permissions::DynamicConstitutionGovernor::from_mcp_configs(&mcp_configs);
+        use cade_core::permissions::ConstitutionGovernor;
+        if let Err(violation) = governor.evaluate_intent(tool_name, arguments).await {
+            return ToolResult {
+                tool_call_id,
+                tool_name: tool_name.to_string(),
+                output: format!("[Blocked by Constitution] {violation}"),
+                is_error: true,
+                ui_resource_uri: None,
+            };
+        }
+    }
+
     // Try native tools first, fall through to MCP
     let (output, is_error, ui_resource_uri) = match run_native_tool(tool_name, arguments).await {
         Some(Ok(out)) => (out, false, None),
