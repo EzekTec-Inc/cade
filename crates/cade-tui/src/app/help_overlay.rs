@@ -33,7 +33,11 @@ impl HelpOverlay {
             ),
             (
                 "Ctrl+O",
-                "Toggle timeline expansion (expand/compress long tool outputs)",
+                "Toggle timeline expansion (expand/compress all items)",
+            ),
+            (
+                "Ctrl+G",
+                "Toggle most recent collapsible item (code block / tool output / reasoning)",
             ),
             (
                 "Ctrl+F",

@@ -494,3 +494,41 @@ fn test_prepared_cache_width_invalidation() {
     // Width 10 should have significantly more wrapped rows than width 80
     assert!(prepared_10[0].rows > prepared_80[0].rows);
 }
+
+#[test]
+fn test_toggle_last_collapsible_item_assistant_code_block() {
+    use crate::app::TuiApp;
+    use crate::app::RenderLine;
+    use crate::app::timeline::TimelineItemKind;
+
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test-agent".to_string(),
+        "test-model".to_string(),
+        None,
+    );
+
+    let mut md = String::from("# Heading\n\n```rust\n");
+    for i in 1..=25 {
+        md.push_str(&format!("println!(\"line {i}\");\n"));
+    }
+    md.push_str("```\n");
+
+    app.lines.push(RenderLine::UserMessage("Write code".to_string()));
+    app.lines.push(RenderLine::AssistantText(md));
+
+    assert!(app.expanded_items.is_empty());
+
+    // Pressing Ctrl+G calls toggle_last_collapsible_item
+    app.toggle_last_collapsible_item();
+
+    // The assistant message must now be marked in expanded_items!
+    assert_eq!(app.expanded_items.len(), 1);
+    let key = app.expanded_items.iter().next().unwrap();
+    assert_eq!(key.kind, TimelineItemKind::Assistant);
+    assert_eq!(key.index, 1);
+
+    // Toggling again collapses it
+    app.toggle_last_collapsible_item();
+    assert!(app.expanded_items.is_empty());
+}

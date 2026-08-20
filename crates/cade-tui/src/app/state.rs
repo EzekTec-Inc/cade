@@ -653,6 +653,10 @@ impl TuiApp {
                 TimelineItemKind::ToolResult
                     | TimelineItemKind::Reasoning
                     | TimelineItemKind::LiveOutput
+                    | TimelineItemKind::Assistant
+                    | TimelineItemKind::StreamingAssistant
+                    | TimelineItemKind::ToolCall
+                    | TimelineItemKind::ContextBar
             ) {
                 let key = entry.key;
                 if self.expanded_items.contains(&key) {
