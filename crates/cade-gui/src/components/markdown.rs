@@ -384,3 +384,19 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_markdown_headings_and_code() {
+        let md = "# Title\n\nHere is a paragraph with **bold** and `inline_code`.\n\n```rust\nfn main() {}\n```\n\n- Item 1\n- Item 2";
+        let blocks = parse_markdown(md);
+        assert_eq!(blocks.len(), 4);
+        assert!(matches!(blocks[0], MarkdownBlock::Heading { level: 1, .. }));
+        assert!(matches!(blocks[1], MarkdownBlock::Paragraph(_)));
+        assert!(matches!(blocks[2], MarkdownBlock::CodeBlock { ref lang, .. } if lang == "rust"));
+        assert!(matches!(blocks[3], MarkdownBlock::List { ordered: false, .. }));
+    }
+}
