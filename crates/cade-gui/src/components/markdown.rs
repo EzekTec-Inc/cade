@@ -310,7 +310,7 @@ fn render_inlines(inlines: Vec<InlineSpan>) -> Element {
                 InlineSpan::Code(c) => rsx! {
                     code {
                         key: "{i}",
-                        class: "bg-[#222530] text-[#ff7c5c] px-1.5 py-0.5 rounded text-xs font-mono font-medium border border-[#313545]",
+                        class: "bg-[#181c29] text-[#ff7c5c] px-1.5 py-0.5 rounded-md text-xs font-mono font-semibold border border-[#2c3349] mx-0.5",
                         "{c}"
                     }
                 },
@@ -367,19 +367,27 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
             let display_lang = if lang.is_empty() { "text".to_string() } else { lang.clone() };
             let code_for_copy = code.clone();
             rsx! {
-                div { key: "{idx}", class: "my-2.5 rounded-lg border border-[#272833] bg-[#0d0e12] overflow-hidden group/code",
-                    div { class: "flex justify-between items-center px-3 py-1.5 bg-[#16171d] border-b border-[#272833] text-[11px] text-gray-400 font-mono select-none",
-                        span { class: "uppercase font-semibold text-gray-400", "{display_lang}" }
+                div { key: "{idx}", class: "my-3 rounded-xl border border-[#232738] bg-[#0b0d13] shadow-lg overflow-hidden group/code font-mono",
+                    div { class: "flex justify-between items-center px-3.5 py-2 bg-[#12151f] border-b border-[#232738] text-[11px] select-none",
+                        div { class: "flex items-center space-x-2",
+                            span { class: "w-2.5 h-2.5 rounded-full bg-[#ff5f56]/80 inline-block" }
+                            span { class: "w-2.5 h-2.5 rounded-full bg-[#ffbd2e]/80 inline-block" }
+                            span { class: "w-2.5 h-2.5 rounded-full bg-[#27c93f]/80 inline-block" }
+                            span { class: "font-semibold text-slate-400 pl-2 uppercase tracking-wider", "{display_lang}" }
+                        }
                         button {
-                            class: "text-gray-400 hover:text-white transition px-2 py-0.5 rounded bg-[#1e2029] hover:bg-[#282b37] border border-[#2d313f] text-[10px] font-sans flex items-center space-x-1",
+                            class: "text-slate-400 hover:text-white transition px-2.5 py-0.5 rounded-md bg-[#1c202e] hover:bg-[#282e42] border border-[#2e344a] text-[10px] font-sans flex items-center space-x-1.5 shadow-sm",
                             onclick: move |_| {
                                 let c = code_for_copy.clone();
                                 crate::api::copyText(&c);
                             },
-                            "Copy"
+                            svg { class: "w-3 h-3 text-slate-400", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", "stroke-width": "2",
+                                path { "stroke-linecap": "round", "stroke-linejoin": "round", d: "M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" }
+                            }
+                            span { "Copy" }
                         }
                     }
-                    pre { class: "p-3 font-mono text-xs text-gray-200 overflow-x-auto whitespace-pre",
+                    pre { class: "p-3.5 font-mono text-xs text-slate-200 overflow-x-auto whitespace-pre leading-relaxed",
                         code { "{code}" }
                     }
                 }
