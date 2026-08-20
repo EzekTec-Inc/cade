@@ -1011,3 +1011,41 @@ fn test_permission_manager_invalidation_on_disconnect() {
     // serena__replace_content should remain intact
     assert_eq!(mgr.resolve("serena__replace_content", &serena_args, true), Verdict::Allow);
 }
+
+#[tokio::test]
+async fn test_dynamic_constitution_governor_sniffing() {
+    use crate::permissions::constitution::{
+        ConstitutionGovernor, ConstitutionViolation, DynamicConstitutionGovernor, GovernorVerdict,
+    };
+    use serde_json::json;
+
+    let governor = DynamicConstitutionGovernor::new(vec![
+        "serena".to_string(),
+        "cade-rag-mcp".to_string(),
+    ]);
+
+    // 1. Benign commands pass without violation
+    let benign_cmd = json!({"command": "cargo build --release && cargo test"});
+    let res = governor.evaluate_intent("bash", &benign_cmd).await;
+    assert_eq!(res, Ok(GovernorVerdict::Pass));
+
+    // 2. Python inline subprocess MCP emulation is blocked
+    let python_bypass = json!({
+        "command": r#"python3 -c "import subprocess; proc = subprocess.Popen([serena, start-mcp-server]); proc.stdin.write(jsonrpc)""#
+    });
+    let bypass_res = governor.evaluate_intent("bash", &python_bypass).await;
+    assert!(matches!(
+        bypass_res,
+        Err(ConstitutionViolation::BypassAttemptBlocked { .. })
+    ));
+
+    // 3. Direct MCP binary invocation via shell is blocked
+    let direct_mcp_cmd = json!({
+        "command": "cade-rag-mcp start-mcp-server --jsonrpc"
+    });
+    let direct_res = governor.evaluate_intent("bash", &direct_mcp_cmd).await;
+    assert!(matches!(
+        direct_res,
+        Err(ConstitutionViolation::BypassAttemptBlocked { .. })
+    ));
+}
