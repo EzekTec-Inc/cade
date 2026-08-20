@@ -13,7 +13,9 @@ pub enum InlineSpan {
     Bold(String),
     Italic(String),
     Code(String),
+    Kbd(String),
     Link { text: String, url: String },
+    Html(String),
 }
 
 /// Top-level Markdown block element
@@ -57,6 +59,7 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
     let mut current_table_row = Vec::new();
     let mut current_cell_text = String::new();
     let mut in_table_head = false;
+    let mut in_kbd = false;
 
     for event in parser {
         match event {
@@ -197,7 +200,9 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
                 } else if in_table {
                     current_cell_text.push_str(&s);
                 } else {
-                    let span = if let Some(ref url) = current_link_url {
+                    let span = if in_kbd {
+                        InlineSpan::Kbd(s)
+                    } else if let Some(ref url) = current_link_url {
                         InlineSpan::Link {
                             text: s,
                             url: url.clone(),
@@ -214,6 +219,39 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
                         current_list_item.push(span);
                     } else {
                         current_inlines.push(span);
+                    }
+                }
+            }
+            Event::Html(h) | Event::InlineHtml(h) => {
+                let s = h.to_string();
+                if in_code_block {
+                    current_code_text.push_str(&s);
+                } else if in_table {
+                    current_cell_text.push_str(&s);
+                } else {
+                    let trimmed = s.trim().to_lowercase();
+                    if trimmed == "<kbd>" {
+                        in_kbd = true;
+                    } else if trimmed == "</kbd>" {
+                        in_kbd = false;
+                    } else if trimmed.starts_with("<kbd>") && trimmed.ends_with("</kbd>") {
+                        let inner = s.trim()
+                            .strip_prefix("<kbd>")
+                            .and_then(|t| t.strip_suffix("</kbd>"))
+                            .unwrap_or(&s);
+                        let span = InlineSpan::Kbd(inner.to_string());
+                        if in_list {
+                            current_list_item.push(span);
+                        } else {
+                            current_inlines.push(span);
+                        }
+                    } else {
+                        let span = InlineSpan::Html(s);
+                        if in_list {
+                            current_list_item.push(span);
+                        } else {
+                            current_inlines.push(span);
+                        }
                     }
                 }
             }
@@ -276,6 +314,13 @@ fn render_inlines(inlines: Vec<InlineSpan>) -> Element {
                         "{c}"
                     }
                 },
+                InlineSpan::Kbd(k) => rsx! {
+                    kbd {
+                        key: "{i}",
+                        class: "bg-[#181a22] text-gray-200 border border-[#383b4b] px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold shadow-[0_1px_0_1px_rgba(0,0,0,0.5)] mx-0.5",
+                        "{k}"
+                    }
+                },
                 InlineSpan::Link { text, url } => rsx! {
                     a {
                         key: "{i}",
@@ -284,6 +329,13 @@ fn render_inlines(inlines: Vec<InlineSpan>) -> Element {
                         target: "_blank",
                         rel: "noopener noreferrer",
                         "{text}"
+                    }
+                },
+                InlineSpan::Html(h) => rsx! {
+                    span {
+                        key: "{i}",
+                        class: "inline-html text-gray-300 font-mono text-xs",
+                        "{h}"
                     }
                 },
             }
@@ -391,12 +443,34 @@ mod tests {
 
     #[test]
     fn test_parse_markdown_headings_and_code() {
-        let md = "# Title\n\nHere is a paragraph with **bold** and `inline_code`.\n\n```rust\nfn main() {}\n```\n\n- Item 1\n- Item 2";
+        let md = "# Title
+
+Here is a paragraph with **bold** and `inline_code`.
+
+```rust
+fn main() {}
+```
+
+- Item 1
+- Item 2";
         let blocks = parse_markdown(md);
         assert_eq!(blocks.len(), 4);
         assert!(matches!(blocks[0], MarkdownBlock::Heading { level: 1, .. }));
         assert!(matches!(blocks[1], MarkdownBlock::Paragraph(_)));
         assert!(matches!(blocks[2], MarkdownBlock::CodeBlock { ref lang, .. } if lang == "rust"));
         assert!(matches!(blocks[3], MarkdownBlock::List { ordered: false, .. }));
+    }
+
+    #[test]
+    fn test_parse_markdown_inline_html_and_kbd() {
+        let md = "Press <kbd>Ctrl+C</kbd> to exit or <kbd>Enter</kbd> to submit.";
+        let blocks = parse_markdown(md);
+        assert_eq!(blocks.len(), 1);
+        if let MarkdownBlock::Paragraph(ref inlines) = blocks[0] {
+            assert!(inlines.iter().any(|i| matches!(i, InlineSpan::Kbd(k) if k == "Ctrl+C")));
+            assert!(inlines.iter().any(|i| matches!(i, InlineSpan::Kbd(k) if k == "Enter")));
+        } else {
+            panic!("Expected MarkdownBlock::Paragraph");
+        }
     }
 }
