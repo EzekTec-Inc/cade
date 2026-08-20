@@ -317,7 +317,7 @@ fn render_inlines(inlines: Vec<InlineSpan>) -> Element {
                 InlineSpan::Kbd(k) => rsx! {
                     kbd {
                         key: "{i}",
-                        class: "bg-[#181a22] text-gray-200 border border-[#383b4b] px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold shadow-[0_1px_0_1px_rgba(0,0,0,0.5)] mx-0.5",
+                        class: "bg-[#151824] text-slate-200 border border-[#343b52] px-1.5 py-0.5 rounded-md text-[11px] font-mono font-semibold shadow-[0_2px_0_0_#232838] mx-0.5 inline-block",
                         "{k}"
                     }
                 },
@@ -347,10 +347,10 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
     match block {
         MarkdownBlock::Heading { level, inlines } => {
             let class_name = match level {
-                1 => "text-lg font-bold text-white mt-3 mb-1 pb-1 border-b border-[#272833]",
-                2 => "text-base font-bold text-sky-400 mt-2.5 mb-1",
-                3 => "text-sm font-semibold text-emerald-400 mt-2 mb-0.5",
-                _ => "text-xs font-semibold text-purple-400 mt-1.5 mb-0.5 uppercase tracking-wide",
+                1 => "text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-300 mt-4 mb-2 pb-1.5 border-b border-[#232738]",
+                2 => "text-sm font-bold text-sky-400 mt-3 mb-1.5",
+                3 => "text-xs font-semibold text-emerald-400 mt-2.5 mb-1",
+                _ => "text-[11px] font-semibold text-purple-400 mt-2 mb-0.5 uppercase tracking-wider",
             };
             rsx! {
                 div { key: "{idx}", class: "{class_name}",
@@ -394,7 +394,7 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
             }
         }
         MarkdownBlock::Blockquote(inlines) => rsx! {
-            blockquote { key: "{idx}", class: "border-l-4 border-[#8b5cf6] bg-[#8b5cf6]/10 px-3 py-1.5 my-2 italic text-gray-300 text-xs rounded-r",
+            blockquote { key: "{idx}", class: "border-l-4 border-violet-500 bg-violet-950/20 px-3.5 py-2 my-2.5 rounded-r-lg text-slate-300 text-xs italic shadow-inner",
                 {render_inlines(inlines)}
             }
         },
@@ -414,22 +414,22 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
             }
         },
         MarkdownBlock::Table { headers, rows } => rsx! {
-            div { key: "{idx}", class: "my-2 overflow-x-auto rounded-lg border border-[#272833]",
+            div { key: "{idx}", class: "my-3 overflow-x-auto rounded-xl border border-[#232738] bg-[#0f121a] shadow-md",
                 table { class: "w-full border-collapse text-xs",
-                    thead { class: "bg-[#16171d] border-b border-[#272833]",
+                    thead { class: "bg-[#161a26] border-b border-[#232738]",
                         tr {
                             for (h_idx, header) in headers.into_iter().enumerate() {
-                                th { key: "{h_idx}", class: "p-2.5 text-left font-semibold text-gray-300 border-r border-[#272833] last:border-r-0",
+                                th { key: "{h_idx}", class: "p-2.5 text-left font-bold text-slate-200 uppercase tracking-wider text-[10px] border-r border-[#232738] last:border-r-0",
                                     "{header}"
                                 }
                             }
                         }
                     }
-                    tbody { class: "divide-y divide-[#272833]",
+                    tbody { class: "divide-y divide-[#232738]",
                         for (r_idx, row) in rows.into_iter().enumerate() {
-                            tr { key: "{r_idx}", class: "hover:bg-[#16171d]/50 transition",
+                            tr { key: "{r_idx}", class: "hover:bg-[#1c2233]/60 transition even:bg-[#121520]/40",
                                 for (c_idx, cell) in row.into_iter().enumerate() {
-                                    td { key: "{c_idx}", class: "p-2.5 text-gray-300 border-r border-[#272833] last:border-r-0",
+                                    td { key: "{c_idx}", class: "p-2.5 text-slate-300 border-r border-[#232738] last:border-r-0 font-normal",
                                         "{cell}"
                                     }
                                 }
