@@ -110,11 +110,14 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 ### 🔌 Extensible by Design
 | Feature | What it does |
 |---------|-------------|
-| **MCP Servers** | Connect any external tool server dynamically — CADE auto-discovers and registers tools on the fly |
-| **Skills** | Drop a Markdown file into `.cade/skills/` to teach CADE new domains |
-| **Hooks** | Wire shell scripts into lifecycle events (before/after tool calls) |
-| **Subagents & Teams** | Dispatch work to specialized agent teams that run in parallel |
-| **IDE Plugins** | Native Neovim plugin with interactive hover-edits and ghost-text |
+| **Capability Mesh** | Unified trait seam across Native Tools, MCP child processes, and Skills (ADR-0020) |
+| **Subagent Harness** | Autonomous `SubagentSession` with RAII workspace isolation, canonical `finish` tool, and dual bounds (ADR-0021) |
+| **MCP Servers** | Connect any external tool server over stdio/HTTP — CADE auto-discovers and registers tools on the fly |
+| **Skills** | Drop a Markdown file into `.cade/skills/` to teach CADE new domain workflows |
+| **Hooks** | Wire shell scripts into lifecycle events (before/after tool calls, session start/end) |
+| **Desktop Commander** | Unified cross-platform automation seam for window tracking, screen capture, and input simulation |
+| **WASM Dashboard** | Built-in reactive Dioxus web GUI at `/dashboard` with syntax-highlighted `MarkdownView` and live SSE telemetry |
+| **IDE Plugins** | Native Neovim plugin with interactive hover-edits, ghost-text, and buffer state syncing |
 
 ---
 
@@ -304,26 +307,28 @@ cargo build --release
 
 ## Architecture
 
-CADE is a Cargo workspace of 16 crates plus the root package that owns the `cade` and `cade-server` binaries:
+CADE is a Cargo workspace of 18 crates:
 
 ```
-src/             → Root package: CLI + server binary entry points
-cade-core        → Shared types, permissions, settings, skills, hooks
-cade-ai          → LLM providers (Anthropic, OpenAI, Gemini, Ollama, OpenRouter)
-cade-api-types   → Shared API schemas and response/request types
-cade-store       → SQLite persistence, AES-GCM encryption, optional embeddings
-cade-server      → Axum HTTP API, context building, consolidation
-cade-agent       → Tool implementations, subagents, MCP, execution backends
-cade-cli         → TUI setup, REPL, slash commands, headless mode
-cade-tui         → Ratatui terminal UI components
-cade-gui         → WASM dashboard (Dioxus v0.5)
-cade-mcp         → Model Context Protocol integration
-cade-ide-mcp     → IDE MCP bridge exposing editor state as tools
-cade-desktop     → Screen capture, window control, notifications
-cade-web         → Web search and scraping
-cade-plugin      → Plugin loading and manifests
-cade-sdk         → Rust SDK for programmatic control
-cade-askpass     → SSH/GPG password prompt IPC helper
+src/             → Root package: CLI client binary entry point
+crates/
+├── cade-core        → Core types, CapabilityMesh seam, permissions, settings, skills, hooks
+├── cade-ai          → LLM providers (Anthropic, OpenAI, Gemini, Ollama, OpenRouter), ITS, prompt caching
+├── cade-api-types   → Shared API schemas, event streams, and request/response types
+├── cade-store       → SQLite persistence (WAL/r2d2), AES-GCM encryption, vector embeddings
+├── cade-server      → Axum HTTP API, context building, Sleeptime memory consolidation
+├── cade-server-bin  → Standalone cade-server release binary entry point
+├── cade-agent       → SubagentSession harness, workspace isolation, capability dispatch
+├── cade-cli         → TUI setup, REPL, slash command engine, headless mode
+├── cade-tui         → Ratatui terminal UI components, subagent inspector, themes
+├── cade-gui         → WASM dashboard (Dioxus v0.5) with rich MarkdownView and SSE telemetry
+├── cade-mcp         → Model Context Protocol client/server integration & stream health
+├── cade-ide-mcp     → IDE MCP bridge exposing editor state as tools
+├── cade-desktop     → DesktopCommander seam: screen capture, window control, notifications
+├── cade-web         → Web search and page scraping
+├── cade-plugin      → PluginEngine seam, package discovery, tarball installer, and manifests
+├── cade-sdk         → Rust SDK for programmatic and embedded agent control
+└── cade-askpass     → SSH/GPG password prompt IPC helper
 ```
 
 📖 Full architecture guide → [docs/architecture.md](docs/architecture.md)

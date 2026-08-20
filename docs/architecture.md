@@ -12,21 +12,22 @@ src/
 └── bin/cade-server.rs           # `cade-server` entry point
 
 crates/
-├── cade-core/                   # shared types — leaf, no workspace deps
-├── cade-ai/                     # LLM providers + model catalogue — leaf
-├── cade-desktop/                # OS extensions (capture, control, notify) — leaf
+├── cade-core/                   # shared types, CapabilityMesh seam, permissions, settings, skills, hooks
+├── cade-ai/                     # LLM providers + model catalogue + ITS + prompt caching
+├── cade-desktop/                # DesktopCommander seam (screen capture, window control, notify)
 ├── cade-store/                  # SQLite + AES-GCM crypto + embeddings (→ core, ai)
-├── cade-server/                 # HTTP API + consolidation       (→ core, ai, store)
-├── cade-agent/                  # client + tools + MCP + subagents (→ core, desktop)
-├── cade-cli/                    # CLI + REPL + headless mode     (→ core, agent, ai)
-├── cade-mcp/                    # MCP server integration
+├── cade-server/                 # HTTP API + Sleeptime memory consolidation (→ core, ai, store)
+├── cade-server-bin/             # Standalone server daemon binary entrypoint
+├── cade-agent/                  # SubagentSession harness + tools manager + backends
+├── cade-cli/                    # CLI + REPL + headless mode (→ core, agent, ai)
+├── cade-mcp/                    # Model Context Protocol integration & stream health
 ├── cade-web/                    # web search + scraping
-├── cade-tui/                    # standalone TUI component library
-├── cade-plugin/                 # plugin loading
+├── cade-tui/                    # standalone TUI component library (Ratatui v0.30)
+├── cade-plugin/                 # PluginEngine seam, package discovery, tarball installer
 ├── cade-sdk/                    # Rust SDK for programmatic control
 ├── cade-ide-mcp/                # IDE bridge (Neovim, VS Code, JetBrains)
 ├── cade-askpass/                # SSH/GPG password prompt (IPC, token auth)
-└── cade-gui/                    # WASM dashboard (Dioxus v0.5)
+└── cade-gui/                    # WASM dashboard (Dioxus v0.5) with rich MarkdownView
 
 plugins/
 └── cade.nvim/                   # Neovim plugin and IDE bridge
@@ -67,15 +68,18 @@ integrations, talk to the same server/API surface.
 
 ## Subsystems
 
-| Subsystem | Crate | Doc |
+| Subsystem | Crate / Module | Doc |
 |---|---|---|
-| Memory blocks + consolidation | `cade-server::server::consolidation` | [memory-system.md](memory-system.md) |
-| Permissions + path protection | `cade-core::permissions` | [permissions.md](permissions.md) |
+| Capability Mesh Seam | `cade-core::capabilities::mesh` | [ADR-0020](adr/0020-capability-mesh-unified-execution-seam.md) |
+| Memory Distillation Engine | `cade-server::server::consolidation` | [memory-system.md](memory-system.md) |
+| Permissions & Consent Governor | `cade-core::permissions` | [permissions.md](permissions.md) |
+| SubagentSession Harness | `cade-agent::subagents::session` | [subagents.md](subagents.md) |
 | Hook engine | `cade-core::hooks` | [hooks.md](hooks.md) |
 | Skill discovery + loading | `cade-core::skills`, `cade-server` | [skills.md](skills.md) |
-| Subagent runner | `cade-agent::subagents` | [subagents.md](subagents.md) |
-| MCP integration | `cade-mcp`, `cade-agent::mcp` | [mcp-servers.md](mcp-servers.md) |
-| Intelligent Tool Selection | `cade-agent::tools::its` | [intelligent-tool-selection.md](intelligent-tool-selection.md) |
+| MCP integration & Stream Health | `cade-mcp`, `cade-agent::mcp` | [mcp-servers.md](mcp-servers.md) |
+| Desktop Commander Seam | `cade-desktop::desktop::commander` | [desktop-commander.md](desktop-commander.md) |
+| Plugin Engine Host | `cade-plugin::engine` | [plugin-development.md](plugin-development.md) |
+| Intelligent Tool Selection | `cade-ai::its` | [intelligent-tool-selection.md](intelligent-tool-selection.md) |
 | Cost / pricing registry | `cade-ai::ModelRegistry` | [cost-and-pricing.md](cost-and-pricing.md) |
 | Execution backends | `cade-agent::backends` | [execution-backends.md](execution-backends.md) |
 
@@ -113,6 +117,11 @@ CADE utilizes robust, production-grade systems to ensure zero-panic stability, s
 13. **Structured Tool Execution & Recovery**: Introduces `StructuredToolOutput` (`stdout`, `stderr`, `exit_code`, `duration_ms`, `truncated`, `error_summary`) to supply structured execution and compiler error metadata directly to LLM recovery routines.
 14. **Structured Git Branch Sandboxing**: Extends `IsolatedWorkspace` with a `MergeConflictReport` engine that inspects `git status --porcelain` on merge failures, returning exact lists of unmerged files (`UU`, `AA`, `DD`) and executing automatic `merge --abort` rollbacks.
 15. **Authenticated Startup Verification & Cold-Start Re-Sync**: On startup, the CLI client performs an authenticated handshake (`verify_auth()`) hitting `GET /v1/config` with Bearer auth. If a cold-start daemon generation occurs during `auto_start_server`, the client re-syncs its Bearer token directly from `~/.cade/api-token` before dispatching agent requests, completely eliminating authentication desynchronization errors.
+16. **CapabilityMesh Unified Execution Seam (ADR-0020)**: Unifies built-in native tools, external MCP processes, and skills behind a single trait seam (`execute` + `active_catalog`). Encapsulates schema injection, ITS tag decoration (`["cade"]`, `["mcp"]`, `["core_mcp"]`), and error taxonomy (`NotFound`, `PermissionDenied`, `Disconnected`, `ExecutionFailed`).
+17. **SubagentSession Autonomous Harness (ADR-0021)**: Decoupled autonomous runner in `cade-agent` with canonical `finish(status, summary)` tool injection, dual bounds (`max_iters` + `max_tokens_budget`), and structured `SubagentOutcome` (`Done`, `Blocked`, `Failed`, `Exhausted`).
+18. **RAII Workspace Isolation (`IsolatedWorkspaceGuard`)**: Manages temporary sandbox directories and git worktrees with automatic atomic merge on success and zero-residue pruning on Drop.
+19. **Real-Time Subagent Telemetry (`SubagentEventEmitter`)**: Streams typed events (`TurnStarted`, `ToolExecuting`, `Progress`, `ApprovalRequired`, `Finished`) asynchronously without blocking execution loops.
+20. **Unified DesktopCommander & PluginEngine Seams**: Cross-platform automation abstraction for screen capture and window control in `cade-desktop`, alongside deep package discovery, tarball extraction, and manifest validation in `cade-plugin`.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in

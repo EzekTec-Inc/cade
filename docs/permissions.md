@@ -96,6 +96,22 @@ suspicious-command detection.
 > is not exhaustive (it covers credentials and CADE's own DB key, not
 > arbitrary user secrets).
 
+## Interactive Consent & Session Caching
+
+When CADE requires confirmation (`Verdict::Ask`), it negotiates authorization through the **`SecurityAuthority`** seam (`crates/cade-core/src/permissions/authority.rs`) using rich `ConsentChoice` scopes:
+
+| Scope | Choice | Behaviour |
+| --- | --- | --- |
+| **Once** | `ConsentChoice::AllowOnce` | Grants permission for this single execution turn only. |
+| **Session** | `ConsentChoice::AllowSession` | Grants permission and registers an in-memory rule into `PermissionManager` via `add_session_allow()`. Subsequent turns in the session resolve in $O(1)$ time without prompting. |
+| **Permanent** | `ConsentChoice::AlwaysAllow` | Persists an allow rule permanently to `~/.cade/settings.json`. |
+| **Deny** | `ConsentChoice::Deny` | Rejects the tool call with structured diagnostic feedback (with optional human redirection text). |
+
+### Session Consent Invalidation on Disconnect
+To prevent stale permissions from being exploited across crashed or replaced processes:
+- When an MCP server drops its pipe or disconnects, `PermissionManager::remove_session_allows_for_prefix(&prefix)` purges all cached allow rules for tools under that namespace (e.g. `github__` or `serena__`).
+- Reconnected or restarted servers require fresh user confirmation.
+
 ## Programmatic access
 
 The Rust API is in `crates/cade-core/src/permissions/`:

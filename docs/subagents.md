@@ -115,18 +115,16 @@ All six are tunable via env vars; see [configuration.md](configuration.md).
 
 ## Memory & state
 
-A subagent runs securely via the `SubagentExecutor` leveraging a stateful design:
+A subagent runs securely via the **`SubagentSession`** harness (ADR-0021) in `crates/cade-agent`, decoupled from the HTTP server daemon:
 
-- **Sandboxed Ephemeral Environment:** An ephemeral agent row is created in `agents` so that all meta-tool calls (like `update_memory`) are isolated to the subagent's namespace.
-- **Ephemeral Branch Sandboxing (Workspace Isolation):** When workspace isolation is active, the subagent runs inside a temporary sandboxed directory managed by the deep `IsolatedWorkspace` module. This module automatically clones the primary workspace (respecting standard ignore and `.gitignore` filters) and later merges modified files back atomically using global write-locks coordinated by the `FileLockManager` to prevent concurrent write collisions.
-- **Hierarchical Memory Mounting:** During subagent initialization, CADE automatically copies/mounts the parent agent's core memory blocks (`project`, `persona`, and `active_goal`) directly into the subagent's sandboxed namespace. This guarantees the subagent inherits the exact same constitutions, grounding, and constraints as the parent.
-- **Context Inheritance:** CADE fetches the parent agent's recent conversation history (the last 8 messages) and injects them inside a `<parent_context>` XML block in the subagent's system prompt. This gives the subagent immediate context of the parent's current progress and recently viewed files.
-- **Active Memory Self-Correction (Doom-Loop Protection):** When the pure, rolling `DoomLoopDetector` state-machine detects tool stagnation (loops), the system intervention explicitly instructs the subagent to use `update_memory(label='active_goal', value=...)` to rewrite its strategy and outline a new task approach in its Core memory before running any further tools.
-- **Smart Memory Merge:** When the subagent completes, the `EphemeralEnvironment` Drop guard triggers `write_back_subagent_memory`. Any typed facts the subagent discovered are intelligently merged back into the parent agent's context using an LLM pass, preserving the memory taxonomy and confidence levels.
-- **No** messages are persisted into the parent's conversation stream.
-- The parent's full tool list (minus `run_subagent` and `run_parallel_subagents`) is dispatched via
-  the same `cade_agent::tools::manager::dispatch` path
-- Final result is returned as a string to the parent's tool-call result. Status updates (`subagent_started` and `subagent_complete`) are streamed natively to the TUI via the `SubagentEventEmitter`.
+- **Autonomous Execution Harness:** `SubagentSession` manages prompt-and-tool loops to convergence, injects a canonical `finish(status, summary, questions)` tool, and returns a structured `SubagentOutcome` (`Done`, `Blocked`, `Failed`, `Exhausted`).
+- **Dual Budget Bounds:** Execution is dual-clamped by turn limit (`max_iters`, default 20) and cumulative token consumption (`max_tokens_budget`). If boundaries are reached without an explicit `finish`, execution halts cleanly with `SubagentOutcome::Exhausted`.
+- **RAII Workspace Isolation (`IsolatedWorkspaceGuard`):** When isolated execution is active, the session runs inside an ephemeral cloned directory or git worktree. On completion with `Done`, modified files are committed and merged back atomically; on error, cancellation, or panic, the `Drop` implementation unlinks and deletes temporary directories automatically with zero filesystem residue.
+- **Hierarchical Memory Mounting:** During subagent initialization, CADE automatically copies and mounts the parent agent's core memory blocks (`project`, `persona`, and `active_goal`) directly into the subagent's sandboxed namespace.
+- **Real-Time Telemetry & Event Streaming:** Structured events (`TurnStarted`, `ToolExecuting`, `Progress`, `ApprovalRequired`, `OutputChunk`, `Finished`) stream over an asynchronous `SubagentEventEmitter` channel to live TUI inspectors and server SSE clients without blocking execution turns.
+- **Human-In-The-Loop Review Gates:** When `human_review = true` is configured, mutating tool invocations pause and emit an `ApprovalRequired` event, awaiting interactive confirmation before proceeding.
+- **Active Memory Self-Correction (Doom-Loop Protection):** When the rolling `DoomLoopDetector` state-machine detects tool stagnation (loops), the system intervention explicitly instructs the subagent to use `update_memory(label='active_goal', value=...)` to rewrite its strategy before running further tools.
+- **Smart Memory Merge:** When the subagent completes, discovered facts are intelligently merged back into the parent agent's context, preserving memory taxonomy and confidence levels.
 
 ## Subagent Steering & Human-in-the-Loop Redirection
 
