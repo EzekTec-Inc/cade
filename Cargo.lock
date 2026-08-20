@@ -1083,6 +1083,7 @@ dependencies = [
 name = "cade-desktop"
 version = "0.2.4"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "cade-core",
  "derive_more",
