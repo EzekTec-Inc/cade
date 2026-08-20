@@ -233,12 +233,17 @@ impl ContextCompactionEngine for DefaultContextCompactor {
         conversation_id: Option<String>,
         override_history_budget: Option<usize>,
     ) -> Option<usize> {
-        crate::server::consolidation::consolidate_agent(
-            state,
-            agent_id,
-            conversation_id,
-            override_history_budget,
-        )
-        .await
+        use crate::server::consolidation::{
+            ConsolidationContext, DefaultMemoryConsolidationEngine, MemoryConsolidationEngine,
+        };
+        let engine = DefaultMemoryConsolidationEngine;
+        let cx = ConsolidationContext::new()
+            .with_conversation_id(conversation_id)
+            .with_history_budget(override_history_budget);
+
+        match engine.consolidate(&state, &agent_id, &cx).await {
+            Ok(report) => Some(report.summary_length_chars),
+            Err(_) => None,
+        }
     }
 }

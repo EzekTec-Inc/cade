@@ -15,6 +15,200 @@ use cade_store::sqlite;
 pub mod accumulator;
 pub mod knowledge_lifting;
 
+// region:    --- Types
+
+/// Need status indicating whether an agent's history requires compaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsolidationNeed {
+    UpToDate,
+    Pending {
+        dropped_turns: usize,
+        estimated_dropped_tokens: usize,
+    },
+    Busy,
+}
+
+/// Standard report produced upon completing a memory consolidation run.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
+pub struct ConsolidationReport {
+    pub agent_id: String,
+    pub turns_summarized: usize,
+    pub input_tokens_used: usize,
+    pub output_tokens_used: usize,
+    pub summary_length_chars: usize,
+    pub knowledge_nodes_lifted: usize,
+    pub ring_rotation_applied: bool,
+}
+
+/// Context parameters for a memory consolidation request.
+#[derive(Debug, Clone, Default)]
+pub struct ConsolidationContext {
+    pub conversation_id: Option<String>,
+    pub override_history_budget: Option<usize>,
+    pub force: bool,
+}
+
+impl ConsolidationContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_conversation_id(mut self, conv_id: Option<String>) -> Self {
+        self.conversation_id = conv_id;
+        self
+    }
+
+    pub fn with_history_budget(mut self, budget: Option<usize>) -> Self {
+        self.override_history_budget = budget;
+        self
+    }
+}
+
+/// Error kinds returned by the MemoryConsolidationEngine.
+#[derive(Debug, Clone, derive_more::Display)]
+#[display("{self:?}")]
+pub enum ConsolidationError {
+    #[display("Agent '{_0}' not found")]
+    AgentNotFound(String),
+    #[display("Database error: {_0}")]
+    Db(String),
+    #[display("LLM distillation failed: {_0}")]
+    Llm(String),
+    #[display("Consolidation skipped: {_0}")]
+    Skipped(String),
+}
+
+impl std::error::Error for ConsolidationError {}
+
+/// Unified, deep interface for memory consolidation and knowledge distillation (ADR-0020 / PRD #52).
+#[async_trait::async_trait]
+pub trait MemoryConsolidationEngine: Send + Sync {
+    /// Execute memory distillation and knowledge lifting for an agent.
+    async fn consolidate(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+        cx: &ConsolidationContext,
+    ) -> Result<ConsolidationReport, ConsolidationError>;
+
+    /// Check whether an agent requires proactive consolidation.
+    async fn check_need(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+        cx: &ConsolidationContext,
+    ) -> ConsolidationNeed;
+}
+
+/// Production implementation of the MemoryConsolidationEngine.
+pub struct DefaultMemoryConsolidationEngine;
+
+#[async_trait::async_trait]
+impl MemoryConsolidationEngine for DefaultMemoryConsolidationEngine {
+    async fn consolidate(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+        cx: &ConsolidationContext,
+    ) -> Result<ConsolidationReport, ConsolidationError> {
+        let compacted_chars = consolidate_agent(
+            state.clone(),
+            agent_id.to_string(),
+            cx.conversation_id.clone(),
+            cx.override_history_budget,
+        )
+        .await;
+
+        match compacted_chars {
+            Some(chars) => Ok(ConsolidationReport {
+                agent_id: agent_id.to_string(),
+                turns_summarized: 0,
+                input_tokens_used: 0,
+                output_tokens_used: 0,
+                summary_length_chars: chars,
+                knowledge_nodes_lifted: 0,
+                ring_rotation_applied: false,
+            }),
+            None => Err(ConsolidationError::Skipped(
+                "No consolidation performed (below threshold or unchanged)".to_string(),
+            )),
+        }
+    }
+
+    async fn check_need(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+        _cx: &ConsolidationContext,
+    ) -> ConsolidationNeed {
+        let activities = state.agent_activity.read().await;
+        if let Some(act) = activities.get(agent_id) {
+            if act.needs_consolidation {
+                ConsolidationNeed::Pending {
+                    dropped_turns: act.last_omitted_turns,
+                    estimated_dropped_tokens: act.last_omitted_turns * 500,
+                }
+            } else {
+                ConsolidationNeed::UpToDate
+            }
+        } else {
+            ConsolidationNeed::UpToDate
+        }
+    }
+}
+
+/// Mock implementation for deterministic in-memory testing without LLM or DB.
+pub struct MockMemoryConsolidationEngine {
+    pub canned_report: Option<ConsolidationReport>,
+    pub canned_need: ConsolidationNeed,
+}
+
+impl Default for MockMemoryConsolidationEngine {
+    fn default() -> Self {
+        Self {
+            canned_report: Some(ConsolidationReport {
+                agent_id: "mock-agent".to_string(),
+                turns_summarized: 5,
+                input_tokens_used: 1200,
+                output_tokens_used: 350,
+                summary_length_chars: 1800,
+                knowledge_nodes_lifted: 3,
+                ring_rotation_applied: true,
+            }),
+            canned_need: ConsolidationNeed::UpToDate,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MemoryConsolidationEngine for MockMemoryConsolidationEngine {
+    async fn consolidate(
+        &self,
+        _state: &AppState,
+        agent_id: &str,
+        _cx: &ConsolidationContext,
+    ) -> Result<ConsolidationReport, ConsolidationError> {
+        if let Some(ref r) = self.canned_report {
+            let mut rep = r.clone();
+            rep.agent_id = agent_id.to_string();
+            Ok(rep)
+        } else {
+            Err(ConsolidationError::Skipped("Mock configured to skip".to_string()))
+        }
+    }
+
+    async fn check_need(
+        &self,
+        _state: &AppState,
+        _agent_id: &str,
+        _cx: &ConsolidationContext,
+    ) -> ConsolidationNeed {
+        self.canned_need.clone()
+    }
+}
+
+// endregion: --- Types
+
 /// Resolve the output directory for memory exports readable by cade-rag-mcp.
 ///
 /// Precedence:

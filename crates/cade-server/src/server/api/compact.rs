@@ -29,19 +29,26 @@ pub async fn compact_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conversation_id = params.get("conversation_id").map(String::as_str);
 
-    let compacted_chars = crate::server::consolidation::consolidate_agent(
-        state.clone(),
-        agent_id.clone(),
-        conversation_id.map(String::from),
-        None,
-    )
-    .await;
+    use crate::server::consolidation::{
+        ConsolidationContext, ConsolidationError, DefaultMemoryConsolidationEngine,
+        MemoryConsolidationEngine,
+    };
+    let engine = DefaultMemoryConsolidationEngine;
+    let cx = ConsolidationContext::new()
+        .with_conversation_id(conversation_id.map(String::from));
+
+    let report_res = engine.consolidate(&state, &agent_id, &cx).await;
+    let (chars, ok) = match report_res {
+        Ok(r) => (r.summary_length_chars, true),
+        Err(ConsolidationError::Skipped(_)) => (0, true),
+        Err(_) => (0, false),
+    };
 
     Ok(Json(json!({
         "agent_id":             agent_id,
         "conversation_id":      conversation_id,
-        "session_summary_chars": compacted_chars.unwrap_or(0),
-        "ok":                   true,
+        "session_summary_chars": chars,
+        "ok":                   ok,
     })))
 }
 

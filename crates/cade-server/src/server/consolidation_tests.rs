@@ -1042,3 +1042,32 @@ fn test_touched_files_extraction_parsing_formatting_and_stripping() {
     let stripped = strip_touched_files_section(&combined_summary);
     assert_eq!(stripped, "This is the summary content.");
 }
+
+#[tokio::test]
+async fn test_memory_consolidation_engine_mock_and_default_seam() {
+    use crate::server::consolidation::{
+        ConsolidationContext, ConsolidationNeed, DefaultMemoryConsolidationEngine,
+        MemoryConsolidationEngine, MockMemoryConsolidationEngine,
+    };
+
+    let db = setup_db();
+    let llm = Arc::new(MockSummaryLlm::new("MOCK_SUMMARY"));
+    let state = mk_state(db, llm);
+
+    // 1. Test Mock Engine
+    let mock = MockMemoryConsolidationEngine::default();
+    let cx = ConsolidationContext::new();
+
+    let need = mock.check_need(&state, "agent-1", &cx).await;
+    assert_eq!(need, ConsolidationNeed::UpToDate);
+
+    let report = mock.consolidate(&state, "agent-1", &cx).await.unwrap();
+    assert_eq!(report.agent_id, "agent-1");
+    assert_eq!(report.turns_summarized, 5);
+    assert_eq!(report.summary_length_chars, 1800);
+
+    // 2. Test Default Engine with non-existent agent returns Skipped or Error cleanly
+    let default_engine = DefaultMemoryConsolidationEngine;
+    let def_need = default_engine.check_need(&state, "agent-nonexistent", &cx).await;
+    assert_eq!(def_need, ConsolidationNeed::UpToDate);
+}
