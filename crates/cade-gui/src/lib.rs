@@ -1,6 +1,9 @@
-mod api;
-mod components;
-mod types;
+pub mod api;
+pub mod chat_session;
+pub mod components;
+pub mod types;
+
+pub use chat_session::{ChatSessionCoordinator, ChatTurnOutcome};
 
 use dioxus::prelude::*;
 
