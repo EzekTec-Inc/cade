@@ -24,7 +24,7 @@ crates/
 ├── cade-web/                    # web search + scraping
 ├── cade-tui/                    # standalone TUI component library (Ratatui v0.30)
 ├── cade-plugin/                 # PluginEngine seam, package discovery, tarball installer
-├── cade-sdk/                    # Rust SDK for programmatic control
+├── cade-sdk/                    # Rust SDK for in-process and remote programmatic control
 ├── cade-ide-mcp/                # IDE bridge (Neovim, VS Code, JetBrains)
 ├── cade-askpass/                # SSH/GPG password prompt (IPC, token auth)
 └── cade-gui/                    # WASM dashboard (Dioxus v0.5) with rich MarkdownView
@@ -33,10 +33,11 @@ plugins/
 └── cade.nvim/                   # Neovim plugin and IDE bridge
 ```
 
-## Process model
+## Process model & SDK runtime
 
-CADE runs as **two primary processes** for interactive use:
+CADE supports two execution topologies:
 
+1. **Interactive Client/Daemon Model**:
 ```
 ┌──────────────┐    HTTP/JSON + SSE    ┌────────────────┐
 │ cade  (CLI)  │ ◀───────────────────▶ │ cade-server    │
@@ -47,6 +48,19 @@ CADE runs as **two primary processes** for interactive use:
                                                ├─ MCP servers (stdio / HTTP)
                                                └─ Tool execution backend
                                                    (local / Docker / SSH)
+```
+
+2. **In-Process Zero-Daemon Embedded Model (`cade-sdk`)**:
+```
+┌────────────────────────────────────────────────────────┐
+│ Your Rust Application / CLI / Microservice / Lambda    │
+│                                                        │
+│  EmbeddedSession / TeamSession (`cade-sdk`)            │
+│  ├── In-Memory / Local SQLite (`cade-store`)           │
+│  ├── Direct LLM Routing (`cade-ai`)                    │
+│  ├── Native Tool Runtime (`cade-agent`)                │
+│  └── Strongly-Typed Reactive Stream (`CadeStreamEvent`)│
+└────────────────────────────────────────────────────────┘
 ```
 
 Other frontends, including the WASM dashboard at `/dashboard` and IDE
@@ -70,6 +84,7 @@ integrations, talk to the same server/API surface.
 
 | Subsystem | Crate / Module | Doc |
 |---|---|---|
+| In-Process Embedded & Team SDK | `cade-sdk` | [crates/cade-sdk/README.md](../crates/cade-sdk/README.md) |
 | Capability Mesh Seam | `cade-core::capabilities::mesh` | [ADR-0020](adr/0020-capability-mesh-unified-execution-seam.md) |
 | Memory Distillation Engine | `cade-server::server::consolidation` | [memory-system.md](memory-system.md) |
 | Permissions & Consent Governor | `cade-core::permissions` | [permissions.md](permissions.md) |
@@ -122,6 +137,7 @@ CADE utilizes robust, production-grade systems to ensure zero-panic stability, s
 18. **RAII Workspace Isolation (`IsolatedWorkspaceGuard`)**: Manages temporary sandbox directories and git worktrees with automatic atomic merge on success and zero-residue pruning on Drop.
 19. **Real-Time Subagent Telemetry (`SubagentEventEmitter`)**: Streams typed events (`TurnStarted`, `ToolExecuting`, `Progress`, `ApprovalRequired`, `Finished`) asynchronously without blocking execution loops.
 20. **Unified DesktopCommander & PluginEngine Seams**: Cross-platform automation abstraction for screen capture and window control in `cade-desktop`, alongside deep package discovery, tarball extraction, and manifest validation in `cade-plugin`.
+21. **In-Process Zero-Daemon & Multi-Agent Squad Runtime (`cade-sdk`)**: Provides `EmbeddedSession` linking directly to `cade-store` SQLite and `cade-ai` `LlmRouter` in-process with zero background daemon overhead, paired with `TeamSession` programmatic squad orchestration and `CadeStreamEvent` strongly-typed reactive streams.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in

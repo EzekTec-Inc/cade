@@ -11,6 +11,8 @@ doctest = false
 cade-core.path  = "../cade-core"
 cade-agent = { path = "../cade-agent", default-features = false, features = ["mcp"] }
 cade-api-types = { path = "../cade-api-types" }
+cade-store = { path = "../cade-store" }
+cade-ai = { path = "../cade-ai" }
 # -- Error handling
 derive_more.workspace = true
 # -- Serialisation
@@ -20,8 +22,12 @@ serde_json.workspace = true
 tracing.workspace    = true
 # -- Async
 tokio.workspace      = true
+tokio-stream.workspace = true
+async-trait.workspace = true
 futures.workspace    = true
 futures-util         = "0.3"
+# -- Database
+rusqlite.workspace   = true
 # -- Misc
 uuid.workspace       = true
 dirs.workspace       = true
@@ -38,4 +44,3 @@ web-sys              = { version = "0.3", features = ["Window", "Request", "Requ
 
 [lints.rust]
 unsafe_code = "forbid"
-# unused = { level = "allow", priority = -1 } # For exploratory dev.

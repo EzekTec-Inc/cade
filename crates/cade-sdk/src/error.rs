@@ -9,6 +9,10 @@ pub enum Error {
     #[from]
     Agent(cade_agent::Error),
     #[from]
+    Ai(cade_ai::Error),
+    #[from]
+    Store(cade_store::error::Error),
+    #[from]
     Io(std::io::Error),
     #[from]
     SerdeJson(serde_json::Error),

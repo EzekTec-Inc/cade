@@ -1172,9 +1172,12 @@ dependencies = [
 name = "cade-sdk"
 version = "0.2.4"
 dependencies = [
+ "async-trait",
  "cade-agent",
+ "cade-ai",
  "cade-api-types",
  "cade-core",
+ "cade-store",
  "derive_more",
  "dirs",
  "futures",
@@ -1182,9 +1185,11 @@ dependencies = [
  "js-sys",
  "reqwest 0.12.28",
  "reqwest-eventsource",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tracing",
  "uuid",
  "wasm-bindgen",
