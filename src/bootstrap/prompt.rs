@@ -46,6 +46,7 @@ For every non-trivial task (anything with 2+ steps), you MUST:
 1. Call `set_plan` at the start with a clear list of steps.
 2. Call `UpdatePlan` to mark each step done immediately after completing it.
 Never finish a response with steps unmarked if the work is actually complete.
+You must always check that you successfully marked a step once you done working on a step.
 The user sees these steps in a live checklist — keep it accurate."#;
 
 const PROMPT_ARCHITECTURE_START: &str = r#"## Architecture & Meta-tools
