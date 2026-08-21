@@ -134,13 +134,71 @@ impl IntelligentToolSelector for PassThroughToolSelector {
     }
 }
 
+
+// ── Needle Tool Selector ──────────────────────────────────────────────────
+
+use crate::needle::{NeedleConfig, NeedleEngine};
+use std::sync::Arc;
+
+pub struct NeedleToolSelector {
+    pub engine: Arc<NeedleEngine>,
+}
+
+impl Default for NeedleToolSelector {
+    fn default() -> Self {
+        Self {
+            engine: Arc::new(NeedleEngine::new(NeedleConfig::default())),
+        }
+    }
+}
+
+impl NeedleToolSelector {
+    pub fn new(config: NeedleConfig) -> Self {
+        Self {
+            engine: Arc::new(NeedleEngine::new(config)),
+        }
+    }
+}
+
+impl IntelligentToolSelector for NeedleToolSelector {
+    fn select_tools(
+        &self,
+        messages: &[LlmMessage],
+        tools: Vec<TaggedToolSchema>,
+    ) -> Vec<Value> {
+        let latest_user_prompt = messages
+            .iter()
+            .rfind(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+
+        let mut core_tools = Vec::new();
+        let mut optional_tools = Vec::new();
+
+        for t in tools {
+            if t.tags.iter().any(|tag| tag == "core_mcp" || tag == "cade") {
+                core_tools.push(t.schema);
+            } else {
+                optional_tools.push(t.schema);
+            }
+        }
+
+        let retrieved = self.engine.retrieve_top_k(latest_user_prompt, &optional_tools);
+        let mut result = core_tools;
+        result.extend(retrieved);
+        result
+    }
+}
+
 // ── Resolver ─────────────────────────────────────────────────────────────────
 
 /// Resolves the optimal tool selector based on the active model ID.
-pub fn resolve_tool_selector(_model_id: &str) -> Box<dyn IntelligentToolSelector> {
-    // Standard model resolution: defaults to AdaptiveToolSelector.
-    // Highly extensible for models that need different selection metrics.
-    Box::new(AdaptiveToolSelector::default())
+pub fn resolve_tool_selector(model_id: &str) -> Box<dyn IntelligentToolSelector> {
+    if model_id.contains("needle") || std::env::var("CADE_USE_NEEDLE_ITS").is_ok() {
+        Box::new(NeedleToolSelector::default())
+    } else {
+        Box::new(AdaptiveToolSelector::default())
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -304,4 +362,49 @@ mod tests {
         assert_eq!(selected[1]["name"], "bash");
         assert_eq!(selected[2]["name"], "serena__activate_project");
     }
+
+    #[test]
+    fn test_needle_tool_selector_pruning() {
+        let selector = NeedleToolSelector::new(NeedleConfig {
+            top_k_tools: 2,
+            ..Default::default()
+        });
+
+        let messages = vec![
+            LlmMessage {
+                role: "user".to_string(),
+                content: "read the config file from disk".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            }
+        ];
+
+        let tools = vec![
+            TaggedToolSchema {
+                schema: json!({ "name": "bash", "description": "execute command" }),
+                tags: vec!["cade".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({ "name": "read_file", "description": "read file content" }),
+                tags: vec!["mcp".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({ "name": "weather_api", "description": "get weather in city" }),
+                tags: vec!["mcp".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({ "name": "music_player", "description": "play audio track" }),
+                tags: vec!["mcp".to_string()],
+            },
+        ];
+
+        let selected = selector.select_tools(&messages, tools);
+        // bash is core (kept) + top-2 optional tools (read_file + 1 other)
+        assert!(selected.iter().any(|t| t["name"] == "bash"));
+        assert!(selected.iter().any(|t| t["name"] == "read_file"));
+        assert!(selected.len() <= 3);
+    }
+
 }
