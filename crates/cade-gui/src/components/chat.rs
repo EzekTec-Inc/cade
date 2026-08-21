@@ -585,12 +585,8 @@ fn input_area(
         if text.is_empty() || is_loading() {
             return;
         }
-        is_loading.set(true);
         input_text.set(String::new());
         show_suggestions.set(false);
-
-        let stream_id = format!("streaming-{}", js_sys::Date::now() as u64);
-        let timestamp = js_sys::Date::now() as u64;
 
         // Abort controller setup for the active stream (safe atomic bool cancel token)
         let cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -598,145 +594,25 @@ fn input_area(
             .active_stream
             .set(crate::types::SafeAbortHandle(cancel_token.clone()));
 
-        // Optimistically insert user message + placeholder assistant message
-        let mut current_msgs = messages();
-        current_msgs.push(cade_api_types::ChatMessage {
-            id: format!("user-{timestamp}"),
-            role: "user".to_string(),
-            content: serde_json::Value::String(text.clone()),
-            conversation_id: None,
-        });
-        current_msgs.push(cade_api_types::ChatMessage {
-            id: stream_id.clone(),
-            role: "assistant".to_string(),
-            content: serde_json::Value::String(String::new()),
-            conversation_id: None,
-        });
-        messages.set(current_msgs);
-
         let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let conv_id = active_conversation();
+        let coordinator = crate::chat_session::ChatSessionCoordinator::new(
+            api_client,
+            agent_id,
+            conv_id,
+        );
+
+        let state_toast = state;
 
         spawn(async move {
-            let mut reasoning_acc = String::new();
+            let result = coordinator
+                .dispatch_turn(&text, messages, is_loading, cancel_token)
+                .await;
 
-            let result = api_client.stream_messages(
-                &agent_id,
-                &text,
-                conv_id.as_deref(),
-                Some(cancel_token),
-                |event: cade_api_types::StreamEvent| {
-                    match event.msg_type() {
-                        "assistant_message" => {
-                            if let Some(delta) = event.content() {
-                                let mut msgs = messages();
-                                if let Some(idx) = msgs.iter().position(|m| m.id == stream_id) {
-                                    let existing = msgs[idx]
-                                        .content
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string();
-                                    msgs[idx].content =
-                                        serde_json::Value::String(format!("{existing}{delta}"));
-                                    messages.set(msgs);
-                                }
-                            }
-                        }
-                        "reasoning_message" => {
-                            if let Some(r) = event.reasoning() {
-                                reasoning_acc.push_str(r);
-                                let reasoning_block =
-                                    format!("<reasoning>\n{reasoning_acc}\n</reasoning>");
-                                let mut msgs = messages();
-                                if let Some(idx) = msgs.iter().position(|m| m.id == stream_id) {
-                                    let existing = msgs[idx]
-                                        .content
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let updated = if existing.is_empty()
-                                        || existing == reasoning_block
-                                    {
-                                        reasoning_block.clone()
-                                    } else if let Some(tail) =
-                                        existing.split("</reasoning>").nth(1)
-                                    {
-                                        format!("{reasoning_block}{tail}")
-                                    } else {
-                                        format!("{reasoning_block}\n{existing}")
-                                    };
-                                    msgs[idx].content =
-                                        serde_json::Value::String(updated);
-                                    messages.set(msgs);
-                                }
-                            }
-                        }
-                        "tool_call_message" => {
-                            if let Some(tc) = event.tool_call() {
-                                let mut msgs = messages();
-                                if let Some(idx) = msgs.iter().position(|m| m.id == stream_id) {
-                                    // Append tool call as structured content
-                                    let existing = msgs[idx]
-                                        .content
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let tool_block = format!(
-                                        "\n\n[Tool Call: {}]\nArguments:\n{}\n",
-                                        tc.name, tc.arguments
-                                    );
-                                    msgs[idx].content =
-                                        serde_json::Value::String(format!("{existing}{tool_block}"));
-                                    messages.set(msgs);
-                                }
-                            }
-                        }
-                        "error" => {
-                            let err_msg = event
-                                .error()
-                                .unwrap_or("Unknown error")
-                                .to_string();
-                            let mut msgs = messages();
-                            if let Some(idx) = msgs.iter().position(|m| m.id == stream_id) {
-                                msgs[idx].content =
-                                    serde_json::Value::String(format!(
-                                        "[Error] {err_msg}"
-                                    ));
-                                messages.set(msgs);
-                            }
-                        }
-                        "approval_requested" => {
-                            let subagent = event.data.get("subagent_id").and_then(|v| v.as_str()).unwrap_or("subagent");
-                            let tool = event.data.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
-                            add_toast(&state, ToastLevel::Warning, "Approval Requested", format!("Background Subagent [{subagent}] requests permission to run {tool}. See Tools page to authorize."));
-                        }
-                        _ => {
-                            // stream_start, finish_reason, tool_result_message,
-                            // usage_statistics — ignore for now
-                        }
-                    }
-                },
-            ).await;
-
-            // Finalize: assign stable ID, preserve content
-            if let Err(e) = &result {
-                add_toast(&state, ToastLevel::Error, "Stream failed", e);
+            if let Err(e) = result {
+                add_toast(&state_toast, ToastLevel::Error, "Stream failed", e);
             }
-            let mut msgs = messages();
-            if let Some(idx) = msgs.iter().position(|m| m.id == stream_id) {
-                let final_content = match &result {
-                    Err(e) => {
-                        let existing = msgs[idx].content.as_str().unwrap_or("").to_string();
-                        format!("{existing}\n\n[Stream Error: {e}]")
-                    }
-                    Ok(_) => msgs[idx].content.as_str().unwrap_or("").to_string(),
-                };
-                msgs[idx].content = serde_json::Value::String(final_content);
-                msgs[idx].id = format!("msg-{timestamp}");
-                messages.set(msgs);
-            }
-            is_loading.set(false);
         });
     };
 
