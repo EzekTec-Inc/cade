@@ -1,6 +1,5 @@
 use dioxus::prelude::*;
 
-use crate::api;
 use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
@@ -12,28 +11,33 @@ pub fn MemoryBlocksView() -> Element {
         .map(|a| a.id.clone())
         .unwrap_or_default();
 
-    let key = state.api_key;
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
+    let engine = crate::api_engine::ApiClientEngine::new(client);
+
     use_effect(move || {
         let aid = agent_id.clone();
-        let k = key;
         let st = state;
         let mut blks = blocks;
         let mut busy = fetching;
+        let eng = engine.clone();
         spawn(async move {
             let actual = if aid.is_empty() {
-                api::list_agents(&k())
+                eng.fetch_agents()
                     .await
-                    .ok()
-                    .and_then(|list| list.into_iter().next())
-                    .map(|a| a.id)
+                    .value()
+                    .and_then(|list| list.first())
+                    .map(|a| a.id.clone())
                     .unwrap_or_default()
             } else {
                 aid
             };
             if !actual.is_empty() {
-                match api::list_memory_blocks(&actual, &k()).await {
-                    Ok(data) => blks.set(data),
-                    Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch memory blocks", e),
+                match eng.fetch_memory_blocks(&actual).await {
+                    crate::api_engine::ResourceState::Ready(data) => blks.set(data),
+                    crate::api_engine::ResourceState::Error(e) => {
+                        add_toast(&st, ToastLevel::Error, "Failed to fetch memory blocks", e)
+                    }
+                    _ => {}
                 }
             }
             busy.set(false);

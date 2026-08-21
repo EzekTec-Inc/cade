@@ -16,12 +16,16 @@ pub fn ToolsView() -> Element {
         let mut srv = servers;
         let mut apprs = approvals;
         let mut busy = fetching;
+        let engine = crate::api_engine::ApiClientEngine::new(client);
         let api_client = client();
 
         spawn(async move {
-            match api_client.list_mcp_servers().await {
-                Ok(data) => srv.set(data),
-                Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch MCP servers", e),
+            match engine.fetch_mcp_servers().await {
+                crate::api_engine::ResourceState::Ready(data) => srv.set(data),
+                crate::api_engine::ResourceState::Error(e) => {
+                    add_toast(&st, ToastLevel::Error, "Failed to fetch MCP servers", e)
+                }
+                _ => {}
             }
 
             match api_client.list_approvals().await {

@@ -1,6 +1,5 @@
 use dioxus::prelude::*;
 
-use crate::api;
 use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
@@ -9,16 +8,21 @@ pub fn ModelsView() -> Element {
     let models_data = use_signal(|| None::<serde_json::Value>);
     let fetching = use_signal(|| true);
 
-    let key = state.api_key;
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
+    let engine = crate::api_engine::ApiClientEngine::new(client);
+
     use_effect(move || {
-        let k = key;
         let st = state;
         let mut md = models_data;
         let mut busy = fetching;
+        let eng = engine.clone();
         spawn(async move {
-            match api::list_models(&k()).await {
-                Ok(data) => md.set(Some(data)),
-                Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch models", e),
+            match eng.fetch_models().await {
+                crate::api_engine::ResourceState::Ready(data) => md.set(Some(data)),
+                crate::api_engine::ResourceState::Error(e) => {
+                    add_toast(&st, ToastLevel::Error, "Failed to fetch models", e)
+                }
+                _ => {}
             }
             busy.set(false);
         });

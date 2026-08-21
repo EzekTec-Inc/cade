@@ -1,6 +1,5 @@
 use dioxus::prelude::*;
 
-use crate::api;
 use crate::types::{AppState, SelectedPage, ToastLevel, add_toast};
 
 #[component]
@@ -9,16 +8,21 @@ pub fn AgentsView() -> Element {
     let agents = use_signal(Vec::<cade_api_types::AgentInfo>::new);
     let fetching = use_signal(|| true);
 
-    let key = state.api_key;
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
+    let engine = crate::api_engine::ApiClientEngine::new(client);
+
     use_effect(move || {
-        let k = key;
         let mut ags = agents;
         let mut busy = fetching;
         let st = state;
+        let eng = engine.clone();
         spawn(async move {
-            match api::list_agents(&k()).await {
-                Ok(list) => ags.set(list),
-                Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch agents", e),
+            match eng.fetch_agents().await {
+                crate::api_engine::ResourceState::Ready(list) => ags.set(list),
+                crate::api_engine::ResourceState::Error(e) => {
+                    add_toast(&st, ToastLevel::Error, "Failed to fetch agents", e)
+                }
+                _ => {}
             }
             busy.set(false);
         });
