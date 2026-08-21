@@ -228,18 +228,18 @@ pub fn CodeView() -> Element {
     });
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text flex flex-col",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218] shrink-0",
-                h1 { class: "text-lg font-semibold text-white", "API Playground" }
-                span { class: "text-xs text-gray-500", "Explore and test CADE API endpoints" }
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text flex flex-col",
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70 shrink-0",
+                h1 { class: "text-lg font-semibold text-slate-100", "API Playground" }
+                span { class: "text-xs text-slate-500", "Explore and test CADE API endpoints" }
             }
 
             div { class: "flex flex-1 overflow-hidden",
                 // Left panel — endpoint list
-                div { class: "w-[320px] border-r border-[#111218] flex flex-col shrink-0 overflow-hidden",
-                    div { class: "p-4 border-b border-[#111218]",
+                div { class: "w-[320px] border-r border-[#1e293b]/70 flex flex-col shrink-0 overflow-hidden",
+                    div { class: "p-4 border-b border-[#1e293b]/70",
                         select {
-                            class: "w-full bg-[#16171d] text-gray-300 text-xs border border-[#272833] rounded-md px-3 py-2 outline-none",
+                            class: "w-full bg-[#090d16] text-slate-300 text-xs border border-[#1e293b] rounded-md px-3 py-2 outline-none",
                             value: "{selected_group}",
                             onchange: move |e| {
                                 selected_group.set(e.value().clone());
@@ -260,7 +260,7 @@ pub fn CodeView() -> Element {
                                 Method::Delete => "text-red-400",
                             };
                             let bg = if is_active {
-                                "bg-[#16171d]"
+                                "bg-[#090d16]"
                             } else {
                                 "hover:bg-[#111218]"
                             };
@@ -278,7 +278,7 @@ pub fn CodeView() -> Element {
                                     },
                                     span { class: "{mc_class}", "{ms}" }
                                     div { class: "flex flex-col min-w-0",
-                                        span { class: "text-white text-xs font-medium truncate", "{t}" }
+                                        span { class: "text-slate-100 text-xs font-medium truncate", "{t}" }
                                         span { class: "text-gray-600 text-[10px] truncate font-mono", "{p}" }
                                     }
                                 }
@@ -296,16 +296,16 @@ pub fn CodeView() -> Element {
                                     span { class: "{method_badge_class}",
                                         "{detail_method_str}"
                                     }
-                                    span { class: "text-gray-300 font-mono text-sm", "{detail_path}" }
+                                    span { class: "text-slate-300 font-mono text-sm", "{detail_path}" }
                                 }
-                                h2 { class: "text-white font-semibold text-base", "{detail_title}" }
-                                p { class: "text-gray-400 text-xs", "{detail_desc}" }
+                                h2 { class: "text-slate-100 font-semibold text-base", "{detail_title}" }
+                                p { class: "text-slate-400 text-xs", "{detail_desc}" }
                             }
                             if detail_needs_agent_id {
                                 div { class: "space-y-1.5",
-                                    label { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "Agent ID" }
+                                    label { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "Agent ID" }
                                     input {
-                                        class: "w-full bg-[#16171d] text-gray-200 text-sm border border-[#272833] rounded-md px-3 py-2 outline-none focus:border-[#ff7c5c]",
+                                        class: "w-full bg-[#090d16] text-slate-200 text-sm border border-[#1e293b] rounded-md px-3 py-2 outline-none focus:border-[#ff7c5c]",
                                         placeholder: "agent-xxx...",
                                         value: "{agent_id_input}",
                                         oninput: move |e| agent_id_input.set(e.value().clone()),
@@ -314,9 +314,9 @@ pub fn CodeView() -> Element {
                             }
                             if detail_supports_body {
                                 div { class: "space-y-1.5",
-                                    label { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "Request Body" }
+                                    label { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "Request Body" }
                                     textarea {
-                                        class: "w-full bg-[#16171d] text-gray-200 text-xs font-mono border border-[#272833] rounded-md px-3 py-2 outline-none focus:border-[#ff7c5c] resize-none h-28",
+                                        class: "w-full bg-[#090d16] text-slate-200 text-xs font-mono border border-[#1e293b] rounded-md px-3 py-2 outline-none focus:border-[#ff7c5c] resize-none h-28",
                                         placeholder: "{{}}",
                                         value: "{request_body}",
                                         oninput: move |e| request_body.set(e.value().clone()),
@@ -326,9 +326,9 @@ pub fn CodeView() -> Element {
                             button {
                                 class: {
                                     if is_sending() {
-                                        "bg-[#ff7c5c]/50 text-white text-xs font-semibold px-5 py-2 rounded-lg cursor-not-allowed"
+                                        "bg-[#ff7c5c]/50 text-slate-100 text-xs font-semibold px-5 py-2 rounded-lg cursor-not-allowed"
                                     } else {
-                                        "bg-[#ff7c5c] hover:bg-[#e26a4f] text-white text-xs font-semibold px-5 py-2 rounded-lg transition"
+                                        "bg-[#ff7c5c] hover:bg-[#e26a4f] text-slate-100 text-xs font-semibold px-5 py-2 rounded-lg transition"
                                     }
                                 },
                                 disabled: is_sending(),
@@ -372,14 +372,14 @@ pub fn CodeView() -> Element {
                             if !response_output().is_empty() {
                                 div { class: "space-y-2",
                                     div { class: "flex items-center justify-between",
-                                        h3 { class: "text-xs font-semibold text-white", "Response" }
+                                        h3 { class: "text-xs font-semibold text-slate-100", "Response" }
                                         button {
-                                            class: "text-[10px] text-gray-500 hover:text-white transition",
+                                            class: "text-[10px] text-slate-500 hover:text-slate-100 transition",
                                             onclick: move |_| response_output.set(String::new()),
                                             "Clear"
                                         }
                                     }
-                                    pre { class: "bg-[#0d0e12] border border-[#272833] rounded-xl p-4 text-xs font-mono text-gray-300 overflow-x-auto max-h-96 overflow-y-auto whitespace-pre-wrap",
+                                    pre { class: "bg-[#0d0e12] border border-[#1e293b] rounded-xl p-4 text-xs font-mono text-slate-300 overflow-x-auto max-h-96 overflow-y-auto whitespace-pre-wrap",
                                         "{response_output}"
                                     }
                                 }
@@ -389,8 +389,8 @@ pub fn CodeView() -> Element {
                         div { class: "flex-1 flex items-center justify-center",
                             div { class: "text-center space-y-3 select-none",
                                 div { class: "text-4xl text-gray-600", "\u{1f50c}" }
-                                h2 { class: "text-white font-semibold text-base", "Select an endpoint" }
-                                p { class: "text-gray-500 text-xs max-w-sm",
+                                h2 { class: "text-slate-100 font-semibold text-base", "Select an endpoint" }
+                                p { class: "text-slate-500 text-xs max-w-sm",
                                     "Choose an API endpoint from the left panel to send a test request."
                                 }
                             }

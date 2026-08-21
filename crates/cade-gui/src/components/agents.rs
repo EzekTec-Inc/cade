@@ -31,23 +31,23 @@ pub fn AgentsView() -> Element {
     let items: Vec<cade_api_types::AgentInfo> = agents().clone();
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                h1 { class: "text-lg font-semibold text-white", "Agents" }
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+                h1 { class: "text-lg font-semibold text-slate-100", "Agents" }
             }
             div { class: "p-10 space-y-4",
-                h2 { class: "text-sm font-semibold text-white", "Configured Agents" }
+                h2 { class: "text-sm font-semibold text-slate-100", "Configured Agents" }
                 if fetching() {
                     for _ in 0..3 {
-                        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5 animate-pulse",
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
                             div { class: "h-4 bg-[#272833] rounded w-1/4 mb-3" }
                             div { class: "h-3 bg-[#272833] rounded w-1/2 mb-2" }
                             div { class: "h-3 bg-[#272833] rounded w-1/3" }
                         }
                     }
                 } else if items.is_empty() {
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-8 text-center",
-                        p { class: "text-gray-500 text-sm", "No agents configured." }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center",
+                        p { class: "text-slate-500 text-sm", "No agents configured." }
                     }
                 } else {
                     {items.into_iter().map(|a| {
@@ -56,7 +56,7 @@ pub fn AgentsView() -> Element {
                         let provider = a.provider.clone().unwrap_or_else(|| "\u{2014}".to_string());
                         rsx! {
                             div {
-                                class: "bg-[#16171d] border border-[#272833] rounded-xl p-5 flex items-center justify-between hover:border-[#373840] transition cursor-pointer",
+                                class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 flex items-center justify-between hover:border-[#373840] transition cursor-pointer",
                                 onclick: move |_| {
                                     let mut st = use_context::<AppState>();
                                     st.selected_agent.set(Some(a.clone()));
@@ -64,15 +64,15 @@ pub fn AgentsView() -> Element {
                                 },
                                 div { class: "flex flex-col space-y-1",
                                     div { class: "flex items-center space-x-3",
-                                        span { class: "text-white font-semibold text-sm", "{name}" }
+                                        span { class: "text-slate-100 font-semibold text-sm", "{name}" }
                                     }
-                                    div { class: "flex items-center space-x-3 text-xs text-gray-400",
+                                    div { class: "flex items-center space-x-3 text-xs text-slate-400",
                                         span { "{provider}" }
                                         span { "\u{2022}" }
-                                        span { class: "font-mono text-gray-500", "{model}" }
+                                        span { class: "font-mono text-slate-500", "{model}" }
                                     }
                                 }
-                                span { class: "text-gray-500 text-xs", "\u{2192} Chat" }
+                                span { class: "text-slate-500 text-xs", "\u{2192} Chat" }
                             }
                         }
                     })}

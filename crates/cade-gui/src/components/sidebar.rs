@@ -8,58 +8,57 @@ pub fn Sidebar() -> Element {
     let state = use_context::<AppState>();
 
     rsx! {
-        aside { class: "w-[240px] bg-[#0f1115] border-r border-[#1f222b] flex flex-col justify-between h-full select-none text-sm shrink-0",
+        aside { class: "w-[240px] bg-[#090d16] border-r border-[#1e293b] flex flex-col justify-between h-full select-none text-sm shrink-0 font-sans",
             div { class: "flex flex-col",
                 // Top Brand Header
-                div { class: "p-4 flex items-center justify-between border-b border-[#1f222b]",
-                    div { class: "flex items-center space-x-2",
-                        svg { class: "w-5 h-5 text-white fill-current", view_box: "0 0 24 24",
-                            rect { x: "4", y: "4", width: "16", height: "16", rx: "3", fill: "#ff7c5c" }
-                            rect { x: "8", y: "8", width: "8", height: "8", rx: "1.5", fill: "#0f1115" }
+                div { class: "p-4 flex items-center justify-between border-b border-[#1e293b]/70",
+                    div { class: "flex items-center space-x-2.5",
+                        div { class: "w-6 h-6 rounded bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shadow-sm shadow-orange-500/20",
+                            span { class: "text-white font-mono font-bold text-xs", "C" }
                         }
-                        span { class: "font-semibold text-[15px] tracking-tight text-[#e5e7eb]", "CADE" }
-                        span { class: "bg-[#1f222b] text-[10px] text-gray-400 px-1.5 py-0.5 rounded font-medium", "Beta" }
+                        span { class: "font-semibold text-sm tracking-tight text-slate-100", "CADE" }
+                        span { class: "bg-slate-800 text-[10px] text-slate-400 px-1.5 py-0.5 rounded font-mono font-medium border border-slate-700", "v0.2" }
                     }
                 }
 
                 // Project Selector Dropdown
                 div { class: "p-3",
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-md p-2 flex items-center justify-between cursor-pointer hover:bg-[#1f212a] transition duration-150",
-                        div { class: "flex items-center space-x-2",
-                            span { class: "text-gray-400 text-xs", "\u{229e}" }
-                            span { class: "font-medium text-xs text-gray-200", "Default Project" }
+                    div { class: "bg-[#0f172a] border border-[#1e293b] rounded-lg p-2.5 flex items-center justify-between cursor-pointer hover:border-slate-600 transition-colors duration-150 shadow-sm",
+                        div { class: "flex items-center space-x-2.5",
+                            span { class: "text-slate-400 text-xs", "⊞" }
+                            span { class: "font-medium text-xs text-slate-200", "Default Workspace" }
                         }
-                        span { class: "text-gray-500 text-[10px]", "\u{25bc}" }
+                        span { class: "text-slate-500 text-[10px]", "▼" }
                     }
                 }
 
                 // Main navigation list
-                nav { class: "px-2 space-y-0.5",
-                    // Dashboard Group
-                    div { class: "text-[10px] font-bold text-gray-500 px-3 pt-3 pb-1 tracking-wider uppercase", "Dashboard" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Dashboard, icon: "\u{1f39b}", label: "Dashboard" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Code, icon: "\u{2328}", label: "Code" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Chat, icon: "\u{1f4ac}", label: "Chat" }
+                nav { class: "px-2.5 space-y-0.5",
+                    // Overview Group
+                    div { class: "text-[10px] font-bold text-slate-500 px-3 pt-3 pb-1 tracking-wider uppercase", "Overview" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Dashboard, icon: "🎛", label: "Dashboard" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Code, icon: "⌨", label: "Code" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Chat, icon: "💬", label: "Chat" }
 
-                    // Development Group
-                    div { class: "text-[10px] font-bold text-gray-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Development" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Agents, icon: "\u{1f916}", label: "Agents" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Logs, icon: "\u{1f4cb}", label: "Logs" }
+                    // Agents & Workflows Group
+                    div { class: "text-[10px] font-bold text-slate-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Development" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Agents, icon: "🤖", label: "Agents" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Logs, icon: "📋", label: "Event Logs" }
 
                     // Resources Group
-                    div { class: "text-[10px] font-bold text-gray-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Resources" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::MemoryBlocks, icon: "\u{1f9e0}", label: "Memory blocks" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Tools, icon: "\u{1f6e0}", label: "Tools" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Models, icon: "\u{2699}", label: "Models" }
-                    nav_item { active_page: state.active_page, page: SelectedPage::Providers, icon: "\u{1f4e1}", label: "Providers" }
+                    div { class: "text-[10px] font-bold text-slate-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Resources" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::MemoryBlocks, icon: "🧠", label: "Memory Blocks" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Tools, icon: "🛠", label: "Tools & Approvals" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Models, icon: "⚙", label: "Models" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Providers, icon: "📡", label: "Providers" }
                 }
             }
 
             // Bottom controls
-            div { class: "p-2 border-t border-[#1f222b] space-y-0.5",
-                nav_item { active_page: state.active_page, page: SelectedPage::ApiKeys, icon: "\u{1f511}", label: "API Keys" }
-                nav_item { active_page: state.active_page, page: SelectedPage::Usage, icon: "\u{1f4ca}", label: "Usage" }
-                nav_item { active_page: state.active_page, page: SelectedPage::Settings, icon: "\u{2699}", label: "Settings" }
+            div { class: "p-2.5 border-t border-[#1e293b]/70 space-y-0.5",
+                nav_item { active_page: state.active_page, page: SelectedPage::ApiKeys, icon: "🔑", label: "API Keys" }
+                nav_item { active_page: state.active_page, page: SelectedPage::Usage, icon: "📊", label: "Telemetry & Cost" }
+                nav_item { active_page: state.active_page, page: SelectedPage::Settings, icon: "⚙", label: "Settings" }
             }
         }
     }
@@ -75,9 +74,9 @@ fn nav_item(
 ) -> Element {
     let is_active = active_page() == page;
     let cls = if is_active {
-        "flex items-center justify-between px-3 py-2 rounded-md bg-[#16171d] text-white font-medium cursor-pointer"
+        "flex items-center justify-between px-3 py-2 rounded-lg bg-slate-800/90 text-sky-400 font-medium cursor-pointer border border-slate-700 shadow-sm transition-all"
     } else {
-        "flex items-center justify-between px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-[#111218] cursor-pointer"
+        "flex items-center justify-between px-3 py-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800/40 cursor-pointer transition-colors duration-150"
     };
 
     rsx! {
@@ -86,7 +85,10 @@ fn nav_item(
             onclick: move |_| active_page.set(page),
             div { class: "flex items-center space-x-2.5",
                 span { class: "text-sm", "{icon}" }
-                span { "{label}" }
+                span { class: "text-xs", "{label}" }
+            }
+            if is_active {
+                span { class: "w-1.5 h-1.5 rounded-full bg-sky-400" }
             }
         }
     }

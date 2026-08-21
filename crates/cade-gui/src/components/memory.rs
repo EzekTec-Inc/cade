@@ -47,23 +47,23 @@ pub fn MemoryBlocksView() -> Element {
     let items: Vec<serde_json::Value> = blocks().clone();
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                h1 { class: "text-lg font-semibold text-white", "Memory Blocks" }
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+                h1 { class: "text-lg font-semibold text-slate-100", "Memory Blocks" }
             }
             div { class: "p-10 space-y-4",
-                h2 { class: "text-sm font-semibold text-white", "Agent Memory" }
+                h2 { class: "text-sm font-semibold text-slate-100", "Agent Memory" }
                 if fetching() {
                     for _ in 0..3 {
-                        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5 animate-pulse",
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
                             div { class: "h-4 bg-[#272833] rounded w-1/3 mb-3" }
                             div { class: "h-3 bg-[#272833] rounded w-full mb-2" }
                             div { class: "h-3 bg-[#272833] rounded w-2/3" }
                         }
                     }
                 } else if items.is_empty() {
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-8 text-center",
-                        p { class: "text-gray-500 text-sm", "No memory blocks found for this agent." }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center",
+                        p { class: "text-slate-500 text-sm", "No memory blocks found for this agent." }
                     }
                 } else {
                     {items.into_iter().map(|b| {
@@ -73,15 +73,15 @@ pub fn MemoryBlocksView() -> Element {
                         let tier_color = match tier.as_str() {
                             "pinned" => "text-purple-400",
                             "long" => "text-blue-400",
-                            _ => "text-gray-400",
+                            _ => "text-slate-400",
                         };
                         rsx! {
-                            div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5",
+                            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5",
                                 div { class: "flex items-center justify-between mb-2",
-                                    span { class: "text-white font-semibold text-sm", "{label}" }
+                                    span { class: "text-slate-100 font-semibold text-sm", "{label}" }
                                     span { class: "text-[10px] font-bold {tier_color} uppercase tracking-wider", "{tier}" }
                                 }
-                                p { class: "text-gray-300 text-xs whitespace-pre-wrap font-mono line-clamp-4", "{value}" }
+                                p { class: "text-slate-300 text-xs whitespace-pre-wrap font-mono line-clamp-4", "{value}" }
                             }
                         }
                     })}

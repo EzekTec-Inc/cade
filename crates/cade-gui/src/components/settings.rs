@@ -74,18 +74,18 @@ pub fn SettingsView() -> Element {
             .unwrap_or_default();
 
         rsx! {
-            div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 space-y-4",
+            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 space-y-4",
                 config_row { label: "Version", value: version }
                 config_row { label: "Provider", value: provider }
                 config_row { label: "Default Model", value: default_model }
                 if !available.is_empty() {
                     div { class: "flex items-center justify-between",
-                        span { class: "text-gray-400 text-xs", "Available Providers" }
+                        span { class: "text-slate-400 text-xs", "Available Providers" }
                         div { class: "flex gap-1.5",
                             {available.iter().map(|p| {
                                 let name = p.clone();
                                 rsx! {
-                                    span { class: "bg-[#1f212a] text-gray-300 text-[10px] border border-[#272833] rounded px-1.5 py-0.5 font-mono", "{name}" }
+                                    span { class: "bg-[#1f212a] text-slate-300 text-[10px] border border-[#1e293b] rounded px-1.5 py-0.5 font-mono", "{name}" }
                                 }
                             })}
                         }
@@ -103,16 +103,16 @@ pub fn SettingsView() -> Element {
     };
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                h1 { class: "text-lg font-semibold text-white", "Settings" }
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+                h1 { class: "text-lg font-semibold text-slate-100", "Settings" }
             }
 
             div { class: "p-10 space-y-8 max-w-3xl",
                 div { class: "space-y-3",
-                    h2 { class: "text-sm font-semibold text-white", "Server Configuration" }
+                    h2 { class: "text-sm font-semibold text-slate-100", "Server Configuration" }
                     if fetching() {
-                        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 animate-pulse",
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 animate-pulse",
                             div { class: "h-4 bg-[#272833] rounded w-1/3 mb-3" }
                             div { class: "h-3 bg-[#272833] rounded w-1/2 mb-2" }
                             div { class: "h-3 bg-[#272833] rounded w-2/3" }
@@ -123,15 +123,15 @@ pub fn SettingsView() -> Element {
                 }
 
                 div { class: "space-y-3",
-                    h2 { class: "text-sm font-semibold text-white", "Agents" }
+                    h2 { class: "text-sm font-semibold text-slate-100", "Agents" }
                     if fetching() {
-                        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 animate-pulse",
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 animate-pulse",
                             div { class: "h-4 bg-[#272833] rounded w-1/4 mb-3" }
                             div { class: "h-3 bg-[#272833] rounded w-1/2" }
                         }
                     } else if agents().is_empty() {
-                        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 text-center",
-                            p { class: "text-gray-500 text-sm", "No agents configured." }
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 text-center",
+                            p { class: "text-slate-500 text-sm", "No agents configured." }
                         }
                     } else {
                         div { class: "space-y-2",
@@ -143,8 +143,8 @@ pub fn SettingsView() -> Element {
                 }
 
                 div { class: "space-y-3",
-                    h2 { class: "text-sm font-semibold text-white", "Authentication" }
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 space-y-3",
+                    h2 { class: "text-sm font-semibold text-slate-100", "Authentication" }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 space-y-3",
                         config_row { label: "API Key", value: masked }
                         p { class: "text-gray-600 text-xs", "The API key is stored in-memory for the session." }
                     }
@@ -158,8 +158,8 @@ pub fn SettingsView() -> Element {
 fn config_row(label: String, value: String) -> Element {
     rsx! {
         div { class: "flex items-center justify-between",
-            span { class: "text-gray-400 text-xs", "{label}" }
-            span { class: "text-white text-xs font-mono", "{value}" }
+            span { class: "text-slate-400 text-xs", "{label}" }
+            span { class: "text-slate-100 text-xs font-mono", "{value}" }
         }
     }
 }
@@ -175,13 +175,13 @@ fn agent_settings_card(agent: cade_api_types::AgentInfo, api_key: Signal<String>
     let agent_name = agent.name.clone();
 
     rsx! {
-        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5",
+        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5",
             div { class: "flex items-center justify-between",
                 div { class: "flex flex-col space-y-1",
                     if editing() {
                         div { class: "flex items-center space-x-2",
                             input {
-                                class: "bg-[#1f212a] text-white text-sm border border-[#272833] rounded-md px-2 py-1 outline-none focus:border-[#ff7c5c]",
+                                class: "bg-[#1f212a] text-slate-100 text-sm border border-[#1e293b] rounded-md px-2 py-1 outline-none focus:border-[#ff7c5c]",
                                 value: "{edit_name}",
                                 oninput: move |e| edit_name.set(e.value().clone()),
                                 onkeydown: {
@@ -200,7 +200,7 @@ fn agent_settings_card(agent: cade_api_types::AgentInfo, api_key: Signal<String>
                                 }
                             }
                             button {
-                                class: "text-[10px] bg-[#ff7c5c] text-white rounded px-2 py-1 hover:bg-[#e26a4f] transition",
+                                class: "text-[10px] bg-[#ff7c5c] text-slate-100 rounded px-2 py-1 hover:bg-[#e26a4f] transition",
                                 disabled: saving(),
                                 onclick: {
                                     let aid = agent_id.clone();
@@ -215,15 +215,15 @@ fn agent_settings_card(agent: cade_api_types::AgentInfo, api_key: Signal<String>
                                 if saving() { "..." } else { "Save" }
                             }
                             button {
-                                class: "text-[10px] text-gray-400 hover:text-white transition",
+                                class: "text-[10px] text-slate-400 hover:text-slate-100 transition",
                                 onclick: move |_| editing.set(false),
                                 "Cancel"
                             }
                         }
                     } else {
-                        span { class: "text-white font-semibold text-sm", "{agent.name}" }
+                        span { class: "text-slate-100 font-semibold text-sm", "{agent.name}" }
                     }
-                    div { class: "flex items-center space-x-2 text-xs text-gray-500",
+                    div { class: "flex items-center space-x-2 text-xs text-slate-500",
                         if let Some(ref m) = agent.model {
                             span { class: "font-mono", "{m}" }
                         }
@@ -235,7 +235,7 @@ fn agent_settings_card(agent: cade_api_types::AgentInfo, api_key: Signal<String>
                 }
                 if !editing() {
                     button {
-                        class: "text-gray-500 hover:text-white text-xs transition",
+                        class: "text-slate-500 hover:text-slate-100 text-xs transition",
                         onclick: move |_| editing.set(true),
                         "Edit"
                     }

@@ -162,12 +162,12 @@ pub fn ProvidersView() -> Element {
     };
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text",
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
             // Header
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                h1 { class: "text-lg font-semibold text-white", "Providers" }
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+                h1 { class: "text-lg font-semibold text-slate-100", "Providers" }
                 button {
-                    class: "bg-[#ff7c5c] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#e26a4f] transition",
+                    class: "bg-[#ff7c5c] text-slate-100 text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#e26a4f] transition",
                     onclick: move |_| show_add.set(!show_add()),
                     if show_add() { "Cancel" } else { "+ Add provider" }
                 }
@@ -176,8 +176,8 @@ pub fn ProvidersView() -> Element {
             div { class: "p-10 space-y-6",
                 // Add provider form
                 if show_add() {
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 space-y-4",
-                        h2 { class: "text-sm font-semibold text-white", "New Provider" }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 space-y-4",
+                        h2 { class: "text-sm font-semibold text-slate-100", "New Provider" }
 
                         if !error_msg().is_empty() {
                             div { class: "bg-red-500/10 border border-red-500/40 rounded-lg p-3 text-xs text-red-400",
@@ -188,10 +188,10 @@ pub fn ProvidersView() -> Element {
                         // Preset quick-select
                             if !preset_buttons.is_empty() {
                                 div { class: "flex flex-wrap gap-2",
-                                    span { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase self-center", "Presets:" }
+                                    span { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase self-center", "Presets:" }
                                     for (label, p) in preset_buttons {
                                         button {
-                                            class: "text-xs bg-[#1f212a] text-gray-300 border border-[#272833] rounded-md px-2.5 py-1 hover:bg-[#272a35] hover:text-white transition",
+                                            class: "text-xs bg-[#1f212a] text-slate-300 border border-[#1e293b] rounded-md px-2.5 py-1 hover:bg-[#272a35] hover:text-slate-100 transition",
                                             onclick: move |_| apply_preset(p.clone()),
                                             "{label}"
                                         }
@@ -201,36 +201,36 @@ pub fn ProvidersView() -> Element {
 
                         div { class: "grid grid-cols-2 gap-4",
                             div { class: "flex flex-col space-y-1.5",
-                                label { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "Name *" }
+                                label { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "Name *" }
                                 input {
-                                    class: "bg-[#1f212a] text-white text-sm rounded-md px-3 py-2 outline-none border border-[#272833]",
+                                    class: "bg-[#1f212a] text-slate-100 text-sm rounded-md px-3 py-2 outline-none border border-[#1e293b]",
                                     placeholder: "my-provider",
                                     value: "{form_name}",
                                     oninput: move |e| form_name.set(e.value().clone()),
                                 }
                             }
                             div { class: "flex flex-col space-y-1.5",
-                                label { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "Kind *" }
+                                label { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "Kind *" }
                                 input {
-                                    class: "bg-[#1f212a] text-white text-sm rounded-md px-3 py-2 outline-none border border-[#272833]",
+                                    class: "bg-[#1f212a] text-slate-100 text-sm rounded-md px-3 py-2 outline-none border border-[#1e293b]",
                                     placeholder: "openrouter / openai / groq / custom",
                                     value: "{form_kind}",
                                     oninput: move |e| form_kind.set(e.value().clone()),
                                 }
                             }
                             div { class: "flex flex-col space-y-1.5",
-                                label { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "API Key" }
+                                label { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "API Key" }
                                 input {
-                                    class: "bg-[#1f212a] text-white text-sm rounded-md px-3 py-2 outline-none border border-[#272833]",
+                                    class: "bg-[#1f212a] text-slate-100 text-sm rounded-md px-3 py-2 outline-none border border-[#1e293b]",
                                     placeholder: "sk-...",
                                     value: "{form_api_key_val}",
                                     oninput: move |e| form_api_key_val.set(e.value().clone()),
                                 }
                             }
                             div { class: "flex flex-col space-y-1.5",
-                                label { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "Base URL" }
+                                label { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "Base URL" }
                                 input {
-                                    class: "bg-[#1f212a] text-white text-sm rounded-md px-3 py-2 outline-none border border-[#272833]",
+                                    class: "bg-[#1f212a] text-slate-100 text-sm rounded-md px-3 py-2 outline-none border border-[#1e293b]",
                                     placeholder: "https://api.openai.com/v1",
                                     value: "{form_base_url}",
                                     oninput: move |e| form_base_url.set(e.value().clone()),
@@ -239,7 +239,7 @@ pub fn ProvidersView() -> Element {
                         }
 
                         button {
-                            class: "self-start bg-[#ff7c5c] text-white text-xs font-semibold px-6 py-2 rounded-lg hover:bg-[#e26a4f] transition",
+                            class: "self-start bg-[#ff7c5c] text-slate-100 text-xs font-semibold px-6 py-2 rounded-lg hover:bg-[#e26a4f] transition",
                             onclick: move |_| add_provider(),
                             "Save Provider"
                         }
@@ -247,11 +247,11 @@ pub fn ProvidersView() -> Element {
                 }
 
                 // Provider list header
-                h2 { class: "text-sm font-semibold text-white", "Configured Providers" }
+                h2 { class: "text-sm font-semibold text-slate-100", "Configured Providers" }
                 if fetching() {
                     div { class: "space-y-3",
                         for _ in 0..2 {
-                            div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5 animate-pulse",
+                            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
                                 div { class: "h-4 bg-[#272833] rounded w-1/3 mb-3" }
                                 div { class: "h-3 bg-[#272833] rounded w-1/2 mb-2" }
                                 div { class: "h-3 bg-[#272833] rounded w-2/3" }
@@ -259,8 +259,8 @@ pub fn ProvidersView() -> Element {
                         }
                     }
                 } else if providers().is_empty() {
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-8 text-center",
-                        p { class: "text-gray-500 text-sm", "No providers configured yet." }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center",
+                        p { class: "text-slate-500 text-sm", "No providers configured yet." }
                         p { class: "text-gray-600 text-xs mt-1", "Add one using the form above." }
                     }
                 } else {
@@ -292,17 +292,17 @@ fn provider_card(data: serde_json::Value, remove: EventHandler<String>) -> Eleme
     let n = name.to_string();
 
     rsx! {
-        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5 flex items-center justify-between",
+        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 flex items-center justify-between",
             div { class: "flex flex-col space-y-1",
                 div { class: "flex items-center space-x-3",
-                    span { class: "text-white font-semibold text-sm", "{name}" }
+                    span { class: "text-slate-100 font-semibold text-sm", "{name}" }
                     if enabled {
                         span { class: "text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded", "active" }
                     } else {
-                        span { class: "text-[10px] bg-gray-500/10 text-gray-400 border border-gray-500/30 px-1.5 py-0.5 rounded", "disabled" }
+                        span { class: "text-[10px] bg-gray-500/10 text-slate-400 border border-gray-500/30 px-1.5 py-0.5 rounded", "disabled" }
                     }
                 }
-                div { class: "flex items-center space-x-3 text-xs text-gray-400",
+                div { class: "flex items-center space-x-3 text-xs text-slate-400",
                     span { "{kind}" }
                     if !base_url.is_empty() {
                         span { "\u{2022}" }
@@ -310,13 +310,13 @@ fn provider_card(data: serde_json::Value, remove: EventHandler<String>) -> Eleme
                     }
                 }
                 if !model.is_empty() {
-                    div { class: "text-xs text-gray-500",
+                    div { class: "text-xs text-slate-500",
                         span { "Model: {model}" }
                     }
                 }
             }
             button {
-                class: "text-gray-500 hover:text-red-400 text-sm px-2 py-1 rounded hover:bg-red-500/10 transition",
+                class: "text-slate-500 hover:text-red-400 text-sm px-2 py-1 rounded hover:bg-red-500/10 transition",
                 onclick: move |_| remove.call(n.clone()),
                 "\u{2716} Delete"
             }

@@ -87,29 +87,29 @@ pub fn ToolsView() -> Element {
     };
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                h1 { class: "text-lg font-semibold text-white", "Tools & Approvals" }
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+                h1 { class: "text-lg font-semibold text-slate-100", "Tools & Approvals" }
             }
 
             div { class: "p-10 space-y-10",
                 // ── Section 1: Headless Approvals Queue ─────────────────────────
                 div { class: "space-y-4",
                     div { class: "flex items-center space-x-3",
-                        h2 { class: "text-sm font-semibold text-white", "Human-in-the-Loop Approvals" }
+                        h2 { class: "text-sm font-semibold text-slate-100", "Human-in-the-Loop Approvals" }
                         if !pending_approvals.is_empty() {
                             span { class: "text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 rounded-full px-2 py-0.5 font-bold animate-pulse",
                                 "{pending_approvals.len()} Pending"
                             }
                         }
                     }
-                    p { class: "text-xs text-gray-500 max-w-2xl leading-relaxed",
+                    p { class: "text-xs text-slate-500 max-w-2xl leading-relaxed",
                         "When background subagents request permissions to modify files or execute shell commands, their operations are held here until authorized."
                     }
 
                     if pending_approvals.is_empty() {
-                        div { class: "bg-[#16171d]/30 border border-[#272833]/50 rounded-xl p-6 text-center select-none",
-                            p { class: "text-gray-500 text-xs", "No pending approvals. All background systems running smoothly." }
+                        div { class: "bg-[#090d16]/30 border border-[#1e293b]/50 rounded-xl p-6 text-center select-none",
+                            p { class: "text-slate-500 text-xs", "No pending approvals. All background systems running smoothly." }
                         }
                     } else {
                         div { class: "grid grid-cols-1 gap-4",
@@ -121,19 +121,19 @@ pub fn ToolsView() -> Element {
                                 let id_app = id.clone();
                                 let id_deny = id.clone();
                                 rsx! {
-                                    div { class: "bg-[#16171d] border border-yellow-500/20 hover:border-yellow-500/40 rounded-xl p-5 transition duration-150 flex flex-col md:flex-row justify-between items-start md:items-center gap-4",
+                                    div { class: "bg-[#090d16] border border-yellow-500/20 hover:border-yellow-500/40 rounded-xl p-5 transition duration-150 flex flex-col md:flex-row justify-between items-start md:items-center gap-4",
                                         div { class: "space-y-1.5 flex-1 min-w-0",
                                             div { class: "flex items-center space-x-2.5",
                                                 span { class: "text-yellow-500 text-xs font-bold uppercase tracking-wider", "Pending Authorization" }
-                                                span { class: "text-[10px] text-gray-500 font-mono", "ID: {id}" }
+                                                span { class: "text-[10px] text-slate-500 font-mono", "ID: {id}" }
                                             }
-                                            h3 { class: "text-white font-semibold text-sm",
+                                            h3 { class: "text-slate-100 font-semibold text-sm",
                                                 "Subagent "
                                                 span { class: "text-purple-400 font-mono", "[{subagent_id}]" }
                                                 " requests "
                                                 span { class: "text-emerald-400 font-mono", "{tool_name}" }
                                             }
-                                            pre { class: "bg-[#0f1115] text-[11px] text-gray-400 font-mono p-3 rounded-lg overflow-x-auto border border-[#272833] max-w-full",
+                                            pre { class: "bg-[#040711] text-[11px] text-slate-400 font-mono p-3 rounded-lg overflow-x-auto border border-[#1e293b] max-w-full",
                                                 "{arguments}"
                                             }
                                         }
@@ -157,18 +157,18 @@ pub fn ToolsView() -> Element {
                 }
 
                 // ── Section 2: MCP Servers List ─────────────────────────────────
-                div { class: "space-y-4 pt-6 border-t border-[#111218]",
-                    h2 { class: "text-sm font-semibold text-white", "MCP Servers & Tools" }
+                div { class: "space-y-4 pt-6 border-t border-[#1e293b]/70",
+                    h2 { class: "text-sm font-semibold text-slate-100", "MCP Servers & Tools" }
                     if fetching() {
                         for _ in 0..2 {
-                            div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5 animate-pulse",
+                            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
                                 div { class: "h-4 bg-[#272833] rounded w-1/4 mb-3" }
                                 div { class: "h-3 bg-[#272833] rounded w-1/2" }
                             }
                         }
                     } else if items.is_empty() {
-                        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-8 text-center select-none",
-                            p { class: "text-gray-500 text-sm", "No MCP servers configured." }
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center select-none",
+                            p { class: "text-slate-500 text-sm", "No MCP servers configured." }
                         }
                     } else {
                         {items.into_iter().map(|s| {
@@ -176,11 +176,11 @@ pub fn ToolsView() -> Element {
                             let tools = s.get("tools").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                             let tool_count = tools.len();
                             rsx! {
-                                div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-5",
+                                div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5",
                                     div { class: "flex items-center justify-between mb-3 select-none",
                                         div { class: "flex items-center space-x-3",
-                                            span { class: "text-white font-semibold text-sm", "{name}" }
-                                            span { class: "text-[10px] bg-[#1f212a] text-gray-400 border border-[#272833] rounded px-1.5 py-0.5", "{tool_count} tools" }
+                                            span { class: "text-slate-100 font-semibold text-sm", "{name}" }
+                                            span { class: "text-[10px] bg-[#1f212a] text-slate-400 border border-[#1e293b] rounded px-1.5 py-0.5", "{tool_count} tools" }
                                         }
                                     }
                                     if !tools.is_empty() {
@@ -189,10 +189,10 @@ pub fn ToolsView() -> Element {
                                                 let tool_name = t.get("name").and_then(|v| v.as_str()).unwrap_or("?").to_string();
                                                 let tool_desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                 rsx! {
-                                                    div { class: "bg-[#1f212a] border border-[#272833] rounded-lg px-3 py-2 text-xs flex-1 min-w-[200px] max-w-sm",
+                                                    div { class: "bg-[#1f212a] border border-[#1e293b] rounded-lg px-3 py-2 text-xs flex-1 min-w-[200px] max-w-sm",
                                                         div { class: "text-purple-400 font-medium font-mono", "{tool_name}" }
                                                         if !tool_desc.is_empty() {
-                                                            div { class: "text-gray-500 mt-1 line-clamp-2 leading-relaxed", "{tool_desc}" }
+                                                            div { class: "text-slate-500 mt-1 line-clamp-2 leading-relaxed", "{tool_desc}" }
                                                         }
                                                     }
                                                 }

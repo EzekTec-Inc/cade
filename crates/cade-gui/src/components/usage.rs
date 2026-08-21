@@ -59,7 +59,7 @@ pub fn UsageView() -> Element {
         rsx! {
             div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
                 for _ in 0..3 {
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 animate-pulse",
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 animate-pulse",
                         div { class: "h-4 bg-[#272833] rounded w-1/3 mb-3" }
                         div { class: "h-8 bg-[#272833] rounded w-1/2" }
                     }
@@ -79,26 +79,26 @@ pub fn UsageView() -> Element {
 
             rsx! {
                 div { class: "space-y-3",
-                    h2 { class: "text-sm font-semibold text-white", "Token Usage (Lifetime)" }
+                    h2 { class: "text-sm font-semibold text-slate-100", "Token Usage (Lifetime)" }
                     div { class: "grid grid-cols-1 md:grid-cols-4 gap-4",
                         metric_card { label: "Input Tokens", value: format_tokens(input_tokens), color: "text-blue-400" }
                         metric_card { label: "Output Tokens", value: format_tokens(output_tokens), color: "text-emerald-400" }
                         metric_card { label: "Cache Read", value: format_tokens(cache_read), color: "text-purple-400" }
                         metric_card { label: "Cache Write", value: format_tokens(cache_write), color: "text-yellow-400" }
                     }
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6",
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6",
                         div { class: "flex items-center justify-between",
-                            span { class: "text-sm font-semibold text-white", "Total Tokens" }
-                            span { class: "text-lg font-bold text-white", "{format_tokens(total_tokens)}" }
+                            span { class: "text-sm font-semibold text-slate-100", "Total Tokens" }
+                            span { class: "text-lg font-bold text-slate-100", "{format_tokens(total_tokens)}" }
                         }
                     }
                 }
                 div { class: "space-y-3",
-                    h2 { class: "text-sm font-semibold text-white", "Consolidation" }
+                    h2 { class: "text-sm font-semibold text-slate-100", "Consolidation" }
                     div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
-                        metric_card { label: "Consolidation Runs", value: consolidation_runs.to_string(), color: "text-gray-300" }
-                        metric_card { label: "Chars Summarised", value: format_chars(chars_summarised), color: "text-gray-300" }
-                        metric_card { label: "Chars Produced", value: format_chars(chars_produced), color: "text-gray-300" }
+                        metric_card { label: "Consolidation Runs", value: consolidation_runs.to_string(), color: "text-slate-300" }
+                        metric_card { label: "Chars Summarised", value: format_chars(chars_summarised), color: "text-slate-300" }
+                        metric_card { label: "Chars Produced", value: format_chars(chars_produced), color: "text-slate-300" }
                     }
                 }
             }
@@ -113,27 +113,27 @@ pub fn UsageView() -> Element {
 
             rsx! {
                 div { class: "space-y-3",
-                    h2 { class: "text-sm font-semibold text-white", "Context Window" }
-                    div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 space-y-4",
+                    h2 { class: "text-sm font-semibold text-slate-100", "Context Window" }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 space-y-4",
                         div { class: "flex items-center justify-between",
-                            span { class: "text-gray-400 text-xs", "Model" }
-                            span { class: "text-white text-xs font-mono", "{model}" }
+                            span { class: "text-slate-400 text-xs", "Model" }
+                            span { class: "text-slate-100 text-xs font-mono", "{model}" }
                         }
                         div { class: "flex items-center justify-between",
-                            span { class: "text-gray-400 text-xs", "Window Size" }
-                            span { class: "text-white text-xs font-mono", "{window_tokens / 1000}K tokens" }
+                            span { class: "text-slate-400 text-xs", "Window Size" }
+                            span { class: "text-slate-100 text-xs font-mono", "{window_tokens / 1000}K tokens" }
                         }
                         div { class: "flex items-center justify-between",
-                            span { class: "text-gray-400 text-xs", "Input Budget" }
-                            span { class: "text-white text-xs font-mono", "{format_chars(input_budget_chars)}" }
+                            span { class: "text-slate-400 text-xs", "Input Budget" }
+                            span { class: "text-slate-100 text-xs font-mono", "{format_chars(input_budget_chars)}" }
                         }
                         div { class: "flex items-center justify-between",
-                            span { class: "text-gray-400 text-xs", "System Overhead (chars)" }
-                            span { class: "text-white text-xs font-mono", "{format_chars(system_overhead_chars)}" }
+                            span { class: "text-slate-400 text-xs", "System Overhead (chars)" }
+                            span { class: "text-slate-100 text-xs font-mono", "{format_chars(system_overhead_chars)}" }
                         }
                         div { class: "flex items-center justify-between",
-                            span { class: "text-gray-400 text-xs", "System Overhead (tokens)" }
-                            span { class: "text-white text-xs font-mono", "{system_tokens} tokens" }
+                            span { class: "text-slate-400 text-xs", "System Overhead (tokens)" }
+                            span { class: "text-slate-100 text-xs font-mono", "{system_tokens} tokens" }
                         }
                     }
                 }
@@ -144,8 +144,8 @@ pub fn UsageView() -> Element {
             {metrics_section}
             {context_section}
             if metrics_data().is_none() && context_data().is_none() {
-                div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-8 text-center",
-                    p { class: "text-gray-500 text-sm", "No usage data available yet." }
+                div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center",
+                    p { class: "text-slate-500 text-sm", "No usage data available yet." }
                     p { class: "text-gray-600 text-xs mt-1", "Send some messages to an agent to see metrics." }
                 }
             }
@@ -153,10 +153,10 @@ pub fn UsageView() -> Element {
     };
 
     rsx! {
-        div { class: "flex-1 bg-[#0f1115] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#111218]",
-                h1 { class: "text-lg font-semibold text-white", "Usage & Metrics" }
-                span { class: "text-xs text-gray-500", "{agent_name}" }
+        div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+                h1 { class: "text-lg font-semibold text-slate-100", "Usage & Metrics" }
+                span { class: "text-xs text-slate-500", "{agent_name}" }
             }
 
             div { class: "p-10 space-y-6",
@@ -169,8 +169,8 @@ pub fn UsageView() -> Element {
 #[component]
 fn metric_card(label: String, value: String, color: String) -> Element {
     rsx! {
-        div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 space-y-2",
-            span { class: "text-[10px] font-bold text-gray-500 tracking-wider uppercase", "{label}" }
+        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 space-y-2",
+            span { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase", "{label}" }
             div { class: "text-xl font-bold {color}", "{value}" }
         }
     }

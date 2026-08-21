@@ -49,8 +49,8 @@ pub fn ChatView() -> Element {
                 api_key: state.api_key,
             }
 
-            div { class: "flex-1 flex flex-col justify-between bg-[#0f1115] h-full",
-                header { class: "px-6 py-4 flex items-center justify-between select-none border-b border-[#111218]",
+            div { class: "flex-1 flex flex-col justify-between bg-[#040711] h-full",
+                header { class: "px-6 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
                     span { class: "text-white font-medium text-sm", "Main chat" }
                 }
 
@@ -179,7 +179,7 @@ fn chat_sidebar(
         .collect();
 
     rsx! {
-        div { class: "w-[260px] bg-[#16171d] border-r border-[#272833] flex flex-col p-4 justify-between h-full select-none shrink-0",
+        div { class: "w-[260px] bg-[#090d16] border-r border-[#1e293b] flex flex-col p-4 justify-between h-full select-none shrink-0",
             div { class: "flex flex-col space-y-6",
                 div { class: "flex items-center space-x-3 p-2",
                     div { class: "w-8 h-8 rounded-lg bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_6px_rgba(236,72,153,0.3)] shrink-0" }
@@ -196,7 +196,7 @@ fn chat_sidebar(
                     if show_new() {
                         div { class: "flex flex-col space-y-2 px-3 pb-2",
                             input {
-                                class: "bg-[#1f212a] text-white text-xs rounded-md px-2 py-1.5 outline-none border border-[#272833]",
+                                class: "bg-[#1f212a] text-white text-xs rounded-md px-2 py-1.5 outline-none border border-[#1e293b]",
                                 placeholder: "Conversation title",
                                 value: "{new_title}",
                                 oninput: move |e| new_title.set(e.value().clone()),
@@ -207,7 +207,7 @@ fn chat_sidebar(
                                 }
                             }
                             button {
-                                class: "text-xs bg-[#ff7c5c] text-white rounded-md px-2 py-1.5 hover:bg-[#e26a4f] transition",
+                                class: "text-xs bg-sky-500 text-white rounded-md px-2 py-1.5 hover:bg-[#e26a4f] transition",
                                 onclick: move |_| create_conv(),
                                 "Create"
                             }
@@ -262,7 +262,7 @@ fn chat_sidebar(
                 }
 
                 // Checkpoints Timeline List
-                div { class: "flex flex-col space-y-1 pt-4 border-t border-[#272833]/30 overflow-y-auto max-h-[180px] hide-scrollbar",
+                div { class: "flex flex-col space-y-1 pt-4 border-t border-[#1e293b]/30 overflow-y-auto max-h-[180px] hide-scrollbar",
                     div { class: "text-[10px] font-bold text-gray-500 px-3 tracking-wider uppercase mb-1.5", "Checkpoints Timeline" }
                     if checkpoints().is_empty() {
                         div { class: "text-[10px] text-gray-500 px-3 italic select-none", "No checkpoints recorded." }
@@ -284,7 +284,7 @@ fn chat_sidebar(
                                             span { class: "text-xs font-medium truncate", "{title}" }
                                         }
                                         button {
-                                            class: "text-[9px] bg-[#ff7c5c]/10 text-[#ff7c5c] hover:bg-[#ff7c5c]/20 border border-[#ff7c5c]/10 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition shrink-0 select-none",
+                                            class: "text-[9px] bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-[#ff7c5c]/10 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition shrink-0 select-none",
                                             onclick: move |e| {
                                                 e.stop_propagation();
                                                 let api_act = api();
@@ -310,7 +310,7 @@ fn chat_sidebar(
                 }
             }
 
-            div { class: "p-2 border-t border-[#272833] flex items-center space-x-2.5 select-none",
+            div { class: "p-2 border-t border-[#1e293b] flex items-center space-x-2.5 select-none",
                 div { class: "w-7 h-7 rounded-full bg-orange-500 text-white text-xs flex items-center justify-center font-bold", "SE" }
                 span { class: "text-gray-400 text-xs", "{current_title}" }
             }
@@ -474,7 +474,7 @@ fn message_bubble(id: String) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm group relative",
+                div { class: "flex flex-col bg-[#090d16]/60 border border-[#1e293b] p-4 rounded-xl text-sm group relative",
                     div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
                     p { class: "text-gray-200 mt-1 whitespace-pre-wrap break-words", "{content_val}" }
                     div { class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition duration-150 select-none",
@@ -525,7 +525,7 @@ fn message_bubble(id: String) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#16171d]/60 border border-[#272833] p-4 rounded-xl text-sm group relative",
+                div { class: "flex flex-col bg-[#090d16]/60 border border-[#1e293b] p-4 rounded-xl text-sm group relative",
                     div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
                     if let Some(ref reasoning) = reasoning_val {
                         details { class: "mb-2",
@@ -617,14 +617,14 @@ fn input_area(
     };
 
     rsx! {
-        div { class: "p-6 bg-[#0f1115] border-t border-[#111218]",
-            div { class: "relative border border-[#272833] bg-[#16171d] rounded-xl p-4 flex flex-col space-y-2",
+        div { class: "p-6 bg-[#040711] border-t border-[#1e293b]/70",
+            div { class: "relative border border-[#1e293b] bg-[#090d16] rounded-xl p-4 flex flex-col space-y-2",
                 if show_suggestions() && !suggestions().is_empty() {
-                    div { class: "absolute bottom-full left-0 right-0 mb-2 bg-[#16171d] border border-[#272833] rounded-xl overflow-hidden shadow-2xl z-50 max-h-48 overflow-y-auto select-none",
+                    div { class: "absolute bottom-full left-0 right-0 mb-2 bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden shadow-2xl z-50 max-h-48 overflow-y-auto select-none",
                         {suggestions().into_iter().enumerate().map(|(idx, s)| {
                             let is_active = active_index() == idx;
                             let row_class = if is_active {
-                                "px-4 py-2 bg-[#ff7c5c]/10 text-white font-medium text-xs cursor-pointer flex items-center justify-between"
+                                "px-4 py-2 bg-sky-500/10 text-white font-medium text-xs cursor-pointer flex items-center justify-between"
                             } else {
                                 "px-4 py-2 hover:bg-[#1f212a] text-gray-400 text-xs cursor-pointer flex items-center justify-between"
                             };
@@ -739,7 +739,7 @@ fn input_area(
                         }
                     }
                 }
-                div { class: "flex items-center justify-between pt-2 border-t border-[#272833]/40 select-none",
+                div { class: "flex items-center justify-between pt-2 border-t border-[#1e293b]/40 select-none",
                     div { class: "flex items-center space-x-3 text-xs text-gray-500 font-medium",
                         span { class: "flex items-center space-x-1",
                             span { class: "text-emerald-500", "\u{1f7e2}" }
@@ -751,7 +751,7 @@ fn input_area(
                         }
                     }
                     button {
-                        class: if is_loading() { "w-7 h-7 bg-[#ff7c5c] text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150 opacity-50 cursor-not-allowed" } else { "w-7 h-7 bg-[#ff7c5c] text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150" },
+                        class: if is_loading() { "w-7 h-7 bg-sky-500 text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150 opacity-50 cursor-not-allowed" } else { "w-7 h-7 bg-sky-500 text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150" },
                         onclick: move |_| do_send(),
                         svg { class: "w-4 h-4 transform rotate-90", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.5",
                             path { "stroke-linecap": "round", "stroke-linejoin": "round", d: "M12 19V5m-7 7l7-7 7 7" }
