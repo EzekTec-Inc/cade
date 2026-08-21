@@ -5,6 +5,56 @@ use cade_store::sqlite::Db;
 use serde_json::Value;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+/// A thread-safe, panic-free LRU cache backed by std collections.
+pub struct SafeLruCache<K, V> {
+    cap: usize,
+    map: std::collections::HashMap<K, (u64, V)>,
+    access_seq: u64,
+}
+
+impl<K: std::hash::Hash + Eq + Clone, V: Clone> SafeLruCache<K, V> {
+    pub fn new(cap: NonZeroUsize) -> Self {
+        Self {
+            cap: cap.get(),
+            map: std::collections::HashMap::with_capacity(cap.get()),
+            access_seq: 0,
+        }
+    }
+
+    pub fn get(&mut self, key: &K) -> Option<&V> {
+        self.access_seq = self.access_seq.wrapping_add(1);
+        let seq = self.access_seq;
+        if let Some(entry) = self.map.get_mut(key) {
+            entry.0 = seq;
+            Some(&entry.1)
+        } else {
+            None
+        }
+    }
+
+    pub fn put(&mut self, key: K, val: V) {
+        self.access_seq = self.access_seq.wrapping_add(1);
+        let seq = self.access_seq;
+        if self.map.len() >= self.cap && !self.map.contains_key(&key) {
+            // Evict the least-recently used key (lowest access_seq)
+            if let Some((oldest_key, _)) = self.map.iter().min_by_key(|(_, (s, _))| *s) {
+                let k_to_remove = oldest_key.clone();
+                self.map.remove(&k_to_remove);
+            }
+        }
+        self.map.insert(key, (seq, val));
+    }
+
+    pub fn pop(&mut self, key: &K) -> Option<V> {
+        self.map.remove(key).map(|(_, v)| v)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.map.iter().map(|(k, (_, v))| (k, v))
+    }
+}
+
 use tokio::sync::RwLock;
 
 /// Capacity of the per-agent context-build LRU cache.  Defined once
@@ -236,7 +286,7 @@ pub struct AppState {
     /// Key: `format!("{agent_id}:{conversation_id}")`
     /// Value: `(max_rowid, cached_context_tuple)`
     pub context_cache: Arc<
-        parking_lot::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>,
+        parking_lot::Mutex<SafeLruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>,
     >,
 
     // ── Skills ──────────────────────────────────────────────────────────────

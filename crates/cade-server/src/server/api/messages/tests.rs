@@ -557,7 +557,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -767,7 +767,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -980,7 +980,7 @@ fn build_minimal_state(
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),

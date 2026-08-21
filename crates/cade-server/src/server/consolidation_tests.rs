@@ -573,7 +573,7 @@ fn mk_state(db: cade_store::sqlite::Db, llm: Arc<dyn LlmProvider>) -> AppState {
         agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+        context_cache: Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: Arc::new(AsyncRwLock::new(Vec::new())),

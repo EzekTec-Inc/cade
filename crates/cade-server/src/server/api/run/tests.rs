@@ -137,7 +137,7 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),

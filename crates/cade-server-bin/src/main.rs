@@ -355,7 +355,7 @@ async fn async_main() -> Result<()> {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+        context_cache: Arc::new(parking_lot::Mutex::new(cade_server::server::state::SafeLruCache::new(
             cade_server::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: Arc::new(RwLock::new(all_skills)),
