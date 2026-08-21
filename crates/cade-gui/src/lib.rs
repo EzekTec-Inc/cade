@@ -1,8 +1,10 @@
 pub mod api;
+pub mod api_engine;
 pub mod chat_session;
 pub mod components;
 pub mod types;
 
+pub use api_engine::{ApiClientEngine, ResourceMutation, ResourceState};
 pub use chat_session::{ChatSessionCoordinator, ChatTurnOutcome};
 
 use dioxus::prelude::*;
