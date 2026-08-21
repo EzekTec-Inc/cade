@@ -4,6 +4,7 @@ version = "0.2.4"
 edition     = "2024"
 
 [lib]
+crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
@@ -43,4 +44,4 @@ js-sys               = "0.3"
 web-sys              = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "TextDecoder"] }
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"

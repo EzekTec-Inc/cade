@@ -7,9 +7,10 @@ edition = "2024"
 doctest = false
 
 [features]
-rig-compat = ["dep:rig-core"]
+rig-compat = ["dep:rig"]
 
 [dependencies]
+rig = { version = "0.42.0", package = "rig-core", optional = true }
 # -- Error handling
 # -- Others
 derive_more.workspace  = true
@@ -42,7 +43,6 @@ llm_providers          = "0.6"
 rand                   = "0.9"
 
 # Rig compatibility
-rig-core               = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

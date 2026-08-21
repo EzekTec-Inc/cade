@@ -2,7 +2,8 @@
 #![cfg(feature = "rig-compat")]
 
 use crate::sqlite::Db;
-use rig::vector_store::VectorStoreError;
+use rig::vector_store::{VectorSearchRequest, VectorStoreError};
+use rig::vector_store::request::Filter;
 
 // region:    --- Types
 
@@ -16,19 +17,20 @@ pub struct RigCadeStore {
 // region:    --- Implementations
 
 impl rig::vector_store::VectorStoreIndex for RigCadeStore {
+    type Filter = Filter<serde_json::Value>;
+
     fn top_n<T: for<'a> serde::Deserialize<'a> + Send>(
         &self,
-        _query: &str,
-        n: usize,
+        req: VectorSearchRequest<Self::Filter>,
     ) -> impl std::future::Future<Output = Result<Vec<(f64, String, T)>, VectorStoreError>> + Send
     {
         let db = self.db.clone();
+        let limit = req.samples() as i64;
         async move {
             let conn = db
                 .get()
                 .map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?;
 
-            let limit = n as i64;
             let mut stmt = conn
                 .prepare("SELECT id, text FROM memory_embeddings LIMIT ?")
                 .map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?;
@@ -56,17 +58,16 @@ impl rig::vector_store::VectorStoreIndex for RigCadeStore {
 
     fn top_n_ids(
         &self,
-        _query: &str,
-        n: usize,
+        req: VectorSearchRequest<Self::Filter>,
     ) -> impl std::future::Future<Output = Result<Vec<(f64, String)>, VectorStoreError>> + Send
     {
         let db = self.db.clone();
+        let limit = req.samples() as i64;
         async move {
             let conn = db
                 .get()
                 .map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?;
 
-            let limit = n as i64;
             let mut stmt = conn
                 .prepare("SELECT id FROM memory_embeddings LIMIT ?")
                 .map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?;
@@ -74,19 +75,17 @@ impl rig::vector_store::VectorStoreIndex for RigCadeStore {
             let rows = stmt
                 .query_map((limit,), |row| {
                     let id: String = row.get(0)?;
-                    Ok((1.0, id))
+                    Ok(id)
                 })
                 .map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?;
 
             let mut results = Vec::new();
             for r in rows {
-                results.push(
-                    r.map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?,
-                );
+                let id =
+                    r.map_err(|e| VectorStoreError::DatastoreError(Box::from(e.to_string())))?;
+                results.push((1.0, id));
             }
             Ok(results)
         }
     }
 }
-
-// endregion: --- Implementations

@@ -3,15 +3,14 @@
 
 use crate::{CompletionRequest, CompletionResponse, LlmProvider, Result, StreamChunk};
 use async_trait::async_trait;
-#[allow(unused_imports)]
-use rig::completion::{CompletionModel, Prompt};
+use rig::completion::{AssistantContent, CompletionModel};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
 // region:    --- Types
 
 /// Adapter that wraps any `rig` completion model as a CADE `LlmProvider`
-pub struct RigProviderAdapter<M: CompletionModel> {
+pub struct RigProviderAdapter<M: CompletionModel + Clone + Send + Sync> {
     pub model: M,
 }
 
@@ -20,7 +19,7 @@ pub struct RigProviderAdapter<M: CompletionModel> {
 // region:    --- Implementations
 
 #[async_trait]
-impl<M: CompletionModel + rig::completion::Prompt + Send + Sync> LlmProvider
+impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmProvider
     for RigProviderAdapter<M>
 {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
@@ -32,14 +31,22 @@ impl<M: CompletionModel + rig::completion::Prompt + Send + Sync> LlmProvider
             .collect::<Vec<_>>()
             .join("\n");
 
+        let request = self.model.completion_request(prompt).build();
         let response = self
             .model
-            .prompt(&prompt)
+            .completion(request)
             .await
             .map_err(|e| crate::Error::custom(format!("Rig Model Error: {e}")))?;
 
+        let mut content = String::new();
+        for item in response.choice {
+            if let AssistantContent::Text(text) = item {
+                content.push_str(&text.text);
+            }
+        }
+
         Ok(CompletionResponse {
-            content: Some(response),
+            content: Some(content),
             tool_calls: vec![],
             finish_reason: "stop".to_string(),
         })
@@ -59,5 +66,3 @@ impl<M: CompletionModel + rig::completion::Prompt + Send + Sync> LlmProvider
         Ok(Box::pin(s))
     }
 }
-
-// endregion: --- Implementations

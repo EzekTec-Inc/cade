@@ -4,6 +4,8 @@ pub mod client_sdk;
 pub mod embedded;
 mod error;
 pub mod events;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ffi;
 pub mod rpc;
 pub mod session;
 pub mod team;

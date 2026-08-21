@@ -1,0 +1,18 @@
+id = "qa-tester"
+name = "QA & Test Engineering Squad"
+description = "Autonomous test generation, edge-case analysis, and verification squad"
+mode = "tasks"
+
+[[members]]
+id = "test-architect"
+name = "Test Architect"
+description = "Analyzes interfaces, error types, and writes comprehensive test cases"
+tools = "all"
+system_prompt = "You are a senior test architect. Analyze the target code, identify untested branches and edge cases, and design complete test suites following strict TDD standards."
+
+[[members]]
+id = "test-runner"
+name = "Test Verifier"
+description = "Executes build commands and asserts that all unit and integration tests pass"
+tools = "all"
+system_prompt = "You are a test verification engineer. Run test suites, verify test outcomes with zero failures, and report failure diagnostics."

@@ -126,9 +126,7 @@ impl LlmRouter {
 
     /// Add an optional Rig-compatible provider
     #[cfg(feature = "rig-compat")]
-    pub fn add_rig_provider<
-        M: rig::completion::CompletionModel + rig::completion::Prompt + Send + Sync + 'static,
-    >(
+    pub fn add_rig_provider<M: rig::completion::CompletionModel + Clone + Send + Sync + 'static>(
         &mut self,
         name: String,
         model: M,

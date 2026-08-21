@@ -1,0 +1,25 @@
+{
+  "name": "@ezektec/cade",
+  "version": "0.2.4",
+  "description": "Official TypeScript/Node.js SDK for CADE — In-Process Agent Runtime, Team Squads, and Typed Telemetry",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "keywords": [
+    "cade",
+    "ai-agent",
+    "llm",
+    "multi-agent",
+    "wasm",
+    "embedded-ai"
+  ],
+  "author": "EzekTec",
+  "license": "MIT OR Apache-2.0",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
