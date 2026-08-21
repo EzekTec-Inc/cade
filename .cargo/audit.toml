@@ -1,6 +1,21 @@
 [advisories]
 ignore = [
+    # Legacy unmaintained upstream dependencies
     "RUSTSEC-2024-0320", # yaml-rust (unmaintained, upstream dependency of syntect)
     "RUSTSEC-2024-0436", # paste (unmaintained, upstream dependency of tokenizers, rav1e)
     "RUSTSEC-2025-0141", # bincode (unmaintained, upstream dependency of syntect)
+
+    # quick-xml build-time/transitive dependencies in xcb (0.30.0) and wayland-scanner (0.39.4)
+    # Impact: Build-time code generation / protocol scanning only; not exposed to untrusted user input at runtime.
+    "RUSTSEC-2026-0194", # quick-xml quadratic start-tag parsing in upstream build tools
+    "RUSTSEC-2026-0195", # quick-xml unbounded namespace allocation in upstream build tools
+
+    # lru transitive dependencies in upstream UI frameworks (dioxus/sledgehammer_utils 0.12.5 and ratatui-core 0.18.1)
+    # Direct usage in cade-server was replaced with panic-safe SafeLruCache.
+    "RUSTSEC-2026-0002", # lru IterMut borrow violation in upstream dioxus/sledgehammer_utils
+    "RUSTSEC-2026-0253", # lru pop panic safety in upstream dioxus and ratatui-core
+
+    # Unmaintained informational warnings in upstream UI/TLS dependencies
+    "RUSTSEC-2025-0134", # rustls-pemfile (unmaintained warning, upstream dependency of reqwest/tokio-rustls)
+    "RUSTSEC-2026-0192", # ttf-parser (unmaintained warning, upstream dependency of epaint/egui)
 ]
