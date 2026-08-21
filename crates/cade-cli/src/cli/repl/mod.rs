@@ -661,6 +661,15 @@ impl Repl {
                 all_ids.push(t.id);
             }
 
+            // In centralized server mode, also attach MCP tools already registered on the daemon
+            if let Ok(server_tools) = client.list_tools().await {
+                for t in server_tools {
+                    if t.name.contains("__") && !all_ids.contains(&t.id) {
+                        all_ids.push(t.id);
+                    }
+                }
+            }
+
             // Attach all together
             if !all_ids.is_empty() {
                 let _ = client.detach_agent_tools(&agent_id).await;

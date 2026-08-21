@@ -549,6 +549,16 @@ async fn async_main() -> Result<()> {
                 if !mcp_ids.is_empty() {
                     let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_ids).await;
                 }
+            } else if bg_server_connected && !bg_lazy_mcp {
+                let all_tools = bg_client.list_tools().await.unwrap_or_default();
+                let mcp_ids: Vec<String> = all_tools
+                    .into_iter()
+                    .filter(|t| t.name.contains("__"))
+                    .map(|t| t.id)
+                    .collect();
+                if !mcp_ids.is_empty() {
+                    let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_ids).await;
+                }
             }
         }
 
