@@ -885,7 +885,11 @@ pub(crate) async fn build_context(
     } else {
         all_tools
             .into_iter()
-            .filter(|t| agent_tool_ids.contains(&t.id))
+            .filter(|t| {
+                agent_tool_ids.contains(&t.id)
+                    || t.tags.contains(&"mcp".to_string())
+                    || t.tags.contains(&"core_mcp".to_string())
+            })
             .filter_map(|t| {
                 t.json_schema.map(|s| cade_ai::TaggedToolSchema {
                     schema: s,
