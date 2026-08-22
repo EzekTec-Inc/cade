@@ -9,6 +9,14 @@ pub use cade_mcp::*;
 mod stub {
     use serde_json::Value;
 
+    #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+    pub struct ReloadSummary {
+        pub started: Vec<String>,
+        pub stopped: Vec<String>,
+        pub kept: Vec<String>,
+        pub failed: Vec<String>,
+    }
+
     pub struct McpManager;
 
     impl McpManager {

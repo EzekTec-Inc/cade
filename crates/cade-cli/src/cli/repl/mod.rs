@@ -568,7 +568,31 @@ impl Repl {
             }
         };
 
-        let summary = self.mcp.reload(&new_mcp, Some(&mut on_progress)).await;
+        let summary = match self.client.reload_mcp_servers(Some(new_mcp.clone())).await {
+            Ok(s) => {
+                if let Ok(statuses) = self.client.get_mcp_statuses().await
+                    && let Some(ref mbs) = self.mcp_boot_status
+                {
+                    let mut guard = mbs.lock();
+                    guard.clear();
+                    for s in statuses {
+                        let status = if s.disabled {
+                            cade_tui::app::ServerBootStatus::Failed("disabled".to_string())
+                        } else {
+                            cade_tui::app::ServerBootStatus::Ready {
+                                tool_count: s.tools.len(),
+                            }
+                        };
+                        guard.insert(s.key, status);
+                    }
+                }
+                s
+            }
+            Err(e) => {
+                tracing::warn!("Server-side MCP reload failed ({e}) — attempting local reload");
+                self.mcp.reload(&new_mcp, Some(&mut on_progress)).await
+            }
+        };
 
         if !summary.stopped.is_empty() {
             self.tui_dim(format!("  stopped: {}", summary.stopped.join(", ")));

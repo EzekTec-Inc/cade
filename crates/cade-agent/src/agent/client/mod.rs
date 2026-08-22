@@ -678,6 +678,71 @@ impl HttpTransport {
         let res = resp.json::<McpResponse>().await?;
         Ok(res.servers)
     }
+
+    pub async fn reload_mcp_servers(
+        &self,
+        configs: Option<std::collections::HashMap<String, cade_core::settings::McpServerConfig>>,
+    ) -> Result<crate::mcp::ReloadSummary> {
+        #[derive(Serialize)]
+        struct ReloadRequest {
+            configs: Option<std::collections::HashMap<String, cade_core::settings::McpServerConfig>>,
+        }
+        let body = ReloadRequest { configs };
+        let resp = self
+            .client
+            .post(self.url("/mcp/reload"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "reload_mcp_servers failed: {}",
+                resp.status()
+            )));
+        }
+        #[derive(Deserialize)]
+        struct ReloadResponse {
+            summary: crate::mcp::ReloadSummary,
+        }
+        let res = resp.json::<ReloadResponse>().await?;
+        Ok(res.summary)
+    }
+
+    pub async fn call_mcp_tool(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<(String, bool, Option<String>)> {
+        #[derive(Serialize)]
+        struct CallRequest<'a> {
+            name: &'a str,
+            arguments: &'a serde_json::Value,
+        }
+        let body = CallRequest { name, arguments };
+        let resp = self
+            .client
+            .post(self.url("/mcp/call"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(crate::Error::custom(format!(
+                "call_mcp_tool failed ({status}): {err_text}"
+            )));
+        }
+        #[derive(Deserialize)]
+        struct CallResponse {
+            output: String,
+            is_error: bool,
+            ui_resource_uri: Option<String>,
+        }
+        let res = resp.json::<CallResponse>().await?;
+        Ok((res.output, res.is_error, res.ui_resource_uri))
+    }
 }
 
 pub mod extensions;

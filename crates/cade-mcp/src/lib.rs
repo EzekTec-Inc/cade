@@ -126,7 +126,7 @@ pub struct McpManager {
 }
 
 /// Summary returned by `McpManager::reload()` for display in the REPL.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReloadSummary {
     pub started: Vec<String>,
     pub stopped: Vec<String>,

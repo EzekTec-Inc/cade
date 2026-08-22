@@ -262,6 +262,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/models", get(models::list_models))
         // MCP servers
         .route("/v1/mcp", get(mcp::list_mcp_servers))
+        .route("/v1/mcp/reload", post(mcp::reload_mcp_servers))
+        .route("/v1/mcp/call", post(mcp::call_mcp_tool))
         // Stream
         .route("/v1/stream", get(proxy::stream_http_handler))
         // Providers
