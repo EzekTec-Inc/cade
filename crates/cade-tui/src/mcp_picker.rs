@@ -17,10 +17,12 @@ pub enum McpAction {
     New,
 }
 
+#[derive(Debug, Clone)]
 pub struct McpEntry {
     pub key: String,
     pub config: McpServerConfig,
     pub tool_count: Option<usize>, // None if disconnected
+    pub tools: Vec<String>,
 }
 
 pub fn show_mcp_manager(
@@ -252,6 +254,13 @@ pub fn show_mcp_manager(
                     ));
                 }
 
+                if !s.tools.is_empty() {
+                    meta.push_str(&format!("\nTools ({}):\n", s.tools.len()));
+                    for t in &s.tools {
+                        meta.push_str(&format!("  • {}\n", t));
+                    }
+                }
+
                 meta
             } else {
                 String::new()
@@ -329,5 +338,49 @@ pub fn show_mcp_manager(
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mcp_entry_creation_and_fields() {
+        let entry = McpEntry {
+            key: "serena".to_string(),
+            config: McpServerConfig {
+                command: "serena".to_string(),
+                disabled: false,
+                ..Default::default()
+            },
+            tool_count: Some(5),
+            tools: vec![
+                "serena__find_symbol".to_string(),
+                "serena__replace_content".to_string(),
+            ],
+        };
+
+        assert_eq!(entry.key, "serena");
+        assert_eq!(entry.tool_count, Some(5));
+        assert_eq!(entry.tools.len(), 2);
+        assert!(!entry.config.disabled);
+    }
+
+    #[test]
+    fn test_mcp_entry_disabled_state() {
+        let entry = McpEntry {
+            key: "desktop-commander".to_string(),
+            config: McpServerConfig {
+                command: "desktop-commander".to_string(),
+                disabled: true,
+                ..Default::default()
+            },
+            tool_count: None,
+            tools: vec![],
+        };
+
+        assert!(entry.config.disabled);
+        assert!(entry.tool_count.is_none());
     }
 }

@@ -19,21 +19,22 @@ impl Repl {
         let mut entries = Vec::new();
         for (key, config) in mcp_configs {
             let status = statuses.iter().find(|s| s.key == key);
-            let tool_count = if config.disabled {
-                None
+            let (tool_count, tools) = if config.disabled {
+                (None, Vec::new())
             } else if let Some(s) = status {
                 if !s.disabled {
-                    Some(s.tools.len())
+                    (Some(s.tools.len()), s.tools.clone())
                 } else {
-                    None
+                    (None, Vec::new())
                 }
             } else {
-                None
+                (None, Vec::new())
             };
             entries.push(McpEntry {
                 key,
                 config,
                 tool_count,
+                tools,
             });
         }
         entries.sort_by(|a, b| a.key.cmp(&b.key));
