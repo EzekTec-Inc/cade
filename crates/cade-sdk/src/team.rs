@@ -15,9 +15,7 @@ use cade_agent::team::{
 };
 use cade_agent::tools::manager::ToolResult;
 use cade_agent::tools::{RuntimeToolResult, ToolRuntime, all_schemas};
-use cade_ai::{
-    AiConfig, CompletionRequest, LlmMessage, LlmProvider, LlmRouter,
-};
+use cade_ai::{AiConfig, CompletionRequest, LlmMessage, LlmProvider, LlmRouter};
 use cade_store::Db;
 
 use crate::embedded::EmbeddedStorageBackend;
@@ -113,7 +111,9 @@ impl SubagentRunner for TeamSubagentRunner {
                 if let Some(tx) = &self.stream_tx
                     && !content.is_empty()
                 {
-                    let _ = tx.send(CadeStreamEvent::MessageDelta(content.clone())).await;
+                    let _ = tx
+                        .send(CadeStreamEvent::MessageDelta(content.clone()))
+                        .await;
                 }
 
                 for tc in resp.tool_calls {
@@ -604,9 +604,15 @@ mod tests {
     impl LlmProvider for TeamMockLlmProvider {
         async fn complete(&self, req: &CompletionRequest) -> cade_ai::Result<CompletionResponse> {
             let n = self.count.fetch_add(1, Ordering::SeqCst);
-            let prompt = req.messages.last().map(|m| m.content.as_str()).unwrap_or("");
+            let prompt = req
+                .messages
+                .last()
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
             Ok(CompletionResponse {
-                content: Some(format!("Squad member executed successfully (step {n}). Input: {prompt}")),
+                content: Some(format!(
+                    "Squad member executed successfully (step {n}). Input: {prompt}"
+                )),
                 tool_calls: vec![],
                 finish_reason: "stop".to_string(),
             })
@@ -615,7 +621,8 @@ mod tests {
         async fn stream(
             &self,
             req: &CompletionRequest,
-        ) -> cade_ai::Result<Pin<Box<dyn Stream<Item = cade_ai::Result<StreamChunk>> + Send>>> {
+        ) -> cade_ai::Result<Pin<Box<dyn Stream<Item = cade_ai::Result<StreamChunk>> + Send>>>
+        {
             let resp = self.complete(req).await?;
             let chunks = vec![
                 Ok(StreamChunk::Text(resp.content.unwrap_or_default())),
@@ -698,8 +705,12 @@ mod tests {
         }
 
         assert!(!events.is_empty());
-        let has_thought = events.iter().any(|e| matches!(e, CadeStreamEvent::Thought(_)));
-        let has_finish = events.iter().any(|e| matches!(e, CadeStreamEvent::Finished { .. }));
+        let has_thought = events
+            .iter()
+            .any(|e| matches!(e, CadeStreamEvent::Thought(_)));
+        let has_finish = events
+            .iter()
+            .any(|e| matches!(e, CadeStreamEvent::Finished { .. }));
 
         assert!(has_thought, "Should emit initial thought");
         assert!(has_finish, "Should emit finished event");

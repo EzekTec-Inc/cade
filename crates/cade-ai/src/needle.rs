@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_stream::Stream;
 
-use crate::{
-    CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, Result,
-    StreamChunk,
-};
+use crate::{CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, Result, StreamChunk};
 
 // region:    --- NeedleConfig
 
@@ -167,7 +164,10 @@ impl NeedleEngine {
     /// Computes tokenized overlap and semantic similarity score between prompt and tool definition.
     fn score_tool_relevance(&self, prompt_tokens: &[&str], tool: &Value) -> f64 {
         let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let desc = tool.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = tool
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let mut score: f64 = 0.0;
 
         let name_lower = name.to_lowercase();
@@ -252,23 +252,37 @@ impl NeedleEngine {
         let mut extracted_args = serde_json::Map::new();
 
         // Heuristic grammatical argument extraction from prompt context
-        if let Some(params) = selected.get("parameters").or_else(|| selected.get("input_schema"))
+        if let Some(params) = selected
+            .get("parameters")
+            .or_else(|| selected.get("input_schema"))
             && let Some(props) = params.get("properties").and_then(|v| v.as_object())
         {
             for (prop_name, _) in props {
-                    let prop_lower = prop_name.to_lowercase();
-                    if prop_lower == "query" || prop_lower == "pattern" || prop_lower == "keyword" || prop_lower == "text" {
-                        extracted_args.insert(prop_name.clone(), Value::String(prompt.trim().to_string()));
-                    } else if prop_lower == "path" || prop_lower == "file" || prop_lower == "file_path" {
-                        if let Some(token) = prompt.split_whitespace().find(|w| w.contains('.') || w.contains('/')) {
-                            let clean_path = token.trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ',');
-                            extracted_args.insert(prop_name.clone(), Value::String(clean_path.to_string()));
-                        }
-                    } else if prop_lower == "command" || prop_lower == "cmd" {
-                        extracted_args.insert(prop_name.clone(), Value::String(prompt.trim().to_string()));
+                let prop_lower = prop_name.to_lowercase();
+                if prop_lower == "query"
+                    || prop_lower == "pattern"
+                    || prop_lower == "keyword"
+                    || prop_lower == "text"
+                {
+                    extracted_args
+                        .insert(prop_name.clone(), Value::String(prompt.trim().to_string()));
+                } else if prop_lower == "path" || prop_lower == "file" || prop_lower == "file_path"
+                {
+                    if let Some(token) = prompt
+                        .split_whitespace()
+                        .find(|w| w.contains('.') || w.contains('/'))
+                    {
+                        let clean_path =
+                            token.trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ',');
+                        extracted_args
+                            .insert(prop_name.clone(), Value::String(clean_path.to_string()));
                     }
+                } else if prop_lower == "command" || prop_lower == "cmd" {
+                    extracted_args
+                        .insert(prop_name.clone(), Value::String(prompt.trim().to_string()));
                 }
             }
+        }
 
         let constrained_args = grammar.validate_and_constrain(&Value::Object(extracted_args));
         let tool_call = LlmToolCall {
@@ -291,7 +305,10 @@ impl NeedleEngine {
         let mut extracted = serde_json::Map::new();
         if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
             for (prop_name, prop_def) in props {
-                let type_str = prop_def.get("type").and_then(|v| v.as_str()).unwrap_or("string");
+                let type_str = prop_def
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("string");
                 let prop_lower = prop_name.to_lowercase();
 
                 // Simple regex-like heuristic extraction from text segments
@@ -302,7 +319,9 @@ impl NeedleEngine {
                         if piece_lower.contains(&prop_lower) {
                             let parts: Vec<&str> = piece.split(&[':', '='][..]).collect();
                             if parts.len() > 1 {
-                                let val_str = parts[1].trim().trim_matches(|c| c == '"' || c == '\'' || c == ',');
+                                let val_str = parts[1]
+                                    .trim()
+                                    .trim_matches(|c| c == '"' || c == '\'' || c == ',');
                                 if type_str == "integer" {
                                     if let Ok(n) = val_str.parse::<i64>() {
                                         found_val = Some(json!(n));
@@ -380,7 +399,9 @@ impl NeedleProviderAdapter {
         };
 
         let response = CompletionResponse {
-            content: Some(format!("Needle inference completed (confidence: {confidence:.2}).")),
+            content: Some(format!(
+                "Needle inference completed (confidence: {confidence:.2})."
+            )),
             tool_calls,
             finish_reason,
         };
@@ -413,11 +434,7 @@ impl LlmProvider for NeedleProviderAdapter {
         Ok(Box::pin(futures::stream::iter(chunks)))
     }
 
-    async fn complete_structured(
-        &self,
-        req: &CompletionRequest,
-        schema: Value,
-    ) -> Result<Value> {
+    async fn complete_structured(&self, req: &CompletionRequest, schema: Value) -> Result<Value> {
         let text = req
             .messages
             .last()
@@ -479,7 +496,7 @@ mod tests {
             json!({
                 "name": "search_database",
                 "description": "Query sqlite database for records"
-            })
+            }),
         ];
 
         let (call_opt, confidence) = engine

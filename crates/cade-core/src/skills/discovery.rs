@@ -139,7 +139,7 @@ pub fn skills_listing(skills: &[Skill]) -> Option<String> {
     }
     let mut out = String::from(
         "<available_skills>\n\
-         Use the standard file `read` tool to load a skill's full content (SKILL.md) or its references directly from their listed paths. Use the standard shell/bash execution tool to run any scripts under scripts/ directly.\n\n"
+         Use the standard file `read` tool to load a skill's full content (SKILL.md) or its references directly from their listed paths. Use the standard shell/bash execution tool to run any scripts under scripts/ directly.\n\n",
     );
     for s in skills {
         out.push_str("  <skill>\n");

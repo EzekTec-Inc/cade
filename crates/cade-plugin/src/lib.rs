@@ -1,9 +1,9 @@
 // region:    --- Modules
 
+pub mod engine;
 mod error;
 pub mod manifest;
 pub mod marketplace;
-pub mod engine;
 pub mod registry;
 
 pub use engine::{MockPluginEngine, NativePluginEngine, PluginEngine, PluginReport};

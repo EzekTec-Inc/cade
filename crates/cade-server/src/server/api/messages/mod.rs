@@ -589,7 +589,8 @@ pub async fn stream_message(
                 content: input.to_string(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             });
         }
     }
@@ -664,15 +665,16 @@ pub async fn stream_message(
 
     // First SSE event: metadata (conversation_id + run_id)
     let meta_event = {
-        let mut events = vec![
-            Ok::<Event, std::convert::Infallible>(
-                Event::default().data(json!({
+        let mut events = vec![Ok::<Event, std::convert::Infallible>(
+            Event::default().data(
+                json!({
                     "message_type": "stream_start",
                     "conversation_id": conv_str,
                     "run_id": run_id,
-                }).to_string())
-            )
-        ];
+                })
+                .to_string(),
+            ),
+        )];
         if last_omitted > 0 {
             events.push(Ok::<Event, std::convert::Infallible>(
                 Event::default().data(json!({

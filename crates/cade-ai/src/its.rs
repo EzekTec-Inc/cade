@@ -12,11 +12,7 @@ pub struct TaggedToolSchema {
 /// Polymorphic interface for intelligent tool selection (pruning and compression).
 pub trait IntelligentToolSelector: Send + Sync {
     /// Selects, prunes, and compresses tool schemas based on the active conversation context.
-    fn select_tools(
-        &self,
-        messages: &[LlmMessage],
-        tools: Vec<TaggedToolSchema>,
-    ) -> Vec<Value>;
+    fn select_tools(&self, messages: &[LlmMessage], tools: Vec<TaggedToolSchema>) -> Vec<Value>;
 }
 
 // ── Adaptive Tool Selector ──────────────────────────────────────────────────
@@ -69,11 +65,7 @@ impl AdaptiveToolSelector {
 }
 
 impl IntelligentToolSelector for AdaptiveToolSelector {
-    fn select_tools(
-        &self,
-        messages: &[LlmMessage],
-        tools: Vec<TaggedToolSchema>,
-    ) -> Vec<Value> {
+    fn select_tools(&self, messages: &[LlmMessage], tools: Vec<TaggedToolSchema>) -> Vec<Value> {
         let is_long_session = messages.len() > 1 + self.recent_window;
 
         let recently_used: HashSet<String> = if is_long_session {
@@ -125,15 +117,10 @@ impl IntelligentToolSelector for AdaptiveToolSelector {
 pub struct PassThroughToolSelector;
 
 impl IntelligentToolSelector for PassThroughToolSelector {
-    fn select_tools(
-        &self,
-        _messages: &[LlmMessage],
-        tools: Vec<TaggedToolSchema>,
-    ) -> Vec<Value> {
+    fn select_tools(&self, _messages: &[LlmMessage], tools: Vec<TaggedToolSchema>) -> Vec<Value> {
         tools.into_iter().map(|t| t.schema).collect()
     }
 }
-
 
 // ── Needle Tool Selector ──────────────────────────────────────────────────
 
@@ -161,11 +148,7 @@ impl NeedleToolSelector {
 }
 
 impl IntelligentToolSelector for NeedleToolSelector {
-    fn select_tools(
-        &self,
-        messages: &[LlmMessage],
-        tools: Vec<TaggedToolSchema>,
-    ) -> Vec<Value> {
+    fn select_tools(&self, messages: &[LlmMessage], tools: Vec<TaggedToolSchema>) -> Vec<Value> {
         let latest_user_prompt = messages
             .iter()
             .rfind(|m| m.role == "user")
@@ -183,7 +166,9 @@ impl IntelligentToolSelector for NeedleToolSelector {
             }
         }
 
-        let retrieved = self.engine.retrieve_top_k(latest_user_prompt, &optional_tools);
+        let retrieved = self
+            .engine
+            .retrieve_top_k(latest_user_prompt, &optional_tools);
         let mut result = core_tools;
         result.extend(retrieved);
         result
@@ -256,15 +241,13 @@ mod tests {
             },
         ];
 
-        let tools = vec![
-            TaggedToolSchema {
-                schema: json!({
-                    "name": "mcp_tool",
-                    "description": "This is a very long description that should be compressed"
-                }),
-                tags: vec!["mcp".to_string()],
-            },
-        ];
+        let tools = vec![TaggedToolSchema {
+            schema: json!({
+                "name": "mcp_tool",
+                "description": "This is a very long description that should be compressed"
+            }),
+            tags: vec!["mcp".to_string()],
+        }];
 
         let selected = selector.select_tools(&messages, tools);
         assert_eq!(selected.len(), 1);
@@ -352,7 +335,11 @@ mod tests {
                     "name": "serena__activate_project",
                     "description": "activate project in serena"
                 }),
-                tags: vec!["cade".to_string(), "mcp".to_string(), "core_mcp".to_string()],
+                tags: vec![
+                    "cade".to_string(),
+                    "mcp".to_string(),
+                    "core_mcp".to_string(),
+                ],
             },
         ];
 
@@ -370,16 +357,14 @@ mod tests {
             ..Default::default()
         });
 
-        let messages = vec![
-            LlmMessage {
-                role: "user".to_string(),
-                content: "read the config file from disk".to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-                images: None,
-                cache_control: None,
-            }
-        ];
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: "read the config file from disk".to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }];
 
         let tools = vec![
             TaggedToolSchema {
@@ -406,5 +391,4 @@ mod tests {
         assert!(selected.iter().any(|t| t["name"] == "read_file"));
         assert!(selected.len() <= 3);
     }
-
 }

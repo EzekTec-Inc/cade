@@ -42,40 +42,41 @@ impl Repl {
         // Memoized data_text cache to prevent redundant roundtrips as user moves cursor
         let mut content_cache: HashMap<String, String> = HashMap::new();
 
-        let build_list_items = |arts_list: &[serde_json::Value], sel: usize| -> Vec<ListItem<'static>> {
-            arts_list
-                .iter()
-                .enumerate()
-                .map(|(i, a)| {
-                    let id = a["id"].as_str().unwrap_or("?");
-                    let kind = a["kind"].as_str().unwrap_or("other");
-                    let size = a["size_bytes"].as_i64().unwrap_or(0);
-                    let ts = a["created_at"].as_i64().unwrap_or(0);
-                    
-                    let date = if ts > 0 {
-                        chrono::DateTime::from_timestamp(ts, 0)
-                            .unwrap_or_default()
-                            .with_timezone(&chrono::Local)
-                            .format("%m/%d %H:%M")
-                            .to_string()
-                    } else {
-                        String::new()
-                    };
+        let build_list_items =
+            |arts_list: &[serde_json::Value], sel: usize| -> Vec<ListItem<'static>> {
+                arts_list
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        let id = a["id"].as_str().unwrap_or("?");
+                        let kind = a["kind"].as_str().unwrap_or("other");
+                        let size = a["size_bytes"].as_i64().unwrap_or(0);
+                        let ts = a["created_at"].as_i64().unwrap_or(0);
 
-                    let short_id = if id.len() > 10 { &id[..10] } else { id };
-                    let label = format!("  {kind:<12}  {size:>6}B  {date}  {short_id}");
-                    let style = if i == sel {
-                        Style::default()
-                            .fg(RC::Black)
-                            .bg(RC::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(RC::White)
-                    };
-                    ListItem::new(Line::from(vec![Span::styled(label, style)]))
-                })
-                .collect()
-        };
+                        let date = if ts > 0 {
+                            chrono::DateTime::from_timestamp(ts, 0)
+                                .unwrap_or_default()
+                                .with_timezone(&chrono::Local)
+                                .format("%m/%d %H:%M")
+                                .to_string()
+                        } else {
+                            String::new()
+                        };
+
+                        let short_id = if id.len() > 10 { &id[..10] } else { id };
+                        let label = format!("  {kind:<12}  {size:>6}B  {date}  {short_id}");
+                        let style = if i == sel {
+                            Style::default()
+                                .fg(RC::Black)
+                                .bg(RC::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(RC::White)
+                        };
+                        ListItem::new(Line::from(vec![Span::styled(label, style)]))
+                    })
+                    .collect()
+            };
 
         let mut last_selected_id = String::new();
 
@@ -134,7 +135,10 @@ impl Repl {
                         content_cache.insert(current_id.clone(), text);
                     }
                     Err(e) => {
-                        content_cache.insert(current_id.clone(), format!("Failed to retrieve artifact content: {e}"));
+                        content_cache.insert(
+                            current_id.clone(),
+                            format!("Failed to retrieve artifact content: {e}"),
+                        );
                     }
                 }
             }
@@ -146,7 +150,10 @@ impl Repl {
                 let mut ls = ListState::default().with_selected(Some(sel));
 
                 let preview_text = if !current_id.is_empty() {
-                    content_cache.get(&current_id).cloned().unwrap_or_else(|| "Loading...".to_string())
+                    content_cache
+                        .get(&current_id)
+                        .cloned()
+                        .unwrap_or_else(|| "Loading...".to_string())
                 } else {
                     "No artifacts match filter.".to_string()
                 };
@@ -161,7 +168,7 @@ impl Repl {
 
                 app.terminal.draw(|f| {
                     let total_area = f.area();
-                    
+
                     let main_layout = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Min(2), Constraint::Length(3)])
@@ -174,7 +181,11 @@ impl Repl {
 
                     let list_block = Block::default()
                         .borders(Borders::ALL)
-                        .title(format!(" Artifacts ({}){} ", filtered_arts.len(), filter_title))
+                        .title(format!(
+                            " Artifacts ({}){} ",
+                            filtered_arts.len(),
+                            filter_title
+                        ))
                         .border_style(Style::default().fg(RC::Cyan));
 
                     let list = List::new(items).block(list_block);
@@ -195,8 +206,10 @@ impl Repl {
                         .borders(Borders::ALL)
                         .title(" Actions ")
                         .border_style(Style::default().fg(RC::DarkGray));
-                    let footer = Paragraph::new(" ↑↓ Move  Shift+↑↓ Scroll Preview  f Toggle Search  d Delete  Esc Close ")
-                        .block(footer_block);
+                    let footer = Paragraph::new(
+                        " ↑↓ Move  Shift+↑↓ Scroll Preview  f Toggle Search  d Delete  Esc Close ",
+                    )
+                    .block(footer_block);
                     f.render_widget(footer, main_layout[1]);
                 })?;
             }
@@ -222,7 +235,10 @@ impl Repl {
                             filter_query.pop();
                             continue;
                         }
-                        KeyCode::Char(c) if k.modifiers == KeyModifiers::NONE || k.modifiers == KeyModifiers::SHIFT => {
+                        KeyCode::Char(c)
+                            if k.modifiers == KeyModifiers::NONE
+                                || k.modifiers == KeyModifiers::SHIFT =>
+                        {
                             filter_query.push(c);
                             continue;
                         }
@@ -271,7 +287,10 @@ impl Repl {
                             continue;
                         }
                         let art_id = filtered_arts[sel]["id"].as_str().unwrap_or("").to_string();
-                        let kind = filtered_arts[sel]["kind"].as_str().unwrap_or("other").to_string();
+                        let kind = filtered_arts[sel]["kind"]
+                            .as_str()
+                            .unwrap_or("other")
+                            .to_string();
 
                         use crate::ui::question::{Question, QuestionOption};
                         let opts = vec![
@@ -286,7 +305,10 @@ impl Repl {
                         ];
                         let q = Question {
                             header: "Delete?".to_string(),
-                            text: format!("Delete artifact \"{kind} ({})\"?", &art_id[..8.min(art_id.len())]),
+                            text: format!(
+                                "Delete artifact \"{kind} ({})\"?",
+                                &art_id[..8.min(art_id.len())]
+                            ),
                             options: opts,
                             multi_select: false,
                             allow_other: false,
@@ -302,11 +324,17 @@ impl Repl {
                                     arts.retain(|a| a["id"].as_str() != Some(&art_id));
                                     content_cache.remove(&art_id);
                                     let mut app = app_arc.lock();
-                                    app.show_toast("Artifact deleted successfully.", crate::ui::ToastLevel::Info);
+                                    app.show_toast(
+                                        "Artifact deleted successfully.",
+                                        crate::ui::ToastLevel::Info,
+                                    );
                                 }
                                 _ => {
                                     let mut app = app_arc.lock();
-                                    app.show_toast("Failed to delete artifact.", crate::ui::ToastLevel::Error);
+                                    app.show_toast(
+                                        "Failed to delete artifact.",
+                                        crate::ui::ToastLevel::Error,
+                                    );
                                 }
                             }
                         }

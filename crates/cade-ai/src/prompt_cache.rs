@@ -17,18 +17,20 @@ impl PromptCacheManager for AnthropicCacheAdapter {
     fn optimize(&self, req: &mut CompletionRequest) {
         // 1. Annotate the first system message (static system prompt)
         if let Some(sys_msg) = req.messages.first_mut()
-            && sys_msg.role == "system" {
-                sys_msg.cache_control = Some("ephemeral".to_string());
-            }
+            && sys_msg.role == "system"
+        {
+            sys_msg.cache_control = Some("ephemeral".to_string());
+        }
 
         // 2. Annotate the last tool schema
         if let Some(last_tool) = req.tools.last_mut()
-            && let Some(obj) = last_tool.as_object_mut() {
-                obj.insert(
-                    "cache_control".to_string(),
-                    serde_json::json!({ "type": "ephemeral" }),
-                );
-            }
+            && let Some(obj) = last_tool.as_object_mut()
+        {
+            obj.insert(
+                "cache_control".to_string(),
+                serde_json::json!({ "type": "ephemeral" }),
+            );
+        }
 
         // 3. Annotate the second-to-last user message (multi-turn history caching)
         let mut user_count = 0;
@@ -55,37 +57,39 @@ impl PromptCacheManager for OpenAiCacheAdapter {
         // We pad the system_static block (the first system message) to the nearest
         // 128-token boundary using the Model's active tokenizer to maximize hits.
         if let Some(sys_msg) = req.messages.first_mut()
-            && sys_msg.role == "system" && !sys_msg.content.is_empty() {
-                let model = &req.model;
-                let tokens = count_tokens(model, &sys_msg.content);
-                
-                if tokens > 0 {
-                    let remainder = tokens % 128;
-                    if remainder > 0 {
-                        let pad_tokens = 128 - remainder;
-                        let target_tokens = tokens + pad_tokens;
-                        let mut padded_content = sys_msg.content.clone();
-                        
-                        // Iteratively pad with spaces until count_tokens matches target_tokens
-                        for _ in 0..1000 {
-                            let current_toks = count_tokens(model, &padded_content);
-                            if current_toks >= target_tokens {
-                                break;
-                            }
-                            padded_content.push(' ');
+            && sys_msg.role == "system"
+            && !sys_msg.content.is_empty()
+        {
+            let model = &req.model;
+            let tokens = count_tokens(model, &sys_msg.content);
+
+            if tokens > 0 {
+                let remainder = tokens % 128;
+                if remainder > 0 {
+                    let pad_tokens = 128 - remainder;
+                    let target_tokens = tokens + pad_tokens;
+                    let mut padded_content = sys_msg.content.clone();
+
+                    // Iteratively pad with spaces until count_tokens matches target_tokens
+                    for _ in 0..1000 {
+                        let current_toks = count_tokens(model, &padded_content);
+                        if current_toks >= target_tokens {
+                            break;
                         }
-                        sys_msg.content = padded_content;
+                        padded_content.push(' ');
                     }
-                } else {
-                    // Character fallback: pad to 512-character boundary
-                    let len = sys_msg.content.len();
-                    let remainder = len % 512;
-                    if remainder > 0 {
-                        let padding_len = 512 - remainder;
-                        sys_msg.content.push_str(&" ".repeat(padding_len));
-                    }
+                    sys_msg.content = padded_content;
+                }
+            } else {
+                // Character fallback: pad to 512-character boundary
+                let len = sys_msg.content.len();
+                let remainder = len % 512;
+                if remainder > 0 {
+                    let padding_len = 512 - remainder;
+                    sys_msg.content.push_str(&" ".repeat(padding_len));
                 }
             }
+        }
     }
 }
 
@@ -119,7 +123,11 @@ pub fn resolve_prompt_cache_manager(model_id: &str) -> Box<dyn PromptCacheManage
     let lower = model_id.to_lowercase();
     if lower.starts_with("anthropic/") || lower.contains("claude") {
         Box::new(AnthropicCacheAdapter)
-    } else if lower.starts_with("openai/") || lower.contains("gpt") || lower.contains("o1") || lower.contains("o3") {
+    } else if lower.starts_with("openai/")
+        || lower.contains("gpt")
+        || lower.contains("o1")
+        || lower.contains("o3")
+    {
         Box::new(OpenAiCacheAdapter)
     } else if lower.starts_with("google/") || lower.contains("gemini") {
         Box::new(GeminiCacheAdapter)
@@ -127,7 +135,6 @@ pub fn resolve_prompt_cache_manager(model_id: &str) -> Box<dyn PromptCacheManage
         Box::new(FallbackCacheAdapter)
     }
 }
-
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -215,12 +222,10 @@ mod tests {
                     cache_control: None,
                 },
             ],
-            tools: vec![
-                json!({
-                    "name": "tool_1",
-                    "description": "desc 1"
-                })
-            ],
+            tools: vec![json!({
+                "name": "tool_1",
+                "description": "desc 1"
+            })],
             max_tokens: 0,
             reasoning_effort: None,
         };
@@ -245,16 +250,14 @@ mod tests {
         let adapter = OpenAiCacheAdapter;
         let mut req = CompletionRequest {
             model: "nonexistent-model-so-it-triggers-fallback".to_string(),
-            messages: vec![
-                LlmMessage {
-                    role: "system".to_string(),
-                    content: "system prompt".to_string(),
-                    tool_call_id: None,
-                    tool_calls: None,
-                    images: None,
-                    cache_control: None,
-                },
-            ],
+            messages: vec![LlmMessage {
+                role: "system".to_string(),
+                content: "system prompt".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            }],
             tools: vec![],
             max_tokens: 0,
             reasoning_effort: None,

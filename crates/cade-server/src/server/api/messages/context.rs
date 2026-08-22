@@ -1,6 +1,6 @@
 use super::*;
-use crate::server::state::AppState;
 use crate::server::compaction::ContextCompactionEngine;
+use crate::server::state::AppState;
 use axum::{
     Json,
     extract::{Path, State},
@@ -50,7 +50,8 @@ pub(crate) fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
                         content,
                         tool_call_id: Some(id.clone()),
                         tool_calls: None,
-                        images: None, cache_control: None,
+                        images: None,
+                        cache_control: None,
                     });
                 }
 
@@ -129,8 +130,6 @@ pub(crate) fn render_skills_section(
     render_skills_section_filtered(loaded, &Default::default(), budget, body_cap)
 }
 
-
-
 /// P5: compress a tool schema for a long-session, unused, non-pinned tool.
 ///
 /// Strips:
@@ -146,7 +145,6 @@ pub(crate) fn render_skills_section(
 ///     (all needed for valid JSON-schema validation on the provider side).
 ///
 /// Idempotent: compressing an already-compressed schema is a no-op.
-
 
 /// Like [`render_skills_section`] but skips any skill whose ID is in
 /// `disabled_ids`.  Called from `build_context` after loading the per-agent
@@ -476,18 +474,18 @@ pub(crate) async fn build_context(
     }
 
     // Invariant: Constraint adherence > Task completion
-    system_static.push_str("
+    system_static.push_str(
+        "
 
 ## Constitutional Invariants (CRITICAL)
-");
+",
+    );
     system_static.push_str("1. **Constraint Adherence > Task Completion**: Under no circumstances may you create workarounds, ad-hoc scripts, or subprocesses when a tool or capability is blocked or unavailable.
 ");
     system_static.push_str("2. **Zero Subprocess Emulation**: Never use bash, python, or shell pipes to talk to MCP servers or emulate MCP tools. All MCP calls must occur strictly through native tool declarations.
 ");
     system_static.push_str("3. **Immediate Structural Yield**: If a required capability is missing or an operation is blocked by policy, HALT immediately and yield to the user.
 ");
-
-
 
     // Memory-change detection: cache the assembled static system_core per agent.
     let system_prompt_static = {
@@ -541,14 +539,16 @@ pub(crate) async fn build_context(
             content: system_prompt_static,
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         },
         LlmMessage {
             role: "system".to_string(),
             content: system_dynamic,
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         },
     ];
 
@@ -626,12 +626,8 @@ pub(crate) async fn build_context(
 
     // Run polymorphic, synchronous context compaction
     let compactor = crate::server::compaction::DefaultContextCompactor;
-    let compaction_res = compactor.compact_inline(
-        &agent.model,
-        &all_llm_msgs,
-        message_budget,
-        max_turn_chars,
-    );
+    let compaction_res =
+        compactor.compact_inline(&agent.model, &all_llm_msgs, message_budget, max_turn_chars);
 
     let selected_messages = compaction_res.selected_messages;
     let omitted_turns = compaction_res.omitted_turns;
@@ -735,13 +731,9 @@ pub(crate) async fn build_context(
             tracing::info!(agent_id = %agent_id, "build_context:  eager consolidation triggered (turn-count path)");
             tokio::spawn(async move {
                 let compactor_bg = crate::server::compaction::DefaultContextCompactor;
-                compactor_bg.consolidate_background(
-                    state_eager,
-                    agent_eager,
-                    conv_for_eager,
-                    None,
-                )
-                .await;
+                compactor_bg
+                    .consolidate_background(state_eager, agent_eager, conv_for_eager, None)
+                    .await;
             });
         }
 
@@ -1778,7 +1770,8 @@ mod head_tail_tests {
             content: original_text.clone(),
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         }];
 
         let margin = 200;

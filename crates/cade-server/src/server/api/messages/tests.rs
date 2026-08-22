@@ -10,7 +10,8 @@ fn user(text: &str) -> LlmMessage {
         content: text.to_string(),
         tool_call_id: None,
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     }
 }
 
@@ -20,7 +21,8 @@ fn assistant(text: &str) -> LlmMessage {
         content: text.to_string(),
         tool_call_id: None,
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     }
 }
 
@@ -30,7 +32,8 @@ fn tool_result(id: &str, content: &str) -> LlmMessage {
         content: content.to_string(),
         tool_call_id: Some(id.to_string()),
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     }
 }
 
@@ -139,14 +142,16 @@ fn make_turn_of_size(chars: usize) -> Vec<LlmMessage> {
             content: "x".repeat(half),
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         },
         LlmMessage {
             role: "assistant".to_string(),
             content: "x".repeat(rest),
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         },
     ]
 }
@@ -557,9 +562,9 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-            crate::server::state::CONTEXT_CACHE_CAPACITY,
-        ))),
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::server::state::SafeLruCache::new(crate::server::state::CONTEXT_CACHE_CAPACITY),
+        )),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
@@ -609,7 +614,8 @@ fn truncate_oversize_message_passthrough_when_under_cap() {
         content: "x".repeat(100),
         tool_call_id: Some("t".to_string()),
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     };
     let out = super::context::truncate_oversize_message(msg.clone(), PER_MESSAGE_CHAR_CAP);
     assert_eq!(
@@ -627,7 +633,8 @@ fn truncate_oversize_message_caps_huge_tool_result() {
         content: huge,
         tool_call_id: Some("t".to_string()),
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     };
     let out = super::context::truncate_oversize_message(msg, PER_MESSAGE_CHAR_CAP);
     let len = out.content.chars().count();
@@ -652,7 +659,8 @@ fn truncate_oversize_message_keeps_head_and_tail() {
         content,
         tool_call_id: Some("t".to_string()),
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     };
     let out = super::context::truncate_oversize_message(msg, PER_MESSAGE_CHAR_CAP);
     assert!(out.content.starts_with("HEADSTART"), "must preserve head");
@@ -666,7 +674,8 @@ fn truncate_oversize_message_preserves_role_and_tool_call_id() {
         content: "x".repeat(PER_MESSAGE_CHAR_CAP * 2),
         tool_call_id: Some("call_abc".to_string()),
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     };
     let out = super::context::truncate_oversize_message(msg, PER_MESSAGE_CHAR_CAP);
     assert_eq!(out.role, "tool");
@@ -767,9 +776,9 @@ async fn build_context_caps_oversize_tool_result_messages() {
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-            crate::server::state::CONTEXT_CACHE_CAPACITY,
-        ))),
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::server::state::SafeLruCache::new(crate::server::state::CONTEXT_CACHE_CAPACITY),
+        )),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
@@ -980,9 +989,9 @@ fn build_minimal_state(
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-            crate::server::state::CONTEXT_CACHE_CAPACITY,
-        ))),
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::server::state::SafeLruCache::new(crate::server::state::CONTEXT_CACHE_CAPACITY),
+        )),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
@@ -1752,9 +1761,11 @@ fn compress_tool_schema_reduces_byte_size_substantially() {
         }
     });
     let before = serde_json::to_string(&s).unwrap().len();
-    let after = serde_json::to_string(&cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s))
-        .unwrap()
-        .len();
+    let after = serde_json::to_string(
+        &cade_ai::its::AdaptiveToolSelector::default().compress_tool_schema(s),
+    )
+    .unwrap()
+    .len();
     assert!(
         after < before / 4,
         "compression must reduce schema by ≥ 4x; before={before} after={after}"

@@ -10,7 +10,7 @@ async fn test_shell_execution_engine_real_os_process() -> Result<()> {
 
     assert!(result.stdout.contains("hello_world_cadeshell"));
     assert_eq!(result.exit_code, 0);
-    assert_eq!(result.truncated, false);
+    assert!(!result.truncated);
     Ok(())
 }
 
@@ -36,7 +36,10 @@ fn test_shell_request_builder() {
 
     assert_eq!(req.command, "cargo test");
     assert_eq!(req.timeout, Duration::from_secs(30));
-    assert_eq!(req.env.get("TEST_KEY").map(|s| s.as_str()), Some("TEST_VAL"));
+    assert_eq!(
+        req.env.get("TEST_KEY").map(|s| s.as_str()),
+        Some("TEST_VAL")
+    );
 }
 
 #[tokio::test]

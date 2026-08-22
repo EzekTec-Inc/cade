@@ -122,11 +122,7 @@ impl IsolatedWorkspace {
             let (status_exit, status_out, _) =
                 run_cmd(temp_path, &["status", "--porcelain"]).await?;
             if status_exit == 0 && !status_out.trim().is_empty() {
-                run_cmd(
-                    temp_path,
-                    &["add", "-A"],
-                )
-                .await?;
+                run_cmd(temp_path, &["add", "-A"]).await?;
                 run_cmd(
                     temp_path,
                     &["commit", "-m", "Subagent task completion changes"],
@@ -162,9 +158,14 @@ impl IsolatedWorkspace {
             if merge_exit != 0 {
                 // Inspect conflicting files via git status --porcelain
                 let mut conflicting_files = Vec::new();
-                if let Ok((_, status_out, _)) = run_cmd(&self.primary_dir, &["status", "--porcelain"]).await {
+                if let Ok((_, status_out, _)) =
+                    run_cmd(&self.primary_dir, &["status", "--porcelain"]).await
+                {
                     for line in status_out.lines() {
-                        if line.starts_with("UU ") || line.starts_with("AA ") || line.starts_with("DD ") {
+                        if line.starts_with("UU ")
+                            || line.starts_with("AA ")
+                            || line.starts_with("DD ")
+                        {
                             let file_str = line[3..].trim();
                             conflicting_files.push(PathBuf::from(file_str));
                         }

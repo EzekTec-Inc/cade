@@ -193,7 +193,9 @@ impl MemoryConsolidationEngine for MockMemoryConsolidationEngine {
             rep.agent_id = agent_id.to_string();
             Ok(rep)
         } else {
-            Err(ConsolidationError::Skipped("Mock configured to skip".to_string()))
+            Err(ConsolidationError::Skipped(
+                "Mock configured to skip".to_string(),
+            ))
         }
     }
 
@@ -680,7 +682,8 @@ impl<'a> ContextCompactionEngine<'a> {
                 content: prompt,
                 tool_call_id: None,
                 tool_calls: None,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             }],
             tools: vec![],
             max_tokens: SUMMARY_MAX_TOKENS,

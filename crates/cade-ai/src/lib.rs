@@ -7,12 +7,12 @@ pub use error::{Error, Result};
 pub mod anthropic;
 pub mod catalogue;
 pub mod gemini;
+pub mod its;
 pub mod needle;
 pub mod observability;
 pub mod ollama;
 pub mod openai;
 pub mod prompt_cache;
-pub mod its;
 pub mod provider_registry;
 pub mod registry;
 #[cfg(feature = "rig-compat")]
@@ -24,11 +24,14 @@ pub mod utils;
 pub mod vcr;
 
 pub use catalogue::{CATALOGUE, ModelEntry};
+pub use its::{
+    AdaptiveToolSelector, IntelligentToolSelector, NeedleToolSelector, PassThroughToolSelector,
+    TaggedToolSchema, resolve_tool_selector,
+};
 pub use needle::{NeedleConfig, NeedleEngine, NeedleGrammar, NeedleProviderAdapter};
+pub use prompt_cache::{PromptCacheManager, resolve_prompt_cache_manager};
 pub use registry::{ModelPricing, ModelRegistry, PricingRule};
 pub use router::*;
-pub use prompt_cache::{PromptCacheManager, resolve_prompt_cache_manager};
-pub use its::{TaggedToolSchema, IntelligentToolSelector, AdaptiveToolSelector, PassThroughToolSelector, NeedleToolSelector, resolve_tool_selector};
 pub use tokenizer::{
     ContextBudgetResult, FALLBACK_CHARS_PER_TOKEN, PromptBudgetManager, chars_for_tokens,
     count_tokens,

@@ -66,7 +66,8 @@ pub extern "C" fn cade_embedded_session_create(
     };
 
     let db_opt = c_str_to_opt_string(db_path);
-    let model_opt = c_str_to_opt_string(model).unwrap_or_else(|| "anthropic/claude-sonnet-4-5".to_string());
+    let model_opt =
+        c_str_to_opt_string(model).unwrap_or_else(|| "anthropic/claude-sonnet-4-5".to_string());
     let sys_opt = c_str_to_opt_string(system_prompt);
 
     let rt_c = rt.clone();
@@ -105,9 +106,7 @@ pub extern "C" fn cade_embedded_session_prompt(
         Err(e) => return string_to_c_char(format!("Error: invalid UTF-8 prompt: {e}")),
     };
 
-    let result = h.rt.block_on(async {
-        h.session.prompt(prompt_str).await
-    });
+    let result = h.rt.block_on(async { h.session.prompt(prompt_str).await });
 
     match result {
         Ok(ans) => string_to_c_char(ans),
@@ -136,9 +135,8 @@ pub extern "C" fn cade_embedded_session_set_memory(
         Err(_) => return -1,
     };
 
-    let result = h.rt.block_on(async {
-        h.session.set_memory(label_str, value_str).await
-    });
+    let result =
+        h.rt.block_on(async { h.session.set_memory(label_str, value_str).await });
 
     if result.is_ok() { 0 } else { -1 }
 }
@@ -159,9 +157,8 @@ pub extern "C" fn cade_embedded_session_get_memory(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let result = h.rt.block_on(async {
-        h.session.get_memory(label_str).await
-    });
+    let result =
+        h.rt.block_on(async { h.session.get_memory(label_str).await });
 
     match result {
         Ok(Some(v)) => string_to_c_char(v),
@@ -193,7 +190,8 @@ pub extern "C" fn cade_team_session_create(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let tid = c_str_to_opt_string(team_id).unwrap_or_else(|| format!("team-{}", uuid::Uuid::new_v4()));
+    let tid =
+        c_str_to_opt_string(team_id).unwrap_or_else(|| format!("team-{}", uuid::Uuid::new_v4()));
     let tname = c_str_to_opt_string(name).unwrap_or_else(|| "Collaborative Squad".to_string());
     let mode = match mode_id {
         1 => TeamMode::Route,
@@ -234,9 +232,7 @@ pub extern "C" fn cade_team_session_run(
         Err(e) => return string_to_c_char(format!("Error: {e}")),
     };
 
-    let result = h.rt.block_on(async {
-        h.team.run(prompt_str).await
-    });
+    let result = h.rt.block_on(async { h.team.run(prompt_str).await });
 
     match result {
         Ok(items) => {

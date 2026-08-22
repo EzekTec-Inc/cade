@@ -3,10 +3,10 @@
 //! Provides a single, deep, cross-platform interface for screen observation,
 //! window management, mouse/keyboard simulation, and OS notifications.
 
-use async_trait::async_trait;
-use crate::{Error, Result};
 use super::capture::ScreenCapture;
-use super::notify::{send_notification, Urgency};
+use super::notify::{Urgency, send_notification};
+use crate::{Error, Result};
+use async_trait::async_trait;
 
 // region:    --- Types
 
@@ -73,7 +73,10 @@ impl NativeDesktopCommander {
 #[async_trait]
 impl DesktopCommander for NativeDesktopCommander {
     async fn capture_screen(&self, monitor_index: Option<usize>) -> Result<CaptureResult> {
-        let (base64_png, width, height) = self.capture.capture_with_dimensions(monitor_index, None).await?;
+        let (base64_png, width, height) = self
+            .capture
+            .capture_with_dimensions(monitor_index, None)
+            .await?;
         Ok(CaptureResult {
             base64_png,
             width,

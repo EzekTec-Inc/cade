@@ -107,14 +107,16 @@ pub async fn edit(
                 content: EDIT_SYSTEM.into(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             },
             LlmMessage {
                 role: "user".into(),
                 content: user_prompt,
                 tool_call_id: None,
                 tool_calls: None,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             },
         ],
         tools: vec![],
@@ -262,9 +264,11 @@ mod tests {
             agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
-            context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-                crate::server::state::CONTEXT_CACHE_CAPACITY,
-            ))),
+            context_cache: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::server::state::SafeLruCache::new(
+                    crate::server::state::CONTEXT_CACHE_CAPACITY,
+                ),
+            )),
             all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
             agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),

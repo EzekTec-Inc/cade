@@ -150,13 +150,8 @@ impl ApiClientEngine {
                 if let Some(m) = model {
                     body_json["model"] = serde_json::Value::String(m);
                 }
-                let res = api_request(
-                    "POST",
-                    "/v1/agents",
-                    Some(&body_json.to_string()),
-                    api_key,
-                )
-                .await?;
+                let res = api_request("POST", "/v1/agents", Some(&body_json.to_string()), api_key)
+                    .await?;
                 let val: serde_json::Value =
                     serde_json::from_str(&res).map_err(|e| e.to_string())?;
                 Ok(val["id"].as_str().unwrap_or("agent").to_string())
@@ -203,8 +198,7 @@ impl ApiClientEngine {
             } => {
                 let path = format!("/v1/agents/{agent_id}/checkpoints");
                 let body = serde_json::json!({ "label": label, "description": description });
-                let res =
-                    api_request("POST", &path, Some(&body.to_string()), api_key).await?;
+                let res = api_request("POST", &path, Some(&body.to_string()), api_key).await?;
                 let val: serde_json::Value =
                     serde_json::from_str(&res).map_err(|e| e.to_string())?;
                 Ok(val["id"].as_str().unwrap_or("cp").to_string())

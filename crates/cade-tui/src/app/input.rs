@@ -170,7 +170,9 @@ impl TuiApp {
                     let trimmed = text.trim();
                     if self.try_paste_image_file_path(trimmed) {
                         // Image file was loaded — skip normal text paste.
-                    } else if let Some(normalized_path) = self.try_normalize_pasted_file_path(trimmed) {
+                    } else if let Some(normalized_path) =
+                        self.try_normalize_pasted_file_path(trimmed)
+                    {
                         self.editor.handle_paste(&normalized_path);
                         self.last_status = None;
                     } else {
@@ -707,10 +709,13 @@ impl TuiApp {
                                 let input_text = self.editor.text();
                                 let cursor_pos = self.editor.cursor_pos();
                                 let before = &input_text[..cursor_pos];
-                                let is_start_or_after_space = before.is_empty() || before.ends_with(|c: char| c.is_whitespace());
+                                let is_start_or_after_space = before.is_empty()
+                                    || before.ends_with(|c: char| c.is_whitespace());
 
                                 if is_start_or_after_space {
-                                    if self.editor_input_mode() != crate::editor::InputMode::SlashCommand {
+                                    if self.editor_input_mode()
+                                        != crate::editor::InputMode::SlashCommand
+                                    {
                                         let at_pos = cursor_pos.saturating_sub(1);
                                         self.overlays.push(Box::new(crate::app::PickerState::new(
                                             at_pos,

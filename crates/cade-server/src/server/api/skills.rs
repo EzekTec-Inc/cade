@@ -277,9 +277,11 @@ mod tests {
             agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
             agent_metrics: Arc::new(dashmap::DashMap::new()),
             agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            context_cache: Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-                crate::server::state::CONTEXT_CACHE_CAPACITY,
-            ))),
+            context_cache: Arc::new(parking_lot::Mutex::new(
+                crate::server::state::SafeLruCache::new(
+                    crate::server::state::CONTEXT_CACHE_CAPACITY,
+                ),
+            )),
             all_skills: Arc::new(RwLock::new(Vec::new())),
             agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
             pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),

@@ -53,8 +53,8 @@ pub trait VectorIndex: Send + Sync {
 }
 
 /// SQLite-backed implementation of the `VectorIndex` trait.
-/// 
-/// Uses local SQLite tables `shared_memory_blocks` and `memory_chunks` 
+///
+/// Uses local SQLite tables `shared_memory_blocks` and `memory_chunks`
 /// with in-memory cosine similarity and LE-f32 decoding.
 pub struct SqliteVectorIndex {
     db: crate::sqlite::Db,
@@ -78,17 +78,21 @@ impl VectorIndex for SqliteVectorIndex {
         tokio::task::spawn_blocking(move || {
             let conn = db.get()?;
             // Attempt to update shared_memory_blocks first
-            let mut stmt = conn.prepare("UPDATE shared_memory_blocks SET embedding = ?1 WHERE id = ?2")?;
+            let mut stmt =
+                conn.prepare("UPDATE shared_memory_blocks SET embedding = ?1 WHERE id = ?2")?;
             let affected = stmt.execute(rusqlite::params![bytes, id])?;
             if affected == 0 {
                 // Otherwise update memory_chunks
-                let mut stmt = conn.prepare("UPDATE memory_chunks SET embedding = ?1 WHERE id = ?2")?;
+                let mut stmt =
+                    conn.prepare("UPDATE memory_chunks SET embedding = ?1 WHERE id = ?2")?;
                 stmt.execute(rusqlite::params![bytes, id])?;
             }
             Ok(())
         })
         .await
-        .map_err(|e| crate::error::Error::custom(format!("SqliteVectorIndex::insert join failed: {e}")))?
+        .map_err(|e| {
+            crate::error::Error::custom(format!("SqliteVectorIndex::insert join failed: {e}"))
+        })?
     }
 
     async fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
@@ -112,7 +116,9 @@ impl VectorIndex for SqliteVectorIndex {
             Ok(search_results)
         })
         .await
-        .map_err(|e| crate::error::Error::custom(format!("SqliteVectorIndex::search join failed: {e}")))?
+        .map_err(|e| {
+            crate::error::Error::custom(format!("SqliteVectorIndex::search join failed: {e}"))
+        })?
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
@@ -120,16 +126,20 @@ impl VectorIndex for SqliteVectorIndex {
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = db.get()?;
-            let mut stmt = conn.prepare("UPDATE shared_memory_blocks SET embedding = NULL WHERE id = ?1")?;
+            let mut stmt =
+                conn.prepare("UPDATE shared_memory_blocks SET embedding = NULL WHERE id = ?1")?;
             let affected = stmt.execute(rusqlite::params![id])?;
             if affected == 0 {
-                let mut stmt = conn.prepare("UPDATE memory_chunks SET embedding = NULL WHERE id = ?1")?;
+                let mut stmt =
+                    conn.prepare("UPDATE memory_chunks SET embedding = NULL WHERE id = ?1")?;
                 stmt.execute(rusqlite::params![id])?;
             }
             Ok(())
         })
         .await
-        .map_err(|e| crate::error::Error::custom(format!("SqliteVectorIndex::delete join failed: {e}")))?
+        .map_err(|e| {
+            crate::error::Error::custom(format!("SqliteVectorIndex::delete join failed: {e}"))
+        })?
     }
 }
 
@@ -185,9 +195,12 @@ impl VectorIndex for PgVectorIndex {
             self.table_name
         );
         let vec_data = pgvector::Vector::from(vector.to_vec());
-        self.client.execute(&query, &[&id, &vec_data, &payload])
+        self.client
+            .execute(&query, &[&id, &vec_data, &payload])
             .await
-            .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::insert failed: {e}")))?;
+            .map_err(|e| {
+                crate::error::Error::custom(format!("PgVectorIndex::insert failed: {e}"))
+            })?;
         Ok(())
     }
 
@@ -200,18 +213,31 @@ impl VectorIndex for PgVectorIndex {
             self.table_name
         );
         let vec_data = pgvector::Vector::from(query_vector.to_vec());
-        let rows = self.client.query(&query, &[&vec_data, &(limit as i64)])
+        let rows = self
+            .client
+            .query(&query, &[&vec_data, &(limit as i64)])
             .await
-            .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search failed: {e}")))?;
+            .map_err(|e| {
+                crate::error::Error::custom(format!("PgVectorIndex::search failed: {e}"))
+            })?;
 
         let mut results = Vec::new();
         for row in rows {
-            let id: String = row.try_get(0)
-                .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search decoding id failed: {e}")))?;
-            let distance: f64 = row.try_get(1)
-                .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search decoding distance failed: {e}")))?;
-            let payload: serde_json::Value = row.try_get(2)
-                .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::search decoding payload failed: {e}")))?;
+            let id: String = row.try_get(0).map_err(|e| {
+                crate::error::Error::custom(format!(
+                    "PgVectorIndex::search decoding id failed: {e}"
+                ))
+            })?;
+            let distance: f64 = row.try_get(1).map_err(|e| {
+                crate::error::Error::custom(format!(
+                    "PgVectorIndex::search decoding distance failed: {e}"
+                ))
+            })?;
+            let payload: serde_json::Value = row.try_get(2).map_err(|e| {
+                crate::error::Error::custom(format!(
+                    "PgVectorIndex::search decoding payload failed: {e}"
+                ))
+            })?;
 
             let score = 1.0 - distance as f32;
             results.push(SearchResult { id, score, payload });
@@ -221,9 +247,9 @@ impl VectorIndex for PgVectorIndex {
 
     async fn delete(&self, id: &str) -> Result<()> {
         let query = format!("DELETE FROM {} WHERE id = $1", self.table_name);
-        self.client.execute(&query, &[&id])
-            .await
-            .map_err(|e| crate::error::Error::custom(format!("PgVectorIndex::delete failed: {e}")))?;
+        self.client.execute(&query, &[&id]).await.map_err(|e| {
+            crate::error::Error::custom(format!("PgVectorIndex::delete failed: {e}"))
+        })?;
         Ok(())
     }
 }
@@ -277,66 +303,71 @@ impl QdrantVectorIndex {
 impl VectorIndex for QdrantVectorIndex {
     async fn insert(&self, id: &str, vector: &[f32], payload: serde_json::Value) -> Result<()> {
         use qdrant_client::qdrant::{PointStruct, UpsertPointsBuilder};
-        
+
         let point_id = if let Ok(parsed_uuid) = uuid::Uuid::parse_str(id) {
             parsed_uuid.to_string()
         } else {
             uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, id.as_bytes()).to_string()
         };
 
-        let qdrant_payload = qdrant_client::Payload::try_from(payload)
-            .map_err(|e| crate::error::Error::custom(format!("Failed to parse Qdrant payload: {e}")))?;
+        let qdrant_payload = qdrant_client::Payload::try_from(payload).map_err(|e| {
+            crate::error::Error::custom(format!("Failed to parse Qdrant payload: {e}"))
+        })?;
 
-        let point = PointStruct::new(
-            point_id,
-            vector.to_vec(),
-            qdrant_payload,
-        );
+        let point = PointStruct::new(point_id, vector.to_vec(), qdrant_payload);
 
-        let upsert_points = UpsertPointsBuilder::new(&self.collection_name, vec![point])
-            .wait(true);
+        let upsert_points = UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true);
 
-        self.client.upsert_points(upsert_points)
+        self.client
+            .upsert_points(upsert_points)
             .await
-            .map_err(|e| crate::error::Error::custom(format!("QdrantVectorIndex::insert failed: {e}")))?;
+            .map_err(|e| {
+                crate::error::Error::custom(format!("QdrantVectorIndex::insert failed: {e}"))
+            })?;
 
         Ok(())
     }
 
     async fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
-        
-
         use qdrant_client::qdrant::SearchPointsBuilder;
 
-        let search_query = SearchPointsBuilder::new(&self.collection_name, query_vector.to_vec(), limit as u64)
-            .with_payload(true);
+        let search_query =
+            SearchPointsBuilder::new(&self.collection_name, query_vector.to_vec(), limit as u64)
+                .with_payload(true);
 
-        let response = self.client.search_points(search_query)
-            .await
-            .map_err(|e| crate::error::Error::custom(format!("QdrantVectorIndex::search failed: {e}")))?;
+        let response = self.client.search_points(search_query).await.map_err(|e| {
+            crate::error::Error::custom(format!("QdrantVectorIndex::search failed: {e}"))
+        })?;
 
         let mut results = Vec::new();
         for point in response.result {
-            let id = point.id.and_then(|id| {
-                id.point_id_options.map(|opt| match opt {
-                    qdrant_client::qdrant::point_id::PointIdOptions::Num(n) => n.to_string(),
-                    qdrant_client::qdrant::point_id::PointIdOptions::Uuid(u) => u,
+            let id = point
+                .id
+                .and_then(|id| {
+                    id.point_id_options.map(|opt| match opt {
+                        qdrant_client::qdrant::point_id::PointIdOptions::Num(n) => n.to_string(),
+                        qdrant_client::qdrant::point_id::PointIdOptions::Uuid(u) => u,
+                    })
                 })
-            }).unwrap_or_default();
+                .unwrap_or_default();
             let score = point.score;
-            
+
             let payload_value = serde_json::Value::Object(
-                point.payload
+                point
+                    .payload
                     .into_iter()
                     .map(|(k, v)| {
-                        let json_val = serde_json::to_value(&v)
-                            .unwrap_or(serde_json::Value::Null);
+                        let json_val = serde_json::to_value(&v).unwrap_or(serde_json::Value::Null);
                         (k, json_val)
                     })
-                    .collect()
+                    .collect(),
             );
 
-            results.push(SearchResult { id, score, payload: payload_value });
+            results.push(SearchResult {
+                id,
+                score,
+                payload: payload_value,
+            });
         }
         Ok(results)
     }
@@ -352,15 +383,20 @@ impl VectorIndex for QdrantVectorIndex {
 
         let qdrant_point_id = qdrant_client::qdrant::PointId::from(point_id);
         let selector = qdrant_client::qdrant::points_selector::PointsSelectorOneOf::Points(
-            qdrant_client::qdrant::PointsIdsList { ids: vec![qdrant_point_id] }
+            qdrant_client::qdrant::PointsIdsList {
+                ids: vec![qdrant_point_id],
+            },
         );
         let delete_points = DeletePointsBuilder::new(&self.collection_name)
             .points(selector)
             .wait(true);
 
-        self.client.delete_points(delete_points)
+        self.client
+            .delete_points(delete_points)
             .await
-            .map_err(|e| crate::error::Error::custom(format!("QdrantVectorIndex::delete failed: {e}")))?;
+            .map_err(|e| {
+                crate::error::Error::custom(format!("QdrantVectorIndex::delete failed: {e}"))
+            })?;
 
         Ok(())
     }
@@ -408,7 +444,10 @@ impl FastEmbedder {
         let inner = TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2Q))
             .map_err(|e| crate::error::Error::Custom(format!("fastembed init failed: {e}")))?;
         // MiniLM-L6-v2 produces 384-dim embeddings.
-        Ok(Self { inner: parking_lot::Mutex::new(inner), dim: 384 })
+        Ok(Self {
+            inner: parking_lot::Mutex::new(inner),
+            dim: 384,
+        })
     }
 }
 
@@ -800,29 +839,35 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_vector_index() -> crate::error::Result<()> {
         let db = crate::sqlite::open(":memory:")?;
-        
+
         // Setup initial schema rows for testing
         {
             let conn = db.get()?;
             conn.execute(
                 "INSERT INTO agents (id, name, model, created_at, memory_turn_counter)
                  VALUES (?1, ?2, ?3, ?4, 0)",
-                rusqlite::params!["test_agent", "Agent Smith", "gpt-4o", 123456i64]
+                rusqlite::params!["test_agent", "Agent Smith", "gpt-4o", 123456i64],
             )?;
             conn.execute(
                 "INSERT INTO shared_memory_blocks (id, label, value, updated_at, memory_type)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params!["block_1", "project", "I love Rust systems programming", 123456i64, "convention"]
+                rusqlite::params![
+                    "block_1",
+                    "project",
+                    "I love Rust systems programming",
+                    123456i64,
+                    "convention"
+                ],
             )?;
             conn.execute(
                 "INSERT INTO agent_memory_blocks (agent_id, block_id)
                  VALUES (?1, ?2)",
-                rusqlite::params!["test_agent", "block_1"]
+                rusqlite::params!["test_agent", "block_1"],
             )?;
         }
 
         let index = SqliteVectorIndex::new(db.clone(), "test_agent".to_string());
-        
+
         // 1. Insert a 3-dimensional embedding
         let vec = vec![1.0, 0.0, 0.0];
         index.insert("block_1", &vec, serde_json::json!({})).await?;
@@ -835,7 +880,10 @@ mod tests {
         // Cosine similarity of identical unit vectors must be 1.0 (or very close due to float precision)
         assert!((results[0].score - 1.0).abs() < 1e-5);
         assert_eq!(results[0].payload["label"], "project");
-        assert_eq!(results[0].payload["value"], "I love Rust systems programming");
+        assert_eq!(
+            results[0].payload["value"],
+            "I love Rust systems programming"
+        );
 
         // 3. Search using an orthogonal vector
         let query_ortho = vec![0.0, 1.0, 0.0];
@@ -858,7 +906,9 @@ mod tests {
         #[cfg(not(feature = "enterprise-postgres"))]
         {
             let index = PgVectorIndex::new();
-            index.insert("test_id", &[0.1, 0.2], serde_json::json!({})).await?;
+            index
+                .insert("test_id", &[0.1, 0.2], serde_json::json!({}))
+                .await?;
             let results = index.search(&[0.1, 0.2], 5).await?;
             assert!(results.is_empty());
             index.delete("test_id").await?;
@@ -871,7 +921,9 @@ mod tests {
         #[cfg(not(feature = "enterprise-qdrant"))]
         {
             let index = QdrantVectorIndex::new();
-            index.insert("test_id", &[0.1, 0.2], serde_json::json!({})).await?;
+            index
+                .insert("test_id", &[0.1, 0.2], serde_json::json!({}))
+                .await?;
             let results = index.search(&[0.1, 0.2], 5).await?;
             assert!(results.is_empty());
             index.delete("test_id").await?;

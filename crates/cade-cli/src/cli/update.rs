@@ -95,9 +95,9 @@ impl UpdateBackend for GithubUpdateBackend {
         let latest_releases = update_builder
             .get_latest_release()
             .map_err(|e| crate::error::Error::custom(e.to_string()))?;
-        let latest = latest_releases.latest().ok_or_else(|| {
-            crate::error::Error::custom("No releases found".to_string())
-        })?;
+        let latest = latest_releases
+            .latest()
+            .ok_or_else(|| crate::error::Error::custom("No releases found".to_string()))?;
         let is_greater = self_update::version::bump_is_greater(
             self_update::cargo_crate_version!(),
             latest.version(),
@@ -140,9 +140,9 @@ impl UpdateBackend for GithubUpdateBackend {
                 .get_latest_release()
                 .map_err(|e| crate::error::Error::custom(e.to_string()))?
         };
-        let latest = latest_releases.latest().ok_or_else(|| {
-            crate::error::Error::custom("No releases found".to_string())
-        })?;
+        let latest = latest_releases
+            .latest()
+            .ok_or_else(|| crate::error::Error::custom("No releases found".to_string()))?;
 
         let is_greater = self_update::version::bump_is_greater(
             self_update::cargo_crate_version!(),
@@ -190,7 +190,7 @@ impl UpdateBackend for GithubUpdateBackend {
             && let Some(sha_asset) = latest
                 .assets()
                 .iter()
-                .find(|a| a.name() ==  format!("{}.sha256", asset.name()))
+                .find(|a| a.name() == format!("{}.sha256", asset.name()))
         {
             eprintln!("[*] Verifying CLI cryptographic signature integrity...");
 
@@ -273,14 +273,13 @@ impl UpdateBackend for GithubUpdateBackend {
 
         // Server Cryptographic Checksum Integrity Verification (Opportunity 2)
         if server_status
-            && let Some(asset) = latest
-                .assets()
-                .iter()
-                .find(|a| a.name().contains(&self.server_bin_name) && !a.name().ends_with(".sha256"))
+            && let Some(asset) = latest.assets().iter().find(|a| {
+                a.name().contains(&self.server_bin_name) && !a.name().ends_with(".sha256")
+            })
             && let Some(sha_asset) = latest
                 .assets()
                 .iter()
-                .find(|a| a.name() ==  format!("{}.sha256", asset.name()))
+                .find(|a| a.name() == format!("{}.sha256", asset.name()))
         {
             eprintln!("[*] Verifying Server cryptographic signature integrity...");
 

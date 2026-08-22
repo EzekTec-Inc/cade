@@ -21,12 +21,24 @@ pub enum InlineSpan {
 /// Top-level Markdown block element
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkdownBlock {
-    Heading { level: u32, inlines: Vec<InlineSpan> },
+    Heading {
+        level: u32,
+        inlines: Vec<InlineSpan>,
+    },
     Paragraph(Vec<InlineSpan>),
-    CodeBlock { lang: String, code: String },
+    CodeBlock {
+        lang: String,
+        code: String,
+    },
     Blockquote(Vec<InlineSpan>),
-    List { ordered: bool, items: Vec<Vec<InlineSpan>> },
-    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
+    List {
+        ordered: bool,
+        items: Vec<Vec<InlineSpan>>,
+    },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     HorizontalRule,
 }
 
@@ -126,7 +138,9 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
             Event::End(tag_end) => match tag_end {
                 TagEnd::Paragraph => {
                     if !in_list && !in_blockquote && !current_inlines.is_empty() {
-                        blocks.push(MarkdownBlock::Paragraph(std::mem::take(&mut current_inlines)));
+                        blocks.push(MarkdownBlock::Paragraph(std::mem::take(
+                            &mut current_inlines,
+                        )));
                     }
                 }
                 TagEnd::Heading(_) => {
@@ -137,7 +151,9 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
                 }
                 TagEnd::BlockQuote(_) => {
                     in_blockquote = false;
-                    blocks.push(MarkdownBlock::Blockquote(std::mem::take(&mut current_inlines)));
+                    blocks.push(MarkdownBlock::Blockquote(std::mem::take(
+                        &mut current_inlines,
+                    )));
                 }
                 TagEnd::CodeBlock => {
                     in_code_block = false;
@@ -235,7 +251,8 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
                     } else if trimmed == "</kbd>" {
                         in_kbd = false;
                     } else if trimmed.starts_with("<kbd>") && trimmed.ends_with("</kbd>") {
-                        let inner = s.trim()
+                        let inner = s
+                            .trim()
                             .strip_prefix("<kbd>")
                             .and_then(|t| t.strip_suffix("</kbd>"))
                             .unwrap_or(&s);
@@ -347,10 +364,14 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
     match block {
         MarkdownBlock::Heading { level, inlines } => {
             let class_name = match level {
-                1 => "text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-300 mt-4 mb-2 pb-1.5 border-b border-[#232738]",
+                1 => {
+                    "text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-300 mt-4 mb-2 pb-1.5 border-b border-[#232738]"
+                }
                 2 => "text-sm font-bold text-sky-400 mt-3 mb-1.5",
                 3 => "text-xs font-semibold text-emerald-400 mt-2.5 mb-1",
-                _ => "text-[11px] font-semibold text-purple-400 mt-2 mb-0.5 uppercase tracking-wider",
+                _ => {
+                    "text-[11px] font-semibold text-purple-400 mt-2 mb-0.5 uppercase tracking-wider"
+                }
             };
             rsx! {
                 div { key: "{idx}", class: "{class_name}",
@@ -364,7 +385,11 @@ fn render_block(block: MarkdownBlock, idx: usize) -> Element {
             }
         },
         MarkdownBlock::CodeBlock { lang, code } => {
-            let display_lang = if lang.is_empty() { "text".to_string() } else { lang.clone() };
+            let display_lang = if lang.is_empty() {
+                "text".to_string()
+            } else {
+                lang.clone()
+            };
             let code_for_copy = code.clone();
             rsx! {
                 div { key: "{idx}", class: "my-3 rounded-xl border border-[#232738] bg-[#0b0d13] shadow-lg overflow-hidden group/code font-mono",
@@ -466,7 +491,10 @@ fn main() {}
         assert!(matches!(blocks[0], MarkdownBlock::Heading { level: 1, .. }));
         assert!(matches!(blocks[1], MarkdownBlock::Paragraph(_)));
         assert!(matches!(blocks[2], MarkdownBlock::CodeBlock { ref lang, .. } if lang == "rust"));
-        assert!(matches!(blocks[3], MarkdownBlock::List { ordered: false, .. }));
+        assert!(matches!(
+            blocks[3],
+            MarkdownBlock::List { ordered: false, .. }
+        ));
     }
 
     #[test]
@@ -475,8 +503,16 @@ fn main() {}
         let blocks = parse_markdown(md);
         assert_eq!(blocks.len(), 1);
         if let MarkdownBlock::Paragraph(ref inlines) = blocks[0] {
-            assert!(inlines.iter().any(|i| matches!(i, InlineSpan::Kbd(k) if k == "Ctrl+C")));
-            assert!(inlines.iter().any(|i| matches!(i, InlineSpan::Kbd(k) if k == "Enter")));
+            assert!(
+                inlines
+                    .iter()
+                    .any(|i| matches!(i, InlineSpan::Kbd(k) if k == "Ctrl+C"))
+            );
+            assert!(
+                inlines
+                    .iter()
+                    .any(|i| matches!(i, InlineSpan::Kbd(k) if k == "Enter"))
+            );
         } else {
             panic!("Expected MarkdownBlock::Paragraph");
         }

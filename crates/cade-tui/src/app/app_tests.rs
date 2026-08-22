@@ -497,8 +497,8 @@ fn test_prepared_cache_width_invalidation() {
 
 #[test]
 fn test_toggle_last_collapsible_item_assistant_code_block() {
-    use crate::app::TuiApp;
     use crate::app::RenderLine;
+    use crate::app::TuiApp;
     use crate::app::timeline::TimelineItemKind;
 
     let mut app = TuiApp::new(
@@ -514,7 +514,8 @@ fn test_toggle_last_collapsible_item_assistant_code_block() {
     }
     md.push_str("```\n");
 
-    app.lines.push(RenderLine::UserMessage("Write code".to_string()));
+    app.lines
+        .push(RenderLine::UserMessage("Write code".to_string()));
     app.lines.push(RenderLine::AssistantText(md));
 
     assert!(app.expanded_items.is_empty());

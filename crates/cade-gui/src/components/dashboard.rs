@@ -278,45 +278,55 @@ fn code_for_tab(tab_idx: i32, lang: CodeLanguage) -> String {
 
 const session = new AgentSession({ serverUrl: "http://localhost:8284" });
 const answer = await session.prompt("Inspect workspace and describe structure.");
-console.log(answer);"#.to_string(),
+console.log(answer);"#
+            .to_string(),
         (0, CodeLanguage::Python) => r#"from cade_sdk import EmbeddedSession
 
 with EmbeddedSession(model="anthropic/claude-sonnet-4-5") as session:
     answer = session.prompt("Inspect workspace and describe structure.")
-    print(answer)"#.to_string(),
+    print(answer)"#
+            .to_string(),
         (0, CodeLanguage::Curl) => r#"curl -X POST http://localhost:8284/v1/agents/default/run \
   -H "Content-Type: application/json" \
-  -d '{"input": "Inspect workspace and describe structure."}'"#.to_string(),
+  -d '{"input": "Inspect workspace and describe structure."}'"#
+            .to_string(),
         (1, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({
   serverUrl: "http://localhost:8284",
   model: "anthropic/claude-sonnet-4-5",
   systemPrompt: "You are a specialized security reviewer."
-});"#.to_string(),
+});"#
+            .to_string(),
         (1, CodeLanguage::Python) => r#"from cade_sdk import EmbeddedSession
 
 session = EmbeddedSession(
     model="anthropic/claude-sonnet-4-5",
     system_prompt="You are a specialized security reviewer."
-)"#.to_string(),
+)"#
+        .to_string(),
         (1, CodeLanguage::Curl) => r#"curl -X POST http://localhost:8284/v1/agents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Security Reviewer",
     "model": "anthropic/claude-sonnet-4-5",
     "system_prompt": "You are a specialized security reviewer."
-  }'"#.to_string(),
+  }'"#
+        .to_string(),
         (_, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({ serverUrl: "http://localhost:8284" });
 const projectRules = await session.getMemory("project");
-console.log(projectRules);"#.to_string(),
+console.log(projectRules);"#
+            .to_string(),
         (_, CodeLanguage::Python) => r#"from cade_sdk import EmbeddedSession
 
 with EmbeddedSession() as session:
     rules = session.get_memory("project")
-    print("Project Rules:", rules)"#.to_string(),
-        (_, CodeLanguage::Curl) => r#"curl http://localhost:8284/v1/agents/default/memory"#.to_string(),
+    print("Project Rules:", rules)"#
+            .to_string(),
+        (_, CodeLanguage::Curl) => {
+            r#"curl http://localhost:8284/v1/agents/default/memory"#.to_string()
+        }
     }
 }

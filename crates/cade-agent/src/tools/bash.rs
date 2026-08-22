@@ -1,8 +1,10 @@
 use crate::Result;
+use cade_core::shell::{
+    DEFAULT_TIMEOUT_SECS, MAX_OUTPUT_CHARS, ShellExecutionEngine, ShellRequest, truncate_head_tail,
+};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use cade_core::shell::{ShellExecutionEngine, ShellRequest, DEFAULT_TIMEOUT_SECS, MAX_OUTPUT_CHARS, truncate_head_tail};
 
 pub struct BashTool;
 
@@ -22,10 +24,12 @@ impl BashTool {
         let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         let engine = ShellExecutionEngine::new();
-        let req = ShellRequest::new(command)
-            .with_timeout(Duration::from_secs(timeout_secs));
+        let req = ShellRequest::new(command).with_timeout(Duration::from_secs(timeout_secs));
 
-        let res = engine.execute(req).await.map_err(|e| crate::Error::custom(e.to_string()))?;
+        let res = engine
+            .execute(req)
+            .await
+            .map_err(|e| crate::Error::custom(e.to_string()))?;
         Ok(res.format_for_llm())
     }
 

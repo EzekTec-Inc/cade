@@ -787,14 +787,16 @@ pub(super) async fn handle_run_subagent_tool_inner(
             content: system_prompt_full,
             tool_calls: None,
             tool_call_id: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         },
         LlmMessage {
             role: "user".to_string(),
             content: prompt.clone(),
             tool_calls: None,
             tool_call_id: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         },
     ];
 
@@ -1524,7 +1526,8 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
                 content: sys.to_string(),
                 tool_call_id: None,
                 tool_calls: None,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             });
         }
         messages.push(cade_ai::LlmMessage {
@@ -1532,7 +1535,8 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
             content: prompt.to_string(),
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         });
 
         let req = cade_ai::CompletionRequest {
@@ -1726,7 +1730,8 @@ pub(super) async fn smart_memory_merge(
             content: prompt,
             tool_call_id: None,
             tool_calls: None,
-            images: None, cache_control: None,
+            images: None,
+            cache_control: None,
         }],
         tools: vec![],
         max_tokens: 4000,

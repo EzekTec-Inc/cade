@@ -127,8 +127,11 @@ impl PluginEngine for NativePluginEngine {
             if !reg.has_tool(tool_name) {
                 return Err(Error::custom(format!("Unknown plugin tool: {tool_name}")));
             }
-            reg.find_tool_handler(tool_name)
-                .ok_or_else(|| Error::custom(format!("Plugin tool '{tool_name}' has no executable handler")))?
+            reg.find_tool_handler(tool_name).ok_or_else(|| {
+                Error::custom(format!(
+                    "Plugin tool '{tool_name}' has no executable handler"
+                ))
+            })?
         };
 
         let args_str = serde_json::to_string(args).unwrap_or_default();
@@ -218,7 +221,9 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "plugin__test_tool");
 
-        let out = mock.dispatch("plugin__test_tool", &serde_json::json!({})).await?;
+        let out = mock
+            .dispatch("plugin__test_tool", &serde_json::json!({}))
+            .await?;
         assert_eq!(out, "Mock plugin output");
 
         let err = mock.dispatch("nonexistent", &serde_json::json!({})).await;

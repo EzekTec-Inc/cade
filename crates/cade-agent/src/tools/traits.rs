@@ -98,7 +98,6 @@ pub trait ErasedBuiltInTool: Send + Sync {
     fn execute_erased(&self, args: Value) -> Result<Value>;
 }
 
-
 /// Structured, machine-readable tool execution outcome.
 ///
 /// Encapsulates stdout, stderr, exit status, execution duration,
@@ -136,7 +135,9 @@ impl StructuredToolOutput {
         let summary = if !stderr_str.is_empty() {
             Some(stderr_str.lines().next().unwrap_or("").to_string())
         } else {
-            Some(format!("Command exited with non-zero status code: {exit_code}"))
+            Some(format!(
+                "Command exited with non-zero status code: {exit_code}"
+            ))
         };
 
         Self {
@@ -196,31 +197,6 @@ impl From<cade_core::shell::ShellResult> for StructuredToolOutput {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_structured_tool_output_success() {
-        let out = StructuredToolOutput::success("Build completed successfully", 150);
-        assert_eq!(out.exit_code, 0);
-        assert_eq!(out.truncated, false);
-        assert_eq!(out.error_summary, None);
-        assert_eq!(out.format_for_llm(), "Build completed successfully");
-    }
-
-    #[test]
-    fn test_structured_tool_output_failure() {
-        let out = StructuredToolOutput::failure("Partial output", "error[E0425]: cannot find function", 1, 200);
-        assert_eq!(out.exit_code, 1);
-        assert_eq!(out.error_summary, Some("error[E0425]: cannot find function".to_string()));
-        let formatted = out.format_for_llm();
-        assert!(formatted.contains("Partial output"));
-        assert!(formatted.contains("STDERR:\nerror[E0425]"));
-        assert!(formatted.contains("(exit code 1)"));
-    }
-}
-
 impl<T> ErasedBuiltInTool for T
 where
     T: BuiltInTool + 'static,
@@ -243,5 +219,38 @@ where
         })?;
         let result = self.execute(typed_args)?;
         Ok(serde_json::to_value(result)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_structured_tool_output_success() {
+        let out = StructuredToolOutput::success("Build completed successfully", 150);
+        assert_eq!(out.exit_code, 0);
+        assert!(!out.truncated);
+        assert_eq!(out.error_summary, None);
+        assert_eq!(out.format_for_llm(), "Build completed successfully");
+    }
+
+    #[test]
+    fn test_structured_tool_output_failure() {
+        let out = StructuredToolOutput::failure(
+            "Partial output",
+            "error[E0425]: cannot find function",
+            1,
+            200,
+        );
+        assert_eq!(out.exit_code, 1);
+        assert_eq!(
+            out.error_summary,
+            Some("error[E0425]: cannot find function".to_string())
+        );
+        let formatted = out.format_for_llm();
+        assert!(formatted.contains("Partial output"));
+        assert!(formatted.contains("STDERR:\nerror[E0425]"));
+        assert!(formatted.contains("(exit code 1)"));
     }
 }

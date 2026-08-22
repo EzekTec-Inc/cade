@@ -38,9 +38,7 @@ pub enum CadeStreamEvent {
         model: String,
     },
     /// Stream or turn completed with the final outcome/finish reason.
-    Finished {
-        outcome: String,
-    },
+    Finished { outcome: String },
     /// An error occurred during execution or streaming.
     Error(String),
 }
@@ -79,31 +77,90 @@ impl CadeStreamEvent {
             "reasoning_message" => event.reasoning().map(|r| Self::Thought(r.to_string())),
             "tool_call_message" => {
                 let tc = event.data.get("tool_call")?;
-                let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let name = tc.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let id = tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let name = tc
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 let arguments = tc.get("arguments").cloned().unwrap_or(Value::Null);
-                Some(Self::ToolExecuting { tool_call_id: id, tool_name: name, arguments })
+                Some(Self::ToolExecuting {
+                    tool_call_id: id,
+                    tool_name: name,
+                    arguments,
+                })
             }
             "tool_result_message" => {
                 let tr = event.data.get("tool_result")?;
-                let id = tr.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let name = tr.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let output = tr.get("output").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let is_error = tr.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
-                Some(Self::ToolCompleted { tool_call_id: id, tool_name: name, output, is_error })
+                let id = tr
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let name = tr
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let output = tr
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let is_error = tr
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Some(Self::ToolCompleted {
+                    tool_call_id: id,
+                    tool_name: name,
+                    output,
+                    is_error,
+                })
             }
             "usage_statistics" => {
-                let input = event.data.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let output = event.data.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let model = event.data.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                Some(Self::Usage { input_tokens: input, output_tokens: output, model })
+                let input = event
+                    .data
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let output = event
+                    .data
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let model = event
+                    .data
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                Some(Self::Usage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    model,
+                })
             }
             "finish_reason" => {
-                let reason = event.data.get("reason").and_then(|v| v.as_str()).unwrap_or("done").to_string();
+                let reason = event
+                    .data
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("done")
+                    .to_string();
                 Some(Self::Finished { outcome: reason })
             }
             "error" => {
-                let err_msg = event.data.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
+                let err_msg = event
+                    .data
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
                 Some(Self::Error(err_msg))
             }
             _ => None,
@@ -123,8 +180,14 @@ mod tests {
             data: json!({ "content": "Hello SDK!" }),
         };
         let parsed = CadeStreamEvent::from_stream_event(&text_event);
-        assert_eq!(parsed, Some(CadeStreamEvent::MessageDelta("Hello SDK!".to_string())));
-        assert_eq!(parsed.as_ref().and_then(|e| e.as_text()), Some("Hello SDK!"));
+        assert_eq!(
+            parsed,
+            Some(CadeStreamEvent::MessageDelta("Hello SDK!".to_string()))
+        );
+        assert_eq!(
+            parsed.as_ref().and_then(|e| e.as_text()),
+            Some("Hello SDK!")
+        );
 
         let tool_call_event = cade_api_types::StreamEvent {
             message_type: "tool_call_message".to_string(),
@@ -137,6 +200,11 @@ mod tests {
             }),
         };
         let parsed_tc = CadeStreamEvent::from_stream_event(&tool_call_event);
-        assert!(parsed_tc.as_ref().map(|e| e.is_tool_executing()).unwrap_or(false));
+        assert!(
+            parsed_tc
+                .as_ref()
+                .map(|e| e.is_tool_executing())
+                .unwrap_or(false)
+        );
     }
 }

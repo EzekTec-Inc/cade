@@ -1,5 +1,5 @@
 use crate::permissions::manager::PermissionManager;
-use crate::permissions::rules::{tool_first_arg, Verdict};
+use crate::permissions::rules::{Verdict, tool_first_arg};
 use crate::permissions::service::{ConsentChoice, PermissionService};
 use std::sync::Arc;
 

@@ -498,7 +498,11 @@ impl Repl {
 
                 {
                     let mut app = bg_app_arc.lock();
-                    if let Some(tracker) = app.subagent_trackers.iter_mut().find(|t| t.task_id == bg_task_id) {
+                    if let Some(tracker) = app
+                        .subagent_trackers
+                        .iter_mut()
+                        .find(|t| t.task_id == bg_task_id)
+                    {
                         tracker.status = if is_error {
                             cade_tui::subagent_tracker::SubagentStatus::Failed {
                                 finished_at: std::time::Instant::now(),

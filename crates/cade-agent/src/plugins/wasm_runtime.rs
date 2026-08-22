@@ -6,11 +6,9 @@
 
 use crate::Result;
 use std::collections::HashMap;
-use wasmtime::{
-    Config, Engine, Linker, Module, Store, TypedFunc,
-};
-use wasmtime_wasi::preview1::{WasiP1Ctx, add_to_linker_async};
+use wasmtime::{Config, Engine, Linker, Module, Store, TypedFunc};
 use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::preview1::{WasiP1Ctx, add_to_linker_async};
 
 struct HostState {
     wasi: WasiP1Ctx,
@@ -129,12 +127,14 @@ impl WasmRuntime {
         let mut wasi_builder = WasiCtxBuilder::new();
         wasi_builder.args(&["wasm-plugin"]);
         wasi_builder.inherit_stderr();
-        wasi_builder.preopened_dir(
-            "/",
-            "/",
-            wasmtime_wasi::DirPerms::all(),
-            wasmtime_wasi::FilePerms::all(),
-        ).map_err(|e| crate::Error::custom(format!("Failed to preopen directory: {e}")))?;
+        wasi_builder
+            .preopened_dir(
+                "/",
+                "/",
+                wasmtime_wasi::DirPerms::all(),
+                wasmtime_wasi::FilePerms::all(),
+            )
+            .map_err(|e| crate::Error::custom(format!("Failed to preopen directory: {e}")))?;
 
         let ctx = wasi_builder.build_p1();
 
@@ -144,11 +144,14 @@ impl WasmRuntime {
         add_to_linker_async(&mut linker, |state: &mut HostState| &mut state.wasi)
             .map_err(|e| crate::Error::custom(format!("Failed to configure Linker: {e}")))?;
 
-        let instance = linker.instantiate_async(&mut store, &module).await.map_err(|e| {
-            crate::Error::custom(format!(
-                "Failed to instantiate WASM plugin '{plugin_name}': {e}"
-            ))
-        })?;
+        let instance = linker
+            .instantiate_async(&mut store, &module)
+            .await
+            .map_err(|e| {
+                crate::Error::custom(format!(
+                    "Failed to instantiate WASM plugin '{plugin_name}': {e}"
+                ))
+            })?;
 
         let func: TypedFunc<(i32, i32), i64> = instance
             .get_typed_func(&mut store, &export_name)

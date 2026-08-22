@@ -19,9 +19,7 @@ pub struct RigProviderAdapter<M: CompletionModel + Clone + Send + Sync> {
 // region:    --- Implementations
 
 #[async_trait]
-impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmProvider
-    for RigProviderAdapter<M>
-{
+impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmProvider for RigProviderAdapter<M> {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         // Map CADE messages to a flat prompt string for rig-core basic completion
         let prompt = req

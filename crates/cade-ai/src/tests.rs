@@ -372,7 +372,8 @@ fn llm_message_roundtrip() -> Result<()> {
         content: "Hello".into(),
         tool_call_id: None,
         tool_calls: None,
-        images: None, cache_control: None,
+        images: None,
+        cache_control: None,
     };
 
     // -- Exec

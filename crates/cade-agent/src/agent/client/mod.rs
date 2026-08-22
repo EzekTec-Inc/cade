@@ -685,14 +685,14 @@ pub mod memory;
 pub mod messages;
 pub mod storage_impl;
 
-
 #[cfg(test)]
 mod client_auth_tests {
     use super::*;
 
     #[test]
     fn test_client_set_api_key() {
-        let mut client = HttpTransport::new("http://localhost:8284".to_string(), "old_key".to_string()).unwrap();
+        let mut client =
+            HttpTransport::new("http://localhost:8284".to_string(), "old_key".to_string()).unwrap();
         assert_eq!(client.api_key(), "old_key");
 
         client.set_api_key("new_key");

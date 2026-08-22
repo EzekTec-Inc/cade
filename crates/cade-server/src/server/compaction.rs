@@ -1,5 +1,5 @@
-use cade_ai::{LlmMessage, PromptBudgetManager};
 use crate::server::state::AppState;
+use cade_ai::{LlmMessage, PromptBudgetManager};
 use cade_store::sqlite;
 
 /// Result of synchronous inline compaction of conversation history.
@@ -52,7 +52,11 @@ pub struct DefaultContextCompactor;
 
 impl DefaultContextCompactor {
     /// Helper to group messages into turns (identical to the legacy group_into_turns).
-    fn group_into_turns(&self, messages: &[LlmMessage], max_turn_chars: usize) -> Vec<Vec<LlmMessage>> {
+    fn group_into_turns(
+        &self,
+        messages: &[LlmMessage],
+        max_turn_chars: usize,
+    ) -> Vec<Vec<LlmMessage>> {
         let mut turns: Vec<Vec<LlmMessage>> = Vec::new();
         let mut current: Vec<LlmMessage> = Vec::new();
         let mut current_chars = 0;
@@ -150,7 +154,8 @@ impl ContextCompactionEngine for DefaultContextCompactor {
                             let keep = len - cut_here;
                             let keep_head = (keep as f64 * 0.2) as usize;
                             let keep_tail = keep.saturating_sub(keep_head);
-                            let mut new_content: String = m.content.chars().take(keep_head).collect();
+                            let mut new_content: String =
+                                m.content.chars().take(keep_head).collect();
                             new_content.push_str(&format!(
                                 "\n... [{} chars truncated to fit context window] ...\n",
                                 cut_here
@@ -222,8 +227,14 @@ impl ContextCompactionEngine for DefaultContextCompactor {
         protect_chars: usize,
         min_chars: usize,
     ) -> Result<usize, String> {
-        sqlite::compact_old_tool_outputs(db_pool, agent_id, conversation_id, protect_chars, min_chars)
-            .map_err(|e| e.to_string())
+        sqlite::compact_old_tool_outputs(
+            db_pool,
+            agent_id,
+            conversation_id,
+            protect_chars,
+            min_chars,
+        )
+        .map_err(|e| e.to_string())
     }
 
     async fn consolidate_background(

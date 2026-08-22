@@ -93,7 +93,8 @@ impl Repl {
                 self.tui_dim("  No artifacts stored yet.".to_string());
             }
             Ok(arts) => {
-                self.artifacts_picker(std::sync::Arc::clone(&self.app), arts, &agent_id).await?;
+                self.artifacts_picker(std::sync::Arc::clone(&self.app), arts, &agent_id)
+                    .await?;
             }
         }
         Ok(false)

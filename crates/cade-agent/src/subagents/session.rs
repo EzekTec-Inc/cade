@@ -5,7 +5,7 @@
 //! real-time telemetry streaming, and structured outcome models.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 use super::config::SubagentConfig;
@@ -358,7 +358,13 @@ mod tests {
             .with_event_emitter(emitter);
 
         // Mutate isolated file
-        let isolated_file = session.workspace_guard.as_ref().unwrap().path().unwrap().join("code.rs");
+        let isolated_file = session
+            .workspace_guard
+            .as_ref()
+            .unwrap()
+            .path()
+            .unwrap()
+            .join("code.rs");
         std::fs::write(&isolated_file, "refactored")?;
 
         // Finalize with Success

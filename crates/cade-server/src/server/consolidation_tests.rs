@@ -573,9 +573,9 @@ fn mk_state(db: cade_store::sqlite::Db, llm: Arc<dyn LlmProvider>) -> AppState {
         agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-            crate::server::state::CONTEXT_CACHE_CAPACITY,
-        ))),
+        context_cache: Arc::new(parking_lot::Mutex::new(
+            crate::server::state::SafeLruCache::new(crate::server::state::CONTEXT_CACHE_CAPACITY),
+        )),
         all_skills: Arc::new(AsyncRwLock::new(Vec::new())),
         agent_skills: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
         pending_subagent_results: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
@@ -1068,6 +1068,8 @@ async fn test_memory_consolidation_engine_mock_and_default_seam() {
 
     // 2. Test Default Engine with non-existent agent returns Skipped or Error cleanly
     let default_engine = DefaultMemoryConsolidationEngine;
-    let def_need = default_engine.check_need(&state, "agent-nonexistent", &cx).await;
+    let def_need = default_engine
+        .check_need(&state, "agent-nonexistent", &cx)
+        .await;
     assert_eq!(def_need, ConsolidationNeed::UpToDate);
 }

@@ -2,8 +2,8 @@
 #![cfg(feature = "rig-compat")]
 
 use crate::sqlite::Db;
-use rig::vector_store::{VectorSearchRequest, VectorStoreError};
 use rig::vector_store::request::Filter;
+use rig::vector_store::{VectorSearchRequest, VectorStoreError};
 
 // region:    --- Types
 

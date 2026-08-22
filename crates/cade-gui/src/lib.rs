@@ -224,7 +224,10 @@ fn App() -> Element {
                                     let mut messages_sig = messages;
                                     spawn(async move {
                                         let c = api::CadeApiClient::new(key_clone);
-                                        if let Ok(list) = c.get_messages(&agent_id_clone, conv_id_clone.as_deref()).await {
+                                        if let Ok(list) = c
+                                            .get_messages(&agent_id_clone, conv_id_clone.as_deref())
+                                            .await
+                                        {
                                             messages_sig.set(list);
                                         }
                                     });
@@ -234,7 +237,10 @@ fn App() -> Element {
                                     let detail = if dropped == 1 {
                                         "1 older turn archived to session_summary.".to_string()
                                     } else {
-                                        format!("{} older turns archived to session_summary.", dropped)
+                                        format!(
+                                            "{} older turns archived to session_summary.",
+                                            dropped
+                                        )
                                     };
                                     list.push(types::ToastMessage {
                                         id: js_sys::Date::now() as u64,

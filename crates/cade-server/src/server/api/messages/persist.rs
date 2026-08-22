@@ -36,7 +36,8 @@ pub(crate) fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
                 content,
                 tool_call_id: row.content["tool_call_id"].as_str().map(String::from),
                 tool_calls: None,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             }]
         }
         "assistant" => {
@@ -55,7 +56,8 @@ pub(crate) fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
                 content: text,
                 tool_call_id: None,
                 tool_calls,
-                images: None, cache_control: None,
+                images: None,
+                cache_control: None,
             }]
         }
         _ => {

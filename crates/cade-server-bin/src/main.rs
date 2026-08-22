@@ -15,8 +15,8 @@ use cade_server::server::{
 };
 use cade_store::sqlite::{self, open as open_db};
 
-use cade_core::settings::SettingsManager;
 use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
+use cade_core::settings::SettingsManager;
 
 // endregion: --- Modules
 
@@ -355,9 +355,11 @@ async fn async_main() -> Result<()> {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(dashmap::DashMap::new()),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(parking_lot::Mutex::new(cade_server::server::state::SafeLruCache::new(
-            cade_server::server::state::CONTEXT_CACHE_CAPACITY,
-        ))),
+        context_cache: Arc::new(parking_lot::Mutex::new(
+            cade_server::server::state::SafeLruCache::new(
+                cade_server::server::state::CONTEXT_CACHE_CAPACITY,
+            ),
+        )),
         all_skills: Arc::new(RwLock::new(all_skills)),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
         pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -420,7 +422,8 @@ async fn async_main() -> Result<()> {
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────
     // Spawn the deep SleeptimeAgent background task to manage automated periodic memory consolidation.
-    let _sleeptime_handle = cade_server::server::consolidation::SleeptimeAgent::new(state.clone()).spawn();
+    let _sleeptime_handle =
+        cade_server::server::consolidation::SleeptimeAgent::new(state.clone()).spawn();
 
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|req: &Request<_>| {

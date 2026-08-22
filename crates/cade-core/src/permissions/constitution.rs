@@ -31,10 +31,7 @@ pub enum ConstitutionViolation {
         reason: String,
     },
     /// Attempted to mutate source code outside the designated AST engine.
-    InvalidCodeMutationTool {
-        tool: String,
-        path: String,
-    },
+    InvalidCodeMutationTool { tool: String, path: String },
     /// General constitutional rule breach.
     RuleViolation(String),
 }

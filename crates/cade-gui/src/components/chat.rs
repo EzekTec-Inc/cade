@@ -597,11 +597,8 @@ fn input_area(
         let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let conv_id = active_conversation();
-        let coordinator = crate::chat_session::ChatSessionCoordinator::new(
-            api_client,
-            agent_id,
-            conv_id,
-        );
+        let coordinator =
+            crate::chat_session::ChatSessionCoordinator::new(api_client, agent_id, conv_id);
 
         let state_toast = state;
 

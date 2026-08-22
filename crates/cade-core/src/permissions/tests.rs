@@ -974,7 +974,10 @@ async fn test_security_authority_caches_session_consent() {
     let authority = SecurityAuthority::new(mgr.clone(), std::sync::Arc::new(service));
 
     // First call: triggers request_consent and stores AllowSession in mgr
-    let first_res = authority.authorize("write_file", &args, false).await.unwrap();
+    let first_res = authority
+        .authorize("write_file", &args, false)
+        .await
+        .unwrap();
     assert_eq!(first_res, Verdict::Allow);
 
     // Second call: mgr resolves directly to Verdict::Allow via cached session allow rule!
@@ -996,8 +999,14 @@ fn test_permission_manager_invalidation_on_disconnect() {
     mgr.add_session_allow("github__create_issue");
     mgr.add_session_allow("serena__replace_content");
 
-    assert_eq!(mgr.resolve("github__create_issue", &github_args, true), Verdict::Allow);
-    assert_eq!(mgr.resolve("serena__replace_content", &serena_args, true), Verdict::Allow);
+    assert_eq!(
+        mgr.resolve("github__create_issue", &github_args, true),
+        Verdict::Allow
+    );
+    assert_eq!(
+        mgr.resolve("serena__replace_content", &serena_args, true),
+        Verdict::Allow
+    );
 
     // Invalidate github server session permissions upon disconnect
     mgr.remove_session_allows_for_prefix("github__");
@@ -1009,7 +1018,10 @@ fn test_permission_manager_invalidation_on_disconnect() {
     ));
 
     // serena__replace_content should remain intact
-    assert_eq!(mgr.resolve("serena__replace_content", &serena_args, true), Verdict::Allow);
+    assert_eq!(
+        mgr.resolve("serena__replace_content", &serena_args, true),
+        Verdict::Allow
+    );
 }
 
 #[tokio::test]
@@ -1019,10 +1031,8 @@ async fn test_dynamic_constitution_governor_sniffing() {
     };
     use serde_json::json;
 
-    let governor = DynamicConstitutionGovernor::new(vec![
-        "serena".to_string(),
-        "cade-rag-mcp".to_string(),
-    ]);
+    let governor =
+        DynamicConstitutionGovernor::new(vec!["serena".to_string(), "cade-rag-mcp".to_string()]);
 
     // 1. Benign commands pass without violation
     let benign_cmd = json!({"command": "cargo build --release && cargo test"});

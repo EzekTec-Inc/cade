@@ -17,7 +17,11 @@ pub trait PermissionService: Send + Sync {
     async fn request_permission(&self, tool_name: &str, args: &Value) -> Result<bool, String>;
 
     /// Request rich consent with scope choices (AllowOnce, AllowSession, AlwaysAllow, Deny).
-    async fn request_consent(&self, tool_name: &str, args: &Value) -> Result<ConsentChoice, String> {
+    async fn request_consent(
+        &self,
+        tool_name: &str,
+        args: &Value,
+    ) -> Result<ConsentChoice, String> {
         match self.request_permission(tool_name, args).await {
             Ok(true) => Ok(ConsentChoice::AllowOnce),
             Ok(false) => Ok(ConsentChoice::Deny),

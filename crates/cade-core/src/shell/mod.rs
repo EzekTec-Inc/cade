@@ -251,7 +251,12 @@ impl ShellExecutionEngine {
 
         let output = tokio::time::timeout(req.timeout, cmd.output())
             .await
-            .map_err(|_| crate::Error::custom(format!("Command timed out after {}s", req.timeout.as_secs())))?
+            .map_err(|_| {
+                crate::Error::custom(format!(
+                    "Command timed out after {}s",
+                    req.timeout.as_secs()
+                ))
+            })?
             .map_err(|e| crate::Error::custom(format!("Failed to spawn shell: {e}")))?;
 
         let duration = start_time.elapsed();
@@ -283,7 +288,10 @@ pub fn truncate_head_tail(text: &str, max_chars: usize) -> (String, bool) {
     let omitted = count.saturating_sub(max_chars);
 
     let head: String = text.chars().take(head_chars).collect();
-    let tail: String = text.chars().skip(count.saturating_sub(tail_chars)).collect();
+    let tail: String = text
+        .chars()
+        .skip(count.saturating_sub(tail_chars))
+        .collect();
 
     let formatted = format!(
         "{head}\n\n[... Output truncated: {omitted} characters omitted from middle. Use head/tail/grep to narrow output. ...]\n\n{tail}"
@@ -299,7 +307,9 @@ pub fn shell_command(command: &str) -> tokio::process::Command {
 }
 
 pub fn shell_command_sync(command: &str) -> std::process::Command {
-    ShellExecutionEngine::new().adapter.build_command_sync(command)
+    ShellExecutionEngine::new()
+        .adapter
+        .build_command_sync(command)
 }
 
 pub fn open_browser(url: &str) -> std::io::Result<std::process::Child> {

@@ -14,8 +14,11 @@ pub struct DesktopControl {
 impl DesktopControl {
     /// Try to initialize desktop input control, returning an error if no display server is connected.
     pub async fn try_detect() -> Result<Self> {
-        let enigo = enigo::Enigo::new(&enigo::Settings::default())
-            .map_err(|e| Error::custom(format!("Failed to initialize desktop input controller: {e}")))?;
+        let enigo = enigo::Enigo::new(&enigo::Settings::default()).map_err(|e| {
+            Error::custom(format!(
+                "Failed to initialize desktop input controller: {e}"
+            ))
+        })?;
         Ok(Self {
             enigo: std::sync::Arc::new(tokio::sync::Mutex::new(enigo)),
         })
@@ -36,12 +39,16 @@ impl DesktopControl {
             let status = std::process::Command::new("powershell")
                 .args(["-NoProfile", "-Command", &ps_script])
                 .status()
-                .map_err(|e| Error::custom(format!("Failed to execute PowerShell AppActivate: {e}")))?;
+                .map_err(|e| {
+                    Error::custom(format!("Failed to execute PowerShell AppActivate: {e}"))
+                })?;
 
             if status.success() {
                 return Ok(());
             }
-            return Err(Error::custom(format!("Could not focus window with title '{title}' on Windows")));
+            return Err(Error::custom(format!(
+                "Could not focus window with title '{title}' on Windows"
+            )));
         }
 
         #[cfg(target_os = "macos")]
@@ -58,7 +65,9 @@ impl DesktopControl {
             if status.success() {
                 return Ok(());
             }
-            return Err(Error::custom(format!("Could not focus window with title '{title}' on macOS")));
+            return Err(Error::custom(format!(
+                "Could not focus window with title '{title}' on macOS"
+            )));
         }
 
         #[cfg(target_os = "linux")]
@@ -170,8 +179,13 @@ mod tests {
     #[tokio::test]
     async fn test_focus_nonexistent_window_returns_error() {
         if let Ok(ctrl) = DesktopControl::try_detect().await {
-            let res = ctrl.focus_window("nonexistent_unique_window_title_12345").await;
-            assert!(res.is_err(), "Focusing a non-existent window should return an error");
+            let res = ctrl
+                .focus_window("nonexistent_unique_window_title_12345")
+                .await;
+            assert!(
+                res.is_err(),
+                "Focusing a non-existent window should return an error"
+            );
         }
     }
 }

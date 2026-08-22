@@ -58,16 +58,17 @@ impl ChatSessionCoordinator {
                     && let Some(idx) = messages.iter().position(|m| m.id == stream_id)
                 {
                     let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{delta}"));
+                    messages[idx].content = serde_json::Value::String(format!("{existing}{delta}"));
                 }
             }
             "reasoning_message" => {
                 if let Some(r) = event.reasoning() {
                     reasoning_acc.push_str(r);
-                    let reasoning_block = format!("<reasoning>
+                    let reasoning_block = format!(
+                        "<reasoning>
 {reasoning_acc}
-</reasoning>");
+</reasoning>"
+                    );
                     if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
                         let existing = messages[idx].content.as_str().unwrap_or("").to_string();
                         let updated = if existing.is_empty() || existing == reasoning_block {
@@ -75,8 +76,10 @@ impl ChatSessionCoordinator {
                         } else if let Some(tail) = existing.split("</reasoning>").nth(1) {
                             format!("{reasoning_block}{tail}")
                         } else {
-                            format!("{reasoning_block}
-{existing}")
+                            format!(
+                                "{reasoning_block}
+{existing}"
+                            )
                         };
                         messages[idx].content = serde_json::Value::String(updated);
                     }
@@ -86,18 +89,18 @@ impl ChatSessionCoordinator {
                 if let Some(tc) = event.tool_call()
                     && let Some(idx) = messages.iter().position(|m| m.id == stream_id)
                 {
-                        let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                        let tool_block = format!(
-                            "
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let tool_block = format!(
+                        "
 
 [Tool Call: {}]
 Arguments:
 {}
 ",
-                            tc.name, tc.arguments
-                        );
-                        messages[idx].content =
-                            serde_json::Value::String(format!("{existing}{tool_block}"));
+                        tc.name, tc.arguments
+                    );
+                    messages[idx].content =
+                        serde_json::Value::String(format!("{existing}{tool_block}"));
                 }
             }
             "error" => {
@@ -188,9 +191,11 @@ Arguments:
             let final_content = match &stream_result {
                 Err(e) => {
                     let existing = final_msgs[idx].content.as_str().unwrap_or("").to_string();
-                    format!("{existing}
+                    format!(
+                        "{existing}
 
-[Stream Error: {e}]")
+[Stream Error: {e}]"
+                    )
                 }
                 Ok(_) => final_msgs[idx].content.as_str().unwrap_or("").to_string(),
             };
@@ -275,7 +280,13 @@ mod tests {
             &mut reasoning_acc,
         );
 
-        assert!(messages[0].content.as_str().unwrap().contains("<reasoning>"));
+        assert!(
+            messages[0]
+                .content
+                .as_str()
+                .unwrap()
+                .contains("<reasoning>")
+        );
         assert!(
             messages[0]
                 .content

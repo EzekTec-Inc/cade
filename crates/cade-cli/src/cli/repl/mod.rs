@@ -1243,10 +1243,7 @@ impl Repl {
                 match self.handle_subagent(&call_id, &args).await {
                     Ok(result) => {
                         if result.is_error {
-                            let _ = self
-                                .app
-                                .lock()
-                                .push(RenderLine::ErrorMsg(result.output));
+                            let _ = self.app.lock().push(RenderLine::ErrorMsg(result.output));
                         } else {
                             let _ = self
                                 .app

@@ -13,8 +13,7 @@ use cade_agent::backends::storage::StorageBackend;
 use cade_agent::mcp::McpManager;
 use cade_agent::tools::{RuntimeToolResult, ToolRuntime, all_schemas};
 use cade_ai::{
-    AiConfig, CompletionRequest, LlmMessage, LlmProvider, LlmRouter,
-    LlmToolCall, StreamChunk,
+    AiConfig, CompletionRequest, LlmMessage, LlmProvider, LlmRouter, LlmToolCall, StreamChunk,
 };
 use cade_core::permissions::{PermissionManager, PermissionMode};
 use cade_core::skills::Skill;
@@ -64,15 +63,8 @@ impl StorageBackend for EmbeddedStorageBackend {
         desc: Option<&str>,
         limit: Option<usize>,
     ) -> cade_agent::Result<()> {
-        cade_store::sqlite::upsert_memory_block(
-            &self.db,
-            agent_id,
-            label,
-            value,
-            desc,
-            limit,
-        )
-        .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        cade_store::sqlite::upsert_memory_block(&self.db, agent_id, label, value, desc, limit)
+            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         Ok(())
     }
 
@@ -264,8 +256,7 @@ impl StorageBackend for EmbeddedStorageBackend {
     async fn record_recent_edit(&self, agent_id: &str, path: &str) -> cade_agent::Result<()> {
         let label = "recent_edits";
         let target_line = format!("Recently edited: {path}");
-        let blocks =
-            cade_store::sqlite::get_memory_blocks(&self.db, agent_id).unwrap_or_default();
+        let blocks = cade_store::sqlite::get_memory_blocks(&self.db, agent_id).unwrap_or_default();
         let ws = blocks.into_iter().find(|(l, _, _)| l == label);
 
         let mut lines: Vec<String> = if let Some((_, block_val, _)) = ws {
@@ -334,7 +325,9 @@ impl StorageBackend for EmbeddedStorageBackend {
 
         match result {
             Ok(_) => Ok(id),
-            Err(e) => Err(cade_agent::Error::custom(format!("Failed to store artifact: {e}"))),
+            Err(e) => Err(cade_agent::Error::custom(format!(
+                "Failed to store artifact: {e}"
+            ))),
         }
     }
 
@@ -347,23 +340,26 @@ impl StorageBackend for EmbeddedStorageBackend {
         excerpt: Option<&str>,
     ) -> cade_agent::Result<()> {
         cade_store::sqlite::insert_memory_evidence(
-            &self.db,
-            agent_id,
-            label,
-            kind,
-            reference,
-            excerpt,
-            1.0,
+            &self.db, agent_id, label, kind, reference, excerpt, 1.0,
         )
         .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         Ok(())
     }
 
-    async fn trigger_reflect(&self, _agent_id: &str, _focus: Option<&str>) -> cade_agent::Result<()> {
+    async fn trigger_reflect(
+        &self,
+        _agent_id: &str,
+        _focus: Option<&str>,
+    ) -> cade_agent::Result<()> {
         Ok(())
     }
 
-    async fn install_plugin(&self, _agent_id: &str, _url: &str, _plugin_id: &str) -> cade_agent::Result<String> {
+    async fn install_plugin(
+        &self,
+        _agent_id: &str,
+        _url: &str,
+        _plugin_id: &str,
+    ) -> cade_agent::Result<String> {
         Ok("Plugin installation handled in-process.".to_string())
     }
 
@@ -423,14 +419,13 @@ impl StorageBackend for EmbeddedStorageBackend {
         drop(conn);
         match result {
             Ok(_) => Ok(id),
-            Err(e) => Err(cade_agent::Error::custom(format!("Failed to create checkpoint: {e}"))),
+            Err(e) => Err(cade_agent::Error::custom(format!(
+                "Failed to create checkpoint: {e}"
+            ))),
         }
     }
 
-    async fn list_checkpoints(
-        &self,
-        agent_id: &str,
-    ) -> cade_agent::Result<Vec<Value>> {
+    async fn list_checkpoints(&self, agent_id: &str) -> cade_agent::Result<Vec<Value>> {
         let conn = self
             .db
             .get()
@@ -455,7 +450,11 @@ impl StorageBackend for EmbeddedStorageBackend {
         Ok(list)
     }
 
-    async fn get_checkpoint(&self, agent_id: &str, checkpoint_id: &str) -> cade_agent::Result<Value> {
+    async fn get_checkpoint(
+        &self,
+        agent_id: &str,
+        checkpoint_id: &str,
+    ) -> cade_agent::Result<Value> {
         let conn = self
             .db
             .get()
@@ -478,7 +477,11 @@ impl StorageBackend for EmbeddedStorageBackend {
         Ok(row)
     }
 
-    async fn restore_checkpoint(&self, _agent_id: &str, _checkpoint_id: &str) -> cade_agent::Result<()> {
+    async fn restore_checkpoint(
+        &self,
+        _agent_id: &str,
+        _checkpoint_id: &str,
+    ) -> cade_agent::Result<()> {
         Ok(())
     }
 
@@ -497,7 +500,12 @@ impl StorageBackend for EmbeddedStorageBackend {
             .collect())
     }
 
-    async fn message_agent(&self, _agent_id: &str, _target: &str, _message: &str) -> cade_agent::Result<String> {
+    async fn message_agent(
+        &self,
+        _agent_id: &str,
+        _target: &str,
+        _message: &str,
+    ) -> cade_agent::Result<String> {
         Ok("Message delivered.".to_string())
     }
 
@@ -643,8 +651,11 @@ impl EmbeddedSessionBuilder {
             None => ":memory:".to_string(),
         };
 
-        let db = cade_store::sqlite::open(&db_target)
-            .map_err(|e| Error::custom(format!("failed to open sqlite database at {db_target}: {e}")))?;
+        let db = cade_store::sqlite::open(&db_target).map_err(|e| {
+            Error::custom(format!(
+                "failed to open sqlite database at {db_target}: {e}"
+            ))
+        })?;
 
         let agent_id = self
             .agent_id
@@ -689,12 +700,7 @@ impl EmbeddedSessionBuilder {
         let storage = Arc::new(EmbeddedStorageBackend { db: db.clone() });
         let mcp = Arc::new(McpManager::empty());
 
-        let mut runtime = ToolRuntime::new(
-            storage,
-            mcp,
-            agent_id.clone(),
-            self.cwd,
-        );
+        let mut runtime = ToolRuntime::new(storage, mcp, agent_id.clone(), self.cwd);
         runtime.allowed_paths = self.allowed_paths;
 
         let _permissions = PermissionManager::new(self.permission_mode);
@@ -779,8 +785,9 @@ impl EmbeddedSession {
         }
 
         // 2. Chat history
-        let history = cade_store::sqlite::list_messages(&self.db, &self.agent_id, conversation_id, 100)
-            .map_err(|e| Error::custom(format!("failed to load history: {e}")))?;
+        let history =
+            cade_store::sqlite::list_messages(&self.db, &self.agent_id, conversation_id, 100)
+                .map_err(|e| Error::custom(format!("failed to load history: {e}")))?;
 
         for m in history {
             let text = if let Value::String(s) = m.content {
@@ -943,8 +950,8 @@ impl EmbeddedSession {
                 // Build context
                 let mut messages = Vec::new();
                 let mut sys = sys_prompt.clone().unwrap_or_default();
-                let memory_blocks = cade_store::sqlite::get_memory_blocks_full(&db, &agent_id)
-                    .unwrap_or_default();
+                let memory_blocks =
+                    cade_store::sqlite::get_memory_blocks_full(&db, &agent_id).unwrap_or_default();
 
                 if !memory_blocks.is_empty() {
                     if !sys.is_empty() {
@@ -967,8 +974,9 @@ impl EmbeddedSession {
                     });
                 }
 
-                let history = cade_store::sqlite::list_messages(&db, &agent_id, Some(&conversation_id), 100)
-                    .unwrap_or_default();
+                let history =
+                    cade_store::sqlite::list_messages(&db, &agent_id, Some(&conversation_id), 100)
+                        .unwrap_or_default();
                 for m in history {
                     let txt = if let Value::String(s) = m.content {
                         s
@@ -1021,9 +1029,7 @@ impl EmbeddedSession {
                                         .await;
                                 }
                                 Ok(StreamChunk::FinishReason(r)) => {
-                                    let _ = tx
-                                        .send(CadeStreamEvent::Finished { outcome: r })
-                                        .await;
+                                    let _ = tx.send(CadeStreamEvent::Finished { outcome: r }).await;
                                 }
                                 Ok(StreamChunk::Done) => {}
                                 Err(e) => {
@@ -1223,7 +1229,11 @@ mod tests {
                 })
             } else {
                 // Second turn: answer with result
-                let last_msg = req.messages.last().map(|m| m.content.as_str()).unwrap_or("");
+                let last_msg = req
+                    .messages
+                    .last()
+                    .map(|m| m.content.as_str())
+                    .unwrap_or("");
                 Ok(CompletionResponse {
                     content: Some(format!("Found files from tool. Response: {last_msg}")),
                     tool_calls: vec![],
@@ -1235,7 +1245,8 @@ mod tests {
         async fn stream(
             &self,
             req: &CompletionRequest,
-        ) -> cade_ai::Result<Pin<Box<dyn Stream<Item = cade_ai::Result<StreamChunk>> + Send>>> {
+        ) -> cade_ai::Result<Pin<Box<dyn Stream<Item = cade_ai::Result<StreamChunk>> + Send>>>
+        {
             let resp = self.complete(req).await?;
             let mut chunks = Vec::new();
             if let Some(c) = resp.content {
@@ -1309,10 +1320,18 @@ mod tests {
         }
 
         assert!(!events.is_empty());
-        let has_delta = events.iter().any(|e| matches!(e, CadeStreamEvent::MessageDelta(_)));
-        let has_tool_exec = events.iter().any(|e| matches!(e, CadeStreamEvent::ToolExecuting { .. }));
-        let has_tool_done = events.iter().any(|e| matches!(e, CadeStreamEvent::ToolCompleted { .. }));
-        let has_finish = events.iter().any(|e| matches!(e, CadeStreamEvent::Finished { .. }));
+        let has_delta = events
+            .iter()
+            .any(|e| matches!(e, CadeStreamEvent::MessageDelta(_)));
+        let has_tool_exec = events
+            .iter()
+            .any(|e| matches!(e, CadeStreamEvent::ToolExecuting { .. }));
+        let has_tool_done = events
+            .iter()
+            .any(|e| matches!(e, CadeStreamEvent::ToolCompleted { .. }));
+        let has_finish = events
+            .iter()
+            .any(|e| matches!(e, CadeStreamEvent::Finished { .. }));
 
         assert!(has_delta, "Should emit MessageDelta");
         assert!(has_tool_exec, "Should emit ToolExecuting");

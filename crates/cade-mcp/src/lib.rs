@@ -866,8 +866,14 @@ impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
         &self,
         intent: cade_core::capabilities::mesh::CapabilityIntent,
         _cx: &mut cade_core::capabilities::mesh::CapabilityExecutionContext,
-    ) -> core::result::Result<cade_core::capabilities::mesh::CapabilityOutput, cade_core::capabilities::mesh::ExecutionError> {
-        match self.call_tool(&intent.capability_name, &intent.arguments).await {
+    ) -> core::result::Result<
+        cade_core::capabilities::mesh::CapabilityOutput,
+        cade_core::capabilities::mesh::ExecutionError,
+    > {
+        match self
+            .call_tool(&intent.capability_name, &intent.arguments)
+            .await
+        {
             Some(Ok((output, is_error, ui_resource_uri))) => {
                 Ok(cade_core::capabilities::mesh::CapabilityOutput {
                     tool_call_id: intent.tool_call_id,
@@ -885,10 +891,12 @@ impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
                         err_str,
                     ))
                 } else {
-                    Err(cade_core::capabilities::mesh::ExecutionError::ExecutionFailed(
-                        intent.capability_name,
-                        err_str,
-                    ))
+                    Err(
+                        cade_core::capabilities::mesh::ExecutionError::ExecutionFailed(
+                            intent.capability_name,
+                            err_str,
+                        ),
+                    )
                 }
             }
             None => Err(cade_core::capabilities::mesh::ExecutionError::NotFound(
@@ -913,10 +921,7 @@ impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
                 if is_core {
                     tags.push("core_mcp".to_string());
                 }
-                cade_core::capabilities::mesh::TaggedCapabilitySchema {
-                    schema: s,
-                    tags,
-                }
+                cade_core::capabilities::mesh::TaggedCapabilitySchema { schema: s, tags }
             })
             .collect()
     }

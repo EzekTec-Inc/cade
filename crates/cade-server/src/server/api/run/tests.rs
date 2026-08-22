@@ -137,9 +137,9 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
         agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(crate::server::state::SafeLruCache::new(
-            crate::server::state::CONTEXT_CACHE_CAPACITY,
-        ))),
+        context_cache: std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::server::state::SafeLruCache::new(crate::server::state::CONTEXT_CACHE_CAPACITY),
+        )),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
@@ -398,7 +398,8 @@ fn filter_subagent_tools_strips_run_subagent_schema() {
         serde_json::json!({"name": "run_subagent"}),
         serde_json::json!({"name": "read_file"}),
     ];
-    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, false);
+    let filtered =
+        filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, false);
     let names: Vec<String> = filtered
         .iter()
         .filter_map(|s| s["name"].as_str().map(String::from))
@@ -449,7 +450,8 @@ fn filter_subagent_tools_strips_finish_schema() {
         serde_json::json!({"name": "run_subagent"}),
         serde_json::json!({"name": "read_file"}),
     ];
-    let filtered = filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, false);
+    let filtered =
+        filter_subagent_tools(schemas, &cade_agent::subagents::SubagentTools::All, false);
     let names: Vec<String> = filtered
         .iter()
         .filter_map(|s| s["name"].as_str().map(String::from))

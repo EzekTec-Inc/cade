@@ -6,12 +6,12 @@ pub mod session;
 pub mod workspace_guard;
 
 pub use config::SubagentConfig;
+pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 pub use session::{
-    canonical_finish_tool_schema, SubagentEvent, SubagentEventEmitter, SubagentOutcome,
-    SubagentSession, FINISH_TOOL_NAME,
+    FINISH_TOOL_NAME, SubagentEvent, SubagentEventEmitter, SubagentOutcome, SubagentSession,
+    canonical_finish_tool_schema,
 };
 pub use workspace_guard::IsolatedWorkspaceGuard;
-pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 
 use crate::Result;
 use std::path::{Path, PathBuf};
@@ -1238,8 +1238,13 @@ mod tests {
             "allow_run_subagent": false,
             "system_prompt": "shh"
         }"#;
-        let def = parse_subagent_json("stealth", json, SubagentScope::Project, PathBuf::from("/tmp/x.json"))
-            .expect("valid json profile");
+        let def = parse_subagent_json(
+            "stealth",
+            json,
+            SubagentScope::Project,
+            PathBuf::from("/tmp/x.json"),
+        )
+        .expect("valid json profile");
         assert!(def.hidden);
         assert!(!def.allow_run_subagent);
     }
@@ -1247,8 +1252,13 @@ mod tests {
     #[test]
     fn parse_json_defaults_hidden_false_and_bans_nesting() {
         let json = r#"{"name": "plain", "description": "x"}"#;
-        let def = parse_subagent_json("plain", json, SubagentScope::Project, PathBuf::from("/tmp/y.json"))
-            .expect("valid json profile");
+        let def = parse_subagent_json(
+            "plain",
+            json,
+            SubagentScope::Project,
+            PathBuf::from("/tmp/y.json"),
+        )
+        .expect("valid json profile");
         assert!(!def.hidden);
         assert!(!def.allow_run_subagent);
     }
@@ -1256,8 +1266,13 @@ mod tests {
     #[test]
     fn parse_md_frontmatter_honours_hidden_and_allow_run_subagent() {
         let md = "---\nname: stealth-md\nhidden: true\nallow_run_subagent: false\n---\nbody";
-        let def = parse_subagent_md("stealth-md", md, SubagentScope::Project, PathBuf::from("/tmp/z.md"))
-            .expect("valid md profile");
+        let def = parse_subagent_md(
+            "stealth-md",
+            md,
+            SubagentScope::Project,
+            PathBuf::from("/tmp/z.md"),
+        )
+        .expect("valid md profile");
         assert!(def.hidden);
         assert!(!def.allow_run_subagent);
     }
@@ -1299,22 +1314,35 @@ mod tests {
     fn route_by_description_skips_hidden_defs() {
         let mut stealth = desc_def("stealth", "Runs the test suite and reports failures");
         stealth.hidden = true;
-        let defs = vec![stealth, desc_def("tester", "Runs the test suite and reports failures")];
+        let defs = vec![
+            stealth,
+            desc_def("tester", "Runs the test suite and reports failures"),
+        ];
         let got = route_subagent_by_description("please run the test suite", &defs);
         assert_eq!(got.map(|d| d.name.as_str()), Some("tester"));
     }
 
     #[test]
     fn resolve_auto_exact_name_wins_over_routing() {
-        let defs = vec![desc_def("planner", "Writes documentation"), desc_def("tester", "Runs the test suite")];
+        let defs = vec![
+            desc_def("planner", "Writes documentation"),
+            desc_def("tester", "Runs the test suite"),
+        ];
         let got = resolve_subagent_auto("planner", "please run the test suite", &defs);
         assert_eq!(got.map(|d| d.name.as_str()), Some("planner"));
     }
 
     #[test]
     fn resolve_auto_routes_build_default_by_description() {
-        let defs = vec![desc_def("worker", "Implementation agent for normal tasks"), desc_def("tester", "Runs the test suite and reports failures")];
-        let got = resolve_subagent_auto("build", "please run the test suite and report failures", &defs);
+        let defs = vec![
+            desc_def("worker", "Implementation agent for normal tasks"),
+            desc_def("tester", "Runs the test suite and reports failures"),
+        ];
+        let got = resolve_subagent_auto(
+            "build",
+            "please run the test suite and report failures",
+            &defs,
+        );
         assert_eq!(got.map(|d| d.name.as_str()), Some("tester"));
     }
 
