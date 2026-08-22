@@ -379,4 +379,16 @@ impl StorageBackend for HttpTransport {
         // Stamping provenance happens server-side automatically, no-op for CLI over HTTP.
         Ok(())
     }
+
+    async fn call_mcp_tool(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<(String, bool, Option<String>)> {
+        self.call_mcp_tool(name, arguments).await
+    }
+
+    async fn list_tools(&self) -> Result<Vec<crate::agent::client::ToolDef>> {
+        self.list_tools().await
+    }
 }

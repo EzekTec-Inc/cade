@@ -47,7 +47,21 @@ impl ToolRuntime {
             return ("Error: 'query' cannot be empty".to_string(), true);
         }
 
-        let schemas = self.mcp.all_tool_schemas().await;
+        let mut schemas = self.mcp.all_tool_schemas().await;
+        if schemas.is_empty()
+            && let Ok(tools) = self.storage.list_tools().await
+        {
+            for t in tools {
+                schemas.push(serde_json::json!({
+                    "name": t.name,
+                    "description": t.description.unwrap_or_default(),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }));
+            }
+        }
         let mut matched = Vec::new();
 
         for s in schemas {

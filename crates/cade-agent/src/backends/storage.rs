@@ -142,4 +142,16 @@ pub trait StorageBackend: Send + Sync {
         label: &str,
         tool_call_id: Option<&str>,
     ) -> Result<()>;
+
+    async fn call_mcp_tool(
+        &self,
+        _name: &str,
+        _arguments: &Value,
+    ) -> Result<(String, bool, Option<String>)> {
+        Err(crate::Error::custom("call_mcp_tool not supported by this storage backend"))
+    }
+
+    async fn list_tools(&self) -> Result<Vec<crate::agent::client::ToolDef>> {
+        Ok(vec![])
+    }
 }

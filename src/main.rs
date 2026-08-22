@@ -447,7 +447,26 @@ async fn async_main() -> Result<()> {
             tracing::warn!(
                 "DEBUG: Bypassing McpManager::start (lazy or disabled or empty configs or server manages MCP)"
             );
-            bg_mcp_boot_status.lock().clear(); // Instantly clear loadings so TUI knows none are pending
+            if bg_server_connected {
+                if let Ok(statuses) = bg_client.get_mcp_statuses().await {
+                    let mut guard = bg_mcp_boot_status.lock();
+                    guard.clear();
+                    for s in statuses {
+                        let status = if s.disabled {
+                            cade_tui::app::ServerBootStatus::Failed("disabled".to_string())
+                        } else {
+                            cade_tui::app::ServerBootStatus::Ready {
+                                tool_count: s.tools.len(),
+                            }
+                        };
+                        guard.insert(s.key, status);
+                    }
+                } else {
+                    bg_mcp_boot_status.lock().clear();
+                }
+            } else {
+                bg_mcp_boot_status.lock().clear(); // Instantly clear loadings so TUI knows none are pending
+            }
             std::sync::Arc::new(McpManager::empty())
         } else {
             tracing::warn!("DEBUG: Invoking McpManager::start...");
