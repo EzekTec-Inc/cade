@@ -90,45 +90,61 @@ fn non_retryable_error() {
     assert!(!is_retryable_error(&err));
 }
 
-// -- infer_provider_prefix
+// -- infer_provider_candidates
 
 #[test]
 fn infer_claude() {
     assert_eq!(
-        infer_provider_prefix("claude-sonnet-4-5-20250929"),
-        Some("anthropic")
+        infer_provider_candidates("claude-sonnet-4-5-20250929"),
+        &["anthropic"][..]
     );
     assert_eq!(
-        infer_provider_prefix("claude-3-opus-20240229"),
-        Some("anthropic")
+        infer_provider_candidates("claude-3-opus-20240229"),
+        &["anthropic"][..]
     );
 }
 
 #[test]
 fn infer_gpt() {
-    assert_eq!(infer_provider_prefix("gpt-4o"), Some("openai"));
-    assert_eq!(infer_provider_prefix("gpt-4o-mini"), Some("openai"));
-    assert_eq!(infer_provider_prefix("o3-mini"), Some("openai"));
-    assert_eq!(infer_provider_prefix("o4-mini"), Some("openai"));
+    assert_eq!(infer_provider_candidates("gpt-4o"), &["openai"][..]);
+    assert_eq!(infer_provider_candidates("gpt-4o-mini"), &["openai"][..]);
+    assert_eq!(infer_provider_candidates("gpt-5"), &["openai"][..]);
+    assert_eq!(
+        infer_provider_candidates("chatgpt-4o-latest"),
+        &["openai"][..]
+    );
+    assert_eq!(infer_provider_candidates("o3-mini"), &["openai"][..]);
+    assert_eq!(infer_provider_candidates("o4-mini"), &["openai"][..]);
+    // Bare o-series names (no dash) still resolve to OpenAI
+    assert_eq!(infer_provider_candidates("o1"), &["openai"][..]);
+    assert_eq!(infer_provider_candidates("o3"), &["openai"][..]);
 }
 
 #[test]
 fn infer_gemini() {
-    assert_eq!(infer_provider_prefix("gemini-2.5-pro"), Some("gemini"));
+    assert_eq!(
+        infer_provider_candidates("gemini-2.5-pro"),
+        &["gemini", "google"][..]
+    );
 }
 
 #[test]
-fn infer_ollama_models() {
-    assert_eq!(infer_provider_prefix("llama-3-70b"), Some("ollama"));
-    assert_eq!(infer_provider_prefix("mistral-large"), Some("ollama"));
-    assert_eq!(infer_provider_prefix("phi-3"), Some("ollama"));
-    assert_eq!(infer_provider_prefix("qwen-2"), Some("ollama"));
-    assert_eq!(infer_provider_prefix("deepseek-coder"), Some("ollama"));
+fn infer_open_weight_families_prefer_hosted_apis_then_ollama() {
+    // DeepSeek models should prefer the DeepSeek API over local Ollama
+    assert_eq!(
+        infer_provider_candidates("deepseek-chat"),
+        &["deepseek", "ollama"][..]
+    );
+    assert_eq!(infer_provider_candidates("grok-4"), &["xai"][..]);
+    assert_eq!(
+        infer_provider_candidates("llama-3-70b"),
+        &["groq", "together", "fireworks", "deepinfra", "ollama"][..]
+    );
 }
 
 #[test]
-fn infer_unknown_returns_none() {
-    assert_eq!(infer_provider_prefix("some-custom-model"), None);
+fn infer_unknown_returns_empty() {
+    assert!(infer_provider_candidates("some-custom-model").is_empty());
 }
 
 // -- LlmRouter::build
@@ -360,6 +376,83 @@ fn router_validate_model() {
     let router = LlmRouter::build(&config);
     assert!(router.validate_model("anthropic/claude-sonnet-4-5").is_ok());
     assert!(router.validate_model("openai/gpt-4o").is_err()); // openai not configured
+}
+
+#[test]
+fn router_deepseek_prefers_configured_api_over_ollama() -> Result<()> {
+    // -- Setup & Fixtures
+    let config = AiConfig {
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        ollama_base_url: "http://localhost:11434".into(),
+        llm_provider: "ollama".into(),
+    };
+    let mut router = LlmRouter::build(&config);
+    let provider: Arc<dyn LlmProvider> = Arc::new(crate::openai::OpenAiProvider::new(
+        "sk-ds-test".into(),
+        Some("https://api.deepseek.com/chat/completions".into()),
+    ));
+    router.add_provider_with_key("deepseek".into(), provider, "sk-ds-test".into());
+
+    // -- Exec & Check
+    // With DEEPSEEK configured, bare deepseek-* models must route to the API,
+    // not fall back to local Ollama.
+    let (name, bare) = router.resolve_provider_name("deepseek-chat")?;
+    assert_eq!(name, "deepseek");
+    assert_eq!(bare, "deepseek-chat");
+
+    Ok(())
+}
+
+#[test]
+fn router_unconfigured_family_lists_all_candidates() {
+    let config = AiConfig {
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        ollama_base_url: "http://localhost:11434".into(),
+        llm_provider: "ollama".into(),
+    };
+    let mut router = LlmRouter::build(&config);
+    // Env keys may auto-register candidates (e.g. XAI_API_KEY); strip them so the
+    // "no candidate configured" path is deterministic regardless of the shell env.
+    router.remove_provider("ollama");
+    router.remove_provider("xai");
+
+    // grok-* has no provider configured → error must list the required candidates
+    let msg = router
+        .resolve_provider_name("grok-4")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        msg.contains("xai"),
+        "error should mention xai candidate: {msg}"
+    );
+}
+
+#[test]
+fn router_openrouter_failover_does_not_guess_versions() {
+    // -- Setup & Fixtures
+    let config = AiConfig {
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: Some("test-google-key".into()),
+        ollama_base_url: "http://localhost:11434".into(),
+        llm_provider: "gemini".into(),
+    };
+    let router = LlmRouter::build(&config);
+
+    // -- Exec & Check
+    // A vague OpenRouter ID must NOT substring-match an arbitrary catalogue version.
+    let (_, model) = router.map_openrouter_to_native("gemini/gemini").unwrap();
+    assert_eq!(model, "gemini", "vague id must pass through unmapped");
+
+    // Exact matches (modulo dots/case) still map onto the catalogue entry.
+    let (_, model) = router
+        .map_openrouter_to_native("gemini/gemini-2.0-flash")
+        .unwrap();
+    assert_eq!(model, "gemini-2.0-flash");
 }
 
 // -- LlmMessage serialization

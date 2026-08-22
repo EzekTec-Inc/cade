@@ -379,17 +379,16 @@ impl HttpTransport {
                     }
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
-                Err(reqwest_eventsource::Error::InvalidStatusCode(status, _)) => {
+                Err(reqwest_eventsource::Error::InvalidStatusCode(status, resp)) => {
                     // Server returned a non-200 HTTP status (e.g. 401, 404, 502).
                     // DON'T fall back to /messages — that would re-persist the user
                     // message and call the same failing LLM again.
-                    // After Fix 3 (messages.rs), CADE's own server returns a proper
-                    // SSE error stream instead of 502, so this path is only hit when
-                    // connecting to external/legacy servers that return raw HTTP errors.
+                    // CADE's own server hits this path too when context building
+                    // fails (e.g. stale conversation_id → 404 with a JSON body
+                    // explaining why), so include the body in the surfaced error.
                     es.close();
-                    return Err(crate::Error::custom(format!(
-                        "Server returned HTTP {status}"
-                    )));
+                    let detail = describe_status_error(status, resp).await;
+                    return Err(crate::Error::custom(detail));
                 }
                 Err(e) => {
                     // Network / transport errors (connection refused, timeout, etc.).
@@ -541,11 +540,10 @@ impl HttpTransport {
                     }
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
-                Err(reqwest_eventsource::Error::InvalidStatusCode(status, _)) => {
+                Err(reqwest_eventsource::Error::InvalidStatusCode(status, resp)) => {
                     es.close();
-                    return Err(crate::Error::custom(format!(
-                        "Server returned HTTP {status}"
-                    )));
+                    let detail = describe_status_error(status, resp).await;
+                    return Err(crate::Error::custom(detail));
                 }
                 Err(e) => {
                     // Network / transport errors.  Same rationale as
@@ -596,5 +594,88 @@ impl HttpTransport {
             })
             .collect();
         Ok(msgs)
+    }
+}
+
+// -- Non-200 SSE handshake errors
+
+/// Read the response body of a failed SSE handshake and build a human-readable
+/// error message.  CADE's own server returns JSON bodies such as
+/// `{"detail":"conversation '…' not found for agent '…'"}` on 404 — surfacing
+/// that text turns an opaque "Server returned HTTP 404" into an actionable
+/// message (e.g. start a new conversation).
+async fn describe_status_error(status: reqwest::StatusCode, resp: reqwest::Response) -> String {
+    let body = resp.text().await.unwrap_or_default();
+    format_status_error(status, &body)
+}
+
+/// Pure formatting logic of [`describe_status_error`] for testability.
+fn format_status_error(status: reqwest::StatusCode, body: &str) -> String {
+    let json = serde_json::from_str::<serde_json::Value>(body).ok();
+    let extracted: Option<&str> = json.as_ref().and_then(|v| {
+        v["detail"]
+            .as_str()
+            .or_else(|| v["error"]["message"].as_str())
+            .or_else(|| v["error"].as_str())
+    });
+    let detail = extracted.unwrap_or_else(|| body.trim());
+    if detail.is_empty() {
+        return format!("Server returned HTTP {status}");
+    }
+    // Cap pathological bodies (HTML error pages, stack traces) so the TUI
+    // error line stays readable.
+    const MAX_CHARS: usize = 300;
+    let mut detail = detail.to_string();
+    if detail.chars().count() > MAX_CHARS {
+        detail = detail.chars().take(MAX_CHARS).collect();
+        detail.push('…');
+    }
+    format!("Server returned HTTP {status}: {detail}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_detail_body_is_surfaced() {
+        let msg = format_status_error(
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"detail":"conversation 'conv-x' not found for agent 'agent-y'"}"#,
+        );
+        assert!(msg.contains("conversation 'conv-x' not found"));
+        assert!(msg.starts_with("Server returned HTTP 404 Not Found: "));
+    }
+
+    #[test]
+    fn nested_error_message_is_surfaced() {
+        let msg = format_status_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"error":{"message":"invalid api key"}}"#,
+        );
+        assert!(msg.ends_with(": invalid api key"));
+    }
+
+    #[test]
+    fn plain_text_body_is_included() {
+        let msg = format_status_error(
+            reqwest::StatusCode::BAD_GATEWAY,
+            "upstream connect error\n",
+        );
+        assert_eq!(msg, "Server returned HTTP 502 Bad Gateway: upstream connect error");
+    }
+
+    #[test]
+    fn empty_body_falls_back_to_status_only() {
+        let msg = format_status_error(reqwest::StatusCode::NOT_FOUND, "");
+        assert_eq!(msg, "Server returned HTTP 404 Not Found");
+    }
+
+    #[test]
+    fn long_bodies_are_truncated() {
+        let body = "x".repeat(1_000);
+        let msg = format_status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, &body);
+        assert!(msg.chars().count() < 1_000);
+        assert!(msg.ends_with('…'));
     }
 }

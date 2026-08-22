@@ -382,6 +382,11 @@ impl LlmRouter {
 
                 // -- Gemini — live models list, fallback to catalogue
                 "gemini" | "google" => {
+                    // "google" is an alias of "gemini"; skip the duplicate listing so
+                    // models don't show up twice in the picker (both prefixes stay routable).
+                    if name == "google" && self.providers.contains_key("gemini") {
+                        continue;
+                    }
                     let n = name.clone();
                     tasks.push(Box::pin(async move {
                         let live = gemini::fetch_gemini_models(&key).await;
@@ -499,39 +504,50 @@ impl LlmRouter {
     /// Public so `RouterAdapter` in `cade-server.rs` can resolve a provider Arc while
     /// holding the lock for only this call, then drop the lock before making HTTP calls.
     pub fn resolve_provider(&self, model: &str) -> Result<(Arc<dyn LlmProvider>, String)> {
+        let (name, bare) = self.resolve_provider_name(model)?;
+        let provider = Arc::clone(
+            self.providers
+                .get(&name)
+                .ok_or_else(|| Error::custom(format!("Provider '{name}' vanished mid-resolve")))?,
+        );
+        Ok((provider, bare))
+    }
+
+    /// Like [`LlmRouter::resolve_provider`] but returns the provider *name* instead of
+    /// the provider instance. Useful for diagnostics, tests, and callers that only need
+    /// to know where a model would be routed.
+    pub fn resolve_provider_name(&self, model: &str) -> Result<(String, String)> {
         // 1. Explicit prefix: `gemini/gemini-2.5-pro`
         if let Some(slash) = model.find('/') {
             let prefix = &model[..slash];
             let bare = model[slash + 1..].to_string();
-            return self
-                .providers
-                .get(prefix)
-                .map(|p| (Arc::clone(p), bare))
-                .ok_or_else(|| {
-                    Error::custom(format!(
-                        "Provider '{prefix}' is not configured. Run /connect {prefix} to add it."
-                    ))
-                });
+            if !self.providers.contains_key(prefix) {
+                return Err(Error::custom(format!(
+                    "Provider '{prefix}' is not configured. Run /connect {prefix} to add it."
+                )));
+            }
+            return Ok((prefix.to_string(), bare));
         }
 
-        // 2. Infer provider from model name pattern
-        if let Some(prefix) = infer_provider_prefix(model) {
-            return self
-                .providers
-                .get(prefix)
-                .map(|p| (Arc::clone(p), model.to_string()))
-                .ok_or_else(|| {
-                    Error::custom(format!(
-                        "Model '{model}' requires the '{prefix}' provider. Run /connect {prefix} to add it."
-                    ))
-                });
+        // 2. Infer provider from model name pattern — pick the first candidate that is
+        //    actually configured, so e.g. `deepseek-chat` routes to the DeepSeek API when
+        //    its key is set instead of always falling back to local Ollama.
+        let candidates = infer_provider_candidates(model);
+        if !candidates.is_empty() {
+            return match candidates.iter().find(|c| self.providers.contains_key(**c)) {
+                Some(&prefix) => Ok((prefix.to_string(), model.to_string())),
+                None => Err(Error::custom(format!(
+                    "Model '{model}' requires one of these providers: {}. Run /connect <provider> or set its API key.",
+                    candidates.join(", ")
+                ))),
+            };
         }
 
         // 3. Truly unknown model — use the default provider
-        self.providers
-            .get(&self.default_provider)
-            .map(|p| (Arc::clone(p), model.to_string()))
-            .ok_or_else(|| Error::custom("No LLM provider available"))
+        if self.providers.contains_key(&self.default_provider) {
+            return Ok((self.default_provider.clone(), model.to_string()));
+        }
+        Err(Error::custom("No LLM provider available"))
     }
 
     /// Validate that the given model string can be routed.
@@ -540,31 +556,39 @@ impl LlmRouter {
     }
 }
 
-/// Infer the provider key from well-known model name prefixes.
-/// Returns e.g. "anthropic", "openai", "gemini", "ollama", or None.
-pub(crate) fn infer_provider_prefix(model: &str) -> Option<&'static str> {
+/// Ordered candidate providers for a bare model name, most preferred first.
+///
+/// The router picks the first candidate that is actually configured. Open-weight
+/// families (`llama`, `qwen`, `deepseek`, …) list hosted presets before Ollama so a
+/// configured API key wins over the local fallback, while `ollama` stays in every
+/// open-weight candidate list so purely local setups keep working unchanged.
+pub(crate) fn infer_provider_candidates(model: &str) -> &'static [&'static str] {
     let m = model.to_lowercase();
     if m.starts_with("claude") {
-        Some("anthropic")
+        &["anthropic"]
     } else if m.starts_with("gemini") {
-        Some("gemini")
+        &["gemini", "google"]
     } else if m.starts_with("gpt-")
-        || m.starts_with("o1-")
-        || m.starts_with("o3-")
-        || m.starts_with("o4-")
-        || m == "gpt-4o"
-        || m == "gpt-4o-mini"
+        || m.starts_with("chatgpt")
+        || m.starts_with("o1")
+        || m.starts_with("o3")
+        || m.starts_with("o4")
     {
-        Some("openai")
+        &["openai"]
+    } else if m.starts_with("grok") {
+        &["xai"]
+    } else if m.starts_with("deepseek") {
+        &["deepseek", "ollama"]
     } else if m.starts_with("llama")
         || m.starts_with("mistral")
+        || m.starts_with("mixtral")
         || m.starts_with("phi")
         || m.starts_with("qwen")
-        || m.starts_with("deepseek")
+        || m.starts_with("gemma")
     {
-        Some("ollama")
+        &["groq", "together", "fireworks", "deepinfra", "ollama"]
     } else {
-        None
+        &[]
     }
 }
 
@@ -580,16 +604,26 @@ impl LlmRouter {
             return None;
         }
 
+        // Strip OpenRouter variant suffix (`:free`, `:extended`) and normalize
+        // separators/dots so catalogue IDs compare reliably.
         let clean_model = model.split(':').next().unwrap_or(model);
+        let norm = |s: &str| s.to_lowercase().replace('.', "-");
 
-        let mut matched_id = None;
-        for (cat_provider, _display, full_id, _toolset, _max, _window) in CATALOGUE {
-            if *cat_provider == provider && full_id.contains(clean_model) {
-                matched_id = Some(full_id.to_string());
-                break;
-            }
-        }
+        // Exact normalized match against the catalogue only. Wildcard substring
+        // matching used to resolve wrong versions (e.g. bare "gemini" matching the
+        // first gemini entry), which silently rerouted requests to a different model.
+        let matched_id = CATALOGUE
+            .iter()
+            .find(|(cat_provider, _, full_id, ..)| {
+                *cat_provider == provider
+                    && full_id
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|m| norm(m) == norm(clean_model))
+            })
+            .map(|(_, _, full_id, ..)| full_id.to_string());
 
+        // No catalogue match → pass the OpenRouter ID through verbatim.
         let final_model_id = matched_id.unwrap_or_else(|| format!("{}/{}", provider, clean_model));
 
         let (native_provider, native_bare) = if let Some(idx) = final_model_id.find('/') {

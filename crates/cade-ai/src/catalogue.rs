@@ -278,7 +278,10 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     }
     // Provider-prefix heuristics for dynamic / uncatalogued models
     if id.starts_with("anthropic/") {
-        if id.contains("opus") || id.contains("sonnet") {
+        // 1M-token windows are current-generation Opus/Sonnet only;
+        // legacy claude-2/claude-3 models cap at 200K.
+        let modern = !(id.contains("claude-2") || id.contains("claude-3"));
+        if modern && (id.contains("opus") || id.contains("sonnet")) {
             return 1_048_576;
         }
         return 200_000;
@@ -453,6 +456,21 @@ mod tests {
         assert_eq!(context_window_for_model("anthropic/future-claude"), 200_000);
         assert_eq!(context_window_for_model("gemini/future-gemini"), 1_048_576);
         assert_eq!(context_window_for_model("openai/future-gpt"), 128_000);
+    }
+
+    #[test]
+    fn context_window_legacy_claude_heuristic_caps_at_200k() {
+        // Uncatalogued claude-3 IDs hit the provider heuristic; they must not be
+        // granted the modern 1M-token window.
+        assert_eq!(
+            context_window_for_model("anthropic/claude-3-5-sonnet-20241022"),
+            200_000
+        );
+        // Current-generation opus/sonnet keep the 1M assumption.
+        assert_eq!(
+            context_window_for_model("anthropic/claude-sonnet-4-9"),
+            1_048_576
+        );
     }
 
     #[test]
