@@ -107,3 +107,50 @@ class EmbeddedSession:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+import json
+import urllib.request
+import urllib.error
+
+class RemoteSession:
+    """Remote client connecting over HTTP/SSE to cade-server."""
+
+    def __init__(self, server_url: str = "http://localhost:8284", api_key: Optional[str] = None, agent_id: Optional[str] = None):
+        self.server_url = server_url.rstrip("/")
+        self.api_key = api_key or ""
+        self.agent_id = agent_id or "default-agent"
+
+    def prompt(self, text: str) -> str:
+        req = urllib.request.Request(
+            f"{self.server_url}/v1/agents/{self.agent_id}/run",
+            data=json.dumps({"input": text}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {})},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            return resp.read().decode("utf-8")
+
+    def steer_subagent(self, subagent_id: str, message: str) -> bool:
+        req = urllib.request.Request(
+            f"{self.server_url}/v1/subagents/{subagent_id}/steer",
+            data=json.dumps({"message": message}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {})},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status == 200
+        except urllib.error.URLError:
+            return False
+
+    def cancel_subagent(self, subagent_id: str) -> bool:
+        req = urllib.request.Request(
+            f"{self.server_url}/v1/subagents/{subagent_id}/cancel",
+            headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {})},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status == 200
+        except urllib.error.URLError:
+            return False

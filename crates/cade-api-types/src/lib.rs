@@ -130,6 +130,11 @@ impl StreamEvent {
         self.data.get("tool_call_id").and_then(|v| v.as_str())
     }
 
+    /// Extract `approval_id` from an `approval_required` event.
+    pub fn approval_id(&self) -> Option<&str> {
+        self.data.get("approval_id").and_then(|v| v.as_str())
+    }
+
     /// Deserialize the `tool_call` object (id, name, arguments).
     pub fn tool_call(&self) -> Option<ToolCallData> {
         self.data
