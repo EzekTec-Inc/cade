@@ -71,6 +71,9 @@ pub struct McpServerConfig {
     /// inside a sanitized sandbox environment (purging non-safe environment variables).
     #[serde(default)]
     pub sandboxed: Option<bool>,
+    /// If true, enforces singleton process rules — prevents duplicate OS processes from spawning.
+    #[serde(default)]
+    pub singleton: Option<bool>,
 }
 
 /// Global settings stored in ~/.cade/settings.json

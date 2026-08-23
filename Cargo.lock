@@ -1142,6 +1142,7 @@ version = "0.2.4"
 dependencies = [
  "async-trait",
  "cade-core",
+ "chrono",
  "derive_more",
  "dirs",
  "http 1.4.2",

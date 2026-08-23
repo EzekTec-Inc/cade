@@ -94,6 +94,65 @@ pub struct McpToolSchema {
     pub is_write: bool,
 }
 
+// -- Singleton Process Guard (Issue #85)
+
+static ACTIVE_SINGLETON_PROCESSES: std::sync::OnceLock<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+fn get_active_singleton_processes() -> &'static tokio::sync::Mutex<std::collections::HashSet<String>> {
+    ACTIVE_SINGLETON_PROCESSES.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// RAII guard that tracks and enforces singleton execution for designated MCP servers.
+#[derive(Debug)]
+pub struct SingletonProcessGuard {
+    signature: Option<String>,
+}
+
+impl SingletonProcessGuard {
+    pub async fn acquire(key: &str, config: &McpServerConfig) -> Result<Self> {
+        let is_singleton = config.singleton.unwrap_or(false)
+            || key == "serena"
+            || config.command.ends_with("serena")
+            || config.command.contains("serena");
+
+        if !is_singleton {
+            return Ok(Self { signature: None });
+        }
+
+        let sig = format!("{}:{}", key, config.command);
+        let mut set = get_active_singleton_processes().lock().await;
+        if set.contains(&sig) {
+            return Err(Error::custom(format!(
+                "Singleton process guard: MCP server '{key}' ({}) is already executing as an active singleton process. Refusing duplicate spawn.",
+                config.command
+            )));
+        }
+        set.insert(sig.clone());
+        Ok(Self { signature: Some(sig) })
+    }
+
+    pub async fn release(&mut self) {
+        if let Some(sig) = self.signature.take() {
+            let mut set = get_active_singleton_processes().lock().await;
+            set.remove(&sig);
+        }
+    }
+}
+
+impl Drop for SingletonProcessGuard {
+    fn drop(&mut self) {
+        if let Some(sig) = self.signature.take()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(async move {
+                let mut set = get_active_singleton_processes().lock().await;
+                set.remove(&sig);
+            });
+        }
+    }
+}
+
 // -- McpServer
 
 struct McpServer {
@@ -109,6 +168,7 @@ struct McpServer {
     /// The live peer — kept alive as long as this struct exists.
     _service: RunningService<RoleClient, ()>,
     peer: rmcp::Peer<RoleClient>,
+    _singleton_guard: Option<SingletonProcessGuard>,
 }
 
 // -- McpManager
@@ -713,11 +773,23 @@ impl McpManager {
             .map_err(|e| Error::custom(format!("HTTP handshake with '{key}' ({url}): {e}")))?;
         let peer = service.peer().clone();
 
-        Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}")).await
+        Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}"), None).await
     }
 
     /// Connect via stdio (local child process — original transport).
     async fn connect_server_stdio(key: &str, config: &McpServerConfig) -> Result<McpServer> {
+        let singleton_guard = SingletonProcessGuard::acquire(key, config).await?;
+
+        if let Ok(mut log_file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/mcp_server_err.log")
+        {
+            use std::io::Write;
+            let now = chrono::Utc::now().to_rfc3339();
+            let _ = writeln!(log_file, "[{now}] [mcp-spawn] Spawning MCP server '{key}' ({})", config.command);
+        }
+
         let cmd = Self::build_stdio_command(config);
 
         // Redirect server's stderr to a log file for debugging and transparency.
@@ -728,23 +800,31 @@ impl McpManager {
             .map(std::process::Stdio::from)
             .unwrap_or_else(|_| std::process::Stdio::null());
 
-        let (transport, _stderr) = TokioChildProcess::builder(cmd)
+        let (transport, _stderr) = match TokioChildProcess::builder(cmd)
             .stderr(stderr_io)
             .spawn()
-            .map_err(|e| {
-                Error::custom(format!(
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                return Err(Error::custom(format!(
                     "spawn MCP server '{key}' ({}): {e}",
                     config.command
-                ))
-            })?;
+                )));
+            }
+        };
 
-        let service = ()
+        let service = match ()
             .serve(transport)
             .await
-            .map_err(|e| Error::custom(format!("handshake with MCP server '{key}': {e}")))?;
+        {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(Error::custom(format!("handshake with MCP server '{key}': {e}")));
+            }
+        };
 
         let peer = service.peer().clone();
-        Self::build_server_from_peer(key, config, peer, service, config.command.clone()).await
+        Self::build_server_from_peer(key, config, peer, service, config.command.clone(), Some(singleton_guard)).await
     }
 
     /// Shared post-handshake logic: list tools, build `McpServer`.
@@ -754,6 +834,7 @@ impl McpManager {
         peer: rmcp::Peer<RoleClient>,
         service: rmcp::service::RunningService<RoleClient, ()>,
         command_display: String,
+        singleton_guard: Option<SingletonProcessGuard>,
     ) -> Result<McpServer> {
         // Fetch all tools (paginated)
         let raw_tools = peer
@@ -829,6 +910,7 @@ impl McpManager {
             disabled: false,
             _service: service,
             peer,
+            _singleton_guard: singleton_guard,
         })
     }
 
@@ -1016,5 +1098,27 @@ mod tests {
             envs_unsandboxed.get(OsStr::new("CARGO_MANIFEST_DIR")),
             Some(&None)
         );
+    }
+
+    #[tokio::test]
+    async fn test_singleton_process_guard_acquisition_and_release() {
+        let config = McpServerConfig {
+            command: "serena".to_string(),
+            singleton: Some(true),
+            ..Default::default()
+        };
+
+        let guard1 = SingletonProcessGuard::acquire("serena", &config).await;
+        assert!(guard1.is_ok());
+        let guard1 = guard1.unwrap();
+
+        let guard2 = SingletonProcessGuard::acquire("serena", &config).await;
+        assert!(guard2.is_err());
+
+        drop(guard1);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let guard3 = SingletonProcessGuard::acquire("serena", &config).await;
+        assert!(guard3.is_ok());
     }
 }

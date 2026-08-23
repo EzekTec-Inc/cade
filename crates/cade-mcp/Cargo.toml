@@ -26,6 +26,7 @@ http = "1"
 # -- Filesystem
 notify.workspace       = true
 dirs.workspace         = true
+chrono.workspace       = true
 
 [lints.rust]
 unsafe_code = "forbid"
