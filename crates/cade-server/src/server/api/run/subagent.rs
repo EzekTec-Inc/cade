@@ -860,32 +860,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         // explicit, canonical way to signal completion.  This replaces the
         // implicit "no tool_calls = done" heuristic which could not distinguish
         // genuine completion from a confused model emitting prose mid-task.
-        filtered.push(serde_json::json!({
-            "name": "finish",
-            "description": "Signal task completion or a definitive block. \
-                Must be called to end the subagent session. \
-                Use status='done' when complete, 'blocked' when stuck, 'error' on failure.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": "Concise summary of what was done or why the task is blocked."
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["done", "blocked", "error"],
-                        "description": "Final status."
-                    },
-                    "findings": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional list of key findings or artefacts."
-                    }
-                },
-                "required": ["summary", "status"]
-            }
-        }));
+        filtered.push(cade_agent::subagents::canonical_finish_tool_schema());
         filtered
     };
 
