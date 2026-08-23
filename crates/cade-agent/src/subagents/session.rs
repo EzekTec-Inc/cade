@@ -91,13 +91,16 @@ impl SubagentOutcome {
     }
 }
 
-/// Real-time event emitted during a subagent session (Issue #51).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Real-time event emitted during a subagent session (Issue #51 / Issue #89).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum SubagentEvent {
     TurnStarted {
         turn: usize,
         max_turns: usize,
+    },
+    Thought {
+        text: String,
     },
     ToolExecuting {
         tool_call_id: String,
@@ -118,6 +121,11 @@ pub enum SubagentEvent {
         arguments: Value,
         approval_id: String,
     },
+    ApprovalResolved {
+        approval_id: String,
+        approved: bool,
+        feedback: Option<String>,
+    },
     OutputChunk {
         text: String,
     },
@@ -126,24 +134,93 @@ pub enum SubagentEvent {
     },
 }
 
-/// Asynchronous event broadcaster for subagents (Issue #51).
+/// Asynchronous event broadcaster for subagents supporting unicast & broadcast subscribers.
 #[derive(Clone, Default)]
 pub struct SubagentEventEmitter {
     tx: Option<tokio::sync::mpsc::Sender<SubagentEvent>>,
+    broadcast_tx: Option<tokio::sync::broadcast::Sender<SubagentEvent>>,
 }
 
 impl SubagentEventEmitter {
     pub fn new(tx: Option<tokio::sync::mpsc::Sender<SubagentEvent>>) -> Self {
-        Self { tx }
+        Self {
+            tx,
+            broadcast_tx: None,
+        }
+    }
+
+    pub fn with_broadcast(mut self, broadcast_tx: tokio::sync::broadcast::Sender<SubagentEvent>) -> Self {
+        self.broadcast_tx = Some(broadcast_tx);
+        self
+    }
+
+    pub fn noop() -> Self {
+        Self {
+            tx: None,
+            broadcast_tx: None,
+        }
+    }
+
+    pub async fn emit(&self, event: SubagentEvent) {
+        if let Some(ref tx) = self.tx {
+            let _ = tx.send(event.clone()).await;
+        }
+        if let Some(ref btx) = self.broadcast_tx {
+            let _ = btx.send(event);
+        }
+    }
+}
+
+/// Human-In-The-Loop approval verdict.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubagentApprovalResponse {
+    pub approved: bool,
+    pub feedback: Option<String>,
+}
+
+pub type ApprovalResponder = tokio::sync::oneshot::Sender<SubagentApprovalResponse>;
+pub type ApprovalRequestPayload = (String, String, Value, ApprovalResponder);
+
+/// Channel for intercepting and requesting human-in-the-loop approvals.
+#[derive(Clone, Default)]
+pub struct SubagentApprovalChannel {
+    tx: Option<tokio::sync::mpsc::Sender<ApprovalRequestPayload>>,
+}
+
+impl SubagentApprovalChannel {
+    pub fn new(tx: tokio::sync::mpsc::Sender<ApprovalRequestPayload>) -> Self {
+        Self { tx: Some(tx) }
     }
 
     pub fn noop() -> Self {
         Self { tx: None }
     }
 
-    pub async fn emit(&self, event: SubagentEvent) {
+    /// Dispatch an approval request and wait asynchronously for human approval or feedback.
+    pub async fn request_approval(
+        &self,
+        approval_id: &str,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> Result<SubagentApprovalResponse, String> {
         if let Some(ref tx) = self.tx {
-            let _ = tx.send(event).await;
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            tx.send((
+                approval_id.to_string(),
+                tool_name.to_string(),
+                arguments.clone(),
+                resp_tx,
+            ))
+            .await
+            .map_err(|e| format!("Failed to dispatch approval request: {e}"))?;
+            resp_rx
+                .await
+                .map_err(|_| "Approval channel closed without response".to_string())
+        } else {
+            Ok(SubagentApprovalResponse {
+                approved: true,
+                feedback: None,
+            })
         }
     }
 }
@@ -161,6 +238,7 @@ pub struct SubagentSession {
     pub workspace_guard: Option<IsolatedWorkspaceGuard>,
     pub event_emitter: SubagentEventEmitter,
     pub findings: Vec<SubagentFinding>,
+    pub approval_channel: SubagentApprovalChannel,
 }
 
 impl SubagentSession {
@@ -179,6 +257,7 @@ impl SubagentSession {
             workspace_guard: None,
             event_emitter: SubagentEventEmitter::noop(),
             findings: Vec::new(),
+            approval_channel: SubagentApprovalChannel::noop(),
         }
     }
 
@@ -199,6 +278,11 @@ impl SubagentSession {
 
     pub fn with_event_emitter(mut self, emitter: SubagentEventEmitter) -> Self {
         self.event_emitter = emitter;
+        self
+    }
+
+    pub fn with_approval_channel(mut self, channel: SubagentApprovalChannel) -> Self {
+        self.approval_channel = channel;
         self
     }
 
@@ -441,5 +525,52 @@ mod tests {
         assert_eq!(finding.label, "api_convention");
         assert_eq!(finding.value, "REST with JSON");
         assert_eq!(finding.memory_type, "convention");
+    }
+
+    #[tokio::test]
+    async fn test_subagent_event_emitter_broadcast() {
+        let (btx, mut brx1) = tokio::sync::broadcast::channel(16);
+        let mut brx2 = btx.subscribe();
+
+        let emitter = SubagentEventEmitter::noop().with_broadcast(btx);
+        emitter.emit(SubagentEvent::Thought { text: "Analyzing code...".to_string() }).await;
+
+        let e1 = brx1.recv().await.expect("Subscriber 1 received event");
+        let e2 = brx2.recv().await.expect("Subscriber 2 received event");
+
+        assert_eq!(e1, SubagentEvent::Thought { text: "Analyzing code...".to_string() });
+        assert_eq!(e2, e1);
+    }
+
+    #[tokio::test]
+    async fn test_subagent_approval_channel_flow() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let channel = SubagentApprovalChannel::new(tx);
+
+        let approval_task = tokio::spawn(async move {
+            channel
+                .request_approval(
+                    "appr-1",
+                    "write_file",
+                    &json!({ "path": "src/main.rs" }),
+                )
+                .await
+        });
+
+        let (appr_id, tool_name, args, responder) = rx.recv().await.expect("Received approval request");
+        assert_eq!(appr_id, "appr-1");
+        assert_eq!(tool_name, "write_file");
+        assert_eq!(args["path"], "src/main.rs");
+
+        responder
+            .send(SubagentApprovalResponse {
+                approved: true,
+                feedback: Some("Approved with caution".to_string()),
+            })
+            .expect("Sent approval");
+
+        let verdict = approval_task.await.expect("Task completed").expect("Approval succeeded");
+        assert!(verdict.approved);
+        assert_eq!(verdict.feedback.as_deref(), Some("Approved with caution"));
     }
 }
