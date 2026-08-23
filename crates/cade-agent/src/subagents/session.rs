@@ -42,6 +42,16 @@ pub fn canonical_finish_tool_schema() -> Value {
     })
 }
 
+/// Structured memory finding produced during subagent execution for writeback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubagentFinding {
+    pub label: String,
+    pub value: String,
+    pub description: String,
+    pub memory_type: String,
+    pub confidence: f64,
+}
+
 /// Structured outcome produced when a subagent session terminates.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -150,6 +160,7 @@ pub struct SubagentSession {
     pub total_tool_calls: usize,
     pub workspace_guard: Option<IsolatedWorkspaceGuard>,
     pub event_emitter: SubagentEventEmitter,
+    pub findings: Vec<SubagentFinding>,
 }
 
 impl SubagentSession {
@@ -167,6 +178,7 @@ impl SubagentSession {
             total_tool_calls: 0,
             workspace_guard: None,
             event_emitter: SubagentEventEmitter::noop(),
+            findings: Vec::new(),
         }
     }
 
@@ -188,6 +200,32 @@ impl SubagentSession {
     pub fn with_event_emitter(mut self, emitter: SubagentEventEmitter) -> Self {
         self.event_emitter = emitter;
         self
+    }
+
+    /// Record a structured finding to be synced back to the parent agent.
+    pub fn record_finding(
+        &mut self,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        description: impl Into<String>,
+        memory_type: impl Into<String>,
+        confidence: f64,
+    ) {
+        self.findings.push(SubagentFinding {
+            label: label.into(),
+            value: value.into(),
+            description: description.into(),
+            memory_type: memory_type.into(),
+            confidence,
+        });
+    }
+
+    pub fn add_finding(&mut self, finding: SubagentFinding) {
+        self.findings.push(finding);
+    }
+
+    pub fn findings(&self) -> &[SubagentFinding] {
+        &self.findings
     }
 
     /// Return the execution working directory for tools (isolated if active, else primary).
@@ -388,5 +426,20 @@ mod tests {
             panic!("Expected Finished event");
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_subagent_session_findings_recording() {
+        let config = SubagentConfig::from_args(&json!({ "prompt": "Research API patterns" }));
+        let mut session = SubagentSession::new(config, "parent-agent-123");
+
+        assert!(session.findings().is_empty());
+        session.record_finding("api_convention", "REST with JSON", "Discovered in repo", "convention", 0.95);
+
+        assert_eq!(session.findings().len(), 1);
+        let finding = &session.findings()[0];
+        assert_eq!(finding.label, "api_convention");
+        assert_eq!(finding.value, "REST with JSON");
+        assert_eq!(finding.memory_type, "convention");
     }
 }

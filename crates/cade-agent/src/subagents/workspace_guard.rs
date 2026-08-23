@@ -53,6 +53,20 @@ impl IsolatedWorkspaceGuard {
     pub fn is_committed(&self) -> bool {
         self.committed
     }
+
+    /// Explicitly discard isolated changes without merging to primary workspace.
+    pub fn discard(&mut self) {
+        self.workspace = None;
+        self.committed = false;
+    }
+}
+
+impl Drop for IsolatedWorkspaceGuard {
+    fn drop(&mut self) {
+        if !self.committed && self.workspace.is_some() {
+            tracing::debug!("Isolated workspace dropped without commit — temporary sandbox discarded cleanly");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +97,30 @@ mod tests {
 
         // Primary should now have the modified content
         assert_eq!(std::fs::read_to_string(&primary_file)?, "modified content");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_workspace_guard_discard() -> io::Result<()> {
+        let temp_primary = tempdir()?;
+        let primary_file = temp_primary.path().join("file.txt");
+        std::fs::write(&primary_file, "original")?;
+
+        let mut guard = IsolatedWorkspaceGuard::new(temp_primary.path(), None).await?;
+        let isolated_file = guard.path().unwrap().join("file.txt");
+        std::fs::write(&isolated_file, "discarded changes")?;
+
+        // Discard explicitly
+        guard.discard();
+        assert!(!guard.is_committed());
+        assert!(guard.path().is_none());
+
+        // Primary file must remain untouched
+        assert_eq!(std::fs::read_to_string(&primary_file)?, "original");
+
+        // Merge after discard should be a no-op
+        guard.commit_and_merge().await?;
+        assert_eq!(std::fs::read_to_string(&primary_file)?, "original");
         Ok(())
     }
 }
