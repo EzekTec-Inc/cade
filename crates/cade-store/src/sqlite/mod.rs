@@ -353,6 +353,19 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_event_log_agent ON event_log(agent_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type);
 
+                CREATE TABLE IF NOT EXISTS workflow_runs (
+            run_id          TEXT PRIMARY KEY,
+            workflow_name   TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            current_step    INTEGER NOT NULL DEFAULT 0,
+            total_steps     INTEGER NOT NULL DEFAULT 0,
+            params_json     TEXT,
+            error           TEXT,
+            created_at      INTEGER NOT NULL,
+            completed_at    INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_name ON workflow_runs(workflow_name);
+
         CREATE TABLE IF NOT EXISTS agent_skill_blacklist (
             agent_id    TEXT NOT NULL,
             skill_id    TEXT NOT NULL,
@@ -539,7 +552,20 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // Migration 5: agent_skill_blacklist — per-agent skill disable feature (Phase B).
         // `IF NOT EXISTS` is safe for new DBs (apply_schema already created it).
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS agent_skill_blacklist (
+            "        CREATE TABLE IF NOT EXISTS workflow_runs (
+            run_id          TEXT PRIMARY KEY,
+            workflow_name   TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            current_step    INTEGER NOT NULL DEFAULT 0,
+            total_steps     INTEGER NOT NULL DEFAULT 0,
+            params_json     TEXT,
+            error           TEXT,
+            created_at      INTEGER NOT NULL,
+            completed_at    INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_name ON workflow_runs(workflow_name);
+
+        CREATE TABLE IF NOT EXISTS agent_skill_blacklist (
                 agent_id    TEXT NOT NULL,
                 skill_id    TEXT NOT NULL,
                 PRIMARY KEY (agent_id, skill_id)
@@ -853,6 +879,31 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 19", [])?;
     }
 
+    if current_version < 20 {
+        let r1 = conn.execute(
+            "CREATE TABLE IF NOT EXISTS workflow_runs (
+                run_id TEXT PRIMARY KEY,
+                workflow_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_step INTEGER NOT NULL DEFAULT 0,
+                total_steps INTEGER NOT NULL DEFAULT 0,
+                params_json TEXT,
+                error TEXT,
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER
+            )",
+            [],
+        );
+        let r2 = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_name ON workflow_runs(workflow_name)",
+            [],
+        );
+        if let Err(e) = r1.and(r2) {
+            tracing::warn!("Migration 20 CREATE TABLE workflow_runs failed: {e}");
+        }
+        conn.execute("PRAGMA user_version = 20", [])?;
+    }
+
     Ok(())
 }
 
@@ -908,6 +959,7 @@ pub mod run_checkpoints;
 pub mod runs;
 pub mod skills;
 pub mod tools;
+pub mod workflows;
 
 pub use agents::*;
 pub use approvals::*;
@@ -922,3 +974,4 @@ pub use providers::*;
 pub use run_checkpoints::*;
 pub use runs::*;
 pub use tools::*;
+pub use workflows::*;

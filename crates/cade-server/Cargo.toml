@@ -12,6 +12,7 @@ mcp = ["dep:cade-mcp", "cade-agent/mcp"]
 [dependencies]
 # -- Workspace crates
 cade-core.path = "../cade-core"
+cade-api-types = { path = "../cade-api-types" }
 cade-ai.path = "../cade-ai"
 cade-store.path = "../cade-store"
 cade-desktop.path = "../cade-desktop"

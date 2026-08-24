@@ -79,9 +79,26 @@ pub fn router(state: AppState) -> Router {
             "/v1/subagents/{id}/steer",
             post(run::steer_subagent_handler),
         )
+        .route("/v1/workflows", get(workflows::list_workflows_handler))
         .route(
             "/v1/workflows/{workflow_name}",
             post(workflows::dispatch_workflow),
+        )
+        .route(
+            "/v1/workflows/{workflow_name}/run",
+            post(workflows::run_workflow_handler),
+        )
+        .route(
+            "/v1/workflows/runs/{run_id}",
+            get(workflows::get_workflow_run_handler),
+        )
+        .route(
+            "/v1/workflows/runs/{run_id}/stream",
+            get(workflows::stream_workflow_run_handler),
+        )
+        .route(
+            "/v1/workflows/runs/{run_id}/cancel",
+            post(workflows::cancel_workflow_run_handler),
         )
         // Dashboard (public, unauthenticated — see auth.rs for exemption)
         // Gzip-compressed so the ~7 MB .wasm transfers as ~2.7 MB.

@@ -1243,6 +1243,7 @@ dependencies = [
  "axum 0.8.9",
  "cade-agent",
  "cade-ai",
+ "cade-api-types",
  "cade-core",
  "cade-desktop",
  "cade-mcp",

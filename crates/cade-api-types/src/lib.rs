@@ -168,6 +168,89 @@ pub struct ToolResultData {
     pub is_error: bool,
 }
 
+
+// region:    --- Workflows (PRD #99 / Issue #100)
+
+/// Status of an overall workflow run or individual pipeline step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStatus {
+    #[default]
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    Skipped,
+}
+
+impl WorkflowStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+/// A workflow step configuration item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStepDef {
+    pub name: String,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+}
+
+/// Workflow metadata descriptor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub steps_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<WorkflowRunSummary>,
+}
+
+/// Execution record of a workflow run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowRunSummary {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub status: WorkflowStatus,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<i64>,
+    pub current_step: usize,
+    pub total_steps: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Real-time event emitted during a workflow run over SSE.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStepEvent {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub step_index: usize,
+    pub step_name: String,
+    pub status: WorkflowStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_chunk: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+// endregion: --- Workflows
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +391,38 @@ mod tests {
         let e: StreamEvent = serde_json::from_str(wire).expect("parse");
         assert_eq!(e.msg_type(), ""); // default empty
         assert_eq!(e.data.get("some").and_then(|v| v.as_str()), Some("thing"));
+    }
+
+    #[test]
+    fn test_workflow_models_roundtrip() {
+        let run = WorkflowRunSummary {
+            run_id: "run-123".to_string(),
+            workflow_name: "deploy-pipeline".to_string(),
+            status: WorkflowStatus::Running,
+            created_at: 1724500000,
+            completed_at: None,
+            current_step: 1,
+            total_steps: 3,
+            error: None,
+        };
+        let json_str = serde_json::to_string(&run).expect("serialize");
+        let decoded: WorkflowRunSummary = serde_json::from_str(&json_str).expect("deserialize");
+        assert_eq!(decoded.run_id, "run-123");
+        assert_eq!(decoded.status, WorkflowStatus::Running);
+        assert_eq!(decoded.status.as_str(), "running");
+
+        let event = WorkflowStepEvent {
+            run_id: "run-123".to_string(),
+            workflow_name: "deploy-pipeline".to_string(),
+            step_index: 0,
+            step_name: "build".to_string(),
+            status: WorkflowStatus::Succeeded,
+            output_chunk: Some("Compiled successfully".to_string()),
+            error: None,
+        };
+        let ev_str = serde_json::to_string(&event).expect("serialize");
+        let ev_decoded: WorkflowStepEvent = serde_json::from_str(&ev_str).expect("deserialize");
+        assert_eq!(ev_decoded.step_name, "build");
+        assert_eq!(ev_decoded.status, WorkflowStatus::Succeeded);
     }
 }

@@ -11,6 +11,7 @@ pub mod poison;
 pub mod rate_limit;
 pub mod reflection;
 pub mod state;
+pub mod workflows;
 
 pub use error::{Error, Result};
 
