@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting Started with CADE — User Guide & Playbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Syne:wght@700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ===========================================
+   FIXED 16:9 STAGE: USER GUIDE DECK
+   Slides are authored at 1920×1080 and scaled as a whole.
+   =========================================== */
+
+:root {
+    --bg-base: #080a0f;
+    --bg-surface: #0f131d;
+    --bg-card: #141a27;
+    --bg-card-hover: #1c2436;
+    --emerald-glow: #10B981;
+    --emerald-dim: rgba(16, 185, 129, 0.15);
+    --emerald-border: rgba(16, 185, 129, 0.35);
+    --blue-accent: #38BDF8;
+    --amber-accent: #F59E0B;
+    --purple-accent: #A855F7;
+    --text-main: #F8FAFC;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --font-display: 'Syne', sans-serif;
+    --font-body: 'Plus Jakarta Sans', sans-serif;
+    --font-mono: 'Fira Code', monospace;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--bg-base);
+    font-family: var(--font-body);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+}
+
+.deck-viewport {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: var(--bg-base);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Fixed 1920x1080 Stage */
+.deck-stage {
+    position: absolute;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    transform-origin: center center;
+    background: var(--bg-base);
+    background-image: 
+        radial-gradient(circle at 85% 15%, rgba(16, 185, 129, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 15% 85%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+        linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 36px 36px, 36px 36px;
+    box-shadow: 0 0 120px rgba(0, 0, 0, 0.8);
+}
+
+/* Slides container */
+.slide {
+    position: absolute;
+    inset: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 80px 100px;
+    box-sizing: border-box;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.slide.active {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 2;
+}
+
+/* Header & Footer */
+.slide-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 20px;
+}
+.sys-tag {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--emerald-glow);
+    letter-spacing: 0.12em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.sys-tag::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: var(--emerald-glow);
+    box-shadow: 0 0 12px var(--emerald-glow);
+    border-radius: 50%;
+}
+.slide-num {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    color: var(--text-dim);
+}
+
+.slide-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 20px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-dim);
+}
+
+/* Typography */
+.hero-title {
+    font-family: var(--font-display);
+    font-size: 80px;
+    font-weight: 900;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    color: #fff;
+    margin: 20px 0;
+}
+.hero-title span {
+    background: linear-gradient(135deg, var(--emerald-glow) 0%, var(--blue-accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.section-title {
+    font-family: var(--font-display);
+    font-size: 54px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: #fff;
+    margin: 10px 0 16px;
+}
+.section-title span {
+    color: var(--emerald-glow);
+}
+
+.lead-p {
+    font-size: 23px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    max-width: 1200px;
+}
+
+/* Grids */
+.cards-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+    margin: 36px 0;
+}
+.cards-grid-4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    margin: 36px 0;
+}
+.cards-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 36px;
+    margin: 32px 0;
+}
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    position: relative;
+    overflow: hidden;
+}
+.card.featured {
+    border-color: var(--emerald-border);
+    background: linear-gradient(180deg, rgba(16, 185, 129, 0.06) 0%, var(--bg-card) 100%);
+}
+.card-icon {
+    font-size: 32px;
+    margin-bottom: 16px;
+}
+.card-step-num {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--emerald-glow);
+    margin-bottom: 10px;
+    letter-spacing: 0.1em;
+}
+.card-title {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 12px;
+}
+.card-body {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--text-muted);
+}
+
+/* Code Snippet Box */
+.code-box {
+    background: #05070a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 20px 24px;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--blue-accent);
+    margin-top: 14px;
+}
+.code-box .cmd { color: #fff; font-weight: 600; }
+.code-box .comment { color: var(--text-dim); }
+.code-box .green { color: var(--emerald-glow); }
+
+/* Badges */
+.badge-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+.pill-badge {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 6px 16px;
+    border-radius: 20px;
+    background: var(--emerald-dim);
+    border: 1px solid var(--emerald-border);
+    color: var(--emerald-glow);
+    font-weight: 600;
+}
+
+/* Global Controls */
+.deck-controls {
+    position: fixed;
+    bottom: 30px;
+    right: 40px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 1000;
+    background: rgba(15, 19, 29, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--emerald-border);
+    padding: 8px 16px;
+    border-radius: 30px;
+}
+.ctrl-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+.ctrl-btn:hover {
+    border-color: var(--emerald-glow);
+    color: var(--emerald-glow);
+}
+.progress-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--emerald-glow), var(--blue-accent));
+    box-shadow: 0 0 10px var(--emerald-glow);
+    transition: width 0.3s ease;
+    z-index: 1001;
+}
+</style>
+</head>
+<body>
+
+<div class="deck-viewport">
+    <div class="deck-stage" id="slideStage">
+
+        <!-- SLIDE 1: Title -->
+        <section class="slide active" data-slide="1">
+            <div class="slide-header">
+                <div class="sys-tag">CADE DEVELOPER PLAYBOOK</div>
+                <div class="slide-num">01 / 07</div>
+            </div>
+            <div>
+                <div class="sys-tag" style="margin-bottom: 16px;">THE POWER USER'S GUIDE</div>
+                <div class="hero-title">
+                    BUILD FASTER WITH<br><span>CADE AI AGENT</span>
+                </div>
+                <p class="lead-p">
+                    Your stateful, multi-interface AI engineering partner. Execute complex refactors, autonomous subagents, full-stack scaffolding, and test-driven builds directly in your environment.
+                </p>
+                <div class="badge-row">
+                    <span class="pill-badge">TERMINAL TUI</span>
+                    <span class="pill-badge">WEB GUI DASHBOARD</span>
+                    <span class="pill-badge">NEOVIM & VS CODE</span>
+                    <span class="pill-badge">LOCAL-FIRST PRIVACY</span>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>GETTING STARTED GUIDE</div>
+                <div>PRESS [SPACE] OR ARROWS TO ADVANCE</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 2: What is CADE? -->
+        <section class="slide" data-slide="2">
+            <div class="slide-header">
+                <div class="sys-tag">OVERVIEW</div>
+                <div class="slide-num">02 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Why Developers <span>Choose CADE</span></div>
+                <p class="lead-p">
+                    Unlike standard web chatbots or rigid IDE autocomplete plugins, CADE is a fully autonomous engineering partner running directly on your machine.
+                </p>
+                <div class="cards-grid-3">
+                    <div class="card featured">
+                        <div class="card-icon">🧠</div>
+                        <div class="card-title">Persistent Memory</div>
+                        <div class="card-body">
+                            Never repeats questions. Automatically remembers project conventions, architecture decisions, and developer preferences across conversations.
+                        </div>
+                    </div>
+                    <div class="card featured">
+                        <div class="card-icon">⚡</div>
+                        <div class="card-title">Multi-Interface Agility</div>
+                        <div class="card-body">
+                            Seamlessly transition between interactive terminal TUI, modern browser dashboard (`localhost:8284/dashboard`), and native Neovim/VS Code extensions.
+                        </div>
+                    </div>
+                    <div class="card featured">
+                        <div class="card-icon">🛡️</div>
+                        <div class="card-title">Hardware-Level Safety</div>
+                        <div class="card-body">
+                            Execute untrusted builds or complex tests inside isolated Firecracker MicroVMs or Docker sandboxes with zero escape risk to your workstation.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>CORE ADVANTAGES</div>
+                <div>CADE USER PLAYBOOK</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 3: Quick Start in 3 Steps -->
+        <section class="slide" data-slide="3">
+            <div class="slide-header">
+                <div class="sys-tag">ONBOARDING</div>
+                <div class="slide-num">03 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Up & Running in <span>3 Minutes</span></div>
+                <p class="lead-p">
+                    Zero complex dependencies. Single binary installation with automated local database initialization.
+                </p>
+                <div class="cards-grid-3">
+                    <div class="card">
+                        <div class="card-step-num">STEP 01</div>
+                        <div class="card-title">Launch CADE</div>
+                        <div class="card-body">
+                            Start the interactive agent terminal or launch the background daemon:
+                        </div>
+                        <div class="code-box">
+                            <span class="cmd">cade</span><br>
+                            <span class="comment"># or start daemon:</span><br>
+                            <span class="cmd">cade-server</span>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-step-num">STEP 02</div>
+                        <div class="card-title">Configure Provider</div>
+                        <div class="card-body">
+                            Connect your preferred LLM (Anthropic, OpenAI, Gemini, Ollama):
+                        </div>
+                        <div class="code-box">
+                            <span class="green">/connect</span> <span class="cmd">anthropic</span><br>
+                            <span class="green">/model</span> <span class="cmd">claude-3-5-sonnet</span><br>
+                            <span class="comment"># or use local Ollama models</span>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-step-num">STEP 03</div>
+                        <div class="card-title">Run Your First Task</div>
+                        <div class="card-body">
+                            Point CADE at any task, refactor, bug, or feature:
+                        </div>
+                        <div class="code-box">
+                            <span class="cmd">"Refactor auth middleware to use JWT bearer tokens"</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>FAST STARTUP</div>
+                <div>CADE ONBOARDING</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 4: Core Capabilities & Skills -->
+        <section class="slide" data-slide="4">
+            <div class="slide-header">
+                <div class="sys-tag">CAPABILITIES</div>
+                <div class="slide-num">04 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Everyday Power <span>Workflows</span></div>
+                <p class="lead-p">
+                    CADE comes pre-loaded with specialized skills that enforce best practices and structure complex engineering tasks.
+                </p>
+                <div class="cards-grid-4">
+                    <div class="card">
+                        <div class="card-icon">🏗️</div>
+                        <div class="card-title">Full-Stack Scaffolding</div>
+                        <div class="card-body">
+                            <span class="green font-mono">/skill:fullstack-dev</span><br>
+                            Scaffolds end-to-end services with typed error hierarchies, connection pools, and reactive UI.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon">📐</div>
+                        <div class="card-title">Codebase Design</div>
+                        <div class="card-body">
+                            <span class="green font-mono">/skill:codebase-design</span><br>
+                            Refactors code into deep modules, eliminating pass-through wrappers and shallow layers.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon">🧪</div>
+                        <div class="card-title">Test-Driven Dev</div>
+                        <div class="card-body">
+                            <span class="green font-mono">/skill:tdd</span><br>
+                            Writes public-interface unit and integration tests first, ensuring zero regression bugs.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon">📊</div>
+                        <div class="card-title">Presentation Decks</div>
+                        <div class="card-body">
+                            <span class="green font-mono">/skill:frontend-slides</span><br>
+                            Creates zero-dependency, 16:9 interactive HTML presentations and converts PPTX files.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>ENGINEERING SKILLS</div>
+                <div>CADE CAPABILITIES</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 5: Subagents & Multi-Agent Teams -->
+        <section class="slide" data-slide="5">
+            <div class="slide-header">
+                <div class="sys-tag">CONCURRENCY</div>
+                <div class="slide-num">05 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Autonomous <span>Subagents & Teams</span></div>
+                <p class="lead-p">
+                    Delegate long-running or exploratory tasks to isolated worker subagents so your main conversation context stays fast and clean.
+                </p>
+                <div class="cards-grid-2">
+                    <div class="card featured">
+                        <div class="card-icon">🤖</div>
+                        <div class="card-title">Background Subagent Workers</div>
+                        <div class="card-body">
+                            Spawn autonomous workers to investigate large codebases, run test suites, or generate migrations.
+                        </div>
+                        <div class="code-box">
+                            <span class="green">run_subagent</span>({<br>
+                            &nbsp;&nbsp;<span class="cmd">"prompt"</span>: "Search all API endpoints and verify auth headers",<br>
+                            &nbsp;&nbsp;<span class="cmd">"mode"</span>: "plan",<br>
+                            &nbsp;&nbsp;<span class="cmd">"background"</span>: true<br>
+                            })
+                        </div>
+                    </div>
+                    <div class="card featured">
+                        <div class="card-icon">👥</div>
+                        <div class="card-title">Specialized Team Squads</div>
+                        <div class="card-body">
+                            Coordinate specialist subagent pipelines (Architect → Implementer → QA Tester → Reviewer).
+                        </div>
+                        <div class="code-box">
+                            <span class="green">/team</span> <span class="cmd">refactor-architect</span><br>
+                            <span class="comment">// Executes concurrent task flow across isolated Git worktrees</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>SUBAGENT ORCHESTRATION</div>
+                <div>CADE AGENT HARNESS</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 6: IDE & Editor Synchronization -->
+        <section class="slide" data-slide="6">
+            <div class="slide-header">
+                <div class="sys-tag">INTEGRATIONS</div>
+                <div class="slide-num">06 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Live Editor <span>Synchronization</span></div>
+                <p class="lead-p">
+                    CADE connects directly to Neovim and VS Code over local loopback sockets with automatic discovery.
+                </p>
+                <div class="cards-grid-3">
+                    <div class="card">
+                        <div class="card-icon">✨</div>
+                        <div class="card-title">Inline AI Ghost-Text</div>
+                        <div class="card-body">
+                            Real-time streaming code completions rendered directly inline at your cursor with tab completion and partial line/word acceptance.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon">🪄</div>
+                        <div class="card-title">Interactive Hover Edits</div>
+                        <div class="card-body">
+                            Select any code block and press <span class="font-mono text-emerald-400">&lt;leader&gt;ce</span> to trigger instant refactoring or explanations with live streaming results.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon">🔄</div>
+                        <div class="card-title">State Synchronization</div>
+                        <div class="card-body">
+                            CADE automatically tracks your active open buffers, visible line ranges, and LSP diagnostics so you never need to copy-paste context.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>IDE & EDITOR EXTENSIONS</div>
+                <div>CADE INTEGRATION</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 7: Summary & Getting Started -->
+        <section class="slide" data-slide="7">
+            <div class="slide-header">
+                <div class="sys-tag">READY TO START</div>
+                <div class="slide-num">07 / 07</div>
+            </div>
+            <div>
+                <div class="sys-tag" style="margin-bottom: 20px;">YOUR CODING CO-PILOT AWAITS</div>
+                <div class="hero-title">
+                    SUPERCHARGE YOUR<br><span>DEVELOPMENT FLOW</span>
+                </div>
+                <p class="lead-p">
+                    Experience stateful, multi-agent AI coding with zero hallucinations, strict security sandboxing, and full toolchain authority.
+                </p>
+                <div class="badge-row">
+                    <span class="pill-badge">GITHUB: EZEKTEC-INC/CADE</span>
+                    <span class="pill-badge">DOCS: CADE.DEV</span>
+                    <span class="pill-badge">LOCAL-FIRST & SECURE</span>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>EZEKTEC INC. 2026</div>
+                <div>END OF PLAYBOOK</div>
+            </div>
+        </section>
+
+    </div>
+</div>
+
+<!-- Controls -->
+<div class="deck-controls">
+    <button class="ctrl-btn" id="prevBtn" title="Previous Slide (Left Arrow)">◀</button>
+    <span style="font-family: var(--font-mono); font-size: 13px; color: var(--emerald-glow);" id="slideIndicator">1 / 7</span>
+    <button class="ctrl-btn" id="nextBtn" title="Next Slide (Right Arrow / Space)">▶</button>
+    <button class="ctrl-btn" id="fullscreenBtn" title="Toggle Fullscreen (F)">⛶</button>
+</div>
+
+<div class="progress-bar" id="progressBar" style="width: 14.28%;"></div>
+
+<script>
+// Fixed 1920x1080 Stage Scaling Engine
+function scaleStage() {
+    const stage = document.getElementById('slideStage');
+    const stageWidth = 1920;
+    const stageHeight = 1080;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+
+    const scale = Math.min(windowWidth / stageWidth, windowHeight / stageHeight);
+    stage.style.transform = `scale(${scale})`;
+}
+
+window.addEventListener('resize', scaleStage);
+window.addEventListener('load', scaleStage);
+
+// Slide Navigation
+const slides = document.querySelectorAll('.slide');
+const totalSlides = slides.length;
+let currentSlide = 0;
+
+function showSlide(index) {
+    if (index < 0) index = 0;
+    if (index >= totalSlides) index = totalSlides - 1;
+    currentSlide = index;
+
+    slides.forEach((slide, i) => {
+        if (i === currentSlide) {
+            slide.classList.add('active');
+        } else {
+            slide.classList.remove('active');
+        }
+    });
+
+    document.getElementById('slideIndicator').textContent = `${currentSlide + 1} / ${totalSlides}`;
+    document.getElementById('progressBar').style.width = `${((currentSlide + 1) / totalSlides) * 100}%`;
+}
+
+document.getElementById('prevBtn').addEventListener('click', () => showSlide(currentSlide - 1));
+document.getElementById('nextBtn').addEventListener('click', () => showSlide(currentSlide + 1));
+
+document.getElementById('fullscreenBtn').addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+        document.exitFullscreen().catch(() => {});
+    }
+});
+
+// Keyboard Navigation
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'Space' || e.key === 'PageDown') {
+        e.preventDefault();
+        showSlide(currentSlide + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        showSlide(currentSlide - 1);
+    } else if (e.key === 'Home') {
+        e.preventDefault();
+        showSlide(0);
+    } else if (e.key === 'End') {
+        e.preventDefault();
+        showSlide(totalSlides - 1);
+    } else if (e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+            document.exitFullscreen().catch(() => {});
+        }
+    }
+});
+
+// Touch Swipe Navigation
+let touchStartX = 0;
+window.addEventListener('touchstart', (e) => {
+    touchStartX = e.changedTouches[0].screenX;
+});
+window.addEventListener('touchend', (e) => {
+    const touchEndX = e.changedTouches[0].screenX;
+    if (touchStartX - touchEndX > 50) {
+        showSlide(currentSlide + 1);
+    } else if (touchEndX - touchStartX > 50) {
+        showSlide(currentSlide - 1);
+    }
+});
+
+showSlide(0);
+</script>
+
+</body>
+</html>
