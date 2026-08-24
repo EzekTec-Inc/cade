@@ -61,14 +61,11 @@ impl ChatSessionCoordinator {
                     messages[idx].content = serde_json::Value::String(format!("{existing}{delta}"));
                 }
             }
-            "reasoning_message" => {
-                if let Some(r) = event.reasoning() {
-                    reasoning_acc.push_str(r);
-                    let reasoning_block = format!(
-                        "<reasoning>
-{reasoning_acc}
-</reasoning>"
-                    );
+            "thought" | "reasoning_message" => {
+                let r_text = event.reasoning().or_else(|| event.content()).unwrap_or("");
+                if !r_text.is_empty() {
+                    reasoning_acc.push_str(r_text);
+                    let reasoning_block = format!("<reasoning>\n{reasoning_acc}\n</reasoning>");
                     if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
                         let existing = messages[idx].content.as_str().unwrap_or("").to_string();
                         let updated = if existing.is_empty() || existing == reasoning_block {
@@ -76,31 +73,66 @@ impl ChatSessionCoordinator {
                         } else if let Some(tail) = existing.split("</reasoning>").nth(1) {
                             format!("{reasoning_block}{tail}")
                         } else {
-                            format!(
-                                "{reasoning_block}
-{existing}"
-                            )
+                            format!("{reasoning_block}\n{existing}")
                         };
                         messages[idx].content = serde_json::Value::String(updated);
                     }
                 }
             }
-            "tool_call_message" => {
-                if let Some(tc) = event.tool_call()
-                    && let Some(idx) = messages.iter().position(|m| m.id == stream_id)
-                {
+            "tool_call_message" | "tool_executing" => {
+                let name = event.tool_name().or_else(|| event.data.get("name").and_then(|v| v.as_str())).unwrap_or("tool");
+                let args = event.tool_args().or_else(|| event.data.get("arguments").and_then(|v| v.as_str())).unwrap_or("");
+                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
                     let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    let tool_block = format!(
-                        "
-
-[Tool Call: {}]
-Arguments:
-{}
-",
-                        tc.name, tc.arguments
+                    let tool_block = format!("\n\n[Tool Executing: {name}]\nArguments: {args}\n");
+                    messages[idx].content = serde_json::Value::String(format!("{existing}{tool_block}"));
+                }
+            }
+            "tool_result_message" | "tool_completed" => {
+                let name = event.tool_name().unwrap_or("tool");
+                let is_error = event.data.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                let output = event.data.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                let status_label = if is_error { "Failed" } else { "Completed" };
+                let ui_meta = if let Some(uri) = event.data.get("ui_resource_uri").and_then(|v| v.as_str()) {
+                    format!("\n[UI Widget Resource: {uri}]\n")
+                } else {
+                    String::new()
+                };
+                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let result_block = format!("\n[Tool {status_label}: {name}]{ui_meta}\nOutput: {output}\n");
+                    messages[idx].content = serde_json::Value::String(format!("{existing}{result_block}"));
+                }
+            }
+            "approval_required" => {
+                let tool_name = event.tool_name().unwrap_or("tool");
+                let approval_id = event.approval_id().unwrap_or("pending");
+                let args = event.tool_args().unwrap_or("");
+                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let approval_card = format!(
+                        "\n\n[Approval Required: {tool_name}] (ID: {approval_id})\nRequires human review before execution.\nArguments: {args}\n"
                     );
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{tool_block}"));
+                    messages[idx].content = serde_json::Value::String(format!("{existing}{approval_card}"));
+                }
+            }
+            "approval_resolved" => {
+                let approval_id = event.approval_id().unwrap_or("unknown");
+                let approved = event.data.get("approved").and_then(|v| v.as_bool()).unwrap_or(true);
+                let verdict_str = if approved { "Approved" } else { "Denied" };
+                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let resolved_block = format!("\n[Approval Resolved: {approval_id} -> {verdict_str}]\n");
+                    messages[idx].content = serde_json::Value::String(format!("{existing}{resolved_block}"));
+                }
+            }
+            "progress" => {
+                let percent = event.data.get("percent").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let msg = event.data.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let progress_block = format!("\n[Progress: {:.0}%] {}\n", percent, msg);
+                    messages[idx].content = serde_json::Value::String(format!("{existing}{progress_block}"));
                 }
             }
             "error" => {
@@ -294,6 +326,52 @@ mod tests {
                 .unwrap()
                 .contains("Thinking step 1...")
         );
+    }
+
+    #[test]
+    fn test_apply_stream_event_approval_and_widget_flow() {
+        let stream_id = "streaming-approval-123";
+        let mut messages = vec![ChatMessage {
+            id: stream_id.to_string(),
+            role: "assistant".to_string(),
+            content: json!("Starting task..."),
+            conversation_id: None,
+        }];
+        let mut reasoning_acc = String::new();
+
+        // 1. Tool Executing
+        let exec_event = StreamEvent {
+            message_type: "tool_executing".to_string(),
+            data: json!({ "name": "delete_file", "arguments": "{\"path\": \"old.txt\"}" }),
+        };
+        ChatSessionCoordinator::apply_stream_event(&mut messages, stream_id, exec_event, &mut reasoning_acc);
+        assert!(messages[0].content.as_str().unwrap().contains("[Tool Executing: delete_file]"));
+
+        // 2. Approval Required
+        let appr_event = StreamEvent {
+            message_type: "approval_required".to_string(),
+            data: json!({ "tool_name": "delete_file", "approval_id": "appr-999", "tool_args": "{\"path\": \"old.txt\"}" }),
+        };
+        ChatSessionCoordinator::apply_stream_event(&mut messages, stream_id, appr_event, &mut reasoning_acc);
+        assert!(messages[0].content.as_str().unwrap().contains("[Approval Required: delete_file]"));
+        assert!(messages[0].content.as_str().unwrap().contains("(ID: appr-999)"));
+
+        // 3. Approval Resolved
+        let resolved_event = StreamEvent {
+            message_type: "approval_resolved".to_string(),
+            data: json!({ "approval_id": "appr-999", "approved": true }),
+        };
+        ChatSessionCoordinator::apply_stream_event(&mut messages, stream_id, resolved_event, &mut reasoning_acc);
+        assert!(messages[0].content.as_str().unwrap().contains("[Approval Resolved: appr-999 -> Approved]"));
+
+        // 4. Tool Completed with UI Widget
+        let comp_event = StreamEvent {
+            message_type: "tool_completed".to_string(),
+            data: json!({ "tool_name": "delete_file", "output": "File removed", "is_error": false, "ui_resource_uri": "ui://widgets/status" }),
+        };
+        ChatSessionCoordinator::apply_stream_event(&mut messages, stream_id, comp_event, &mut reasoning_acc);
+        assert!(messages[0].content.as_str().unwrap().contains("[Tool Completed: delete_file]"));
+        assert!(messages[0].content.as_str().unwrap().contains("[UI Widget Resource: ui://widgets/status]"));
     }
 }
 

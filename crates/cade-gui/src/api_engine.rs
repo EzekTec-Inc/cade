@@ -70,6 +70,11 @@ pub enum ResourceMutation {
         label: String,
         description: Option<String>,
     },
+    SubmitApproval {
+        approval_id: String,
+        approved: bool,
+        feedback: Option<String>,
+    },
 }
 
 /// Unified, deep resource engine for managing API communication and reactive caching.
@@ -93,6 +98,21 @@ impl ApiClientEngine {
             Ok(agents) => ResourceState::Ready(agents),
             Err(e) => ResourceState::Error(e),
         }
+    }
+
+    /// Submit human-in-the-loop approval decision.
+    pub async fn submit_approval(
+        &self,
+        approval_id: &str,
+        approved: bool,
+        feedback: Option<String>,
+    ) -> Result<String, String> {
+        self.mutate(ResourceMutation::SubmitApproval {
+            approval_id: approval_id.to_string(),
+            approved,
+            feedback,
+        })
+        .await
     }
 
     /// Fetch messages for an agent and optional conversation.
@@ -203,6 +223,19 @@ impl ApiClientEngine {
                     serde_json::from_str(&res).map_err(|e| e.to_string())?;
                 Ok(val["id"].as_str().unwrap_or("cp").to_string())
             }
+            ResourceMutation::SubmitApproval {
+                approval_id,
+                approved,
+                feedback,
+            } => {
+                let path = format!("/v1/approvals/{approval_id}");
+                let body = serde_json::json!({
+                    "approved": approved,
+                    "feedback": feedback
+                });
+                api_request("POST", &path, Some(&body.to_string()), api_key).await?;
+                Ok(approval_id)
+            }
         }
     }
 }
@@ -231,6 +264,23 @@ mod tests {
         assert!(!error.is_loading());
         assert_eq!(error.value(), None);
         assert_eq!(error.error(), Some("404 Not Found"));
+    }
+
+    #[test]
+    fn test_resource_mutation_variants() {
+        let mutation = ResourceMutation::SubmitApproval {
+            approval_id: "appr-123".to_string(),
+            approved: true,
+            feedback: Some("Proceed".to_string()),
+        };
+        match mutation {
+            ResourceMutation::SubmitApproval { approval_id, approved, feedback } => {
+                assert_eq!(approval_id, "appr-123");
+                assert!(approved);
+                assert_eq!(feedback.as_deref(), Some("Proceed"));
+            }
+            _ => panic!("Expected SubmitApproval mutation"),
+        }
     }
 }
 
