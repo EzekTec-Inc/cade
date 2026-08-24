@@ -538,6 +538,13 @@ impl CadeApiClient {
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
 
+    pub async fn list_workflows(&self) -> Result<Vec<cade_api_types::WorkflowSummary>, String> {
+        let res = api_request("GET", "/v1/workflows", None, &self.api_key).await?;
+        let val: serde_json::Value = serde_json::from_str(&res).map_err(|e| e.to_string())?;
+        let workflows = val["workflows"].clone();
+        serde_json::from_value(workflows).map_err(|e| e.to_string())
+    }
+
     pub async fn listen_global_events<F>(&self, on_event: F) -> Result<(), String>
     where
         F: FnMut(serde_json::Value),

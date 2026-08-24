@@ -75,6 +75,13 @@ pub enum ResourceMutation {
         approved: bool,
         feedback: Option<String>,
     },
+    DispatchWorkflowRun {
+        workflow_name: String,
+        params: serde_json::Value,
+    },
+    CancelWorkflowRun {
+        run_id: String,
+    },
 }
 
 /// Unified, deep resource engine for managing API communication and reactive caching.
@@ -136,6 +143,27 @@ impl ApiClientEngine {
             Ok(tools) => ResourceState::Ready(tools),
             Err(e) => ResourceState::Error(e),
         }
+    }
+
+    /// Fetch all registered workflows.
+    pub async fn fetch_workflows(&self) -> ResourceState<Vec<cade_api_types::WorkflowSummary>> {
+        match self.client().list_workflows().await {
+            Ok(w) => ResourceState::Ready(w),
+            Err(e) => ResourceState::Error(e),
+        }
+    }
+
+    /// Dispatch a workflow run.
+    pub async fn dispatch_workflow_run(
+        &self,
+        workflow_name: &str,
+        params: serde_json::Value,
+    ) -> Result<String, String> {
+        self.mutate(ResourceMutation::DispatchWorkflowRun {
+            workflow_name: workflow_name.to_string(),
+            params,
+        })
+        .await
     }
 
     /// Fetch all models from the catalog.
@@ -235,6 +263,21 @@ impl ApiClientEngine {
                 });
                 api_request("POST", &path, Some(&body.to_string()), api_key).await?;
                 Ok(approval_id)
+            }
+            ResourceMutation::DispatchWorkflowRun {
+                workflow_name,
+                params,
+            } => {
+                let path = format!("/v1/workflows/{workflow_name}/run");
+                let res = api_request("POST", &path, Some(&params.to_string()), api_key).await?;
+                let val: serde_json::Value =
+                    serde_json::from_str(&res).map_err(|e| e.to_string())?;
+                Ok(val["run_id"].as_str().unwrap_or("run").to_string())
+            }
+            ResourceMutation::CancelWorkflowRun { run_id } => {
+                let path = format!("/v1/workflows/runs/{run_id}/cancel");
+                api_request("POST", &path, None, api_key).await?;
+                Ok(run_id)
             }
         }
     }

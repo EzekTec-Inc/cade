@@ -15,3 +15,4 @@ pub mod stubs;
 pub mod toast;
 pub mod tools_page;
 pub mod usage;
+pub mod workflows;
