@@ -179,6 +179,8 @@ pub enum ExecutionBackendKind {
     ReadOnly,
     /// Run commands in a virtual restricted local sandbox.
     Virtual,
+    /// Run commands inside a hardware-isolated Firecracker MicroVM.
+    MicroVm,
 }
 
 impl ExecutionBackendKind {
@@ -189,6 +191,7 @@ impl ExecutionBackendKind {
             Self::Ssh => "ssh",
             Self::ReadOnly => "readonly",
             Self::Virtual => "virtual",
+            Self::MicroVm => "microvm",
         }
     }
 }

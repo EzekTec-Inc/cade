@@ -50,6 +50,7 @@ globset.workspace      = true
 ignore.workspace       = true
 walkdir.workspace      = true
 dirs.workspace         = true
+tar = "0.4.45"
 # -- Plugin runtimes (optional, feature-gated)
 rquickjs      = { version = "0.12", optional = true, default-features = false, features = ["macro", "parallel"] }
 wasmtime      = { version = "36", optional = true, default-features = false, features = ["cranelift", "async"] }

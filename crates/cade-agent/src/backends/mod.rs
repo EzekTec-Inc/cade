@@ -17,6 +17,7 @@ pub mod readonly;
 #[cfg(feature = "backend-ssh")]
 pub mod ssh;
 pub mod storage;
+pub mod microvm;
 pub mod virtual_sandbox;
 
 #[cfg(feature = "backend-docker")]
@@ -26,6 +27,7 @@ pub use readonly::ReadOnlyBackend;
 #[cfg(feature = "backend-ssh")]
 pub use ssh::SshBackend;
 pub use virtual_sandbox::VirtualSandboxBackend;
+pub use microvm::MicroVmBackend;
 
 use std::path::{Path, PathBuf};
 
@@ -240,6 +242,28 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
         ExecutionBackendKind::Virtual => Box::new(VirtualSandboxBackend::new(
             std::env::current_dir().unwrap_or_default(),
         )),
+        ExecutionBackendKind::MicroVm => {
+            let primary = std::env::current_dir().unwrap_or_default();
+            if !microvm::hypervisor::HypervisorProcess::is_kvm_available() {
+                tracing::warn!(
+                    "KVM hardware acceleration (/dev/kvm) is unavailable. Falling back to Virtual sandbox."
+                );
+                Box::new(VirtualSandboxBackend::new(primary))
+            } else {
+                let handle = tokio::runtime::Handle::try_current();
+                if let Ok(rt) = handle {
+                    match tokio::task::block_in_place(|| rt.block_on(MicroVmBackend::new(&primary, None))) {
+                        Ok(b) => Box::new(b),
+                        Err(e) => {
+                            tracing::warn!("Failed to initialize MicroVmBackend ({e}). Falling back to Virtual sandbox.");
+                            Box::new(VirtualSandboxBackend::new(primary))
+                        }
+                    }
+                } else {
+                    Box::new(VirtualSandboxBackend::new(primary))
+                }
+            }
+        }
     }
 }
 
