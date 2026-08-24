@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CADE Presentation — Visual Style Discovery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Fira+Code:wght@400;600&family=JetBrains+Mono:wght@400;700&family=Outfit:wght@400;600;800;900&family=Space+Grotesk:wght@400;500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #090b10;
+    color: #e2e8f0;
+    font-family: 'Space Grotesk', sans-serif;
+    padding: 40px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #fff; letter-spacing: -0.02em; }
+p.subtitle { color: #94a3b8; font-size: 15px; margin-bottom: 36px; }
+
+.previews-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 32px;
+    max-width: 1300px;
+    width: 100%;
+}
+.preview-card {
+    background: #11141d;
+    border: 1px solid #1e293b;
+    border-radius: 16px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    transition: transform 0.2s, border-color 0.2s;
+}
+.preview-card:hover {
+    transform: translateY(-4px);
+    border-color: #3b82f6;
+}
+.preview-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #1e293b;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.preview-title { font-weight: 700; font-size: 16px; color: #f8fafc; }
+.badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.badge-safe { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
+.badge-bold { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
+.badge-wildcard { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+
+/* Aspect ratio 16:9 box */
+.stage-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+}
+.slide-mini {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 24px;
+    user-select: none;
+}
+
+/* Style Option 1: Bold Signal */
+.style-bold-signal {
+    background: linear-gradient(135deg, #111215 0%, #1f2229 50%, #111215 100%);
+    font-family: 'Space Grotesk', sans-serif;
+}
+.style-bold-signal .top-bar { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; font-family: 'JetBrains Mono', monospace; }
+.style-bold-signal .hero-card {
+    background: #ff5722;
+    color: #0f1115;
+    padding: 16px 20px;
+    border-radius: 10px;
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 20px;
+    line-height: 1.1;
+    box-shadow: 0 8px 20px rgba(255, 87, 34, 0.3);
+}
+.style-bold-signal .tagline { font-size: 11px; color: #cbd5e1; font-weight: 500; }
+
+/* Style Option 2: Neo-Grid / Blueprint */
+.style-neo-grid {
+    background: #07090e;
+    background-image: linear-gradient(rgba(0, 240, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 240, 255, 0.05) 1px, transparent 1px);
+    background-size: 20px 20px;
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    font-family: 'Syne', sans-serif;
+}
+.style-neo-grid .grid-header { font-family: 'Fira Code', monospace; font-size: 10px; color: #00f0ff; letter-spacing: 0.1em; }
+.style-neo-grid .hero-title { font-size: 24px; font-weight: 800; color: #fff; line-height: 1.1; }
+.style-neo-grid .hero-title span { color: #00f0ff; }
+.style-neo-grid .grid-footer { display: flex; gap: 8px; font-family: 'Fira Code', monospace; font-size: 10px; color: #64748b; }
+
+/* Style Option 3: Cyberpunk Kinetic Glass */
+.style-kinetic-glass {
+    background: radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.25) 0%, #08090d 70%);
+    font-family: 'Outfit', sans-serif;
+}
+.style-kinetic-glass .glass-panel {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 16px;
+}
+.style-kinetic-glass .hero-heading { font-size: 24px; font-weight: 900; color: #fff; letter-spacing: -0.03em; }
+.style-kinetic-glass .hero-heading span { background: linear-gradient(90deg, #10b981, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.style-kinetic-glass .pill-list { display: flex; gap: 6px; margin-top: 8px; }
+.style-kinetic-glass .pill { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; font-size: 9px; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+
+.preview-desc {
+    padding: 16px 20px;
+    font-size: 13px;
+    color: #94a3b8;
+    line-height: 1.5;
+    background: #0f1219;
+}
+.preview-desc strong { color: #e2e8f0; }
+</style>
+</head>
+<body>
+
+<h1>CADE Architecture & Platform Deck</h1>
+<p class="subtitle">Select your preferred visual style direction to generate the complete presentation.</p>
+
+<div class="previews-grid">
+
+    <!-- Option 1 -->
+    <div class="preview-card">
+        <div class="preview-header">
+            <div class="preview-title">1. Bold Signal</div>
+            <div class="badge badge-safe">Preset</div>
+        </div>
+        <div class="stage-container">
+            <div class="slide-mini style-bold-signal">
+                <div class="top-bar">
+                    <span>// ARCHITECTURE DECK</span>
+                    <span>01 / 07</span>
+                </div>
+                <div class="hero-card">
+                    CADE: THE AUTONOMOUS CODING AGENT
+                </div>
+                <div class="tagline">
+                    Deep modules, hypervisor sandboxing, and grammatical tool execution.
+                </div>
+            </div>
+        </div>
+        <div class="preview-desc">
+            <strong>Vibe:</strong> High-impact, confident, modern tech editorial.<br>
+            <strong>Fonts:</strong> Archivo Black + Space Grotesk.<br>
+            <strong>Palette:</strong> High-contrast blaze orange (#FF5722) on dark slate graphite.
+        </div>
+    </div>
+
+    <!-- Option 2 -->
+    <div class="preview-card">
+        <div class="preview-header">
+            <div class="preview-title">2. Neo-Grid Blueprint</div>
+            <div class="badge badge-bold">Bold Template</div>
+        </div>
+        <div class="stage-container">
+            <div class="slide-mini style-neo-grid">
+                <div class="grid-header">[SYS.SPEC.2026 // CADE-CORE]</div>
+                <div class="hero-title">
+                    SYSTEMS-GRADE<br><span>AGENT HARNESS</span>
+                </div>
+                <div class="grid-footer">
+                    <span>• VSOCK CONTROL</span>
+                    <span>• FIRECRACKER</span>
+                    <span>• ZERO-DRIFT</span>
+                </div>
+            </div>
+        </div>
+        <div class="preview-desc">
+            <strong>Vibe:</strong> Engineering-first, blueprint precision, cyber grid.<br>
+            <strong>Fonts:</strong> Syne + Fira Code.<br>
+            <strong>Palette:</strong> Electric cyan (#00F0FF) on deep obsidian blueprint grid.
+        </div>
+    </div>
+
+    <!-- Option 3 -->
+    <div class="preview-card">
+        <div class="preview-header">
+            <div class="preview-title">3. Cyber Kinetic Glass</div>
+            <div class="badge badge-wildcard">Wildcard</div>
+        </div>
+        <div class="stage-container">
+            <div class="slide-mini style-kinetic-glass">
+                <div class="glass-panel">
+                    <div class="hero-heading">CADE <span>REACTIVE</span> PLATFORM</div>
+                    <div class="pill-list">
+                        <span class="pill">RUST AXUM</span>
+                        <span class="pill">LEPTOS WASM</span>
+                        <span class="pill">NEEDLE 2</span>
+                    </div>
+                </div>
+                <div style="font-size: 10px; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">
+                    Unified Execution Seam & Multi-Agent Teams
+                </div>
+            </div>
+        </div>
+        <div class="preview-desc">
+            <strong>Vibe:</strong> Futuristic, sophisticated glassmorphism, multi-gradient glow.<br>
+            <strong>Fonts:</strong> Outfit + JetBrains Mono.<br>
+            <strong>Palette:</strong> Emerald neon (#10B981) + Violet radiant glow on dark glass.
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>

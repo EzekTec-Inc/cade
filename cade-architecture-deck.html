@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CADE — Systems-Grade Autonomous Coding Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ===========================================
+   FIXED 16:9 STAGE: MANDATORY BASE STYLES
+   Slides are authored at 1920×1080 and scaled as a whole.
+   =========================================== */
+
+:root {
+    --bg-base: #06080d;
+    --bg-card: #0d121d;
+    --bg-card-hover: #131a29;
+    --cyan-glow: #00F0FF;
+    --cyan-dim: rgba(0, 240, 255, 0.15);
+    --cyan-border: rgba(0, 240, 255, 0.3);
+    --emerald-accent: #10B981;
+    --text-main: #F8FAFC;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --font-display: 'Syne', sans-serif;
+    --font-body: 'Space Grotesk', sans-serif;
+    --font-mono: 'Fira Code', monospace;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--bg-base);
+    font-family: var(--font-body);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+}
+
+.deck-viewport {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: var(--bg-base);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Fixed 1920x1080 Stage */
+.deck-stage {
+    position: absolute;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    transform-origin: center center;
+    background: var(--bg-base);
+    background-image: 
+        linear-gradient(rgba(0, 240, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.05) 1px, transparent 1px);
+    background-size: 32px 32px;
+    box-shadow: 0 0 100px rgba(0, 240, 255, 0.05);
+}
+
+/* Slides container */
+.slide {
+    position: absolute;
+    inset: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 80px 100px;
+    box-sizing: border-box;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.slide.active {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 2;
+}
+
+/* Header & Footer elements */
+.slide-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--cyan-border);
+    padding-bottom: 20px;
+}
+.sys-tag {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--cyan-glow);
+    letter-spacing: 0.15em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.sys-tag::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: var(--cyan-glow);
+    box-shadow: 0 0 10px var(--cyan-glow);
+    border-radius: 50%;
+}
+.slide-num {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    color: var(--text-dim);
+}
+
+.slide-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 20px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-dim);
+}
+
+/* Slide Typography & Layouts */
+.hero-title {
+    font-family: var(--font-display);
+    font-size: 84px;
+    font-weight: 900;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    color: #fff;
+    margin: 20px 0;
+}
+.hero-title span {
+    color: var(--cyan-glow);
+    text-shadow: 0 0 30px rgba(0, 240, 255, 0.4);
+}
+
+.section-title {
+    font-family: var(--font-display);
+    font-size: 56px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: #fff;
+    margin: 10px 0 20px;
+}
+.section-title span {
+    color: var(--cyan-glow);
+}
+
+.lead-p {
+    font-size: 24px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    max-width: 1200px;
+}
+
+/* Card Grids */
+.cards-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+    margin: 40px 0;
+}
+.cards-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 36px;
+    margin: 30px 0;
+}
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--cyan-border);
+    border-radius: 12px;
+    padding: 36px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40px;
+    height: 3px;
+    background: var(--cyan-glow);
+}
+
+.card-num {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--cyan-glow);
+    margin-bottom: 12px;
+}
+.card-title {
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 12px;
+}
+.card-body {
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--text-muted);
+}
+
+/* Terminal / Code Box */
+.terminal-box {
+    background: #040609;
+    border: 1px solid var(--cyan-border);
+    border-radius: 8px;
+    padding: 24px;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    line-height: 1.6;
+    color: #38bdf8;
+}
+.terminal-box .cyan { color: var(--cyan-glow); }
+.terminal-box .green { color: var(--emerald-accent); }
+.terminal-box .dim { color: var(--text-dim); }
+
+/* Badges */
+.badge-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+.spec-badge {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    background: var(--cyan-dim);
+    border: 1px solid var(--cyan-border);
+    color: var(--cyan-glow);
+    font-weight: 600;
+}
+
+/* Global Controls */
+.deck-controls {
+    position: fixed;
+    bottom: 30px;
+    right: 40px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 1000;
+    background: rgba(13, 18, 29, 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--cyan-border);
+    padding: 8px 16px;
+    border-radius: 30px;
+}
+.ctrl-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+.ctrl-btn:hover {
+    border-color: var(--cyan-glow);
+    color: var(--cyan-glow);
+}
+.progress-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 4px;
+    background: var(--cyan-glow);
+    box-shadow: 0 0 10px var(--cyan-glow);
+    transition: width 0.3s ease;
+    z-index: 1001;
+}
+</style>
+</head>
+<body>
+
+<div class="deck-viewport">
+    <div class="deck-stage" id="slideStage">
+
+        <!-- SLIDE 1: Title -->
+        <section class="slide active" data-slide="1">
+            <div class="slide-header">
+                <div class="sys-tag">CADE ARCHITECTURE // SPEC 2026</div>
+                <div class="slide-num">01 / 07</div>
+            </div>
+            <div>
+                <div class="sys-tag" style="margin-bottom: 20px;">AUTONOMOUS AGENT HARNESS</div>
+                <div class="hero-title">
+                    SYSTEMS-GRADE<br><span>AI CODING AGENT</span>
+                </div>
+                <p class="lead-p">
+                    Stateful, hardware-virtualized developer agent built for enterprise codebases, deep modular leverage, and zero-compromise security.
+                </p>
+                <div class="badge-row">
+                    <span class="spec-badge">RUST KERNEL</span>
+                    <span class="spec-badge">FIRECRACKER MICROVM</span>
+                    <span class="spec-badge">NEEDLE 2 ENGINE</span>
+                    <span class="spec-badge">NATIVE MCP AUTHORITY</span>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>EZEKTEC INC. // OPEN SPECIFICATION</div>
+                <div>PRESS [SPACE] OR ARROWS TO ADVANCE</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 2: Core Architecture & Seams -->
+        <section class="slide" data-slide="2">
+            <div class="slide-header">
+                <div class="sys-tag">FOUNDATIONAL PRINCIPLES</div>
+                <div class="slide-num">02 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Deep Modules & <span>Seam Discipline</span></div>
+                <p class="lead-p">
+                    Maximum behavior behind clean, narrow interfaces. Zero pass-through wrappers.
+                </p>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-num">SEAM 01</div>
+                        <div class="card-title">CapabilityMesh</div>
+                        <div class="card-body">
+                            Unified execution seam connecting MCP tools, AST transformers, and desktop capabilities into an unambiguous function-calling catalog.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">SEAM 02</div>
+                        <div class="card-title">SubagentSession</div>
+                        <div class="card-body">
+                            Deep autonomous harness managing turn loops, dual-budget clamping (turn + token), and RAII workspace isolation behind a 1-method interface.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">SEAM 03</div>
+                        <div class="card-title">ExecutionBackend</div>
+                        <div class="card-body">
+                            Pluggable OS interaction seam routing commands through Local, Docker, SSH, Virtual Sandbox, or Firecracker MicroVMs transparently.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>ADR-0020 // CAPABILITY MESH SEAM</div>
+                <div>CADE ARCHITECTURE</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 3: MicroVM Sandboxing -->
+        <section class="slide" data-slide="3">
+            <div class="slide-header">
+                <div class="sys-tag">SECURITY & SANDBOXING</div>
+                <div class="slide-num">03 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Hardware-Level <span>MicroVM Sandboxing</span></div>
+                <p class="lead-p">
+                    AWS Firecracker over hardware virtual sockets (vsock). Zero shared host volume mounts.
+                </p>
+                <div class="cards-grid-2">
+                    <div class="card">
+                        <div class="card-num">HYPERVISOR ISOLATION</div>
+                        <div class="card-title">Dedicated KVM Virtual Machine</div>
+                        <div class="card-body">
+                            Untrusted shell commands and subagent builds execute inside isolated 1024MB MicroVMs that boot in under 20ms. Kernel panics and exploits are 100% trapped inside the guest kernel.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">VSOCK CONTROL CHANNEL</div>
+                        <div class="card-title">In-Memory Tarball Synchronization</div>
+                        <div class="card-body">
+                            Files are bundled in-memory and streamed over vsock into guest `/workspace`. No host directory paths are exposed to the guest, physically eliminating container escape vectors.
+                        </div>
+                    </div>
+                </div>
+                <div class="terminal-box">
+                    <span class="dim">// Hypervisor Fallback Pipeline</span><br>
+                    <span class="cyan">MicroVmBackend</span> (KVM) <span class="dim">→</span> <span class="green">DockerBackend</span> <span class="dim">→</span> <span class="green">VirtualSandboxBackend</span> <span class="dim">→</span> <span class="green">LocalBackend</span>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>ADR-0014 // FIRECRACKER MICROVM INTEGRATION</div>
+                <div>CADE SECURITY</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 4: Subagent Autonomous Harness -->
+        <section class="slide" data-slide="4">
+            <div class="slide-header">
+                <div class="sys-tag">AUTONOMOUS EXECUTION</div>
+                <div class="slide-num">04 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">SubagentSession <span>Autonomous Harness</span></div>
+                <p class="lead-p">
+                    Sandboxed task delegation with leak-free lifecycle management and real-time telemetry.
+                </p>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-num">FEATURE 01</div>
+                        <div class="card-title">RAII Workspace Guard</div>
+                        <div class="card-body">
+                            Temporary worktrees and directories automatically stage on success and guarantee clean discard on panic or cancellation via RAII Drop guards.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">FEATURE 02</div>
+                        <div class="card-title">Dual-Budget Clamping</div>
+                        <div class="card-body">
+                            Simultaneously clamps turn iterations (`max_iters`) and cumulative token expenditures (`max_tokens_budget`) to stop runaway agentic loops.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">FEATURE 03</div>
+                        <div class="card-title">Structured Outcomes</div>
+                        <div class="card-body">
+                            Produces typed, exhaustive outcomes: `Done`, `Blocked`, `Failed`, and `Exhausted`, feeding memory findings back into SQLite knowledge graphs.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>ADR-0021 // SUBAGENT SESSION HARNESS</div>
+                <div>CADE AGENT SYSTEM</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 5: Full-Stack Reactive Architecture -->
+        <section class="slide" data-slide="5">
+            <div class="slide-header">
+                <div class="sys-tag">FULL-STACK PLATFORM</div>
+                <div class="slide-num">05 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Reactive Web GUI & <span>Pipeline Orchestrator</span></div>
+                <p class="lead-p">
+                    Full Rust end-to-end: Axum HTTP/SSE server + Dioxus WASM client with zero wire drift.
+                </p>
+                <div class="cards-grid-2">
+                    <div class="card">
+                        <div class="card-num">FRONTEND (WASM)</div>
+                        <div class="card-title">Dioxus Reactive Dashboard</div>
+                        <div class="card-body">
+                            Real-time streaming timeline, interactive Human-In-The-Loop (HITL) approval cards, DAG pipeline visualization, and dynamic MCP UI widget rendering (`_meta.ui.resourceUri`).
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">BACKEND (AXUM + SQLITE)</div>
+                        <div class="card-title">WorkflowEngine & SSE Stream</div>
+                        <div class="card-body">
+                            DAG step dependency sequencing, parallel subagent dispatch, transactional WAL run persistence, and non-blocking broadcast event streaming over `/v1/workflows/runs/:id/stream`.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>PRD #99 // WORKFLOW & PIPELINE ORCHESTRATOR</div>
+                <div>CADE FULL-STACK</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 6: Tool Calling & Needle 2 Engine -->
+        <section class="slide" data-slide="6">
+            <div class="slide-header">
+                <div class="sys-tag">AI INFERENCE & GRAMMAR</div>
+                <div class="slide-num">06 / 07</div>
+            </div>
+            <div>
+                <div class="section-title">Needle 2 <span>Grammatical Tool Engine</span></div>
+                <p class="lead-p">
+                    Zero-network tool calling, grammatical schema constraint, and intelligent tool pruning.
+                </p>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-num">ENGINE 01</div>
+                        <div class="card-title">Grammar-Constrained Decoding</div>
+                        <div class="card-body">
+                            Forces LLM token output to strictly conform to JSON Schema parameters at the logit level, eliminating JSON parsing syntax errors.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">ENGINE 02</div>
+                        <div class="card-title">Intelligent Tool Selection</div>
+                        <div class="card-body">
+                            Dynamically prunes inactive tool schemas on each request based on conversation context, saving up to 85% prompt input tokens on long sessions.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-num">ENGINE 03</div>
+                        <div class="card-title">Centralized MCP Authority</div>
+                        <div class="card-body">
+                            Single daemon source of truth for all MCP server lifecycles, preventing duplicate process trees and language server CPU/RAM exhaustion.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>ADR-0020 & PRD #81 // TOOL CALLING ENGINE</div>
+                <div>CADE AI SYSTEM</div>
+            </div>
+        </section>
+
+        <!-- SLIDE 7: Summary & Conclusion -->
+        <section class="slide" data-slide="7">
+            <div class="slide-header">
+                <div class="sys-tag">CONCLUSION & ROADMAP</div>
+                <div class="slide-num">07 / 07</div>
+            </div>
+            <div>
+                <div class="sys-tag" style="margin-bottom: 20px;">THE AUTONOMOUS FUTURE</div>
+                <div class="hero-title">
+                    BUILT FOR CODE THAT<br><span>MATTERS.</span>
+                </div>
+                <p class="lead-p">
+                    CADE combines systems engineering discipline, hardware sandboxing, and grammatical inference into a unified platform for elite software development.
+                </p>
+                <div class="badge-row">
+                    <span class="spec-badge">ZERO COMPROMISE ARCHITECTURE</span>
+                    <span class="spec-badge">OPEN SPECIFICATION</span>
+                    <span class="spec-badge">GITHUB.COM/EZEKTEC-INC/CADE</span>
+                </div>
+            </div>
+            <div class="slide-footer">
+                <div>EZEKTEC INC. 2026 // ALL RIGHTS RESERVED</div>
+                <div>END OF PRESENTATION</div>
+            </div>
+        </section>
+
+    </div>
+</div>
+
+<!-- Controls -->
+<div class="deck-controls">
+    <button class="ctrl-btn" id="prevBtn" title="Previous Slide (Left Arrow)">◀</button>
+    <span style="font-family: var(--font-mono); font-size: 13px; color: var(--cyan-glow);" id="slideIndicator">1 / 7</span>
+    <button class="ctrl-btn" id="nextBtn" title="Next Slide (Right Arrow / Space)">▶</button>
+    <button class="ctrl-btn" id="fullscreenBtn" title="Toggle Fullscreen (F)">⛶</button>
+</div>
+
+<div class="progress-bar" id="progressBar" style="width: 14.28%;"></div>
+
+<script>
+// Fixed 1920x1080 Stage Scaling Engine
+function scaleStage() {
+    const stage = document.getElementById('slideStage');
+    const stageWidth = 1920;
+    const stageHeight = 1080;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+
+    const scale = Math.min(windowWidth / stageWidth, windowHeight / stageHeight);
+    stage.style.transform = `scale(${scale})`;
+}
+
+window.addEventListener('resize', scaleStage);
+window.addEventListener('load', scaleStage);
+
+// Slide Navigation
+const slides = document.querySelectorAll('.slide');
+const totalSlides = slides.length;
+let currentSlide = 0;
+
+function showSlide(index) {
+    if (index < 0) index = 0;
+    if (index >= totalSlides) index = totalSlides - 1;
+    currentSlide = index;
+
+    slides.forEach((slide, i) => {
+        if (i === currentSlide) {
+            slide.classList.add('active');
+        } else {
+            slide.classList.remove('active');
+        }
+    });
+
+    document.getElementById('slideIndicator').textContent = `${currentSlide + 1} / ${totalSlides}`;
+    document.getElementById('progressBar').style.width = `${((currentSlide + 1) / totalSlides) * 100}%`;
+}
+
+document.getElementById('prevBtn').addEventListener('click', () => showSlide(currentSlide - 1));
+document.getElementById('nextBtn').addEventListener('click', () => showSlide(currentSlide + 1));
+
+document.getElementById('fullscreenBtn').addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+        document.exitFullscreen().catch(() => {});
+    }
+});
+
+// Keyboard Navigation
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'Space' || e.key === 'PageDown') {
+        e.preventDefault();
+        showSlide(currentSlide + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        showSlide(currentSlide - 1);
+    } else if (e.key === 'Home') {
+        e.preventDefault();
+        showSlide(0);
+    } else if (e.key === 'End') {
+        e.preventDefault();
+        showSlide(totalSlides - 1);
+    } else if (e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+            document.exitFullscreen().catch(() => {});
+        }
+    }
+});
+
+// Touch Swipe Navigation
+let touchStartX = 0;
+window.addEventListener('touchstart', (e) => {
+    touchStartX = e.changedTouches[0].screenX;
+});
+window.addEventListener('touchend', (e) => {
+    const touchEndX = e.changedTouches[0].screenX;
+    if (touchStartX - touchEndX > 50) {
+        showSlide(currentSlide + 1);
+    } else if (touchEndX - touchStartX > 50) {
+        showSlide(currentSlide - 1);
+    }
+});
+
+showSlide(0);
+</script>
+
+</body>
+</html>
