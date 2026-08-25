@@ -7,10 +7,11 @@ edition = "2024"
 default         = ["bundled-sqlite"]
 bundled-sqlite  = ["rusqlite/bundled", "r2d2_sqlite/bundled"]
 # WI-SEMANTIC: opt-in. Default build does NOT pull fastembed/sqlite-vec.
-semantic-search = ["dep:fastembed", "dep:sqlite-vec"]
+semantic-search = ["dep:fastembed", "dep:sqlite-vec", "dep:turbovec"]
 rig-compat      = ["dep:rig"]
 enterprise-postgres = ["dep:tokio-postgres", "dep:pgvector"]
 enterprise-qdrant = ["dep:qdrant-client"]
+turbovec = ["dep:turbovec"]
 
 [dependencies]
 rig = { version = "0.42.0", package = "rig-core", optional = true }
@@ -46,9 +47,11 @@ dirs = { workspace = true }
 tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1"] }
 pgvector = { version = "0.4.2", optional = true, features = ["postgres"] }
 qdrant-client = { version = "1.18", optional = true }
+turbovec = { version = "1.0.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
+tempfile = { workspace = true }
 
 
 
