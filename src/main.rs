@@ -464,10 +464,11 @@ async fn async_main() -> Result<()> {
                 } else {
                     bg_mcp_boot_status.lock().clear();
                 }
+                std::sync::Arc::new(McpManager::from_remote(std::sync::Arc::new(bg_client.clone())))
             } else {
                 bg_mcp_boot_status.lock().clear(); // Instantly clear loadings so TUI knows none are pending
+                std::sync::Arc::new(McpManager::empty())
             }
-            std::sync::Arc::new(McpManager::empty())
         } else {
             tracing::warn!("DEBUG: Invoking McpManager::start...");
             let (mgr, _) = McpManager::start(

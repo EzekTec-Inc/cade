@@ -750,6 +750,26 @@ pub mod memory;
 pub mod messages;
 pub mod storage_impl;
 
+#[cfg(feature = "mcp")]
+#[async_trait::async_trait]
+impl cade_mcp::RemoteMcpClient for HttpTransport {
+    async fn call_mcp_tool(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> cade_mcp::Result<(String, bool, Option<String>)> {
+        self.call_mcp_tool(name, arguments)
+            .await
+            .map_err(|e| cade_mcp::Error::custom(e.to_string()))
+    }
+
+    async fn list_mcp_statuses(&self) -> cade_mcp::Result<Vec<cade_mcp::McpStatus>> {
+        self.get_mcp_statuses()
+            .await
+            .map_err(|e| cade_mcp::Error::custom(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod client_auth_tests {
     use super::*;

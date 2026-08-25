@@ -177,12 +177,26 @@ struct McpServer {
 ///
 /// Constructed once at startup; passed as `Arc<McpManager>` to the REPL.
 /// All methods take `&self` (thread-safe via interior `RwLock`).
+/// Trait for routing MCP operations to a remote CADE server.
+#[async_trait::async_trait]
+pub trait RemoteMcpClient: Send + Sync {
+    async fn call_mcp_tool(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<(String, bool, Option<String>)>;
+
+    async fn list_mcp_statuses(&self) -> Result<Vec<McpStatus>>;
+}
+
 pub struct McpManager {
     /// Interior-mutable server list so `call_tool(&self)` can reconnect.
     servers: RwLock<Vec<McpServer>>,
     /// Set to `true` when tool schemas change after a successful reconnect.
     /// The REPL polls this flag each tick and re-registers tools when set.
     pub schemas_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Optional remote client for delegating tool calls when connected to cade-server.
+    pub remote_client: Option<std::sync::Arc<dyn RemoteMcpClient>>,
 }
 
 /// Summary returned by `McpManager::reload()` for display in the REPL.
@@ -279,8 +293,18 @@ impl McpManager {
         let mgr = McpManager {
             servers: RwLock::new(servers),
             schemas_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            remote_client: None,
         };
         (mgr, results)
+    }
+
+    /// Construct an McpManager that delegates tool execution to a remote client.
+    pub fn from_remote(remote: std::sync::Arc<dyn RemoteMcpClient>) -> Self {
+        McpManager {
+            servers: RwLock::new(vec![]),
+            schemas_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            remote_client: Some(remote),
+        }
     }
 
     /// No-op (empty) manager — used when no servers are configured.
@@ -288,6 +312,7 @@ impl McpManager {
         McpManager {
             servers: RwLock::new(vec![]),
             schemas_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            remote_client: None,
         }
     }
 
@@ -447,7 +472,7 @@ impl McpManager {
 
     /// Returns true if any servers are configured.
     pub async fn is_empty(&self) -> bool {
-        self.servers.read().await.is_empty()
+        self.servers.read().await.is_empty() && self.remote_client.is_none()
     }
 
     /// All tool schemas across all servers (OpenAI-compatible).
@@ -462,7 +487,16 @@ impl McpManager {
 
     /// Returns true if this manager owns the given prefixed tool name.
     pub async fn owns_tool(&self, prefixed_name: &str) -> bool {
-        self.find_tool_idx(prefixed_name).await.is_some()
+        if self.find_tool_idx(prefixed_name).await.is_some() {
+            true
+        } else if let Some(remote) = &self.remote_client {
+            let statuses = remote.list_mcp_statuses().await.unwrap_or_default();
+            statuses
+                .iter()
+                .any(|s| !s.disabled && s.tools.iter().any(|t| t == prefixed_name))
+        } else {
+            false
+        }
     }
 
     /// Returns true when the error looks like a JSON-RPC protocol error
@@ -483,7 +517,15 @@ impl McpManager {
         prefixed_name: &str,
         args: &Value,
     ) -> Option<Result<(String, bool, Option<String>)>> {
-        let server_idx = self.find_tool_idx(prefixed_name).await?.0;
+        let server_idx = match self.find_tool_idx(prefixed_name).await {
+            Some((idx, _)) => idx,
+            None => {
+                if let Some(remote) = &self.remote_client {
+                    return Some(remote.call_mcp_tool(prefixed_name, args).await);
+                }
+                return None;
+            }
+        };
 
         let (is_disabled, server_key, original_name, peer) = {
             let servers = self.servers.read().await;
@@ -665,17 +707,22 @@ impl McpManager {
 
     /// Summary of all active servers (for `/mcp` command).
     pub async fn status(&self) -> Vec<McpStatus> {
-        self.servers
-            .read()
-            .await
-            .iter()
-            .map(|s| McpStatus {
-                key: s.key.clone(),
-                command: s.command.clone(),
-                tools: s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
-                disabled: s.disabled,
-            })
-            .collect()
+        let servers = self.servers.read().await;
+        if !servers.is_empty() {
+            return servers
+                .iter()
+                .map(|s| McpStatus {
+                    key: s.key.clone(),
+                    command: s.command.clone(),
+                    tools: s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
+                    disabled: s.disabled,
+                })
+                .collect();
+        }
+        if let Some(remote) = &self.remote_client {
+            return remote.list_mcp_statuses().await.unwrap_or_default();
+        }
+        vec![]
     }
 
     // -- Internal helpers
