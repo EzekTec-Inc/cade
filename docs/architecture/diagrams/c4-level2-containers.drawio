@@ -1,0 +1,99 @@
+<mxfile host="Electron" modified="2026-08-26T00:00:00.000Z" agent="CADE" version="24.0.0" type="device">
+  <diagram id="c4_level2_containers" name="C4 Level 2 - Container Architecture">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" background="#040711" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title Block -->
+        <mxCell id="title_block" value="&lt;b&gt;CADE Platform — C4 Level 2: Container &amp; Application Architecture&lt;/b&gt;&#xa;&lt;i&gt;TOGAF 10 Application Architecture (Phase C)&lt;/i&gt;" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontColor=#f8fafc;fontSize=16;fontFamily=monospace;" vertex="1" parent="1">
+          <mxGeometry x="60" y="30" width="700" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- System Boundary Container Box -->
+        <mxCell id="box_cade_boundary" value="CADE System Boundary" style="swimlane;whiteSpace=wrap;html=1;fillColor=#070b14;strokeColor=#1e293b;strokeWidth=2;dashed=1;fontColor=#94a3b8;fontSize=12;startSize=28;horizontal=1;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="60" y="90" width="920" height="840" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 1: TUI CLI Client -->
+        <mxCell id="cnt_cli" value="&lt;b&gt;CLI / TUI Client (cade)&lt;/b&gt;&#xa;&lt;i&gt;[Rust / Ratatui v0.30]&lt;/i&gt;&#xa;&#xa;Interactive smart terminal shell with CSI 2026 synchronized rendering, slash commands, and fuzzy autocompletion." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#38bdf8;strokeWidth=2;fontColor=#f8fafc;fontSize=11;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="40" y="60" width="220" height="110" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 2: WASM Web GUI -->
+        <mxCell id="cnt_gui" value="&lt;b&gt;WASM GUI Dashboard&lt;/b&gt;&#xa;&lt;i&gt;[Dioxus v0.5 / WASM / HTML]&lt;/i&gt;&#xa;&#xa;Browser dashboard at /dashboard with Cmd+K palette, Multi-Model Arena, Swarm DAG canvas, and 3-Tier memory heatmap." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#a855f7;strokeWidth=2;fontColor=#f8fafc;fontSize=11;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="350" y="60" width="230" height="110" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 3: IDE Bridge -->
+        <mxCell id="cnt_ide_bridge" value="&lt;b&gt;IDE Bridge (cade-ide-mcp)&lt;/b&gt;&#xa;&lt;i&gt;[Rust / Neovim / VSCode]&lt;/i&gt;&#xa;&#xa;LSP &amp; socket bridge for interactive buffer syncing, ghost-text completions, and proposed edits." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#ec4899;strokeWidth=2;fontColor=#f8fafc;fontSize=11;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="660" y="60" width="220" height="110" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 4: Core Server Daemon -->
+        <mxCell id="cnt_server" value="&lt;b&gt;CADE Server Daemon (cade-server)&lt;/b&gt;&#xa;&lt;i&gt;[Rust / Axum HTTP &amp; SSE Engine]&lt;/i&gt;&#xa;&#xa;Centralized background daemon hosting REST endpoints, real-time SSE stream multiplexers, Sleeptime memory consolidation, and agentic loops." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#38bdf8;strokeWidth=3;fontColor=#f8fafc;fontSize=12;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="280" y="270" width="360" height="130" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 5: Embedded In-Process SDK -->
+        <mxCell id="cnt_sdk" value="&lt;b&gt;Embedded SDK Runtime (cade-sdk)&lt;/b&gt;&#xa;&lt;i&gt;[Rust Library / Zero-Daemon]&lt;/i&gt;&#xa;&#xa;Direct in-process EmbeddedSession &amp; TeamSession linking directly to SQLite &amp; LlmRouter with zero HTTP overhead." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#10b981;strokeWidth=2;fontColor=#f8fafc;fontSize=11;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="40" y="490" width="240" height="120" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 6: Agent Harness & Backends -->
+        <mxCell id="cnt_agent" value="&lt;b&gt;Agent Harness (cade-agent)&lt;/b&gt;&#xa;&lt;i&gt;[SubagentSession / ToolRuntime]&lt;/i&gt;&#xa;&#xa;Autonomous subagent sessions, dual bounds, RAII IsolatedWorkspaceGuard worktree sandboxing, and backend executors (Local, Docker, SSH, Virtual)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#f59e0b;strokeWidth=2;fontColor=#f8fafc;fontSize=11;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="350" y="490" width="280" height="120" as="geometry"/>
+        </mxCell>
+
+        <!-- Container 7: Persistence Store Database -->
+        <mxCell id="cnt_store" value="&lt;b&gt;Local Database (cade-store)&lt;/b&gt;&#xa;&lt;i&gt;[SQLite / WAL / sqlite-vec / AES-GCM]&lt;/i&gt;&#xa;&#xa;Stores agents, conversations, 3-tier memory blocks, knowledge_edges graph triples, vector embeddings, and encrypted provider secrets." style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#0f172a;strokeColor=#10b981;strokeWidth=2;fontColor=#f8fafc;fontSize=11;fontFamily=sans-serif;" vertex="1" parent="box_cade_boundary">
+          <mxGeometry x="690" y="470" width="200" height="160" as="geometry"/>
+        </mxCell>
+
+        <!-- External Systems -->
+        <mxCell id="ext_llms" value="&lt;b&gt;LLM Provider APIs&lt;/b&gt;&#xa;&lt;i&gt;[Anthropic / OpenAI / Gemini / Ollama]&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#f59e0b;strokeWidth=2;fontColor=#f8fafc;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="380" width="260" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="ext_mcp_procs" value="&lt;b&gt;MCP Child Subprocesses&lt;/b&gt;&#xa;&lt;i&gt;[GitHub / Developer / Custom stdio]&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#10b981;strokeWidth=2;fontColor=#f8fafc;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="590" width="260" height="90" as="geometry"/>
+        </mxCell>
+
+        <!-- Internal Connections -->
+        <mxCell id="e_cli_to_server" value="HTTP / SSE&#xa;[Bearer Token]" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#38bdf8;fontColor=#94a3b8;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="box_cade_boundary" source="cnt_cli" target="cnt_server">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_gui_to_server" value="REST / SSE&#xa;[Localhost]" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#a855f7;fontColor=#94a3b8;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="box_cade_boundary" source="cnt_gui" target="cnt_server">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_ide_to_server" value="JSON-RPC&#xa;[Socket / Pipe]" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#ec4899;fontColor=#94a3b8;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="box_cade_boundary" source="cnt_ide_bridge" target="cnt_server">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_server_to_agent" value="Dispatches Turn&#xa;[ToolRuntime]" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#38bdf8;fontColor=#94a3b8;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="box_cade_boundary" source="cnt_server" target="cnt_agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_server_to_store" value="Reads/Writes State&#xa;[r2d2 SQLite Pool]" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10b981;fontColor=#94a3b8;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="box_cade_boundary" source="cnt_server" target="cnt_store">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_sdk_to_agent" value="In-Process Calls" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10b981;fontColor=#94a3b8;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="box_cade_boundary" source="cnt_sdk" target="cnt_agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- External Outgoing Connections -->
+        <mxCell id="e_server_to_llm" value="HTTPS / Streaming SSE" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#f59e0b;strokeWidth=2;fontColor=#fbbf24;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cnt_server" target="ext_llms">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e_agent_to_mcp" value="Stdio JSON-RPC" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10b981;strokeWidth=2;fontColor=#34d399;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cnt_agent" target="ext_mcp_procs">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

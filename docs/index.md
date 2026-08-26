@@ -59,6 +59,7 @@ Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent 
 
 | Doc | When to read it |
 |---|---|
-| [Architecture](architecture.md) | You want to understand the crate structure and data flow |
+| [TOGAF 10 & C4 Architecture Specification](architecture/togaf-c4-architecture.md) | You want the complete enterprise architecture specification with native Draw.io diagrams |
+| [Architecture Overview](architecture.md) | You want to understand the crate structure and data flow |
 | [Development](development.md) | You want to build CADE from source and run the test suite |
 | [Developer Guide](developer-guide.md) | You want to contribute code and follow project conventions |

@@ -1,0 +1,46 @@
+<mxfile host="Electron" agent="CADE">
+  <diagram id="c4_level1_system_context" name="C4 Level 1 - System Context">
+    <mxGraphModel dx="1653" dy="912" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="900" background="#040711" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title_block" parent="1" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontColor=#f8fafc;fontSize=16;fontFamily=monospace;" value="&lt;b&gt;CADE Platform — C4 Level 1: System Context Architecture&lt;/b&gt;&#xa;&lt;i&gt;TOGAF 10 Architecture Vision (Phase A) &amp; Business Context&lt;/i&gt;" vertex="1">
+          <mxGeometry height="40" width="620" x="60" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="actor_engineer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#a855f7;strokeWidth=2;fontColor=#f8fafc;fontSize=12;fontFamily=sans-serif;align=center;" value="&lt;b&gt;Software Engineer / Operator&lt;/b&gt;&#xa;&lt;i&gt;[Person]&lt;/i&gt;&#xa;&#xa;Interacts with CADE via terminal TUI, GUI dashboard, or IDE plugins to author code, automate tasks, and inspect multi-agent swarms." vertex="1">
+          <mxGeometry height="120" width="220" x="60" y="340" as="geometry" />
+        </mxCell>
+        <mxCell id="system_cade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f172a;strokeColor=#38bdf8;strokeWidth=3;fontColor=#f8fafc;fontSize=13;fontFamily=sans-serif;align=center;" value="&lt;b&gt;CADE Platform Ecosystem&lt;/b&gt;&#xa;&lt;i&gt;[Software System — Rust / Local-First]&lt;/i&gt;&#xa;&#xa;Autonomous developer intelligence shell with persistent 3-tier memory, desktop screen automation, subagent harnesses, and unified capability mesh." vertex="1">
+          <mxGeometry height="200" width="320" x="440" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_llm_providers" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#f59e0b;strokeWidth=2;fontColor=#f8fafc;fontSize=12;fontFamily=sans-serif;align=center;" value="&lt;b&gt;LLM Cloud &amp; Local Providers&lt;/b&gt;&#xa;&lt;i&gt;[External System]&lt;/i&gt;&#xa;&#xa;Anthropic Claude, OpenAI, Google Gemini, and Local Ollama instances providing model reasoning." vertex="1">
+          <mxGeometry height="110" width="220" x="920" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_mcp_servers" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#10b981;strokeWidth=2;fontColor=#f8fafc;fontSize=12;fontFamily=sans-serif;align=center;" value="&lt;b&gt;Model Context Protocol (MCP)&lt;/b&gt;&#xa;&lt;i&gt;[External Servers / Stdio / HTTP]&lt;/i&gt;&#xa;&#xa;External tools providing GitHub API, database queries, web scraping, and third-party integrations." vertex="1">
+          <mxGeometry height="110" width="220" x="920" y="345" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_host_os" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#64748b;strokeWidth=2;fontColor=#f8fafc;fontSize=12;fontFamily=sans-serif;align=center;" value="&lt;b&gt;Host OS &amp; Desktop Environment&lt;/b&gt;&#xa;&lt;i&gt;[Host Subsystem]&lt;/i&gt;&#xa;&#xa;Linux (X11/Wayland), macOS, Windows Desktop (xcap screen capture, window control, local filesystem)." vertex="1">
+          <mxGeometry height="110" width="220" x="920" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_ide" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#090d16;strokeColor=#ec4899;strokeWidth=2;fontColor=#f8fafc;fontSize=12;fontFamily=sans-serif;align=center;" value="&lt;b&gt;Developer IDEs&lt;/b&gt;&#xa;&lt;i&gt;[Neovim, VS Code, JetBrains]&lt;/i&gt;&#xa;&#xa;Code editors integrated via cade-ide-mcp and cade.nvim with inline ghost-text and diff proposals." vertex="1">
+          <mxGeometry height="110" width="220" x="490" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_engineer_to_cade" edge="1" parent="1" source="actor_engineer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#a855f7;strokeWidth=2;fontColor=#c084fc;fontFamily=monospace;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="system_cade" value="Interacts via TUI / Dashboard&#xa;[CLI / HTTP / Keyboard]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_cade_to_llm" edge="1" parent="1" source="system_cade" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#f59e0b;strokeWidth=2;fontColor=#fbbf24;fontFamily=monospace;fontSize=10;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="ext_llm_providers" value="Streams Completions&#xa;[HTTPS / SSE / REST]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_cade_to_mcp" edge="1" parent="1" source="system_cade" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#10b981;strokeWidth=2;fontColor=#34d399;fontFamily=monospace;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="ext_mcp_servers" value="Invokes Tools via JSON-RPC&#xa;[Stdio / Streamable HTTP]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_cade_to_os" edge="1" parent="1" source="system_cade" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#64748b;strokeWidth=2;fontColor=#94a3b8;fontFamily=monospace;fontSize=10;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="ext_host_os" value="Captures Screen &amp; Controls Windows&#xa;[Native OS Bindings / IPC]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_ide_to_cade" edge="1" parent="1" source="ext_ide" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#ec4899;strokeWidth=2;fontColor=#f472b6;fontFamily=monospace;fontSize=10;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="system_cade" value="Syncs Buffers &amp; Edits&#xa;[cade-ide-mcp / Socket]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
