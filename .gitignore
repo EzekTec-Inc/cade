@@ -46,6 +46,8 @@ test_empty_system.sh
 tmux-*.log
 nohup.out
 larql-workaround.md
+*.bkp
+.$*
 
 # Local testing and experimental files
 serena-evaluation.md
