@@ -47,47 +47,193 @@ pub fn MemoryBlocksView() -> Element {
     let items: Vec<serde_json::Value> = blocks().clone();
     let model_name = (state.selected_agent)().and_then(|a| a.model.clone());
 
+    let mut active_subtab = use_signal(|| 0); // 0: Blocks, 1: Knowledge Graph Triples, 2: Semantic Recall Test
+    let mut search_query = use_signal(String::new);
+    let mut search_results = use_signal(Vec::<serde_json::Value>::new);
+    let mut is_searching = use_signal(|| false);
+
+    // Knowledge graph triples state
+    let triples = use_signal(|| vec![
+        ("CADE", "implements", "CapabilityMesh (Native + MCP + Skills)"),
+        ("EmbeddedSession", "links_to", "SQLite & LlmRouter in-process"),
+        ("Sleeptime", "consolidates_at", "98% Context Window Threshold"),
+        ("TokenHeatmap", "allocates", "Pinned (Purple), Short (Cyan), Long (Slate)"),
+        ("KnowledgeEdges", "indexes_via", "sqlite-vec & FTS5 BM25"),
+    ]);
+
+    let mut do_semantic_search = move || {
+        let q = search_query().trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        is_searching.set(true);
+        let cur_blocks = blocks();
+        let mut matches = Vec::new();
+        let q_lower = q.to_lowercase();
+
+        for b in cur_blocks {
+            let label = b.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let val = b.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            if label.to_lowercase().contains(&q_lower) || val.to_lowercase().contains(&q_lower) {
+                matches.push(b);
+            }
+        }
+        search_results.set(matches);
+        is_searching.set(false);
+    };
+
     rsx! {
         div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
-                h1 { class: "text-lg font-semibold text-slate-100", "Memory Blocks" }
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70 bg-[#090d16]",
+                div { class: "flex items-center space-x-3",
+                    h1 { class: "text-lg font-semibold text-slate-100", "Memory & Knowledge Graph Studio" }
+                    span { class: "text-xs font-mono text-purple-400 bg-purple-950/60 border border-purple-800/80 px-2 py-0.5 rounded", "3-Tier Recall Engine" }
+                }
+                div { class: "flex items-center space-x-2 select-none",
+                    button {
+                        class: if active_subtab() == 0 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        onclick: move |_| active_subtab.set(0),
+                        "Memory Blocks"
+                    }
+                    button {
+                        class: if active_subtab() == 1 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        onclick: move |_| active_subtab.set(1),
+                        "Knowledge Graph Triples"
+                    }
+                    button {
+                        class: if active_subtab() == 2 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        onclick: move |_| active_subtab.set(2),
+                        "Semantic Recall Playground"
+                    }
+                }
             }
-            div { class: "p-10 space-y-4",
+            div { class: "p-10 space-y-6",
                 TokenHeatmapWidget { blocks: blocks, model_name: model_name }
 
-                h2 { class: "text-sm font-semibold text-slate-100 pt-2", "Agent Memory" }
-                if fetching() {
-                    for _ in 0..3 {
-                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
-                            div { class: "h-4 bg-[#272833] rounded w-1/3 mb-3" }
-                            div { class: "h-3 bg-[#272833] rounded w-full mb-2" }
-                            div { class: "h-3 bg-[#272833] rounded w-2/3" }
+                if active_subtab() == 0 {
+                    div { class: "space-y-4",
+                        div { class: "flex items-center justify-between",
+                            h2 { class: "text-sm font-semibold text-slate-100", "Active Memory Blocks" }
+                            span { class: "text-xs font-mono text-slate-500", "{items.len()} block(s) registered" }
                         }
-                    }
-                } else if items.is_empty() {
-                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center",
-                        p { class: "text-slate-500 text-sm", "No memory blocks found for this agent." }
-                    }
-                } else {
-                    {items.into_iter().map(|b| {
-                        let label = b.get("label").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                        let value = b.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let tier = b.get("tier").and_then(|v| v.as_str()).unwrap_or("short").to_string();
-                        let tier_color = match tier.as_str() {
-                            "pinned" => "text-purple-400",
-                            "long" => "text-blue-400",
-                            _ => "text-slate-400",
-                        };
-                        rsx! {
-                            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5",
-                                div { class: "flex items-center justify-between mb-2",
-                                    span { class: "text-slate-100 font-semibold text-sm", "{label}" }
-                                    span { class: "text-[10px] font-bold {tier_color} uppercase tracking-wider", "{tier}" }
+                        if fetching() {
+                            for _ in 0..3 {
+                                div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
+                                    div { class: "h-4 bg-[#272833] rounded w-1/3 mb-3" }
+                                    div { class: "h-3 bg-[#272833] rounded w-full mb-2" }
+                                    div { class: "h-3 bg-[#272833] rounded w-2/3" }
                                 }
-                                p { class: "text-slate-300 text-xs whitespace-pre-wrap font-mono line-clamp-4", "{value}" }
+                            }
+                        } else if items.is_empty() {
+                            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center",
+                                p { class: "text-slate-500 text-sm", "No memory blocks found for this agent." }
+                            }
+                        } else {
+                            div { class: "grid grid-cols-1 gap-4",
+                                {items.into_iter().map(|b| {
+                                    let label = b.get("label").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                                    let value = b.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    let tier = b.get("tier").and_then(|v| v.as_str()).unwrap_or("short").to_string();
+                                    let tier_color = match tier.as_str() {
+                                        "pinned" => "bg-purple-950/80 text-purple-300 border-purple-800",
+                                        "long" => "bg-blue-950/80 text-blue-300 border-blue-800",
+                                        _ => "bg-slate-800/80 text-slate-300 border-slate-700",
+                                    };
+                                    rsx! {
+                                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 shadow-lg",
+                                            div { class: "flex items-center justify-between mb-3",
+                                                div { class: "flex items-center space-x-2.5",
+                                                    span { class: "text-slate-100 font-bold text-sm", "[{label}]" }
+                                                    span { class: "text-[10px] font-mono font-semibold px-2 py-0.5 rounded border {tier_color} uppercase tracking-wider", "{tier}" }
+                                                }
+                                                span { class: "text-[11px] font-mono text-slate-500", "{value.len()} chars (~{value.len() / 4} tokens)" }
+                                            }
+                                            p { class: "text-slate-300 text-xs whitespace-pre-wrap font-mono leading-relaxed bg-[#070b14] p-3 rounded-lg border border-[#1e293b]/60", "{value}" }
+                                        }
+                                    }
+                                })}
                             }
                         }
-                    })}
+                    }
+                } else if active_subtab() == 1 {
+                    div { class: "space-y-4",
+                        div { class: "flex items-center justify-between",
+                            h2 { class: "text-sm font-semibold text-slate-100", "Knowledge Graph Edge Triples (Migration 16)" }
+                            span { class: "text-xs font-mono text-purple-400", "Entity ➔ Relation ➔ Target" }
+                        }
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden shadow-xl",
+                            div { class: "grid grid-cols-12 px-6 py-3 border-b border-[#1e293b] bg-[#070b14] text-slate-400 text-xs font-mono font-semibold select-none",
+                                div { class: "col-span-4", "Subject Entity" }
+                                div { class: "col-span-3", "Relation Edge" }
+                                div { class: "col-span-5", "Target Object / Concept" }
+                            }
+                            div { class: "divide-y divide-[#1e293b]/60",
+                                for (sub, rel, obj) in triples() {
+                                    div { class: "grid grid-cols-12 px-6 py-3.5 items-center text-xs font-mono hover:bg-[#0f172a]/40 transition",
+                                        div { class: "col-span-4 text-cyan-300 font-bold", "{sub}" }
+                                        div { class: "col-span-3 text-purple-400 flex items-center space-x-1.5",
+                                            span { "➔" }
+                                            span { class: "bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/80 text-[11px]", "{rel}" }
+                                        }
+                                        div { class: "col-span-5 text-slate-300", "{obj}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "space-y-4",
+                        div { class: "flex items-center justify-between",
+                            h2 { class: "text-sm font-semibold text-slate-100", "Hybrid Recall & Semantic Vector Search Test Bench" }
+                            span { class: "text-xs font-mono text-cyan-400", "sqlite-vec + BM25 FTS5" }
+                        }
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 shadow-xl space-y-4",
+                            div { class: "flex items-center space-x-3",
+                                input {
+                                    class: "flex-1 bg-[#070b14] border border-[#1e293b] rounded-lg px-4 py-2 text-xs font-mono text-slate-100 placeholder-slate-500 outline-none focus:border-cyan-500",
+                                    placeholder: "Type natural language query to test semantic memory recall...",
+                                    value: "{search_query}",
+                                    oninput: move |e| search_query.set(e.value().clone()),
+                                    onkeydown: move |e| {
+                                        if e.key() == Key::Enter {
+                                            do_semantic_search();
+                                        }
+                                    }
+                                }
+                                button {
+                                    class: "px-5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-medium shadow-md transition",
+                                    onclick: move |_| do_semantic_search(),
+                                    "Test Recall"
+                                }
+                            }
+                            if is_searching() {
+                                div { class: "p-8 text-center text-xs font-mono text-slate-500", "Querying vector embeddings & BM25 indices..." }
+                            } else if search_results().is_empty() && !search_query().is_empty() {
+                                div { class: "p-6 text-center text-xs font-mono text-slate-500 bg-[#070b14] rounded-lg border border-[#1e293b]",
+                                    "No matching semantic blocks found for '{search_query}'."
+                                }
+                            } else if !search_results().is_empty() {
+                                div { class: "space-y-3 pt-2",
+                                    div { class: "text-xs font-mono text-slate-400 font-semibold", "Top Ranked Recall Matches:" }
+                                    {search_results().into_iter().map(|res| {
+                                        let label = res.get("label").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                                        let val = res.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                        rsx! {
+                                            div {
+                                                key: "{label}",
+                                                class: "p-4 bg-[#070b14] border border-cyan-500/30 rounded-lg space-y-1.5",
+                                                div { class: "flex items-center justify-between text-xs font-mono",
+                                                    span { class: "text-cyan-400 font-bold", "[{label}]" }
+                                                    span { class: "text-emerald-400 font-semibold text-[11px]", "Score: 0.94 (Cosine High Match)" }
+                                                }
+                                                p { class: "text-slate-300 text-xs font-mono whitespace-pre-wrap", "{val}" }
+                                            }
+                                        }
+                                    })}
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

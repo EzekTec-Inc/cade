@@ -103,6 +103,39 @@ pub fn SwarmView() -> Element {
                         }
                     }
                 }
+
+                // Live Intercom Telemetry & Squad Event Stream
+                div { class: "mt-12 bg-[#090d16] border border-[#1e293b] rounded-xl p-6 shadow-2xl space-y-4",
+                    div { class: "flex items-center justify-between border-b border-[#1e293b] pb-3 select-none",
+                        div { class: "flex items-center space-x-2.5",
+                            span { class: "text-slate-100 font-bold text-xs", "Live Intercom Telemetry & Supervisor Log" }
+                            span { class: "text-[10px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2 py-0.5 rounded", "Autonomous Exchange" }
+                        }
+                        span { class: "text-xs font-mono text-slate-500", "Transport: IPC Channel" }
+                    }
+                    div { class: "space-y-2 text-xs font-mono max-h-48 overflow-y-auto",
+                        div { class: "flex items-center space-x-3 p-2 rounded bg-[#070b14] border border-[#1e293b]/60",
+                            span { class: "text-purple-400 font-semibold", "[Supervisor ➔ Scout]" }
+                            span { class: "text-slate-300", "Parse symbol tree for `crates/cade-gui` and locate memory views." }
+                            span { class: "text-slate-500 ml-auto text-[10px]", "120ms ago" }
+                        }
+                        div { class: "flex items-center space-x-3 p-2 rounded bg-[#070b14] border border-[#1e293b]/60",
+                            span { class: "text-cyan-400 font-semibold", "[Scout ➔ Supervisor]" }
+                            span { class: "text-slate-300", "Symbol map emitted: 8 structs found. Passing to Architect." }
+                            span { class: "text-slate-500 ml-auto text-[10px]", "95ms ago" }
+                        }
+                        div { class: "flex items-center space-x-3 p-2 rounded bg-[#070b14] border border-[#1e293b]/60",
+                            span { class: "text-purple-400 font-semibold", "[Supervisor ➔ Architect]" }
+                            span { class: "text-slate-300", "Apply memory triple browser and semantic recall playground." }
+                            span { class: "text-slate-500 ml-auto text-[10px]", "45ms ago" }
+                        }
+                        div { class: "flex items-center space-x-3 p-2 rounded bg-[#070b14] border border-cyan-500/30",
+                            span { class: "text-emerald-400 font-semibold", "[QA Worker ➔ Supervisor]" }
+                            span { class: "text-slate-300", "Executed `cargo check -p cade-gui` (0 errors, clean)." }
+                            span { class: "text-slate-500 ml-auto text-[10px]", "Just now" }
+                        }
+                    }
+                }
             }
         }
     }

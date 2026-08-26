@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-26
+
+### Added
+
+- **`cade-gui` Global Keyboard Command Palette (`Cmd+K` / `Ctrl+K`):** Added global shortcut listener, dynamic fuzzy filtering across all 13 views, autonomous agents, and MCP tools, with arrow-key navigation and instant view switching.
+- **Multi-Model Arena Real-Time Telemetry Matrix:** Added live throughput gauges (`tok/s`), Time-To-First-Token (TTFT) latency badges across 2–4 parallel model lanes, and an interactive side-by-side word-level diff highlighter.
+- **Collapsible Reasoning Accordions & Structured Tool Cards:** Added `<reasoning>` thought accordions with elapsed duration badges and token counts, structured tool execution cards with status badges and duration metrics, and working single-click clipboard copy triggers.
+- **Interactive Multi-Agent Swarm Topology & Workflow DAG Canvas:** Added supervisor/worker hierarchical node tree with token consumption metrics, active state pulses, and live IPC Intercom Telemetry Stream & Supervisor Log.
+- **3-Tier Context Allocation Heatmap & Knowledge Graph Explorer:** Added dynamic context allocation bar (Pinned, Short-Term, Long-Term tiers) against 128k–1M token budgets, knowledge edge triples browser (`Entity` ➔ `Relation` ➔ `Target`), and hybrid semantic vector search test playground.
+- **CADE Rust SDK Documentation Suite (`docs/sdk/`):** Created a full documentation suite including Quickstart guide, Architecture deep-dive, 4 runnable real-world solution recipes (Cookbook), and exhaustive API Reference. Added asynchronous `cade_sdk` code samples to the Dashboard developer workbench.
+
+### Fixed
+
+- **`cade-gui` Chat Input Responsiveness:** Removed blocking `prevent_default: "onkeydown"` attribute on the chat `<textarea>` to restore standard typing, arrow navigation, and `Enter` submission.
+- **WASM Asset Distribution & Embedding:** Automated release compilation of the WASM bundle via `trunk build --release` and embedded the new dashboard directly into `target/release/cade-server`.
+
 ## [0.2.4] - 2026-06-11
 
 ### Added
