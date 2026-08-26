@@ -101,6 +101,22 @@ fn chat_sidebar(
         });
     });
 
+    let agent_id_for_convs = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
+    let conv_api_client = client;
+    use_effect(move || {
+        let a_id = agent_id_for_convs.clone();
+        let api = conv_api_client;
+        let mut conv_sig = conversations;
+        spawn(async move {
+            if !a_id.is_empty()
+                && let Ok(mut data) = api().list_conversations(&a_id).await
+            {
+                data.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+                conv_sig.set(data);
+            }
+        });
+    });
+
     let mut create_conv = move || {
         let title = new_title().trim().to_string();
         if title.is_empty() {
@@ -170,11 +186,18 @@ fn chat_sidebar(
         .unwrap_or_else(|| "All messages".to_string());
 
     // Pre-compute conversation rows outside RSX to avoid let-bindings in for-body
-    let conv_rows: Vec<(String, String, bool)> = conversations()
+    let conv_rows: Vec<(String, String, String, i64, bool)> = conversations()
         .iter()
         .map(|conv| {
             let is_active = active_conversation() == Some(conv.id.clone());
-            (conv.id.clone(), conv.title.clone(), is_active)
+            let date_str = if conv.updated_at > 0 {
+                chrono::DateTime::from_timestamp(conv.updated_at, 0)
+                    .map(|dt| dt.format("%m/%d %H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            (conv.id.clone(), conv.title.clone(), date_str, conv.message_count, is_active)
         })
         .collect();
 
@@ -230,31 +253,45 @@ fn chat_sidebar(
                             span { "All messages" }
                         }
                     }
-                    {conv_rows.iter().map(|(conv_id, conv_title, is_active)| {
+                    {conv_rows.iter().map(|(conv_id, conv_title, date_str, msg_count, is_active)| {
                         let id_sel = conv_id.clone();
                         let id_del = conv_id.clone();
                         let title = conv_title.clone();
+                        let date_label = date_str.clone();
+                        let count = *msg_count;
                         let is_active = *is_active;
                         let del = delete_conv;
                         rsx! {
                             div {
+                                key: "{id_sel}",
                                 class: if is_active {
                                     "flex items-center justify-between px-3 py-2 rounded-md bg-[#1f212a] text-white font-medium cursor-pointer"
                                 } else {
-                                    "flex items-center justify-between px-3 py-2 rounded-md hover:bg-[#1f212a]/60 text-gray-400 cursor-pointer"
+                                    "flex items-center justify-between px-3 py-2 rounded-md hover:bg-[#1f212a]/60 text-gray-400 cursor-pointer transition duration-100"
                                 },
                                 onclick: move |_| active_conversation.set(Some(id_sel.clone())),
-                                div { class: "flex items-center space-x-2.5 truncate",
-                                    span { "\u{1f4ac}" }
-                                    span { "{title}" }
+                                div { class: "flex flex-col min-w-0 pr-2 truncate",
+                                    div { class: "flex items-center space-x-2 truncate",
+                                        span { class: "text-xs shrink-0 select-none", "💬" }
+                                        span { class: "text-xs font-medium truncate", "{title}" }
+                                    }
+                                    div { class: "flex items-center space-x-1.5 text-[10px] text-gray-500 pl-5 mt-0.5 select-none",
+                                        if count > 0 {
+                                            span { "{count} msgs" }
+                                        }
+                                        if !date_label.is_empty() {
+                                            span { "· {date_label}" }
+                                        }
+                                    }
                                 }
                                 button {
-                                    class: "text-gray-600 hover:text-red-400 text-xs shrink-0 ml-1",
+                                    class: "text-gray-600 hover:text-red-400 text-xs shrink-0 ml-1 p-1 rounded hover:bg-red-500/10 transition",
+                                    title: "Delete conversation",
                                     onclick: move |e| {
                                         e.stop_propagation();
                                         del(id_del.clone());
                                     },
-                                    "\u{2716}"
+                                    "✖"
                                 }
                             }
                         }
@@ -598,17 +635,33 @@ fn input_area(
         let api_client = client();
         let conv_id = active_conversation();
         let coordinator =
-            crate::chat_session::ChatSessionCoordinator::new(api_client, agent_id, conv_id);
+            crate::chat_session::ChatSessionCoordinator::new(api_client.clone(), agent_id.clone(), conv_id);
 
         let state_toast = state;
+        let mut convs = state.conversations;
+        let mut active_conv = active_conversation;
+        let agent_id_clone = agent_id.clone();
+        let api_client_clone = api_client.clone();
 
         spawn(async move {
             let result = coordinator
                 .dispatch_turn(&text, messages, is_loading, cancel_token)
                 .await;
 
-            if let Err(e) = result {
-                add_toast(&state_toast, ToastLevel::Error, "Stream failed", e);
+            match result {
+                Ok(crate::chat_session::ChatTurnOutcome::Completed { assigned_conversation_id, .. }) => {
+                    if active_conv().is_none() && let Some(cid) = assigned_conversation_id {
+                        active_conv.set(Some(cid));
+                        if let Ok(mut list) = api_client_clone.list_conversations(&agent_id_clone).await {
+                            list.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+                            convs.set(list);
+                        }
+                    }
+                }
+                Err(e) => {
+                    add_toast(&state_toast, ToastLevel::Error, "Stream failed", e);
+                }
+                _ => {}
             }
         });
     };

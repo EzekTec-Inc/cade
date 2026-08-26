@@ -19,6 +19,7 @@ pub enum ChatTurnOutcome {
         final_message_id: String,
         content_length: usize,
         had_reasoning: bool,
+        assigned_conversation_id: Option<String>,
     },
     Cancelled,
     Failed(String),
@@ -190,6 +191,7 @@ impl ChatSessionCoordinator {
         // 2. Stream execution
         let mut reasoning_acc = String::new();
         let stream_id_clone = stream_id.clone();
+        let mut captured_conv_id: Option<String> = self.conversation_id.clone();
 
         let stream_result = self
             .api_client
@@ -199,6 +201,12 @@ impl ChatSessionCoordinator {
                 self.conversation_id.as_deref(),
                 Some(cancel_token.clone()),
                 |event: StreamEvent| {
+                    if event.msg_type() == "stream_start"
+                        && let Some(cid) = event.data.get("conversation_id").and_then(|v| v.as_str())
+                        && !cid.is_empty()
+                    {
+                        captured_conv_id = Some(cid.to_string());
+                    }
                     let mut current_msgs = messages_signal();
                     Self::apply_stream_event(
                         &mut current_msgs,
@@ -242,6 +250,7 @@ impl ChatSessionCoordinator {
                 final_message_id: final_id,
                 content_length: final_len,
                 had_reasoning,
+                assigned_conversation_id: captured_conv_id,
             }),
             Err(e) => {
                 if cancel_token.load(std::sync::atomic::Ordering::Acquire) {
