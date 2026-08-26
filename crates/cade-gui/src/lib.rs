@@ -76,6 +76,8 @@ fn App() -> Element {
     let active_stream = use_signal(types::SafeAbortHandle::default);
     let parsed_messages =
         use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
+    let mut show_palette = use_signal(|| false);
+    let mut palette_query = use_signal(String::new);
 
     // Provide individual signals and composite state to all children
     use_context_provider(|| api_key);
@@ -280,17 +282,24 @@ fn App() -> Element {
     rsx! {
         div {
             class: "w-screen h-screen flex bg-[#0f1115] text-gray-200 overflow-hidden",
-            // Keyboard shortcuts:
+            // Global Keyboard shortcuts:
+            //   Ctrl+K   → Command Palette
             //   Ctrl+N   → Chat
             //   Ctrl+,   → Settings
-            //   Escape   → Chat (if not already there)
+            //   Escape   → Close Palette or return to Chat
             onkeydown: move |e| {
-                if e.key() == Key::Character("n".into()) && e.modifiers().ctrl() {
+                if (e.key() == Key::Character("k".into()) || e.key() == Key::Character("K".into())) && e.modifiers().ctrl() {
+                    show_palette.set(!show_palette());
+                } else if e.key() == Key::Character("n".into()) && e.modifiers().ctrl() {
                     active_page.set(SelectedPage::Chat);
                 } else if e.key() == Key::Character(",".into()) && e.modifiers().ctrl() {
                     active_page.set(SelectedPage::Settings);
-                } else if e.key() == Key::Escape && (active_page)() != SelectedPage::Chat {
-                    active_page.set(SelectedPage::Chat);
+                } else if e.key() == Key::Escape {
+                    if show_palette() {
+                        show_palette.set(false);
+                    } else if (active_page)() != SelectedPage::Chat {
+                        active_page.set(SelectedPage::Chat);
+                    }
                 }
             },
             if (api_key)().is_empty() {
@@ -313,6 +322,14 @@ fn App() -> Element {
                 main { class: "flex-1 bg-[#0f1115] overflow-y-auto flex flex-col justify-between h-full select-text pb-8",
                     if (active_page)() == SelectedPage::Chat {
                         components::chat::ChatView {}
+                    } else if (active_page)() == SelectedPage::Arena {
+                        components::arena::ArenaView {}
+                    } else if (active_page)() == SelectedPage::Workflows {
+                        components::workflows::WorkflowView {}
+                    } else if (active_page)() == SelectedPage::Swarm {
+                        components::swarm::SwarmView {}
+                    } else if (active_page)() == SelectedPage::Artifacts {
+                        components::artifacts::ArtifactStudioView {}
                     } else if (active_page)() == SelectedPage::Providers {
                         components::providers::ProvidersView {}
                     } else if (active_page)() == SelectedPage::Code {
@@ -337,8 +354,64 @@ fn App() -> Element {
                         components::dashboard::DashboardView {}
                     }
                 }
+                if show_palette() {
+                    div {
+                        class: "fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center pt-24 select-none animate-in fade-in duration-100",
+                        onclick: move |_| show_palette.set(false),
+                        div {
+                            class: "bg-[#090d16] border border-[#1e293b] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col",
+                            onclick: move |e| e.stop_propagation(),
+                            div { class: "p-4 border-b border-[#1e293b] flex items-center space-x-3 bg-[#070b14]",
+                                span { class: "text-slate-400 text-xs font-mono bg-[#16171d] px-2 py-0.5 rounded border border-[#1e293b]", "⌘K" }
+                                input {
+                                    class: "bg-transparent text-slate-100 placeholder-slate-500 outline-none w-full text-xs font-sans",
+                                    placeholder: "Type a view name or command (Chat, Arena, Workflows, Swarm, Artifacts)...",
+                                    autofocus: true,
+                                    value: "{palette_query}",
+                                    oninput: move |e| palette_query.set(e.value().clone()),
+                                }
+                            }
+                            div { class: "p-2 max-h-80 overflow-y-auto space-y-1 text-xs",
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Chat, icon: "💬", label: "Jump to Chat", shortcut: "Ctrl+N" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Arena, icon: "⚡", label: "Multi-Model Arena Matrix", shortcut: "Arena" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Workflows, icon: "🔄", label: "Visual Workflow DAG Canvas", shortcut: "Workflows" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Swarm, icon: "🌐", label: "Swarm Supervisory Topology", shortcut: "Swarm" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Artifacts, icon: "📦", label: "Live Artifact Studio", shortcut: "Artifacts" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::MemoryBlocks, icon: "🧠", label: "Memory Blocks & Token Heatmap", shortcut: "Memory" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Tools, icon: "🛠", label: "MCP Tools & Approvals", shortcut: "Tools" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Usage, icon: "📊", label: "Telemetry & Token Costs", shortcut: "Usage" }
+                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Settings, icon: "⚙", label: "System Settings", shortcut: "Ctrl+," }
+                            }
+                        }
+                    }
+                }
                 components::toast::ToastContainer {}
             }
+        }
+    }
+}
+
+#[component]
+fn palette_entry(
+    show_palette: Signal<bool>,
+    active_page: Signal<SelectedPage>,
+    page: SelectedPage,
+    icon: String,
+    label: String,
+    shortcut: String,
+) -> Element {
+    rsx! {
+        div {
+            class: "flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#1f212a] text-slate-300 hover:text-white cursor-pointer transition duration-150",
+            onclick: move |_| {
+                active_page.set(page);
+                show_palette.set(false);
+            },
+            div { class: "flex items-center space-x-2.5",
+                span { class: "text-sm", "{icon}" }
+                span { class: "font-medium text-xs", "{label}" }
+            }
+            span { class: "text-[10px] font-mono text-slate-500 bg-[#16171d] px-1.5 py-0.5 rounded border border-[#1e293b]", "{shortcut}" }
         }
     }
 }

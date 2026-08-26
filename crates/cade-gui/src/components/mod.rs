@@ -1,4 +1,7 @@
 pub mod agents;
+pub mod arena;
+pub mod artifacts;
+pub mod swarm;
 pub mod api_keys;
 pub mod chat;
 pub mod code;

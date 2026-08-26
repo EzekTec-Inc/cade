@@ -40,8 +40,66 @@ pub fn WorkflowView() -> Element {
                         }
                     },
                     ResourceState::Ready(list) => rsx! {
+                        // Visual DAG Canvas Area
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 shadow-xl space-y-6",
+                            div { class: "flex items-center justify-between border-b border-[#1e293b] pb-4 select-none",
+                                div { class: "flex items-center space-x-2.5",
+                                    span { class: "text-white font-bold text-sm", "Visual DAG Pipeline Visualizer" }
+                                    span { class: "text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-2 py-0.5 rounded", "Autonomous Subagent Nodes" }
+                                }
+                                span { class: "text-xs font-mono text-slate-400", "Topology: Sequential & Fan-Out" }
+                            }
+
+                            // Interactive DAG node graph
+                            div { class: "flex items-center justify-between gap-4 overflow-x-auto py-6 px-2 select-none",
+                                // Node 1: Scout
+                                div { class: "w-56 bg-[#070b14] border border-[#1e293b] rounded-xl p-4 flex flex-col space-y-2 shadow-lg shrink-0",
+                                    div { class: "flex items-center justify-between",
+                                        span { class: "text-xs font-bold text-slate-100 font-mono", "1. Scout & Index" }
+                                        span { class: "w-2 h-2 rounded-full bg-emerald-400" }
+                                    }
+                                    p { class: "text-[11px] text-slate-400", "Parse AST symbols & locate codebase seams." }
+                                    div { class: "pt-2 border-t border-[#1e293b] flex items-center justify-between text-[10px] font-mono text-slate-500",
+                                        span { "claude-3-5-haiku" }
+                                        span { "Done (310ms)" }
+                                    }
+                                }
+
+                                span { class: "text-slate-600 font-bold text-lg shrink-0", "➔" }
+
+                                // Node 2: Architect
+                                div { class: "w-56 bg-[#070b14] border border-cyan-500/50 rounded-xl p-4 flex flex-col space-y-2 shadow-lg shrink-0 ring-1 ring-cyan-500/20",
+                                    div { class: "flex items-center justify-between",
+                                        span { class: "text-xs font-bold text-cyan-400 font-mono", "2. Refactor Code" }
+                                        span { class: "w-2 h-2 rounded-full bg-cyan-400 animate-pulse" }
+                                    }
+                                    p { class: "text-[11px] text-slate-400", "Apply deep module mutations & AST edits." }
+                                    div { class: "pt-2 border-t border-[#1e293b] flex items-center justify-between text-[10px] font-mono text-cyan-500",
+                                        span { "claude-3-5-sonnet" }
+                                        span { "Executing..." }
+                                    }
+                                }
+
+                                span { class: "text-slate-600 font-bold text-lg shrink-0", "➔" }
+
+                                // Node 3: QA Tester
+                                div { class: "w-56 bg-[#070b14] border border-[#1e293b] rounded-xl p-4 flex flex-col space-y-2 shadow-lg shrink-0 opacity-70",
+                                    div { class: "flex items-center justify-between",
+                                        span { class: "text-xs font-bold text-slate-300 font-mono", "3. Verify & Test" }
+                                        span { class: "w-2 h-2 rounded-full bg-slate-600" }
+                                    }
+                                    p { class: "text-[11px] text-slate-400", "Execute cargo test & strict clippy checks." }
+                                    div { class: "pt-2 border-t border-[#1e293b] flex items-center justify-between text-[10px] font-mono text-slate-500",
+                                        span { "worker-qa" }
+                                        span { "Pending" }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Registered Workflows Grid
                         if list.is_empty() {
-                            div { class: "bg-[#16171d] border border-[#272833] rounded-xl p-8 text-center text-gray-400",
+                            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-8 text-center text-slate-400",
                                 "No registered workflows found. Create workflow definitions in .cade/workflows/"
                             }
                         } else {
@@ -49,25 +107,25 @@ pub fn WorkflowView() -> Element {
                                 for wf in list {
                                     div {
                                         key: "{wf.id}",
-                                        class: "bg-[#16171d] border border-[#272833] rounded-xl p-6 hover:border-gray-600 transition flex flex-col justify-between",
+                                        class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 hover:border-slate-600 transition flex flex-col justify-between shadow-xl",
                                         div {
                                             div { class: "flex items-center justify-between mb-3",
                                                 h3 { class: "text-white font-semibold text-base", "{wf.name}" }
-                                                span { class: "text-xs px-2.5 py-0.5 rounded-full bg-blue-900/40 text-blue-300 border border-blue-800/50",
+                                                span { class: "text-xs px-2.5 py-0.5 rounded-full bg-blue-950 text-blue-400 border border-blue-800/50",
                                                     "{wf.steps_count} step(s)"
                                                 }
                                             }
-                                            p { class: "text-gray-400 text-sm mb-4", "{wf.description}" }
+                                            p { class: "text-slate-400 text-xs mb-4", "{wf.description}" }
                                             if let Some(ref last) = wf.last_run {
-                                                div { class: "text-xs text-gray-500 mb-4 flex items-center gap-2",
+                                                div { class: "text-xs text-slate-500 mb-4 flex items-center gap-2",
                                                     span { "Last run status: " }
-                                                    span { class: "font-mono text-gray-300", "{last.status.as_str()}" }
+                                                    span { class: "font-mono text-slate-300", "{last.status.as_str()}" }
                                                 }
                                             }
                                         }
-                                        div { class: "pt-4 border-t border-[#272833]/60 flex items-center justify-between",
+                                        div { class: "pt-4 border-t border-[#1e293b] flex items-center justify-between",
                                             button {
-                                                class: "px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition",
+                                                class: "px-4 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium transition",
                                                 onclick: {
                                                     let name = wf.name.clone();
                                                     let engine = api_engine.clone();

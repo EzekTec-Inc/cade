@@ -39,10 +39,14 @@ pub fn Sidebar() -> Element {
                     nav_item { active_page: state.active_page, page: SelectedPage::Dashboard, icon: "🎛", label: "Dashboard" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Code, icon: "⌨", label: "Code" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Chat, icon: "💬", label: "Chat" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Arena, icon: "⚡", label: "Model Arena" }
 
-                    // Agents & Workflows Group
-                    div { class: "text-[10px] font-bold text-slate-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Development" }
+                    // Intelligence & Workflows Group
+                    div { class: "text-[10px] font-bold text-slate-500 px-3 pt-4 pb-1 tracking-wider uppercase", "Orchestration" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Agents, icon: "🤖", label: "Agents" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Workflows, icon: "🔄", label: "Workflows DAG" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Swarm, icon: "🌐", label: "Swarm Topology" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Artifacts, icon: "📦", label: "Artifact Studio" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Logs, icon: "📋", label: "Event Logs" }
 
                     // Resources Group
