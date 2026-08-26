@@ -79,10 +79,11 @@ fn chat_sidebar(
     selected_agent: Signal<Option<cade_api_types::AgentInfo>>,
     api_key: Signal<String>,
 ) -> Element {
-    let state = use_context::<AppState>();
+    let mut state = use_context::<AppState>();
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let mut show_new = use_signal(|| false);
     let mut new_title = use_signal(String::new);
+    let mut search_query = use_signal(String::new);
 
     let checkpoints = use_signal(Vec::<serde_json::Value>::new);
     let agent_id_for_cp = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
@@ -186,8 +187,10 @@ fn chat_sidebar(
         .unwrap_or_else(|| "All messages".to_string());
 
     // Pre-compute conversation rows outside RSX to avoid let-bindings in for-body
+    let query = search_query().trim().to_lowercase();
     let conv_rows: Vec<(String, String, String, i64, bool)> = conversations()
         .iter()
+        .filter(|conv| query.is_empty() || conv.title.to_lowercase().contains(&query))
         .map(|conv| {
             let is_active = active_conversation() == Some(conv.id.clone());
             let date_str = if conv.updated_at > 0 {
@@ -201,26 +204,43 @@ fn chat_sidebar(
         })
         .collect();
 
+    let num_threads = conv_rows.len();
+
     rsx! {
-        div { class: "w-[260px] bg-[#090d16] border-r border-[#1e293b] flex flex-col p-4 justify-between h-full select-none shrink-0",
-            div { class: "flex flex-col space-y-6",
-                div { class: "flex items-center space-x-3 p-2",
-                    div { class: "w-8 h-8 rounded-lg bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_6px_rgba(236,72,153,0.3)] shrink-0" }
-                    span { class: "text-white text-sm font-semibold truncate", "{agent_name}" }
+        div { class: "w-[280px] bg-[#070b14] border-r border-[#1e293b] flex flex-col p-4 justify-between h-full select-none shrink-0",
+            div { class: "flex flex-col space-y-4 overflow-hidden",
+                // Agent Header Card
+                div { class: "flex items-center justify-between p-2.5 bg-[#090d16] border border-[#1e293b] rounded-xl shadow-sm",
+                    div { class: "flex items-center space-x-2.5 truncate",
+                        div { class: "w-7 h-7 rounded-lg bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_6px_rgba(236,72,153,0.3)] shrink-0 flex items-center justify-center text-white text-xs font-bold", "AI" }
+                        div { class: "flex flex-col min-w-0",
+                            span { class: "text-white text-xs font-bold truncate", "{agent_name}" }
+                            span { class: "text-[10px] font-mono text-emerald-400", "● Session Connected" }
+                        }
+                    }
                 }
 
-                div { class: "flex flex-col space-y-1 text-sm text-gray-400",
+                // New Chat Action Button
+                div { class: "flex flex-col space-y-2",
                     div {
-                        class: "flex items-center space-x-2.5 px-3 py-2 rounded-md hover:bg-[#1f212a] hover:text-white cursor-pointer transition duration-150",
+                        class: "flex items-center justify-center space-x-2 px-3 py-2 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-medium text-xs cursor-pointer shadow-md shadow-sky-950/30 transition duration-150 select-none",
+                        onclick: move |_| {
+                            active_conversation.set(None);
+                            state.messages.set(Vec::new());
+                        },
+                        span { "＋" }
+                        span { "New Dialogue" }
+                    }
+                    div {
+                        class: "text-[11px] text-center text-slate-500 hover:text-slate-300 cursor-pointer transition select-none py-0.5",
                         onclick: move |_| show_new.set(!show_new()),
-                        span { "\u{1f4dd}" }
-                        span { "New chat" }
+                        if show_new() { "▲ Close custom title" } else { "▼ Create with custom title" }
                     }
                     if show_new() {
-                        div { class: "flex flex-col space-y-2 px-3 pb-2",
+                        div { class: "flex flex-col space-y-2 p-2 bg-[#090d16] border border-[#1e293b] rounded-lg",
                             input {
-                                class: "bg-[#1f212a] text-white text-xs rounded-md px-2 py-1.5 outline-none border border-[#1e293b]",
-                                placeholder: "Conversation title",
+                                class: "bg-[#16171d] text-white text-xs rounded-md px-2.5 py-1.5 outline-none border border-[#1e293b] placeholder-slate-500 font-sans",
+                                placeholder: "Enter conversation title...",
                                 value: "{new_title}",
                                 oninput: move |e| new_title.set(e.value().clone()),
                                 onkeydown: move |e| {
@@ -230,27 +250,42 @@ fn chat_sidebar(
                                 }
                             }
                             button {
-                                class: "text-xs bg-sky-500 text-white rounded-md px-2 py-1.5 hover:bg-[#e26a4f] transition",
+                                class: "text-xs bg-sky-600 hover:bg-sky-500 text-white rounded-md px-2 py-1 transition font-medium",
                                 onclick: move |_| create_conv(),
-                                "Create"
+                                "Save Thread"
                             }
                         }
                     }
                 }
 
-                div { class: "flex flex-col space-y-1",
-                    div { class: "text-[10px] font-bold text-gray-500 px-3 tracking-wider uppercase mb-1", "Conversations" }
-                    // "All messages" — shows all messages for the agent
+                // Real-time Search Input (cade-tui parity)
+                div { class: "relative",
+                    input {
+                        class: "w-full bg-[#090d16] text-slate-200 placeholder-slate-500 text-xs rounded-lg pl-7 pr-2 py-1.5 outline-none border border-[#1e293b] focus:border-cyan-500/50 transition font-sans",
+                        placeholder: "Search threads...",
+                        value: "{search_query}",
+                        oninput: move |e| search_query.set(e.value().clone()),
+                    }
+                    span { class: "absolute left-2.5 top-1.5 text-[10px] text-slate-500 select-none", "🔍" }
+                }
+
+                // Conversations List
+                div { class: "flex flex-col space-y-1 overflow-y-auto max-h-[340px] pr-1 hide-scrollbar",
+                    div { class: "flex items-center justify-between text-[10px] font-bold text-slate-500 px-2 tracking-wider uppercase mb-1",
+                        span { "Threads" }
+                        span { class: "bg-[#16171d] text-slate-400 px-1.5 py-0.2 rounded font-mono", "{num_threads}" }
+                    }
+                    // "All messages" global turn view
                     div {
                         class: if active_conversation().is_none() {
-                            "flex items-center justify-between px-3 py-2 rounded-md bg-[#1f212a] text-white font-medium cursor-pointer"
+                            "flex items-center justify-between px-3 py-2 rounded-lg bg-[#161b26] border-l-2 border-cyan-400 text-white font-medium cursor-pointer shadow-sm"
                         } else {
-                            "flex items-center justify-between px-3 py-2 rounded-md hover:bg-[#1f212a]/60 text-gray-400 cursor-pointer"
+                            "flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#1f212a]/60 text-slate-400 hover:text-slate-200 cursor-pointer transition-colors duration-100"
                         },
                         onclick: move |_| active_conversation.set(None),
-                        div { class: "flex items-center space-x-2.5",
-                            span { "\u{1f4ac}" }
-                            span { "All messages" }
+                        div { class: "flex items-center space-x-2",
+                            span { "💬" }
+                            span { class: "text-xs font-medium", "All Messages" }
                         }
                     }
                     {conv_rows.iter().map(|(conv_id, conv_title, date_str, msg_count, is_active)| {
@@ -265,19 +300,19 @@ fn chat_sidebar(
                             div {
                                 key: "{id_sel}",
                                 class: if is_active {
-                                    "flex items-center justify-between px-3 py-2 rounded-md bg-[#1f212a] text-white font-medium cursor-pointer"
+                                    "group flex items-center justify-between px-3 py-2 rounded-lg bg-[#161b26] border-l-2 border-cyan-400 text-white font-medium cursor-pointer shadow-sm transition-all"
                                 } else {
-                                    "flex items-center justify-between px-3 py-2 rounded-md hover:bg-[#1f212a]/60 text-gray-400 cursor-pointer transition duration-100"
+                                    "group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#16171d] text-slate-400 hover:text-slate-200 cursor-pointer transition-colors duration-100"
                                 },
                                 onclick: move |_| active_conversation.set(Some(id_sel.clone())),
                                 div { class: "flex flex-col min-w-0 pr-2 truncate",
                                     div { class: "flex items-center space-x-2 truncate",
-                                        span { class: "text-xs shrink-0 select-none", "💬" }
+                                        span { class: "text-xs shrink-0 select-none", if is_active { "💬" } else { "🗨️" } }
                                         span { class: "text-xs font-medium truncate", "{title}" }
                                     }
-                                    div { class: "flex items-center space-x-1.5 text-[10px] text-gray-500 pl-5 mt-0.5 select-none",
+                                    div { class: "flex items-center space-x-1.5 text-[10px] text-slate-500 pl-5 mt-0.5 select-none font-mono",
                                         if count > 0 {
-                                            span { "{count} msgs" }
+                                            span { class: if is_active { "text-cyan-400 font-semibold" } else { "text-slate-500" }, "{count} msgs" }
                                         }
                                         if !date_label.is_empty() {
                                             span { "· {date_label}" }
@@ -285,8 +320,8 @@ fn chat_sidebar(
                                     }
                                 }
                                 button {
-                                    class: "text-gray-600 hover:text-red-400 text-xs shrink-0 ml-1 p-1 rounded hover:bg-red-500/10 transition",
-                                    title: "Delete conversation",
+                                    class: "text-slate-600 hover:text-red-400 text-xs shrink-0 ml-1 p-1 rounded hover:bg-red-500/10 transition opacity-0 group-hover:opacity-100",
+                                    title: "Delete thread",
                                     onclick: move |e| {
                                         e.stop_propagation();
                                         del(id_del.clone());
