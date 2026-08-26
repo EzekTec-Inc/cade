@@ -288,11 +288,27 @@ fn App() -> Element {
             //   Ctrl+,   → Settings
             //   Escape   → Close Palette or return to Chat
             onkeydown: move |e| {
-                if (e.key() == Key::Character("k".into()) || e.key() == Key::Character("K".into())) && e.modifiers().ctrl() {
+                let is_k = match e.key() {
+                    Key::Character(ref s) => s.eq_ignore_ascii_case("k"),
+                    _ => false,
+                };
+                let is_n = match e.key() {
+                    Key::Character(ref s) => s.eq_ignore_ascii_case("n"),
+                    _ => false,
+                };
+                let is_comma = match e.key() {
+                    Key::Character(ref s) => s == ",",
+                    _ => false,
+                };
+
+                if is_k && (e.modifiers().ctrl() || e.modifiers().meta()) {
+                    e.stop_propagation();
                     show_palette.set(!show_palette());
-                } else if e.key() == Key::Character("n".into()) && e.modifiers().ctrl() {
+                } else if is_n && (e.modifiers().ctrl() || e.modifiers().meta()) {
+                    e.stop_propagation();
                     active_page.set(SelectedPage::Chat);
-                } else if e.key() == Key::Character(",".into()) && e.modifiers().ctrl() {
+                } else if is_comma && (e.modifiers().ctrl() || e.modifiers().meta()) {
+                    e.stop_propagation();
                     active_page.set(SelectedPage::Settings);
                 } else if e.key() == Key::Escape {
                     if show_palette() {
@@ -372,15 +388,39 @@ fn App() -> Element {
                                 }
                             }
                             div { class: "p-2 max-h-80 overflow-y-auto space-y-1 text-xs",
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Chat, icon: "💬", label: "Jump to Chat", shortcut: "Ctrl+N" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Arena, icon: "⚡", label: "Multi-Model Arena Matrix", shortcut: "Arena" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Workflows, icon: "🔄", label: "Visual Workflow DAG Canvas", shortcut: "Workflows" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Swarm, icon: "🌐", label: "Swarm Supervisory Topology", shortcut: "Swarm" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Artifacts, icon: "📦", label: "Live Artifact Studio", shortcut: "Artifacts" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::MemoryBlocks, icon: "🧠", label: "Memory Blocks & Token Heatmap", shortcut: "Memory" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Tools, icon: "🛠", label: "MCP Tools & Approvals", shortcut: "Tools" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Usage, icon: "📊", label: "Telemetry & Token Costs", shortcut: "Usage" }
-                                palette_entry { show_palette: show_palette, active_page: active_page, page: SelectedPage::Settings, icon: "⚙", label: "System Settings", shortcut: "Ctrl+," }
+                                {
+                                    let q = palette_query().to_lowercase();
+                                    let items = vec![
+                                        (SelectedPage::Dashboard, "🎛", "Dashboard Overview", "Overview"),
+                                        (SelectedPage::Chat, "💬", "Jump to Chat", "Ctrl+N"),
+                                        (SelectedPage::Arena, "⚡", "Multi-Model Arena Matrix", "Arena"),
+                                        (SelectedPage::Workflows, "🔄", "Visual Workflow DAG Canvas", "Workflows"),
+                                        (SelectedPage::Swarm, "🌐", "Swarm Supervisory Topology", "Swarm"),
+                                        (SelectedPage::Artifacts, "📦", "Live Artifact Studio", "Artifacts"),
+                                        (SelectedPage::Agents, "🤖", "Autonomous Agents Manager", "Agents"),
+                                        (SelectedPage::MemoryBlocks, "🧠", "Memory Blocks & Token Heatmap", "Memory"),
+                                        (SelectedPage::Tools, "🛠", "MCP Tools & Approvals", "Tools"),
+                                        (SelectedPage::Models, "⚙", "Model Registry & Context Limits", "Models"),
+                                        (SelectedPage::Providers, "📡", "LLM Providers & API Keys", "Providers"),
+                                        (SelectedPage::Usage, "📊", "Telemetry & Token Costs", "Usage"),
+                                        (SelectedPage::Settings, "⚙", "System Settings", "Ctrl+,"),
+                                    ];
+                                    let filtered: Vec<_> = items.into_iter().filter(|(_, _, label, _)| q.is_empty() || label.to_lowercase().contains(&q)).collect();
+
+                                    filtered.into_iter().map(|(page, icon, label, shortcut)| {
+                                        rsx! {
+                                            palette_entry {
+                                                key: "{label}",
+                                                show_palette: show_palette,
+                                                active_page: active_page,
+                                                page: page,
+                                                icon: icon.to_string(),
+                                                label: label.to_string(),
+                                                shortcut: shortcut.to_string()
+                                            }
+                                        }
+                                    })
+                                }
                             }
                         }
                     }

@@ -274,7 +274,12 @@ pub fn ArenaView() -> Element {
                                         span { class: if l_is_stream { "w-2 h-2 rounded-full bg-cyan-400 animate-pulse" } else { "w-2 h-2 rounded-full bg-slate-600" } }
                                         span { "{l_status}" }
                                     }
-                                    span { "~{l_tok} tokens" }
+                                    div { class: "flex items-center space-x-3",
+                                        if l_lat > 0 {
+                                            span { class: "text-emerald-400 font-bold", "{((l_tok as f64) / (l_lat as f64 / 1000.0).max(0.001)):.1} tok/s" }
+                                        }
+                                        span { "~{l_tok} tokens" }
+                                    }
                                 }
                             }
                         }
