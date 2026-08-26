@@ -15,13 +15,14 @@ deployment needed.
 
 ## What it does
 
-- Connects to the same REST API the CLI uses
-- Streams real-time reasoning and tool responses via SSE (`POST /v1/agents/:id/run`)
-- Renders rich timeline representations with collapsible reasoning, tool cards, and error indicators
-- Full Conversation Management: Create, list, switch, and delete chat sessions directly from the sidebar
-- Active CRUD Provider Panel: Live model provider configurations (OpenRouter, Groq, local fallback presets)
-- Native Interactive Pages: Live telemetry logs, active tools & MCP listing, memory block trees, and local configurations (replacing all stubs)
-- Built-in custom Toast Notification container (supporting 4 severity levels)
+- **Connects to the native REST/SSE API** with zero-latency WASM reactive signals (Dioxus v0.5).
+- **Global Command Palette (`Cmd+K` / `Ctrl+K`)**: Instant fuzzy search across all 13 views, autonomous agents, and MCP tools with full keyboard navigation.
+- **Multi-Model Arena Matrix**: Simultaneous 2–4 lane stream multiplexing with real-time Tokens/sec (`tok/s`) gauges, Time-To-First-Token (`TTFT`) latency meters, and synchronized comparative diffing.
+- **Chat & Execution Traces**: Collapsible `<reasoning>` thought accordions with elapsed duration badges, structured tool execution cards with status badges and duration metrics, and working single-click clipboard copy triggers.
+- **Swarm Topology & Workflow DAG Canvas**: Interactive multi-agent supervisor/worker tree with token consumption metrics, active state pulses, and live IPC Intercom Telemetry Stream & Supervisor Log.
+- **3-Tier Context Allocation & Knowledge Graph Studio**: Stacked context allocation heatmap (Pinned, Short-Term, Long-Term tiers) against 128k–1M token budgets, Knowledge Graph Triples (`Entity` ➔ `Relation` ➔ `Target`) browser, and hybrid semantic vector search test playground.
+- **Developer API Workbench**: Embedded, copyable SDK examples in Rust (`cade-sdk`), Node.js, Python, and cURL with syntax highlighting.
+- **Full Conversation & Provider Management**: Create, list, switch, and delete chat sessions; configure live model providers (Anthropic, OpenAI, Gemini, Ollama, OpenRouter).
 
 ## Layout
 
@@ -64,14 +65,14 @@ GUI palettes.
 
 | Key | Action |
 |---|---|
-| `Ctrl+P` | Open palette |
-| `Ctrl+N` | Start a new chat session / conversation |
+| `Cmd+K` / `Ctrl+K` | Open global Command Palette & Search Overlay |
+| `Ctrl+N` | Start a new chat session / jump to Chat |
 | `Ctrl+,` | Open global Settings panel |
-| `Esc` | Close current overlay or return focus to prompt |
-| `Enter` | Send / execute |
-| `Shift+Enter` | New line |
-| `↑` `↓` (in palette) | Move selection |
-| `Ctrl+S` (in memory editor) | Save |
+| `Esc` | Close palette/modal or return focus to Chat |
+| `Enter` | Send message / execute selected command |
+| `Shift+Enter` | Multi-line line break in chat input |
+| `↑` `↓` (in palette) | Navigate active command selection |
+| `Ctrl+S` (in memory editor) | Save memory block changes |
 | `↓` button (timeline) | Scroll-to-bottom + re-enable auto-scroll |
 
 Auto-scroll: scrolls with new content unless the user scrolls **up**,

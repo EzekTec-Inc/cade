@@ -116,7 +116,7 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 | **Skills** | Drop a Markdown file into `.cade/skills/` to teach CADE new domain workflows |
 | **Hooks** | Wire shell scripts into lifecycle events (before/after tool calls, session start/end) |
 | **Desktop Commander** | Unified cross-platform automation seam for window tracking, screen capture, and input simulation |
-| **WASM Dashboard** | Built-in reactive Dioxus web GUI at `/dashboard` with syntax-highlighted `MarkdownView` and live SSE telemetry |
+| **WASM Dashboard** | Built-in reactive Dioxus web GUI at `/dashboard` with `Cmd+K` command palette, Multi-Model Arena throughput gauges, Swarm DAG canvas, and 3-Tier memory heatmap |
 | **IDE Plugins** | Native Neovim plugin with interactive hover-edits, ghost-text, and buffer state syncing |
 
 ---
