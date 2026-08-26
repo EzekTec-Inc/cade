@@ -7,7 +7,7 @@ use crate::types::{AppState, CodeLanguage};
 pub fn DashboardView() -> Element {
     let state = use_context::<AppState>();
     let active_tab = use_signal(|| 0);
-    let selected_lang = use_signal(|| CodeLanguage::Javascript);
+    let selected_lang = use_signal(|| CodeLanguage::Rust);
     let copied_key = use_signal(|| false);
     let copied_code = use_signal(|| false);
 
@@ -303,6 +303,7 @@ fn code_panel(
         div { class: "md:col-span-8 p-6 flex flex-col justify-between bg-[#040711]",
             div { class: "flex items-center justify-between mb-3 border-b border-[#1e293b]/50 pb-2.5",
                 div { class: "flex items-center space-x-2",
+                    lang_button { selected_lang: selected_lang, lang: CodeLanguage::Rust, label: "Rust" }
                     lang_button { selected_lang: selected_lang, lang: CodeLanguage::Javascript, label: "Node.js" }
                     lang_button { selected_lang: selected_lang, lang: CodeLanguage::Python, label: "Python" }
                     lang_button { selected_lang: selected_lang, lang: CodeLanguage::Curl, label: "cURL" }
@@ -342,6 +343,21 @@ fn lang_button(selected_lang: Signal<CodeLanguage>, lang: CodeLanguage, label: S
 
 fn code_for_tab(tab_idx: i32, lang: CodeLanguage) -> String {
     match (tab_idx, lang) {
+        (0, CodeLanguage::Rust) => r#"use cade_sdk::EmbeddedSession;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Direct zero-daemon in-process execution with cade-sdk
+    let mut session = EmbeddedSession::builder()
+        .model("anthropic/claude-sonnet-4-5")
+        .build()
+        .await?;
+
+    let answer = session.prompt("Inspect workspace and describe structure.").await?;
+    println!("{answer}");
+    Ok(())
+}"#
+            .to_string(),
         (0, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({ serverUrl: "http://localhost:8284" });
@@ -357,6 +373,24 @@ with EmbeddedSession(model="anthropic/claude-sonnet-4-5") as session:
         (0, CodeLanguage::Curl) => r#"curl -X POST http://localhost:8284/v1/agents/default/run \
   -H "Content-Type: application/json" \
   -d '{"input": "Inspect workspace and describe structure."}'"#
+            .to_string(),
+        (1, CodeLanguage::Rust) => r#"use cade_sdk::{AgentOptions, EmbeddedSession};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let session = EmbeddedSession::builder()
+        .agent_options(AgentOptions {
+            name: "Security Reviewer".into(),
+            model: Some("anthropic/claude-sonnet-4-5".into()),
+            system_prompt: Some("You are a specialized security reviewer.".into()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    println!("Agent deployed: {}", session.agent_id());
+    Ok(())
+}"#
             .to_string(),
         (1, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
@@ -381,6 +415,16 @@ session = EmbeddedSession(
     "system_prompt": "You are a specialized security reviewer."
   }'"#
         .to_string(),
+        (_, CodeLanguage::Rust) => r#"use cade_sdk::EmbeddedSession;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let session = EmbeddedSession::builder().build().await?;
+    let rules = session.get_memory_block("project").await?;
+    println!("Project Rules:\n{rules:?}");
+    Ok(())
+}"#
+            .to_string(),
         (_, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({ serverUrl: "http://localhost:8284" });

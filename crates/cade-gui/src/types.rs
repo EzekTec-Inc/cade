@@ -24,6 +24,7 @@ pub enum SelectedPage {
 /// Code language selector for API examples.
 #[derive(Clone, Copy, PartialEq)]
 pub enum CodeLanguage {
+    Rust,
     Javascript,
     Python,
     Curl,
