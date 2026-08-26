@@ -2,6 +2,12 @@
 
 Rust SDK for embedding CADE in standalone applications, CLI tools, serverless functions (AWS Lambda, Cloud Run), and multi-agent systems with zero external daemon requirements.
 
+📖 **Comprehensive Documentation Suite**:
+- **[SDK Overview & Quickstart Guide](../../docs/sdk/quickstart.md)**
+- **[SDK Architecture & Topologies](../../docs/sdk/architecture.md)**
+- **[Solution Cookbook & Recipes](../../docs/sdk/cookbook.md)**
+- **[Complete API Reference](../../docs/sdk/api-reference.md)**
+
 ## Key Capabilities
 
 1. **Embedded In-Process Execution (`EmbeddedSession`)**:

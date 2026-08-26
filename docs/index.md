@@ -45,6 +45,16 @@ Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent 
 | [GUI Dashboard](gui-dashboard.md) | You want to use the browser-based WASM dashboard |
 | [Cost & Pricing](cost-and-pricing.md) | You want to track spend or set cost guardrails |
 
+## 📦 Rust SDK & Programmatic Integration
+
+| Doc | When to read it |
+|---|---|
+| [SDK Overview & Index](sdk/README.md) | You want to integrate CADE directly into your Rust apps or microservices |
+| [SDK Quickstart](sdk/quickstart.md) | You want to build a zero-daemon agent or connect to a daemon in 5 minutes |
+| [SDK Architecture](sdk/architecture.md) | You want to understand the dual runtime topologies and CapabilityMesh |
+| [SDK Solution Cookbook](sdk/cookbook.md) | You want production recipes for review bots, swarms, and streaming web APIs |
+| [SDK API Reference](sdk/api-reference.md) | You want full type definitions for `EmbeddedSession`, `TeamSession`, and events |
+
 ## 🏗️ Architecture & Development
 
 | Doc | When to read it |
