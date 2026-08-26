@@ -1,6 +1,6 @@
 [package]
 name = "cade-server"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 authors = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
 description = "CADE — Centralized HTTP server daemon and agentic loop runtime"

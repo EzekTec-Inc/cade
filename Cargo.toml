@@ -119,7 +119,7 @@ schemars       = "1"
 
 [package]
 name        = "cade"
-version     = "0.2.4"
+version     = "0.2.5"
 edition     = "2024"
 authors     = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
 description = "CADE — Coding AI assistant with Desktop Extensions"
@@ -174,7 +174,7 @@ async-trait.workspace  = true
 tokio-stream.workspace = true
 axum.workspace         = true
 tower-http.workspace   = true
-cade-tui = { version = "0.2.4", path = "crates/cade-tui" }
+cade-tui = { version = "0.2.5", path = "crates/cade-tui" }
 cade-askpass = { path = "crates/cade-askpass", features = ["server"] }
 ratatui.workspace = true
 indicatif.workspace = true

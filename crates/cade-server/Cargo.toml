@@ -1,6 +1,6 @@
 [package]
 name = "cade-server-lib"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 
 [lib]
@@ -51,7 +51,7 @@ getrandom = { workspace = true }
 rust-embed = "8.11.0"
 # lru removed
 async-trait.workspace = true
-cade-plugin = { version = "0.2.4", path = "../cade-plugin" }
+cade-plugin = { version = "0.2.5", path = "../cade-plugin" }
 dashmap = "6.2.1"
 
 [lints.rust]
