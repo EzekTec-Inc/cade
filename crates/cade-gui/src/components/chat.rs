@@ -675,8 +675,6 @@ fn input_area(
         let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let conv_id = active_conversation();
-        let coordinator =
-            crate::chat_session::ChatSessionCoordinator::new(api_client.clone(), agent_id.clone(), conv_id);
 
         let state_toast = state;
         let mut convs = state.conversations;
@@ -685,6 +683,22 @@ fn input_area(
         let api_client_clone = api_client.clone();
 
         spawn(async move {
+            let actual_agent_id = if agent_id_clone.is_empty() {
+                if let Ok(agents) = api_client_clone.list_agents().await && let Some(first) = agents.first() {
+                    first.id.clone()
+                } else {
+                    "default".to_string()
+                }
+            } else {
+                agent_id_clone.clone()
+            };
+
+            let coordinator = crate::chat_session::ChatSessionCoordinator::new(
+                api_client_clone.clone(),
+                actual_agent_id.clone(),
+                conv_id,
+            );
+
             let result = coordinator
                 .dispatch_turn(&text, messages, is_loading, cancel_token)
                 .await;
@@ -750,7 +764,6 @@ fn input_area(
                     class: "bg-transparent text-gray-200 placeholder-gray-500 outline-none w-full text-sm resize-none h-12",
                     placeholder: "Ask anything, @ to add files, / for commands",
                     value: "{input_text}",
-                    prevent_default: "onkeydown",
                     oninput: move |e| {
                         let val = e.value();
                         input_text.set(val.clone());
