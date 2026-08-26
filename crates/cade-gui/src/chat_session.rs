@@ -382,6 +382,23 @@ mod tests {
         assert!(messages[0].content.as_str().unwrap().contains("[Tool Completed: delete_file]"));
         assert!(messages[0].content.as_str().unwrap().contains("[UI Widget Resource: ui://widgets/status]"));
     }
+
+    #[test]
+    fn test_chat_turn_outcome_assigned_conversation_id() {
+        let outcome = ChatTurnOutcome::Completed {
+            final_message_id: "msg-123".to_string(),
+            content_length: 42,
+            had_reasoning: true,
+            assigned_conversation_id: Some("conv-auto-titled-456".to_string()),
+        };
+
+        if let ChatTurnOutcome::Completed { assigned_conversation_id, had_reasoning, .. } = outcome {
+            assert_eq!(assigned_conversation_id.as_deref(), Some("conv-auto-titled-456"));
+            assert!(had_reasoning);
+        } else {
+            panic!("Expected Completed variant");
+        }
+    }
 }
 
 // endregion: --- Tests
