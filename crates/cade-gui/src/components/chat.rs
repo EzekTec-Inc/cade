@@ -426,11 +426,11 @@ fn message_bubble(id: String) -> Element {
     };
 
     let avatar_class = if is_user {
-        "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-orange-500 text-white"
+        "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-sm shadow-sky-500/20"
     } else if is_tool {
-        "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-gray-600 text-white"
+        "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-slate-800 text-cyan-400 border border-cyan-800/60"
     } else {
-        "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6]"
+        "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center font-bold text-xs bg-gradient-to-tr from-purple-500 to-pink-500 text-white shadow-sm shadow-purple-500/30"
     };
 
     let avatar_label = if is_user {
@@ -511,9 +511,9 @@ fn message_bubble(id: String) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#090d16]/60 border border-[#1e293b] p-4 rounded-xl text-sm group relative",
-                    div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
-                    p { class: "text-gray-200 mt-1 whitespace-pre-wrap break-words", "{content_val}" }
+                div { class: "flex flex-col bg-[#0f172a]/90 border border-sky-500/30 p-4 rounded-2xl text-sm group relative shadow-md shadow-sky-950/20",
+                    div { class: "text-[10px] font-mono font-bold text-sky-400 uppercase select-none mb-1", "{role_label}" }
+                    p { class: "text-slate-100 mt-1 whitespace-pre-wrap break-words leading-relaxed", "{content_val}" }
                     div { class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition duration-150 select-none",
                         button {
                             class: "text-gray-500 hover:text-white transition duration-150 p-1 bg-[#1e2029] border border-[#2d313f] rounded",
@@ -562,14 +562,20 @@ fn message_bubble(id: String) -> Element {
         rsx! {
             div { class: "{bubble_class}",
                 div { class: "{avatar_class}", "{avatar_label}" }
-                div { class: "flex flex-col bg-[#090d16]/60 border border-[#1e293b] p-4 rounded-xl text-sm group relative",
-                    div { class: "text-[10px] font-bold text-gray-500 uppercase select-none mb-1", "{role_label}" }
+                div { class: "flex flex-col bg-[#090d16]/90 border border-[#1e293b] p-5 rounded-2xl text-sm group relative shadow-xl shadow-black/40",
+                    div { class: "text-[10px] font-mono font-bold text-purple-400 uppercase select-none mb-1 flex items-center justify-between",
+                        span { "{role_label}" }
+                        if is_streaming {
+                            span { class: "w-2 h-2 rounded-full bg-purple-400 animate-ping" }
+                        }
+                    }
                     if let Some(ref reasoning) = reasoning_val {
-                        details { class: "mb-2",
-                            summary { class: "text-yellow-500 text-xs cursor-pointer hover:text-yellow-400 select-none",
-                                "\u{1f4ad} Reasoning"
+                        details { class: "mb-3 bg-[#070b14] border border-amber-500/20 rounded-xl p-3 select-none",
+                            summary { class: "text-amber-400 text-xs font-mono font-medium cursor-pointer hover:text-amber-300 select-none flex items-center space-x-2",
+                                span { "💭" }
+                                span { "Model Reasoning Process" }
                             }
-                            p { class: "text-gray-400 mt-1 whitespace-pre-wrap text-xs italic border-l-2 border-yellow-500/30 pl-2", "{reasoning}" }
+                            p { class: "text-slate-300 mt-2 whitespace-pre-wrap text-xs font-mono leading-relaxed border-l-2 border-amber-500/40 pl-3 italic", "{reasoning}" }
                         }
                     }
                     div { class: "relative",

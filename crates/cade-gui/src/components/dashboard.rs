@@ -33,31 +33,99 @@ pub fn DashboardView() -> Element {
     };
 
     let code_content = code_for_tab(active_tab(), selected_lang());
+    let mut active_page = state.active_page;
 
     rsx! {
-        // Header bar
-        header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70 bg-[#090d16]",
+        // Header bar with Glassmorphism & Status Beacon
+        header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70 bg-[#090d16]/90 backdrop-blur-md sticky top-0 z-10",
             div { class: "flex items-center space-x-3",
-                span { class: "text-xs font-mono font-medium text-slate-400 uppercase tracking-widest", "Workspace Overview" }
+                div { class: "w-2 h-2 rounded-full bg-cyan-400 animate-ping" }
+                span { class: "text-xs font-mono font-bold text-cyan-400 uppercase tracking-widest", "CADE Autonomous Intelligence Platform" }
             }
             div { class: "flex items-center space-x-6 text-[13px] text-slate-400 font-medium",
-                a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/index.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "Documentation" }
-                a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/getting-started.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "API Reference" }
-                span { class: "bg-emerald-950 text-emerald-400 border border-emerald-800/80 px-2.5 py-1 rounded-full text-xs font-semibold shadow-sm flex items-center space-x-1.5",
-                    span { class: "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" }
-                    span { "Engine Online" }
+                a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/index.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "Docs" }
+                a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/getting-started.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "API Spec" }
+                span { class: "bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs font-semibold shadow-sm flex items-center space-x-2",
+                    span { class: "w-2 h-2 rounded-full bg-emerald-400 animate-pulse" }
+                    span { "Engine Healthy (Local WAL)" }
                 }
             }
         }
 
         // Dashboard Content
         div { class: "px-10 pt-8 pb-12 flex-1 overflow-y-auto bg-[#040711]",
-            // Greeting Heading
-            div { class: "mb-8",
-                h1 { class: "text-2xl font-bold text-slate-100 tracking-tight flex items-center space-x-2.5",
-                    span { "CADE Intelligence Console" }
+            // Greeting & Live Telemetry Ticker
+            div { class: "mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e293b]/50 pb-6",
+                div {
+                    h1 { class: "text-2xl font-extrabold text-slate-100 tracking-tight flex items-center space-x-3",
+                        span { "Executive AI Intelligence Console" }
+                    }
+                    p { class: "text-xs text-slate-400 mt-1", "Real-time stateful autonomous agent mesh, multi-model arena, and AST refactoring harness." }
                 }
-                p { class: "text-xs text-slate-400 mt-1", "Stateful autonomous coding runtime with zero-network tool dispatch and local vector recall." }
+                div { class: "flex items-center gap-3 select-none",
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
+                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Model Context" }
+                        span { class: "text-xs font-bold text-cyan-400 font-mono", "128k - 1M Tokens" }
+                    }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
+                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Recall Seam" }
+                        span { class: "text-xs font-bold text-slate-300 font-mono", "BM25 + Vector" }
+                    }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
+                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "MCP Status" }
+                        span { class: "text-xs font-bold text-purple-400 font-mono", "Active Native" }
+                    }
+                }
+            }
+
+            // Quick Action Launchpad Cards (Surpassing Abacus.ai)
+            div { class: "mb-10 select-none",
+                div { class: "flex items-center justify-between mb-3",
+                    h2 { class: "text-xs font-bold uppercase tracking-wider text-slate-400 font-mono", "Autonomous Action Launchpad" }
+                    span { class: "text-[11px] text-slate-500 font-mono", "Single-click operations" }
+                }
+                div { class: "grid grid-cols-1 md:grid-cols-4 gap-4",
+                    div {
+                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-cyan-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-cyan-500/10",
+                        onclick: move |_| active_page.set(crate::types::SelectedPage::Arena),
+                        div { class: "flex items-center justify-between mb-2",
+                            span { class: "text-lg", "⚡" }
+                            span { class: "text-[10px] font-mono font-bold text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800", "Arena Battle" }
+                        }
+                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-cyan-300 transition-colors", "Multi-Model Arena" }
+                        p { class: "text-slate-400 text-xs mt-1", "Stream 2-4 models side-by-side with latency & diff analysis." }
+                    }
+                    div {
+                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-purple-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-purple-500/10",
+                        onclick: move |_| active_page.set(crate::types::SelectedPage::Workflows),
+                        div { class: "flex items-center justify-between mb-2",
+                            span { class: "text-lg", "🔄" }
+                            span { class: "text-[10px] font-mono font-bold text-purple-400 bg-purple-950/80 px-2 py-0.5 rounded border border-purple-800", "DAG Visualizer" }
+                        }
+                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-purple-300 transition-colors", "Workflows & Pipelines" }
+                        p { class: "text-slate-400 text-xs mt-1", "Visual DAG canvas with animated step execution pulses." }
+                    }
+                    div {
+                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-emerald-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-emerald-500/10",
+                        onclick: move |_| active_page.set(crate::types::SelectedPage::Swarm),
+                        div { class: "flex items-center justify-between mb-2",
+                            span { class: "text-lg", "🌐" }
+                            span { class: "text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800", "Swarm Tree" }
+                        }
+                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-emerald-300 transition-colors", "Swarm Topology" }
+                        p { class: "text-slate-400 text-xs mt-1", "Inspect supervisory trees, subagents, and token metrics." }
+                    }
+                    div {
+                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-amber-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-amber-500/10",
+                        onclick: move |_| active_page.set(crate::types::SelectedPage::Artifacts),
+                        div { class: "flex items-center justify-between mb-2",
+                            span { class: "text-lg", "📦" }
+                            span { class: "text-[10px] font-mono font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800", "Artifacts" }
+                        }
+                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-amber-300 transition-colors", "Artifact Studio" }
+                        p { class: "text-slate-400 text-xs mt-1", "Inspect generated code diffs, datasets, and markdown." }
+                    }
+                }
             }
 
             // Feature cards grid
