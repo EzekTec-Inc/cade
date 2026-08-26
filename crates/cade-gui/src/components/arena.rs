@@ -58,24 +58,24 @@ pub fn ArenaView() -> Element {
         let mut ags = agents_list;
         let mut lns = lanes;
         spawn(async move {
-            if let crate::api_engine::ResourceState::Ready(list) = eng.fetch_agents().await {
-                if !list.is_empty() {
-                    ags.set(list.clone());
-                    let mut current = lns();
-                    if current.len() >= 2 && list.len() >= 2 {
-                        current[0].agent_id = list[0].id.clone();
-                        current[0].agent_name = list[0].name.clone();
-                        current[0].model = list[0].model.clone().unwrap_or_else(|| "claude-3-5-sonnet".to_string());
-                        
-                        current[1].agent_id = list[1].id.clone();
-                        current[1].agent_name = list[1].name.clone();
-                        current[1].model = list[1].model.clone().unwrap_or_else(|| "gpt-4o".to_string());
-                        lns.set(current);
-                    } else if !list.is_empty() && !current.is_empty() {
-                        current[0].agent_id = list[0].id.clone();
-                        current[0].agent_name = list[0].name.clone();
-                        lns.set(current);
-                    }
+            if let crate::api_engine::ResourceState::Ready(list) = eng.fetch_agents().await
+                && !list.is_empty()
+            {
+                ags.set(list.clone());
+                let mut current = lns();
+                if current.len() >= 2 && list.len() >= 2 {
+                    current[0].agent_id = list[0].id.clone();
+                    current[0].agent_name = list[0].name.clone();
+                    current[0].model = list[0].model.clone().unwrap_or_else(|| "claude-3-5-sonnet".to_string());
+                    
+                    current[1].agent_id = list[1].id.clone();
+                    current[1].agent_name = list[1].name.clone();
+                    current[1].model = list[1].model.clone().unwrap_or_else(|| "gpt-4o".to_string());
+                    lns.set(current);
+                } else if !current.is_empty() {
+                    current[0].agent_id = list[0].id.clone();
+                    current[0].agent_name = list[0].name.clone();
+                    lns.set(current);
                 }
             }
         });

@@ -194,11 +194,11 @@ pub fn ArtifactStudioView() -> Element {
                                     },
                                     ArtifactType::TableData => rsx! {
                                         div { class: "p-2 bg-[#070b14] border border-[#1e293b] rounded-lg overflow-x-auto",
-                                            crate::components::markdown::MarkdownRenderer { content: active_content.clone() }
+                                            crate::components::markdown::MarkdownView { content: active_content.clone() }
                                         }
                                     },
                                     _ => rsx! {
-                                        crate::components::markdown::MarkdownRenderer { content: active_content.clone() }
+                                        crate::components::markdown::MarkdownView { content: active_content.clone() }
                                     }
                                 }
                             }
