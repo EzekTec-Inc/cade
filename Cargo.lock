@@ -1097,6 +1097,7 @@ dependencies = [
  "enigo",
  "image",
  "notify-rust",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
