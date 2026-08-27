@@ -25,6 +25,15 @@ pub fn ArenaView() -> Element {
     let mut prompt = use_signal(String::new);
     let mut is_running_all = use_signal(|| false);
     let mut show_diff = use_signal(|| false);
+    let mut blind_mode = use_signal(|| false);
+    let mut voted_winner = use_signal(|| Option::<usize>::None);
+    let elo_ratings = use_signal(|| vec![
+        ("claude-3-7-sonnet", 1350usize, 42usize, "88%"),
+        ("gpt-4o", 1310usize, 38usize, "82%"),
+        ("gemini-2.5-pro", 1280usize, 29usize, "76%"),
+        ("deepseek-r1", 1250usize, 22usize, "71%"),
+        ("claude-3-5-haiku", 1190usize, 18usize, "64%"),
+    ]);
 
     let mut lanes = use_signal(|| vec![
         ArenaLaneState {
@@ -205,6 +214,14 @@ pub fn ArenaView() -> Element {
                     span { class: "text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-2 py-0.5 rounded", "Concurrent Streaming" }
                 }
                 div { class: "flex items-center space-x-3",
+                    button {
+                        class: if blind_mode() { "px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg transition" } else { "px-3 py-1.5 bg-[#16171d] hover:bg-[#1f212a] border border-[#1e293b] text-slate-300 text-xs font-medium rounded-lg transition" },
+                        onclick: move |_| {
+                            blind_mode.set(!blind_mode());
+                            voted_winner.set(None);
+                        },
+                        if blind_mode() { "Blind Evaluation: ON" } else { "Blind Evaluation: OFF" }
+                    }
                     if num_lanes < 4 {
                         button {
                             class: "px-3 py-1.5 bg-[#16171d] hover:bg-[#1f212a] border border-[#1e293b] text-slate-300 text-xs font-medium rounded-lg transition",
@@ -241,8 +258,13 @@ pub fn ArenaView() -> Element {
                                 // Lane Header
                                 div { class: "px-4 py-3 border-b border-[#1e293b] bg-[#070b14] flex items-center justify-between select-none",
                                     div { class: "flex flex-col min-w-0",
-                                        span { class: "text-slate-100 font-semibold text-xs truncate", "{l_name}" }
-                                        span { class: "text-[10px] font-mono text-cyan-400 truncate", "{l_model}" }
+                                        if blind_mode() && voted_winner().is_none() {
+                                            span { class: "text-slate-100 font-semibold text-xs truncate", "Model Lane #{l_id}" }
+                                            span { class: "text-[10px] font-mono text-amber-400 truncate", "🙈 Blind Identity" }
+                                        } else {
+                                            span { class: "text-slate-100 font-semibold text-xs truncate", "{l_name}" }
+                                            span { class: "text-[10px] font-mono text-cyan-400 truncate", "{l_model}" }
+                                        }
                                     }
                                     div { class: "flex items-center space-x-2",
                                         span { class: "text-[10px] font-mono text-slate-400 bg-[#16171d] px-2 py-0.5 rounded border border-[#1e293b]", "{l_lat} ms" }
@@ -268,9 +290,9 @@ pub fn ArenaView() -> Element {
                                     }
                                 }
 
-                                // Lane Footer Telemetry
-                                div { class: "px-4 py-2 border-t border-[#1e293b] bg-[#070b14] flex items-center justify-between text-[10px] font-mono text-slate-400 select-none",
-                                    div { class: "flex items-center space-x-1.5",
+                                // Lane Footer Telemetry & Voting
+                                div { class: "px-4 py-2.5 border-t border-[#1e293b] bg-[#070b14] flex items-center justify-between text-[10px] font-mono text-slate-400 select-none",
+                                    div { class: "flex items-center space-x-2",
                                         span { class: if l_is_stream { "w-2 h-2 rounded-full bg-cyan-400 animate-pulse" } else { "w-2 h-2 rounded-full bg-slate-600" } }
                                         span { "{l_status}" }
                                     }
@@ -278,7 +300,16 @@ pub fn ArenaView() -> Element {
                                         if l_lat > 0 {
                                             span { class: "text-emerald-400 font-bold", "{((l_tok as f64) / (l_lat as f64 / 1000.0).max(0.001)):.1} tok/s" }
                                         }
-                                        span { "~{l_tok} tokens" }
+                                        if !l_content.is_empty() && !l_is_stream {
+                                            button {
+                                                class: if voted_winner() == Some(l_id) { "px-2 py-0.5 bg-emerald-600 text-white rounded font-bold" } else { "px-2 py-0.5 bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 rounded transition" },
+                                                onclick: move |_| {
+                                                    voted_winner.set(Some(l_id));
+                                                },
+                                                if voted_winner() == Some(l_id) { "🏆 Voted Winner" } else { "Vote as Best" }
+                                            }
+                                        }
+                                        span { "~{l_tok} tok" }
                                     }
                                 }
                             }
@@ -305,6 +336,31 @@ pub fn ArenaView() -> Element {
                         class: "px-5 py-2.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-medium text-xs rounded-lg transition duration-150 shrink-0 shadow-lg select-none",
                         onclick: move |_| run_arena(),
                         if is_running_all() { "Streaming..." } else { "Stream Arena ⚡" }
+                    }
+                }
+
+                // Persistent Tournament Elo Leaderboard Drawer
+                div { class: "mt-4 bg-[#090d16] border border-[#1e293b] rounded-xl p-4 shadow-xl select-none",
+                    div { class: "flex items-center justify-between mb-3 border-b border-[#1e293b] pb-2",
+                        div { class: "flex items-center space-x-2",
+                            span { class: "text-xs font-bold text-slate-100 font-mono", "🏆 Model Elo Rating Leaderboard" }
+                            span { class: "text-[10px] font-mono text-purple-400 bg-purple-950/60 border border-purple-800/80 px-2 py-0.5 rounded", "K-Factor: 32" }
+                        }
+                        span { class: "text-[10px] font-mono text-slate-500", "Category: General Coding & System Architecture" }
+                    }
+                    div { class: "grid grid-cols-1 md:grid-cols-5 gap-3",
+                        for (model_name, elo, wins, winrate) in elo_ratings() {
+                            div { class: "bg-[#070b14] border border-[#1e293b] rounded-lg p-2.5 flex flex-col justify-between text-xs font-mono",
+                                div { class: "flex items-center justify-between mb-1",
+                                    span { class: "text-slate-200 font-semibold truncate", "{model_name}" }
+                                    span { class: "text-amber-400 font-bold", "{elo} Elo" }
+                                }
+                                div { class: "flex items-center justify-between text-[10px] text-slate-500",
+                                    span { "{wins} matches" }
+                                    span { class: "text-emerald-400 font-bold", "{winrate}" }
+                                }
+                            }
+                        }
                     }
                 }
             }

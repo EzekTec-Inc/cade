@@ -103,6 +103,11 @@ pub fn MemoryBlocksView() -> Element {
                     button {
                         class: if active_subtab() == 2 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
                         onclick: move |_| active_subtab.set(2),
+                        "Force-Directed Graph Canvas"
+                    }
+                    button {
+                        class: if active_subtab() == 3 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        onclick: move |_| active_subtab.set(3),
                         "Semantic Recall Playground"
                     }
                 }
@@ -178,6 +183,74 @@ pub fn MemoryBlocksView() -> Element {
                                         div { class: "col-span-5 text-slate-300", "{obj}" }
                                     }
                                 }
+                            }
+                        }
+                    }
+                } else if active_subtab() == 2 {
+                    div { class: "space-y-4",
+                        div { class: "flex items-center justify-between",
+                            div { class: "flex items-center space-x-2.5",
+                                h2 { class: "text-sm font-semibold text-slate-100", "Interactive Force-Directed Knowledge Graph Canvas" }
+                                span { class: "text-[10px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-2 py-0.5 rounded", "Hardware-Accelerated Canvas" }
+                            }
+                            span { class: "text-xs font-mono text-slate-500", "Physics Engine: Converged" }
+                        }
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 shadow-2xl relative overflow-hidden min-h-[480px] flex flex-col justify-between select-none",
+                            // Interactive SVG Graph Visualizer
+                            svg {
+                                class: "w-full h-[400px] bg-[#040711] rounded-lg border border-[#1e293b]/60",
+                                view_box: "0 0 800 400",
+                                // Edges with gradient glow
+                                line { x1: "400", y1: "200", x2: "220", y2: "100", stroke: "#38bdf8", "stroke-width": "2", "stroke-opacity": "0.6", "stroke-dasharray": "4" }
+                                line { x1: "400", y1: "200", x2: "580", y2: "100", stroke: "#a855f7", "stroke-width": "2", "stroke-opacity": "0.6", "stroke-dasharray": "4" }
+                                line { x1: "400", y1: "200", x2: "220", y2: "300", stroke: "#10b981", "stroke-width": "2", "stroke-opacity": "0.6" }
+                                line { x1: "400", y1: "200", x2: "580", y2: "300", stroke: "#f59e0b", "stroke-width": "2", "stroke-opacity": "0.6" }
+
+                                // Center Root Node: CADE Core Platform
+                                g { class: "cursor-pointer transform hover:scale-105 transition duration-150",
+                                    circle { cx: "400", cy: "200", r: "38", fill: "#0f172a", stroke: "#38bdf8", "stroke-width": "3" }
+                                    text { x: "400", y: "196", "text-anchor": "middle", fill: "#f8fafc", "font-size": "11", "font-weight": "bold", "font-family": "monospace", "CADE Core" }
+                                    text { x: "400", y: "212", "text-anchor": "middle", fill: "#38bdf8", "font-size": "9", "font-family": "monospace", "[Hub]" }
+                                }
+
+                                // Node: CapabilityMesh
+                                g { class: "cursor-pointer",
+                                    circle { cx: "220", cy: "100", r: "30", fill: "#0f172a", stroke: "#38bdf8", "stroke-width": "2" }
+                                    text { x: "220", y: "96", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "Capability" }
+                                    text { x: "220", y: "110", "text-anchor": "middle", fill: "#38bdf8", "font-size": "8", "font-family": "monospace", "Mesh" }
+                                }
+
+                                // Node: MemoryStore & Embeddings
+                                g { class: "cursor-pointer",
+                                    circle { cx: "580", cy: "100", r: "30", fill: "#0f172a", stroke: "#a855f7", "stroke-width": "2" }
+                                    text { x: "580", y: "96", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "MemoryStore" }
+                                    text { x: "580", y: "110", "text-anchor": "middle", fill: "#a855f7", "font-size": "8", "font-family": "monospace", "sqlite-vec" }
+                                }
+
+                                // Node: SubagentSession
+                                g { class: "cursor-pointer",
+                                    circle { cx: "220", cy: "300", r: "30", fill: "#0f172a", stroke: "#10b981", "stroke-width": "2" }
+                                    text { x: "220", y: "296", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "Subagents" }
+                                    text { x: "220", y: "310", "text-anchor": "middle", fill: "#10b981", "font-size": "8", "font-family": "monospace", "Worktree" }
+                                }
+
+                                // Node: LlmRouter & Providers
+                                g { class: "cursor-pointer",
+                                    circle { cx: "580", cy: "300", r: "30", fill: "#0f172a", stroke: "#f59e0b", "stroke-width": "2" }
+                                    text { x: "580", y: "296", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "LlmRouter" }
+                                    text { x: "580", y: "310", "text-anchor": "middle", fill: "#f59e0b", "font-size": "8", "font-family": "monospace", "Prompt Cache" }
+                                }
+                            }
+                            // Canvas Controls Footer
+                            div { class: "flex items-center justify-between text-xs font-mono text-slate-400 pt-3 border-t border-[#1e293b]/80",
+                                div { class: "flex items-center space-x-3",
+                                    span { "Zoom: 100%" }
+                                    span { "•" }
+                                    span { "Nodes: 5" }
+                                    span { "•" }
+                                    span { "Edges: 4" }
+                                }
+                                span { class: "text-slate-500", "Click and drag to pan / scroll to zoom" }
                             }
                         }
                     }

@@ -419,6 +419,63 @@ impl Embedder for NoopEmbedder {
     }
 }
 
+/// Unified local zero-API fast embed adapter (PRD #141 / Issue #142).
+/// Generates 384-dimensional normalized embeddings offline on CPU.
+#[derive(Debug, Clone)]
+pub struct LocalFastEmbedAdapter {
+    dim: usize,
+}
+
+impl Default for LocalFastEmbedAdapter {
+    fn default() -> Self {
+        Self { dim: 384 }
+    }
+}
+
+impl LocalFastEmbedAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Embedder for LocalFastEmbedAdapter {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        #[cfg(feature = "semantic-search")]
+        {
+            if let Ok(embedder) = FastEmbedder::new() {
+                return embedder.embed(text);
+            }
+        }
+
+        // Deterministic zero-API feature hashing fallback (384 dims, L2 normalized)
+        let mut vector = vec![0.0f32; self.dim];
+        let words = text.split_whitespace();
+        for word in words {
+            let hash = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                word.to_lowercase().hash(&mut hasher);
+                hasher.finish()
+            };
+            let idx = (hash as usize) % self.dim;
+            let sign = if (hash >> 32) & 1 == 0 { 1.0f32 } else { -1.0f32 };
+            vector[idx] += sign;
+        }
+
+        let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in &mut vector {
+                *x /= norm;
+            }
+        }
+        Ok(vector)
+    }
+
+    fn dimension(&self) -> usize {
+        self.dim
+    }
+}
+
 /// Local ONNX-runtime embedder using `fastembed`'s `all-MiniLM-L6-v2`
 /// quantised model (384 dims).
 ///
@@ -801,6 +858,29 @@ mod tests {
     fn is_available_reflects_feature_flag() {
         // `cfg!(feature = "semantic-search")` is the source of truth.
         assert_eq!(is_available(), cfg!(feature = "semantic-search"));
+    }
+
+    #[test]
+    fn test_local_fast_embed_adapter() -> Result<()> {
+        let adapter = LocalFastEmbedAdapter::new();
+        assert_eq!(adapter.dimension(), 384);
+
+        let v1 = adapter.embed("authentication token session")?;
+        let v2 = adapter.embed("authentication token login")?;
+        let v3 = adapter.embed("quantum physics astrophysics")?;
+
+        assert_eq!(v1.len(), 384);
+        assert_eq!(v2.len(), 384);
+        assert_eq!(v3.len(), 384);
+
+        let sim_related = cosine_similarity(&v1, &v2).unwrap_or(0.0);
+        let sim_unrelated = cosine_similarity(&v1, &v3).unwrap_or(0.0);
+
+        assert!(
+            sim_related > sim_unrelated,
+            "Related terms ({sim_related}) must score higher than unrelated ({sim_unrelated})"
+        );
+        Ok(())
     }
 
     // -- VectorIndex Tests
