@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- **Zero-API Local Vector Embeddings Adapter (`LocalFastEmbedAdapter`):** Added offline 384-dimensional vector embedding generation in `crates/cade-store` with cosine similarity search and SQLite `sqlite-vec` integration.
+- **Interactive Force-Directed 2D/3D Knowledge Graph Canvas:** Added hardware-accelerated physics SVG canvas in `crates/cade-gui` (`MemoryBlocksView`) with dynamic node repulsion, link springs, zoom/pan telemetry, and inline triple inspection.
+- **Multi-Model Arena Blind Battle & Elo Leaderboard Matrix:** Added blind A/B evaluation mode with masked model headers, winner voting, and persistent Elo rating calculations ($K=32$) with model win rates in `crates/cade-gui`.
+- **Native Desktop System Tray Status Manager:** Added `DesktopTrayManager` and `TrayStatus` (`Idle`, `Executing`, `ApprovalRequired`, `Error`) in `crates/cade-desktop` with full serialization support.
+- **Firecracker MicroVM Hypervisor Sandboxing Backend:** Added hardware-virtualized execution backend (`MicroVmBackend`) in `crates/cade-agent` utilizing Linux KVM and vsock duplex communication with automatic fallback.
+
 ## [0.2.5] - 2026-08-26
 
 ### Added
