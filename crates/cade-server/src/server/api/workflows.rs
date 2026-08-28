@@ -246,9 +246,22 @@ pub async fn dispatch_workflow(
         workflow_name, prompt_input
     );
 
-    let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let run_id = format!("wfrun-{}", uuid::Uuid::new_v4());
+    let run_row = match sqlite::create_run(&state.db, &agent_id, None) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to create run record: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
+    let execution_id = run_row.id.clone();
 
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let loop_run_id = execution_id.clone();
     let loop_state = state.clone();
     let loop_agent_id = agent_id.clone();
 
@@ -257,7 +270,7 @@ pub async fn dispatch_workflow(
             loop_state.clone(),
             loop_agent_id.clone(),
             None,
-            run_id,
+            loop_run_id,
             None,
             tx,
             prompt,
@@ -269,6 +282,7 @@ pub async fn dispatch_workflow(
         StatusCode::ACCEPTED,
         Json(json!({
             "status": "triggered",
+            "execution_id": execution_id,
             "workflow": workflow_name,
             "agent_id": agent_id,
             "message": "Workflow spawned and running asynchronously in background."
