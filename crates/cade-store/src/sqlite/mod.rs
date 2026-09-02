@@ -68,6 +68,14 @@ pub fn open(path: &str) -> Result<Db> {
         SqliteConnectionManager::file(path)
     }
     .with_init(|c| {
+        #[cfg(feature = "semantic-search")]
+        {
+            unsafe {
+                let _ = rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                    sqlite_vec::sqlite3_vec_init as *const (),
+                )));
+            }
+        }
         // Applied to every connection handed out by the pool.
         c.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",

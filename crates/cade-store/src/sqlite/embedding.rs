@@ -438,12 +438,34 @@ impl LocalFastEmbedAdapter {
     }
 }
 
+#[cfg(feature = "semantic-search")]
+static CACHED_FASTEMBEDDER: std::sync::OnceLock<Option<FastEmbedder>> = std::sync::OnceLock::new();
+
+#[cfg(feature = "semantic-search")]
+fn get_or_init_fastembedder() -> Option<&'static FastEmbedder> {
+    CACHED_FASTEMBEDDER
+        .get_or_init(|| {
+            match FastEmbedder::new() {
+                Ok(embedder) => Some(embedder),
+                Err(e) => {
+                    tracing::warn!(
+                        "LocalFastEmbedAdapter: fastembed init failed ({e}), falling back to deterministic feature hashing"
+                    );
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
 impl Embedder for LocalFastEmbedAdapter {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         #[cfg(feature = "semantic-search")]
         {
-            if let Ok(embedder) = FastEmbedder::new() {
-                return embedder.embed(text);
+            if let Some(embedder) = get_or_init_fastembedder() {
+                if let Ok(vec) = embedder.embed(text) {
+                    return Ok(vec);
+                }
             }
         }
 
@@ -469,6 +491,19 @@ impl Embedder for LocalFastEmbedAdapter {
             }
         }
         Ok(vector)
+    }
+
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        #[cfg(feature = "semantic-search")]
+        {
+            if let Some(embedder) = get_or_init_fastembedder() {
+                if let Ok(batch) = embedder.embed_batch(texts) {
+                    return Ok(batch);
+                }
+            }
+        }
+
+        texts.iter().map(|t| self.embed(t)).collect()
     }
 
     fn dimension(&self) -> usize {
@@ -880,6 +915,52 @@ mod tests {
             sim_related > sim_unrelated,
             "Related terms ({sim_related}) must score higher than unrelated ({sim_unrelated})"
         );
+
+        let batch = adapter.embed_batch(&["hello world", "rust systems programming"])?;
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].len(), 384);
+        assert_eq!(batch[1].len(), 384);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_backfill_embeddings_with_local_adapter() -> Result<()> {
+        let db = crate::sqlite::open(":memory:")?;
+
+        {
+            let conn = db.get()?;
+            conn.execute(
+                "INSERT INTO shared_memory_blocks (id, label, value, updated_at)
+                 VALUES ('b1', 'goal', 'finish local embeddings pipeline', 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO shared_memory_blocks (id, label, value, updated_at)
+                 VALUES ('b2', 'project', 'cade systems agent harness', 1000)",
+                [],
+            )?;
+        }
+
+        let adapter = LocalFastEmbedAdapter::new();
+        let count = backfill_embeddings(&db, &adapter)?;
+        assert_eq!(count, 2);
+
+        // Verify embeddings were populated
+        {
+            let conn = db.get()?;
+            let non_null_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM shared_memory_blocks WHERE embedding IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(non_null_count, 2);
+        }
+
+        // Running backfill again when all are populated should return 0
+        let count2 = backfill_embeddings(&db, &adapter)?;
+        assert_eq!(count2, 0);
+
         Ok(())
     }
 
