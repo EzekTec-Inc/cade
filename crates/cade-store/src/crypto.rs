@@ -234,21 +234,19 @@ pub fn decrypt(encoded: &str) -> Result<String> {
     // A plausible v2 blob must be long enough AND start with 0x02.
     if data.len() >= 30 && data[0] == KDF_V2_ARGON2ID {
         let (salt, rest) = data[1..].split_at(16);
-        if rest.len() < 12 {
-            return Err(Error::custom(
-                "Invalid encrypted data (v2): nonce too short".to_string(),
-            ));
+        if rest.len() >= 12 {
+            let (nonce_bytes, ciphertext) = rest.split_at(12);
+            if let Ok(key_bytes) = derive_key_argon2id(salt)
+                && let Ok(cipher) = Aes256Gcm::new_from_slice(&key_bytes)
+            {
+                let nonce = Nonce::from_slice(nonce_bytes);
+                if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext)
+                    && let Ok(s) = String::from_utf8(plaintext)
+                {
+                    return Ok(s);
+                }
+            }
         }
-        let (nonce_bytes, ciphertext) = rest.split_at(12);
-        let key_bytes = derive_key_argon2id(salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key_bytes)
-            .map_err(|e| Error::custom(format!("Cipher init failed: {e}")))?;
-        let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| Error::custom(format!("Decryption failed (v2): {e}")))?;
-        return String::from_utf8(plaintext)
-            .map_err(|e| Error::custom(format!("UTF-8 decode failed: {e}")));
     }
 
     // Legacy unprefixed salted format (pre-P2-2):
