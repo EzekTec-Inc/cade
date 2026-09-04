@@ -15,6 +15,7 @@ pub mod isolation;
 pub mod manager;
 pub mod memory;
 pub mod meta;
+pub mod pipeline;
 pub mod plan;
 pub mod runtime;
 pub mod search;
@@ -29,6 +30,9 @@ pub use manager::{
 pub use meta::{all_meta_schemas, register_meta_tools};
 pub use plan::{
     EnterPlanModeTool, ExitPlanModeTool, FinishTaskTool, SetPlanTool, TodoWriteTool, UpdatePlanTool,
+};
+pub use pipeline::{
+    ApprovalDelegate, AutoApprovalDelegate, DenyAllApprovalDelegate, PipelineOutcome, ToolPipeline,
 };
 pub use runtime::{RuntimeToolResult, ToolRuntime};
 
