@@ -47,7 +47,7 @@ impl ToolRuntime {
             return ("Error: 'query' cannot be empty".to_string(), true);
         }
 
-        let mut schemas = self.mcp.all_tool_schemas().await;
+        let mut schemas: Vec<Value> = self.mcp.all_tool_schemas().await;
         if schemas.is_empty()
             && let Ok(tools) = self.storage.list_tools().await
         {
