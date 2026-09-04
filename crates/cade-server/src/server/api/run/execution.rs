@@ -183,6 +183,28 @@ pub(super) async fn execute_turn_tools(
         std::env::current_dir().unwrap_or_default(),
     ));
 
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let hooks = if let Ok(settings) = cade_core::settings::SettingsManager::new(&cwd) {
+        Arc::new(cade_core::hooks::HookEngine::new(
+            settings.merged_hooks(),
+            cwd.clone(),
+            agent_id.clone(),
+        ))
+    } else {
+        Arc::new(cade_core::hooks::HookEngine::new(
+            cade_core::settings::HooksConfig::default(),
+            cwd.clone(),
+            agent_id.clone(),
+        ))
+    };
+    let permissions = cade_core::permissions::PermissionManager::new(cade_core::permissions::PermissionMode::Default);
+    let pipeline = Arc::new(cade_agent::tools::ToolPipeline::new(
+        runtime.clone(),
+        permissions,
+        hooks,
+        Arc::new(cade_agent::tools::AutoApprovalDelegate),
+    ));
+
     if !moa_tool_calls.is_empty() {
         let selected_agents = router.route(&router_req).unwrap_or_default();
         let mut execution_futures = Vec::new();
@@ -332,29 +354,31 @@ pub(super) async fn execute_turn_tools(
                 ui_resource_uri: None,
             })
         } else {
-            // ... other legacy tool handlers
-            let runtime_c = Arc::clone(&runtime);
+            // Unified execution via deep ToolPipeline seam
+            let pipeline_c = Arc::clone(&pipeline);
             let tool_call_id_c = tool_call_id.clone();
             let tool_name_c = tool_name.clone();
             let arguments_c = arguments.clone();
             let handle = tokio::spawn(async move {
-                runtime_c
-                    .execute(tool_call_id_c.clone(), &tool_name_c, &arguments_c)
+                match pipeline_c
+                    .execute(&tool_call_id_c, &tool_name_c, &arguments_c)
                     .await
-                    .map(|r| ToolResult {
-                        tool_call_id: r.tool_call_id,
-                        tool_name: r.tool_name,
-                        output: r.output,
-                        is_error: r.is_error,
-                        ui_resource_uri: r.ui_resource_uri,
-                    })
-                    .unwrap_or_else(|| ToolResult {
+                {
+                    Ok(outcome) => ToolResult {
+                        tool_call_id: outcome.tool_call_id,
+                        tool_name: outcome.tool_name,
+                        output: outcome.output,
+                        is_error: outcome.is_error,
+                        ui_resource_uri: outcome.ui_resource_uri,
+                    },
+                    Err(e) => ToolResult {
                         tool_call_id: tool_call_id_c,
                         tool_name: tool_name_c,
-                        output: "Tool execution failed".to_string(),
+                        output: format!("Tool execution error: {e}"),
                         is_error: true,
                         ui_resource_uri: None,
-                    })
+                    },
+                }
             });
             handle.await.unwrap_or_else(|e| ToolResult {
                 tool_call_id: tool_call_id.clone(),

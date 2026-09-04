@@ -13,11 +13,11 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use cade_core::hooks::{HooksConfig, runner::HookRunner};
+use cade_core::hooks::{HookEngine, HookOutcome};
 use cade_core::permissions::{PermissionManager, PermissionMode, Verdict, is_write_schema};
 
 use crate::tools::runtime::{RuntimeToolResult, ToolRuntime};
-use crate::{Error, Result};
+use crate::Result;
 
 // endregion: --- Imports
 
@@ -146,7 +146,7 @@ impl PipelineOutcome {
 pub struct ToolPipeline {
     runtime: Arc<ToolRuntime>,
     permissions: PermissionManager,
-    hooks: HooksConfig,
+    hooks: Arc<HookEngine>,
     approval_delegate: Arc<dyn ApprovalDelegate>,
 }
 
@@ -155,7 +155,7 @@ impl ToolPipeline {
     pub fn new(
         runtime: Arc<ToolRuntime>,
         permissions: PermissionManager,
-        hooks: HooksConfig,
+        hooks: Arc<HookEngine>,
         approval_delegate: Arc<dyn ApprovalDelegate>,
     ) -> Self {
         Self {
@@ -171,8 +171,8 @@ impl ToolPipeline {
         &self.permissions
     }
 
-    /// Access the underlying hooks configuration.
-    pub fn hooks(&self) -> &HooksConfig {
+    /// Access the underlying hook engine.
+    pub fn hooks(&self) -> &Arc<HookEngine> {
         &self.hooks
     }
 
@@ -205,7 +205,7 @@ impl ToolPipeline {
         let canonical = canonical_owned.as_str();
 
         // 2. Evaluate permission rules & plan-mode write blocking
-        let is_mcp_write = crate::tools::is_mcp_write_tool(canonical);
+        let is_mcp_write = crate::tools::is_mcp_write_tool(canonical, self.runtime.mcp()).await;
         let is_write = is_write_schema(canonical) || is_mcp_write;
 
         if self.permissions.mode() == PermissionMode::Plan && is_write {
@@ -273,44 +273,21 @@ impl ToolPipeline {
         }
 
         // 3. Execute PreToolUse hooks
-        let mut effective_args = arguments.clone();
-        let pre_hook_outcome = HookRunner::run_pre_tool_use(
-            &self.hooks,
-            tool_name,
-            &effective_args,
-            self.runtime.working_dir(),
-        )
-        .await;
+        let effective_args = arguments.clone();
+        let pre_hook_outcome = self.hooks.pre_tool_use(tool_name, &effective_args).await;
 
-        match pre_hook_outcome {
-            cade_core::hooks::runner::PreToolUseOutcome::Blocked { reason } => {
-                warn!(
-                    target: "cade_agent::pipeline",
-                    tool_name = %tool_name,
-                    reason = %reason,
-                    "Tool execution blocked by PreToolUse hook"
-                );
-                return Ok(PipelineOutcome::blocked(
-                    tool_call_id.to_string(),
-                    tool_name.to_string(),
-                    reason,
-                ));
-            }
-            cade_core::hooks::runner::PreToolUseOutcome::ProceedWithOverrides {
-                updated_input,
-                additional_context,
-            } => {
-                if let Some(new_input) = updated_input {
-                    effective_args = new_input;
-                }
-                if let Some(ctx) = additional_context {
-                    debug!(
-                        target: "cade_agent::pipeline",
-                        "PreToolUse hook injected additional context: {ctx}"
-                    );
-                }
-            }
-            cade_core::hooks::runner::PreToolUseOutcome::Proceed => {}
+        if let HookOutcome::Block { reason } = pre_hook_outcome {
+            warn!(
+                target: "cade_agent::pipeline",
+                tool_name = %tool_name,
+                reason = %reason,
+                "Tool execution blocked by PreToolUse hook"
+            );
+            return Ok(PipelineOutcome::blocked(
+                tool_call_id.to_string(),
+                tool_name.to_string(),
+                reason,
+            ));
         }
 
         // 4. Dispatch tool execution via ToolRuntime
@@ -319,7 +296,7 @@ impl ToolPipeline {
             .execute(tool_call_id.to_string(), canonical, &effective_args)
             .await;
 
-        let (output, is_error, ui_resource_uri) = match run_result {
+        let (mut output, is_error, ui_resource_uri) = match run_result {
             Some(RuntimeToolResult {
                 output,
                 is_error,
@@ -335,23 +312,18 @@ impl ToolPipeline {
 
         // 5. Execute PostToolUse or PostToolUseFailure hooks
         if is_error {
-            HookRunner::run_post_tool_use_failure(
-                &self.hooks,
-                tool_name,
-                &effective_args,
-                &output,
-                self.runtime.working_dir(),
-            )
-            .await;
-        } else {
-            HookRunner::run_post_tool_use(
-                &self.hooks,
-                tool_name,
-                &effective_args,
-                &output,
-                self.runtime.working_dir(),
-            )
-            .await;
+            self.hooks
+                .post_tool_use_failure(tool_name, &effective_args, &output, None, None)
+                .await;
+        } else if let Some(extra_context) = self
+            .hooks
+            .post_tool_use(tool_name, &effective_args, &output, None, None)
+            .await
+            && !extra_context.is_empty()
+        {
+            output.push_str("\n\n[Hook context: ");
+            output.push_str(&extra_context);
+            output.push(']');
         }
 
         Ok(PipelineOutcome {
@@ -375,52 +347,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    struct TestStorage;
-
-    #[async_trait::async_trait]
-    impl crate::tools::runtime::ToolStorageBackend for TestStorage {
-        async fn get_memory(&self, _agent_id: &str, _key: &str) -> Option<String> {
-            None
-        }
-        async fn set_memory(&self, _agent_id: &str, _key: &str, _value: &str) -> Result<()> {
-            Ok(())
-        }
-        async fn delete_memory(&self, _agent_id: &str, _key: &str) -> Result<()> {
-            Ok(())
-        }
-        async fn list_memories(
-            &self,
-            _agent_id: &str,
-        ) -> Vec<cade_core::settings::memory::MemoryBlock> {
-            Vec::new()
-        }
-        async fn log_tool_execution(
-            &self,
-            _agent_id: String,
-            _conversation_id: Option<String>,
-            _checkpoint_id: Option<String>,
-            _tool_call_id: String,
-            _tool_name: String,
-            _arguments: Value,
-            _output: String,
-            _is_error: bool,
-            _duration_ms: u64,
-        ) {
-        }
-        async fn call_mcp_tool(
-            &self,
-            _name: &str,
-            _arguments: &Value,
-        ) -> Result<(String, bool, Option<String>)> {
-            Ok(("mcp output".to_string(), false, None))
-        }
-    }
-
     fn create_test_pipeline(
         mode: PermissionMode,
         delegate: Arc<dyn ApprovalDelegate>,
-    ) -> ToolPipeline {
-        let storage = Arc::new(TestStorage);
+    ) -> Result<ToolPipeline> {
+        let storage = Arc::new(crate::agent::HttpTransport::new(
+            "http://localhost:0".to_string(),
+            "fake-key".to_string(),
+        )?);
         let mcp = Arc::new(crate::mcp::McpManager::empty());
         let runtime = Arc::new(ToolRuntime::new(
             storage,
@@ -429,8 +363,12 @@ mod tests {
             std::env::temp_dir(),
         ));
         let permissions = PermissionManager::new(mode);
-        let hooks = HooksConfig::default();
-        ToolPipeline::new(runtime, permissions, hooks, delegate)
+        let hooks = Arc::new(HookEngine::new(
+            cade_core::settings::HooksConfig::default(),
+            std::env::temp_dir(),
+            "test-session".to_string(),
+        ));
+        Ok(ToolPipeline::new(runtime, permissions, hooks, delegate))
     }
 
     #[tokio::test]
@@ -438,7 +376,7 @@ mod tests {
         let pipeline = create_test_pipeline(
             PermissionMode::Default,
             Arc::new(AutoApprovalDelegate),
-        );
+        )?;
         let outcome = pipeline
             .execute("call_1", "list_checkpoints", &json!({}))
             .await?;
@@ -454,7 +392,7 @@ mod tests {
         let pipeline = create_test_pipeline(
             PermissionMode::Plan,
             Arc::new(AutoApprovalDelegate),
-        );
+        )?;
         let outcome = pipeline
             .execute("call_2", "write_file", &json!({"path": "test.txt", "content": "abc"}))
             .await?;
@@ -470,7 +408,7 @@ mod tests {
         let pipeline = create_test_pipeline(
             PermissionMode::Default,
             Arc::new(DenyAllApprovalDelegate),
-        );
+        )?;
         let outcome = pipeline
             .execute("call_3", "write_file", &json!({"path": "test.txt", "content": "abc"}))
             .await?;

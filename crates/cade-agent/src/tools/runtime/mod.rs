@@ -121,6 +121,21 @@ impl ToolRuntime {
         self
     }
 
+    /// Access the working directory.
+    pub fn working_dir(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
+    /// Access the MCP manager reference.
+    pub fn mcp(&self) -> &Arc<McpManager> {
+        &self.mcp
+    }
+
+    /// Access the agent ID.
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+
     // -- Dispatch
 
     /// Dispatch a single tool call and return its output.
