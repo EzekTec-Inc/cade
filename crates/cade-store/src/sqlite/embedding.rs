@@ -480,7 +480,11 @@ impl Embedder for LocalFastEmbedAdapter {
                 hasher.finish()
             };
             let idx = (hash as usize) % self.dim;
-            let sign = if (hash >> 32) & 1 == 0 { 1.0f32 } else { -1.0f32 };
+            let sign = if (hash >> 32) & 1 == 0 {
+                1.0f32
+            } else {
+                -1.0f32
+            };
             vector[idx] += sign;
         }
 

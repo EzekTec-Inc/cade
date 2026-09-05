@@ -317,7 +317,11 @@ mod tests {
             feedback: Some("Proceed".to_string()),
         };
         match mutation {
-            ResourceMutation::SubmitApproval { approval_id, approved, feedback } => {
+            ResourceMutation::SubmitApproval {
+                approval_id,
+                approved,
+                feedback,
+            } => {
                 assert_eq!(approval_id, "appr-123");
                 assert!(approved);
                 assert_eq!(feedback.as_deref(), Some("Proceed"));

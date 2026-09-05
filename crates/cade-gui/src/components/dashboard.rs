@@ -357,7 +357,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{answer}");
     Ok(())
 }"#
-            .to_string(),
+        .to_string(),
         (0, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({ serverUrl: "http://localhost:8284" });
@@ -391,7 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Agent deployed: {}", session.agent_id());
     Ok(())
 }"#
-            .to_string(),
+        .to_string(),
         (1, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({
@@ -424,7 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Project Rules:\n{rules:?}");
     Ok(())
 }"#
-            .to_string(),
+        .to_string(),
         (_, CodeLanguage::Javascript) => r#"import { AgentSession } from "@ezektec/cade";
 
 const session = new AgentSession({ serverUrl: "http://localhost:8284" });

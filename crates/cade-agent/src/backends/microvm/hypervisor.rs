@@ -58,8 +58,8 @@ impl HypervisorProcess {
             let _ = std::fs::remove_file(&api_socket_path);
         }
 
-        let firecracker_bin = std::env::var("FIRECRACKER_BIN")
-            .unwrap_or_else(|_| "firecracker".to_string());
+        let firecracker_bin =
+            std::env::var("FIRECRACKER_BIN").unwrap_or_else(|_| "firecracker".to_string());
 
         debug!(
             socket = %api_socket_path.display(),

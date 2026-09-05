@@ -1,7 +1,12 @@
 //! Deep WorkflowEngine Execution Seam (PRD #99 / Issue #101).
 
-use cade_api_types::{WorkflowRunSummary, WorkflowStatus, WorkflowStepDef, WorkflowStepEvent, WorkflowSummary};
-use cade_store::sqlite::{Db, WorkflowRunRecord, create_workflow_run, get_workflow_run, list_workflow_runs, update_workflow_run_status, update_workflow_run_step};
+use cade_api_types::{
+    WorkflowRunSummary, WorkflowStatus, WorkflowStepDef, WorkflowStepEvent, WorkflowSummary,
+};
+use cade_store::sqlite::{
+    Db, WorkflowRunRecord, create_workflow_run, get_workflow_run, list_workflow_runs,
+    update_workflow_run_status, update_workflow_run_step,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -12,7 +17,8 @@ static WORKFLOW_STREAMS: OnceLock<RwLock<HashMap<String, broadcast::Sender<Workf
     OnceLock::new();
 static WORKFLOW_CANCELS: OnceLock<RwLock<HashMap<String, oneshot::Sender<()>>>> = OnceLock::new();
 
-fn get_workflow_streams() -> &'static RwLock<HashMap<String, broadcast::Sender<WorkflowStepEvent>>> {
+fn get_workflow_streams() -> &'static RwLock<HashMap<String, broadcast::Sender<WorkflowStepEvent>>>
+{
     WORKFLOW_STREAMS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -46,9 +52,13 @@ impl WorkflowEngine {
         let builtins = Self::builtin_workflows();
 
         for def in builtins {
-            let last_run = get_workflow_run(&self.db, &def.name).ok().flatten()
+            let last_run = get_workflow_run(&self.db, &def.name)
+                .ok()
+                .flatten()
                 .or_else(|| {
-                    list_workflow_runs(&self.db, Some(&def.name), 1).ok().and_then(|mut v| v.pop())
+                    list_workflow_runs(&self.db, Some(&def.name), 1)
+                        .ok()
+                        .and_then(|mut v| v.pop())
                 })
                 .map(|r| WorkflowRunSummary {
                     run_id: r.run_id,
@@ -81,7 +91,10 @@ impl WorkflowEngine {
     }
 
     /// Subscribe to real-time event broadcasts for an active workflow run.
-    pub async fn subscribe_events(&self, run_id: &str) -> Option<broadcast::Receiver<WorkflowStepEvent>> {
+    pub async fn subscribe_events(
+        &self,
+        run_id: &str,
+    ) -> Option<broadcast::Receiver<WorkflowStepEvent>> {
         let streams = get_workflow_streams().read().await;
         streams.get(run_id).map(|tx| tx.subscribe())
     }
@@ -91,7 +104,13 @@ impl WorkflowEngine {
         let mut cancels = get_workflow_cancels().write().await;
         if let Some(tx) = cancels.remove(run_id) {
             let _ = tx.send(());
-            let _ = update_workflow_run_status(&self.db, run_id, "cancelled", None, Some(chrono::Utc::now().timestamp()));
+            let _ = update_workflow_run_status(
+                &self.db,
+                run_id,
+                "cancelled",
+                None,
+                Some(chrono::Utc::now().timestamp()),
+            );
             true
         } else {
             false
@@ -173,11 +192,7 @@ impl WorkflowEngine {
             }
 
             let end_ts = chrono::Utc::now().timestamp();
-            let final_status = if step_failed {
-                "failed"
-            } else {
-                "succeeded"
-            };
+            let final_status = if step_failed { "failed" } else { "succeeded" };
 
             let _ = update_workflow_run_status(
                 &engine.db,
@@ -202,7 +217,8 @@ impl WorkflowEngine {
         vec![
             WorkflowDef {
                 name: "ci-validation".to_string(),
-                description: "Run cargo check, clippy -- -D warnings, and test suite verification".to_string(),
+                description: "Run cargo check, clippy -- -D warnings, and test suite verification"
+                    .to_string(),
                 steps: vec![
                     WorkflowStepDef {
                         name: "cargo-check".to_string(),
@@ -226,15 +242,14 @@ impl WorkflowEngine {
             },
             WorkflowDef {
                 name: "dependency-audit".to_string(),
-                description: "Audit workspace dependencies for security vulnerabilities".to_string(),
-                steps: vec![
-                    WorkflowStepDef {
-                        name: "cargo-audit".to_string(),
-                        agent: Some("security".to_string()),
-                        prompt: "Run cargo audit".to_string(),
-                        depends_on: vec![],
-                    },
-                ],
+                description: "Audit workspace dependencies for security vulnerabilities"
+                    .to_string(),
+                steps: vec![WorkflowStepDef {
+                    name: "cargo-audit".to_string(),
+                    agent: Some("security".to_string()),
+                    prompt: "Run cargo audit".to_string(),
+                    depends_on: vec![],
+                }],
             },
         ]
     }

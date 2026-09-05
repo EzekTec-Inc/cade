@@ -1,7 +1,7 @@
 //! Multi-Model Arena Matrix & Parallel Stream Multiplexer (PRD #128 / Issue #129).
 
-use dioxus::prelude::*;
 use crate::api_engine::ApiClientEngine;
+use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq)]
 pub struct ArenaLaneState {
@@ -27,38 +27,42 @@ pub fn ArenaView() -> Element {
     let mut show_diff = use_signal(|| false);
     let mut blind_mode = use_signal(|| false);
     let mut voted_winner = use_signal(|| Option::<usize>::None);
-    let elo_ratings = use_signal(|| vec![
-        ("claude-3-7-sonnet", 1350usize, 42usize, "88%"),
-        ("gpt-4o", 1310usize, 38usize, "82%"),
-        ("gemini-2.5-pro", 1280usize, 29usize, "76%"),
-        ("deepseek-r1", 1250usize, 22usize, "71%"),
-        ("claude-3-5-haiku", 1190usize, 18usize, "64%"),
-    ]);
+    let elo_ratings = use_signal(|| {
+        vec![
+            ("claude-3-7-sonnet", 1350usize, 42usize, "88%"),
+            ("gpt-4o", 1310usize, 38usize, "82%"),
+            ("gemini-2.5-pro", 1280usize, 29usize, "76%"),
+            ("deepseek-r1", 1250usize, 22usize, "71%"),
+            ("claude-3-5-haiku", 1190usize, 18usize, "64%"),
+        ]
+    });
 
-    let mut lanes = use_signal(|| vec![
-        ArenaLaneState {
-            id: 1,
-            agent_id: String::new(),
-            agent_name: "Model Lane A".to_string(),
-            model: "claude-3-5-sonnet".to_string(),
-            content: String::new(),
-            is_streaming: false,
-            latency_ms: 0,
-            token_count: 0,
-            status: "Idle".to_string(),
-        },
-        ArenaLaneState {
-            id: 2,
-            agent_id: String::new(),
-            agent_name: "Model Lane B".to_string(),
-            model: "gpt-4o".to_string(),
-            content: String::new(),
-            is_streaming: false,
-            latency_ms: 0,
-            token_count: 0,
-            status: "Idle".to_string(),
-        },
-    ]);
+    let mut lanes = use_signal(|| {
+        vec![
+            ArenaLaneState {
+                id: 1,
+                agent_id: String::new(),
+                agent_name: "Model Lane A".to_string(),
+                model: "claude-3-5-sonnet".to_string(),
+                content: String::new(),
+                is_streaming: false,
+                latency_ms: 0,
+                token_count: 0,
+                status: "Idle".to_string(),
+            },
+            ArenaLaneState {
+                id: 2,
+                agent_id: String::new(),
+                agent_name: "Model Lane B".to_string(),
+                model: "gpt-4o".to_string(),
+                content: String::new(),
+                is_streaming: false,
+                latency_ms: 0,
+                token_count: 0,
+                status: "Idle".to_string(),
+            },
+        ]
+    });
 
     // Populate initial agent list
     let eng_effect = engine.clone();
@@ -75,11 +79,17 @@ pub fn ArenaView() -> Element {
                 if current.len() >= 2 && list.len() >= 2 {
                     current[0].agent_id = list[0].id.clone();
                     current[0].agent_name = list[0].name.clone();
-                    current[0].model = list[0].model.clone().unwrap_or_else(|| "claude-3-5-sonnet".to_string());
-                    
+                    current[0].model = list[0]
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "claude-3-5-sonnet".to_string());
+
                     current[1].agent_id = list[1].id.clone();
                     current[1].agent_name = list[1].name.clone();
-                    current[1].model = list[1].model.clone().unwrap_or_else(|| "gpt-4o".to_string());
+                    current[1].model = list[1]
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "gpt-4o".to_string());
                     lns.set(current);
                 } else if !current.is_empty() {
                     current[0].agent_id = list[0].id.clone();
@@ -94,10 +104,21 @@ pub fn ArenaView() -> Element {
         let mut cur = lanes();
         if cur.len() < 4 {
             let next_id = cur.len() + 1;
-            let available_agent = agents_list().into_iter().nth(cur.len()).or_else(|| agents_list().first().cloned());
+            let available_agent = agents_list()
+                .into_iter()
+                .nth(cur.len())
+                .or_else(|| agents_list().first().cloned());
             let (aid, aname, amodel) = match available_agent {
-                Some(a) => (a.id, a.name, a.model.unwrap_or_else(|| "default".to_string())),
-                None => (String::new(), format!("Model Lane {next_id}"), "default".to_string()),
+                Some(a) => (
+                    a.id,
+                    a.name,
+                    a.model.unwrap_or_else(|| "default".to_string()),
+                ),
+                None => (
+                    String::new(),
+                    format!("Model Lane {next_id}"),
+                    "default".to_string(),
+                ),
             };
             cur.push(ArenaLaneState {
                 id: next_id,
@@ -163,23 +184,25 @@ pub fn ArenaView() -> Element {
                     return;
                 }
 
-                let stream_res = api_client.stream_messages(
-                    &aid,
-                    &prompt_text,
-                    None,
-                    None,
-                    move |event: cade_api_types::StreamEvent| {
-                        if let Some(delta) = event.content() {
-                            let mut current = lns_sig();
-                            if let Some(idx) = current.iter().position(|l| l.id == lane_id) {
-                                current[idx].content.push_str(delta);
-                                current[idx].token_count += delta.len() / 4 + 1;
-                                current[idx].latency_ms = (js_sys::Date::now() - start) as u64;
+                let stream_res = api_client
+                    .stream_messages(
+                        &aid,
+                        &prompt_text,
+                        None,
+                        None,
+                        move |event: cade_api_types::StreamEvent| {
+                            if let Some(delta) = event.content() {
+                                let mut current = lns_sig();
+                                if let Some(idx) = current.iter().position(|l| l.id == lane_id) {
+                                    current[idx].content.push_str(delta);
+                                    current[idx].token_count += delta.len() / 4 + 1;
+                                    current[idx].latency_ms = (js_sys::Date::now() - start) as u64;
+                                }
+                                lns_sig.set(current);
                             }
-                            lns_sig.set(current);
-                        }
-                    },
-                ).await;
+                        },
+                    )
+                    .await;
 
                 let end = js_sys::Date::now();
                 let mut current = lns_sig();

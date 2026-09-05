@@ -64,7 +64,9 @@ impl IsolatedWorkspaceGuard {
 impl Drop for IsolatedWorkspaceGuard {
     fn drop(&mut self) {
         if !self.committed && self.workspace.is_some() {
-            tracing::debug!("Isolated workspace dropped without commit — temporary sandbox discarded cleanly");
+            tracing::debug!(
+                "Isolated workspace dropped without commit — temporary sandbox discarded cleanly"
+            );
         }
     }
 }

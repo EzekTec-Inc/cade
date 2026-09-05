@@ -592,35 +592,222 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::backends::storage::StorageBackend for MockRemoteMcpStorage {
-        async fn get_memory(&self, _agent_id: &str) -> crate::Result<Vec<crate::agent::client::MemoryBlock>> { Ok(vec![]) }
-        async fn delete_memory(&self, _agent_id: &str, _label: &str) -> crate::Result<()> { Ok(()) }
-        async fn upsert_memory_with_limit(&self, _agent_id: &str, _label: &str, _value: &str, _desc: Option<&str>, _limit: Option<usize>) -> crate::Result<()> { Ok(()) }
-        async fn upsert_memory_with_options(&self, _agent_id: &str, _label: &str, _value: &str, _desc: Option<&str>, _limit: Option<usize>, _memory_type: Option<&str>, _confidence: Option<f64>) -> crate::Result<()> { Ok(()) }
-        async fn search_memory(&self, _agent_id: &str, _query: &str, _memory_type: Option<&str>) -> crate::Result<Vec<serde_json::Value>> { Ok(vec![]) }
-        async fn conversation_search(&self, _agent_id: &str, _keyword: &str, _limit: Option<usize>) -> crate::Result<Vec<serde_json::Value>> { Ok(vec![]) }
-        async fn archival_memory_insert(&self, _agent_id: &str, _content: &str, _tags: Option<&[String]>) -> crate::Result<String> { Ok(String::new()) }
-        async fn archival_memory_search(&self, _agent_id: &str, _keyword: &str, _limit: Option<usize>) -> crate::Result<Vec<serde_json::Value>> { Ok(vec![]) }
-        async fn query_event_log(&self, _agent_id: &str, _keyword: &str, _limit: Option<usize>) -> crate::Result<Vec<serde_json::Value>> { Ok(vec![]) }
-        async fn recall(&self, _agent_id: &str, _query: &str, _limit: Option<usize>) -> crate::Result<Vec<serde_json::Value>> { Ok(vec![]) }
-        async fn add_memory_evidence(&self, _agent_id: &str, _label: &str, _kind: &str, _reference: &str, _excerpt: Option<&str>) -> crate::Result<()> { Ok(()) }
-        async fn trigger_reflect(&self, _agent_id: &str, _focus: Option<&str>) -> crate::Result<()> { Ok(()) }
-        async fn record_recent_edit(&self, _agent_id: &str, _path: &str) -> crate::Result<()> { Ok(()) }
-        async fn store_artifact(&self, _agent_id: &str, _kind: &str, _content_type: &str, _text: Option<&str>, _blob: Option<&[u8]>, _metadata: Option<&serde_json::Value>) -> crate::Result<String> { Ok(String::new()) }
-        async fn install_plugin(&self, _agent_id: &str, _url: &str, _plugin_id: &str) -> crate::Result<String> { Ok(String::new()) }
-        async fn install_skill(&self, _agent_id: &str, _url: &str, _scope: &str, _skill_name: Option<&str>) -> crate::Result<String> { Ok(String::new()) }
-        async fn run_skill_script(&self, _agent_id: &str, _skill_id: &str, _script_name: &str, _args: Option<&[String]>, _cwd: &std::path::Path) -> crate::Result<String> { Ok(String::new()) }
-        async fn load_skill_ref(&self, _agent_id: &str, _skill_id: &str, _doc_name: &str) -> crate::Result<String> { Ok(String::new()) }
-        async fn create_checkpoint(&self, _agent_id: &str, _conversation_id: Option<&str>, _branch_id: Option<&str>, _label: Option<&str>, _desc: Option<&str>, _git_commit_hash: Option<&str>) -> crate::Result<String> { Ok(String::new()) }
-        async fn get_checkpoint(&self, _agent_id: &str, _checkpoint_id: &str) -> crate::Result<serde_json::Value> { Ok(serde_json::json!({})) }
-        async fn list_checkpoints(&self, _agent_id: &str) -> crate::Result<Vec<serde_json::Value>> { Ok(vec![]) }
-        async fn restore_checkpoint(&self, _agent_id: &str, _checkpoint_id: &str) -> crate::Result<()> { Ok(()) }
-        async fn list_agents(&self) -> crate::Result<Vec<crate::agent::client::AgentState>> { Ok(vec![]) }
-        async fn message_agent(&self, _agent_id: &str, _target: &str, _message: &str) -> crate::Result<String> { Ok(String::new()) }
-        async fn log_tool_execution_spawn(&self, _agent_id: String, _conversation_id: Option<String>, _checkpoint_id: Option<String>, _tool_call_id: String, _tool_name: String, _arguments: serde_json::Value, _output: String, _is_error: bool, _duration_ms: u64) {}
-        async fn stamp_provenance(&self, _agent_id: &str, _label: &str, _tool_call_id: Option<&str>) -> crate::Result<()> { Ok(()) }
-        async fn call_mcp_tool(&self, name: &str, _arguments: &serde_json::Value) -> crate::Result<(String, bool, Option<String>)> {
+        async fn get_memory(
+            &self,
+            _agent_id: &str,
+        ) -> crate::Result<Vec<crate::agent::client::MemoryBlock>> {
+            Ok(vec![])
+        }
+        async fn delete_memory(&self, _agent_id: &str, _label: &str) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn upsert_memory_with_limit(
+            &self,
+            _agent_id: &str,
+            _label: &str,
+            _value: &str,
+            _desc: Option<&str>,
+            _limit: Option<usize>,
+        ) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn upsert_memory_with_options(
+            &self,
+            _agent_id: &str,
+            _label: &str,
+            _value: &str,
+            _desc: Option<&str>,
+            _limit: Option<usize>,
+            _memory_type: Option<&str>,
+            _confidence: Option<f64>,
+        ) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn search_memory(
+            &self,
+            _agent_id: &str,
+            _query: &str,
+            _memory_type: Option<&str>,
+        ) -> crate::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn conversation_search(
+            &self,
+            _agent_id: &str,
+            _keyword: &str,
+            _limit: Option<usize>,
+        ) -> crate::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn archival_memory_insert(
+            &self,
+            _agent_id: &str,
+            _content: &str,
+            _tags: Option<&[String]>,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn archival_memory_search(
+            &self,
+            _agent_id: &str,
+            _keyword: &str,
+            _limit: Option<usize>,
+        ) -> crate::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn query_event_log(
+            &self,
+            _agent_id: &str,
+            _keyword: &str,
+            _limit: Option<usize>,
+        ) -> crate::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn recall(
+            &self,
+            _agent_id: &str,
+            _query: &str,
+            _limit: Option<usize>,
+        ) -> crate::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn add_memory_evidence(
+            &self,
+            _agent_id: &str,
+            _label: &str,
+            _kind: &str,
+            _reference: &str,
+            _excerpt: Option<&str>,
+        ) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn trigger_reflect(
+            &self,
+            _agent_id: &str,
+            _focus: Option<&str>,
+        ) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn record_recent_edit(&self, _agent_id: &str, _path: &str) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn store_artifact(
+            &self,
+            _agent_id: &str,
+            _kind: &str,
+            _content_type: &str,
+            _text: Option<&str>,
+            _blob: Option<&[u8]>,
+            _metadata: Option<&serde_json::Value>,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn install_plugin(
+            &self,
+            _agent_id: &str,
+            _url: &str,
+            _plugin_id: &str,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn install_skill(
+            &self,
+            _agent_id: &str,
+            _url: &str,
+            _scope: &str,
+            _skill_name: Option<&str>,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn run_skill_script(
+            &self,
+            _agent_id: &str,
+            _skill_id: &str,
+            _script_name: &str,
+            _args: Option<&[String]>,
+            _cwd: &std::path::Path,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn load_skill_ref(
+            &self,
+            _agent_id: &str,
+            _skill_id: &str,
+            _doc_name: &str,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn create_checkpoint(
+            &self,
+            _agent_id: &str,
+            _conversation_id: Option<&str>,
+            _branch_id: Option<&str>,
+            _label: Option<&str>,
+            _desc: Option<&str>,
+            _git_commit_hash: Option<&str>,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn get_checkpoint(
+            &self,
+            _agent_id: &str,
+            _checkpoint_id: &str,
+        ) -> crate::Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+        async fn list_checkpoints(&self, _agent_id: &str) -> crate::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn restore_checkpoint(
+            &self,
+            _agent_id: &str,
+            _checkpoint_id: &str,
+        ) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn list_agents(&self) -> crate::Result<Vec<crate::agent::client::AgentState>> {
+            Ok(vec![])
+        }
+        async fn message_agent(
+            &self,
+            _agent_id: &str,
+            _target: &str,
+            _message: &str,
+        ) -> crate::Result<String> {
+            Ok(String::new())
+        }
+        async fn log_tool_execution_spawn(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _checkpoint_id: Option<String>,
+            _tool_call_id: String,
+            _tool_name: String,
+            _arguments: serde_json::Value,
+            _output: String,
+            _is_error: bool,
+            _duration_ms: u64,
+        ) {
+        }
+        async fn stamp_provenance(
+            &self,
+            _agent_id: &str,
+            _label: &str,
+            _tool_call_id: Option<&str>,
+        ) -> crate::Result<()> {
+            Ok(())
+        }
+        async fn call_mcp_tool(
+            &self,
+            name: &str,
+            _arguments: &serde_json::Value,
+        ) -> crate::Result<(String, bool, Option<String>)> {
             if name == self.expected_name {
-                Ok((self.return_output.clone(), false, Some("ui://test".to_string())))
+                Ok((
+                    self.return_output.clone(),
+                    false,
+                    Some("ui://test".to_string()),
+                ))
             } else {
                 Err(crate::Error::custom("tool not found"))
             }

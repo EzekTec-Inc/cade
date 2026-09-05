@@ -149,7 +149,10 @@ impl SubagentEventEmitter {
         }
     }
 
-    pub fn with_broadcast(mut self, broadcast_tx: tokio::sync::broadcast::Sender<SubagentEvent>) -> Self {
+    pub fn with_broadcast(
+        mut self,
+        broadcast_tx: tokio::sync::broadcast::Sender<SubagentEvent>,
+    ) -> Self {
         self.broadcast_tx = Some(broadcast_tx);
         self
     }
@@ -518,7 +521,13 @@ mod tests {
         let mut session = SubagentSession::new(config, "parent-agent-123");
 
         assert!(session.findings().is_empty());
-        session.record_finding("api_convention", "REST with JSON", "Discovered in repo", "convention", 0.95);
+        session.record_finding(
+            "api_convention",
+            "REST with JSON",
+            "Discovered in repo",
+            "convention",
+            0.95,
+        );
 
         assert_eq!(session.findings().len(), 1);
         let finding = &session.findings()[0];
@@ -533,12 +542,21 @@ mod tests {
         let mut brx2 = btx.subscribe();
 
         let emitter = SubagentEventEmitter::noop().with_broadcast(btx);
-        emitter.emit(SubagentEvent::Thought { text: "Analyzing code...".to_string() }).await;
+        emitter
+            .emit(SubagentEvent::Thought {
+                text: "Analyzing code...".to_string(),
+            })
+            .await;
 
         let e1 = brx1.recv().await.expect("Subscriber 1 received event");
         let e2 = brx2.recv().await.expect("Subscriber 2 received event");
 
-        assert_eq!(e1, SubagentEvent::Thought { text: "Analyzing code...".to_string() });
+        assert_eq!(
+            e1,
+            SubagentEvent::Thought {
+                text: "Analyzing code...".to_string()
+            }
+        );
         assert_eq!(e2, e1);
     }
 
@@ -549,15 +567,12 @@ mod tests {
 
         let approval_task = tokio::spawn(async move {
             channel
-                .request_approval(
-                    "appr-1",
-                    "write_file",
-                    &json!({ "path": "src/main.rs" }),
-                )
+                .request_approval("appr-1", "write_file", &json!({ "path": "src/main.rs" }))
                 .await
         });
 
-        let (appr_id, tool_name, args, responder) = rx.recv().await.expect("Received approval request");
+        let (appr_id, tool_name, args, responder) =
+            rx.recv().await.expect("Received approval request");
         assert_eq!(appr_id, "appr-1");
         assert_eq!(tool_name, "write_file");
         assert_eq!(args["path"], "src/main.rs");
@@ -569,7 +584,10 @@ mod tests {
             })
             .expect("Sent approval");
 
-        let verdict = approval_task.await.expect("Task completed").expect("Approval succeeded");
+        let verdict = approval_task
+            .await
+            .expect("Task completed")
+            .expect("Approval succeeded");
         assert!(verdict.approved);
         assert_eq!(verdict.feedback.as_deref(), Some("Approved with caution"));
     }

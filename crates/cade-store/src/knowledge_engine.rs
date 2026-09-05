@@ -15,10 +15,9 @@ use crate::sqlite::Db;
 use crate::sqlite::embedding::Embedder;
 use crate::sqlite::knowledge::insert_knowledge_edge;
 use crate::sqlite::memory::{
-    RecalledChunk, decay_stale_memories, delete_memory_block,
-    get_active_blocks, get_long_term_excerpts, get_turn_counter,
-    promote_stale_blocks, recall_chunks_hybrid, stamp_provenance,
-    upsert_memory_block_with_embedder,
+    RecalledChunk, decay_stale_memories, delete_memory_block, get_active_blocks,
+    get_long_term_excerpts, get_turn_counter, promote_stale_blocks, recall_chunks_hybrid,
+    stamp_provenance, upsert_memory_block_with_embedder,
 };
 
 // endregion: --- Imports
@@ -179,7 +178,12 @@ impl KnowledgeEngine {
     }
 
     /// Recall relevant facts and active context matching a natural language query within a token budget.
-    pub async fn recall(&self, agent_id: &str, query: &str, token_budget: usize) -> Result<RecallOutput> {
+    pub async fn recall(
+        &self,
+        agent_id: &str,
+        query: &str,
+        token_budget: usize,
+    ) -> Result<RecallOutput> {
         debug!(
             target: "cade_store::knowledge",
             agent_id = %agent_id,
@@ -201,13 +205,15 @@ impl KnowledgeEngine {
         let raw_active = get_active_blocks(&self.db, agent_id)?;
         let active_blocks: Vec<ActiveMemoryBlock> = raw_active
             .into_iter()
-            .map(|(label, value, description, tier, last_turn)| ActiveMemoryBlock {
-                label,
-                value,
-                description,
-                tier,
-                last_turn,
-            })
+            .map(
+                |(label, value, description, tier, last_turn)| ActiveMemoryBlock {
+                    label,
+                    value,
+                    description,
+                    tier,
+                    last_turn,
+                },
+            )
             .collect();
 
         let current_turn = get_turn_counter(&self.db, agent_id)?;
@@ -279,12 +285,7 @@ impl KnowledgeEngine {
     }
 
     /// Create an explicit semantic edge in the knowledge graph between two entities.
-    pub async fn link_knowledge(
-        &self,
-        entity: &str,
-        relation: &str,
-        target: &str,
-    ) -> Result<()> {
+    pub async fn link_knowledge(&self, entity: &str, relation: &str, target: &str) -> Result<()> {
         let embedder_ref = self.embedder.as_deref();
         insert_knowledge_edge(&self.db, entity, relation, target, embedder_ref)
     }
@@ -299,13 +300,15 @@ impl KnowledgeEngine {
         let raw = get_active_blocks(&self.db, agent_id)?;
         Ok(raw
             .into_iter()
-            .map(|(label, value, description, tier, last_turn)| ActiveMemoryBlock {
-                label,
-                value,
-                description,
-                tier,
-                last_turn,
-            })
+            .map(
+                |(label, value, description, tier, last_turn)| ActiveMemoryBlock {
+                    label,
+                    value,
+                    description,
+                    tier,
+                    last_turn,
+                },
+            )
             .collect())
     }
 }
@@ -328,7 +331,14 @@ mod tests {
         conn.execute(
             "INSERT INTO agents (id, name, model, description, system_prompt, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![agent_id, "Test Agent", "test-model", "Test Desc", "Prompt", 0],
+            rusqlite::params![
+                agent_id,
+                "Test Agent",
+                "test-model",
+                "Test Desc",
+                "Prompt",
+                0
+            ],
         )?;
         Ok(())
     }
@@ -339,14 +349,19 @@ mod tests {
         let agent_id = "test-agent-1";
         create_test_agent(engine.db(), agent_id)?;
 
-        let fact = FactInput::new("user_preference", "User prefers strict Rust10x error handling with no unwrap.")
-            .with_type("convention")
-            .with_confidence(0.95);
+        let fact = FactInput::new(
+            "user_preference",
+            "User prefers strict Rust10x error handling with no unwrap.",
+        )
+        .with_type("convention")
+        .with_confidence(0.95);
 
         let label = engine.remember(agent_id, fact).await?;
         assert_eq!(label, "user_preference");
 
-        let recall_out = engine.recall(agent_id, "Rust10x error handling", 2000).await?;
+        let recall_out = engine
+            .recall(agent_id, "Rust10x error handling", 2000)
+            .await?;
         assert!(!recall_out.active_blocks.is_empty());
         assert_eq!(recall_out.active_blocks[0].label, "user_preference");
         assert!(recall_out.formatted_prompt.contains("user_preference"));
@@ -361,7 +376,12 @@ mod tests {
         let agent_id = "test-agent-2";
         create_test_agent(engine.db(), agent_id)?;
 
-        engine.remember(agent_id, FactInput::new("temp_goal", "Refactor memory subsystem")).await?;
+        engine
+            .remember(
+                agent_id,
+                FactInput::new("temp_goal", "Refactor memory subsystem"),
+            )
+            .await?;
 
         let active = engine.list_active(agent_id).await?;
         assert_eq!(active.len(), 1);

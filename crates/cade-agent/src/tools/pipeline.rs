@@ -9,15 +9,15 @@
 
 // region:    --- Imports
 
-use std::sync::Arc;
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use cade_core::hooks::{HookEngine, HookOutcome};
 use cade_core::permissions::{PermissionManager, PermissionMode, Verdict, is_write_schema};
 
-use crate::tools::runtime::{RuntimeToolResult, ToolRuntime};
 use crate::Result;
+use crate::tools::runtime::{RuntimeToolResult, ToolRuntime};
 
 // endregion: --- Imports
 
@@ -373,10 +373,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_auto_approved_read_tool() -> Result<()> {
-        let pipeline = create_test_pipeline(
-            PermissionMode::Default,
-            Arc::new(AutoApprovalDelegate),
-        )?;
+        let pipeline =
+            create_test_pipeline(PermissionMode::Default, Arc::new(AutoApprovalDelegate))?;
         let outcome = pipeline
             .execute("call_1", "list_checkpoints", &json!({}))
             .await?;
@@ -389,12 +387,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_mode_blocks_write_tool() -> Result<()> {
-        let pipeline = create_test_pipeline(
-            PermissionMode::Plan,
-            Arc::new(AutoApprovalDelegate),
-        )?;
+        let pipeline = create_test_pipeline(PermissionMode::Plan, Arc::new(AutoApprovalDelegate))?;
         let outcome = pipeline
-            .execute("call_2", "write_file", &json!({"path": "test.txt", "content": "abc"}))
+            .execute(
+                "call_2",
+                "write_file",
+                &json!({"path": "test.txt", "content": "abc"}),
+            )
             .await?;
 
         assert!(outcome.permission_denied);
@@ -405,12 +404,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_delegate_denial_blocks_execution() -> Result<()> {
-        let pipeline = create_test_pipeline(
-            PermissionMode::Default,
-            Arc::new(DenyAllApprovalDelegate),
-        )?;
+        let pipeline =
+            create_test_pipeline(PermissionMode::Default, Arc::new(DenyAllApprovalDelegate))?;
         let outcome = pipeline
-            .execute("call_3", "write_file", &json!({"path": "test.txt", "content": "abc"}))
+            .execute(
+                "call_3",
+                "write_file",
+                &json!({"path": "test.txt", "content": "abc"}),
+            )
             .await?;
 
         assert!(outcome.permission_denied);

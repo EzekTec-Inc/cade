@@ -658,11 +658,11 @@ mod tests {
 
     #[test]
     fn plain_text_body_is_included() {
-        let msg = format_status_error(
-            reqwest::StatusCode::BAD_GATEWAY,
-            "upstream connect error\n",
+        let msg = format_status_error(reqwest::StatusCode::BAD_GATEWAY, "upstream connect error\n");
+        assert_eq!(
+            msg,
+            "Server returned HTTP 502 Bad Gateway: upstream connect error"
         );
-        assert_eq!(msg, "Server returned HTTP 502 Bad Gateway: upstream connect error");
     }
 
     #[test]

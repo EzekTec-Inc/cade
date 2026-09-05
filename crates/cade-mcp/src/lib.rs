@@ -17,12 +17,12 @@ pub use error::{Error, Result};
 pub use schema::{McpToolSchema, ToolSchemaNormalizer};
 pub use transport::{HttpTransportAdapter, SingletonProcessGuard, StdioTransportAdapter};
 
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
-use serde_json::Value;
 
 use rmcp::{
     RoleClient,
@@ -313,14 +313,13 @@ impl McpManager {
                     warn!("MCP server '{key}' failed to start during reload: {msg}");
                     summary.failed.push(key.clone());
                     if let Some(ref mut cb) = on_progress {
-                        cb(McpStartResult::Failed {
-                            key,
-                            error: msg,
-                        });
+                        cb(McpStartResult::Failed { key, error: msg });
                     }
                 }
                 Err(_) => {
-                    warn!("MCP server '{key}' timed out during reload ({MCP_SERVER_TIMEOUT_SECS}s)");
+                    warn!(
+                        "MCP server '{key}' timed out during reload ({MCP_SERVER_TIMEOUT_SECS}s)"
+                    );
                     summary.failed.push(key.clone());
                     if let Some(ref mut cb) = on_progress {
                         cb(McpStartResult::Timeout {
@@ -407,7 +406,11 @@ impl McpManager {
     async fn find_tool_idx(&self, prefixed_name: &str) -> Option<(usize, bool)> {
         let servers = self.servers.read().await;
         for (i, server) in servers.iter().enumerate() {
-            if let Some(tool) = server.tools.iter().find(|t| t.prefixed_name == prefixed_name) {
+            if let Some(tool) = server
+                .tools
+                .iter()
+                .find(|t| t.prefixed_name == prefixed_name)
+            {
                 return Some((i, tool.is_write));
             }
         }
@@ -482,9 +485,7 @@ impl McpManager {
             return Some(Err(Error::custom(error_msg)));
         }
 
-        warn!(
-            "MCP server call failed for '{prefixed_name}': {error_msg} — attempting reconnect"
-        );
+        warn!("MCP server call failed for '{prefixed_name}': {error_msg} — attempting reconnect");
 
         for attempt in 1..=MAX_RECONNECT_ATTEMPTS {
             warn!(
@@ -589,9 +590,11 @@ impl McpManager {
     async fn connect_server(key: &str, config: &McpServerConfig) -> Result<McpServer> {
         if let Some(url) = &config.url {
             let (service, peer) = HttpTransportAdapter::connect(key, config, url).await?;
-            Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}"), None).await
+            Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}"), None)
+                .await
         } else {
-            let (service, peer, singleton_guard) = StdioTransportAdapter::connect(key, config).await?;
+            let (service, peer, singleton_guard) =
+                StdioTransportAdapter::connect(key, config).await?;
             Self::build_server_from_peer(
                 key,
                 config,
@@ -667,10 +670,12 @@ impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
                         err_str,
                     ))
                 } else {
-                    Err(cade_core::capabilities::mesh::ExecutionError::ExecutionFailed(
-                        intent.capability_name,
-                        err_str,
-                    ))
+                    Err(
+                        cade_core::capabilities::mesh::ExecutionError::ExecutionFailed(
+                            intent.capability_name,
+                            err_str,
+                        ),
+                    )
                 }
             }
             None => Err(cade_core::capabilities::mesh::ExecutionError::NotFound(

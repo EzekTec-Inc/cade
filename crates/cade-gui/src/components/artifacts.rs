@@ -1,7 +1,7 @@
 //! Live Artifact Studio & Interactive Diff/Data Explorer (PRD #128 / Issue #131).
 
-use dioxus::prelude::*;
 use crate::types::AppState;
+use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq)]
 pub enum ArtifactType {
@@ -91,13 +91,25 @@ pub fn ArtifactStudioView() -> Element {
     let query = filter_query().to_lowercase();
     let filtered_artifacts: Vec<ArtifactItem> = detected_artifacts
         .into_iter()
-        .filter(|a| query.is_empty() || a.title.to_lowercase().contains(&query) || a.content.to_lowercase().contains(&query))
+        .filter(|a| {
+            query.is_empty()
+                || a.title.to_lowercase().contains(&query)
+                || a.content.to_lowercase().contains(&query)
+        })
         .collect();
 
-    let active_artifact = filtered_artifacts.get(selected_tab()).cloned().or_else(|| filtered_artifacts.first().cloned());
+    let active_artifact = filtered_artifacts
+        .get(selected_tab())
+        .cloned()
+        .or_else(|| filtered_artifacts.first().cloned());
     let (has_active, active_title, active_content, active_type) = match active_artifact {
         Some(art) => (true, art.title, art.content, art.artifact_type),
-        None => (false, String::new(), String::new(), ArtifactType::MarkdownDoc),
+        None => (
+            false,
+            String::new(),
+            String::new(),
+            ArtifactType::MarkdownDoc,
+        ),
     };
 
     rsx! {

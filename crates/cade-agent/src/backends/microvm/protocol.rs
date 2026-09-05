@@ -72,8 +72,8 @@ pub async fn send_request<W: AsyncWrite + Unpin>(
     writer: &mut W,
     req: &GuestRequest,
 ) -> io::Result<()> {
-    let payload = serde_json::to_vec(req)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let payload =
+        serde_json::to_vec(req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let len = payload.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&payload).await?;
@@ -88,8 +88,7 @@ pub async fn recv_request<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Gu
     let len = u32::from_be_bytes(len_bytes) as usize;
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload).await?;
-    serde_json::from_slice(&payload)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Send a length-prefixed response over an async writer.
@@ -97,8 +96,8 @@ pub async fn send_response<W: AsyncWrite + Unpin>(
     writer: &mut W,
     resp: &GuestResponse,
 ) -> io::Result<()> {
-    let payload = serde_json::to_vec(resp)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let payload =
+        serde_json::to_vec(resp).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let len = payload.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&payload).await?;
@@ -113,8 +112,7 @@ pub async fn recv_response<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<G
     let len = u32::from_be_bytes(len_bytes) as usize;
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload).await?;
-    serde_json::from_slice(&payload)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 #[cfg(test)]

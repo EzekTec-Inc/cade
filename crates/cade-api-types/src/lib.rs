@@ -168,7 +168,6 @@ pub struct ToolResultData {
     pub is_error: bool,
 }
 
-
 // region:    --- Workflows (PRD #99 / Issue #100)
 
 /// Status of an overall workflow run or individual pipeline step.

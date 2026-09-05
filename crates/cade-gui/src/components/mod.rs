@@ -1,8 +1,7 @@
 pub mod agents;
+pub mod api_keys;
 pub mod arena;
 pub mod artifacts;
-pub mod swarm;
-pub mod api_keys;
 pub mod chat;
 pub mod code;
 pub mod dashboard;
@@ -15,6 +14,7 @@ pub mod providers;
 pub mod settings;
 pub mod sidebar;
 pub mod stubs;
+pub mod swarm;
 pub mod toast;
 pub mod tools_page;
 pub mod usage;

@@ -2,11 +2,13 @@
 
 pub mod config;
 pub mod coordinator;
+pub mod harness;
 pub mod session;
 pub mod workspace_guard;
 
 pub use config::SubagentConfig;
 pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
+pub use harness::{AgentHarness, HarnessLifecycleState, HarnessTaskSpec, IsolationPolicy};
 pub use session::{
     FINISH_TOOL_NAME, SubagentEvent, SubagentEventEmitter, SubagentOutcome, SubagentSession,
     canonical_finish_tool_schema,

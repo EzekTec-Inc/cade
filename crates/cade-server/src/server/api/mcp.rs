@@ -4,11 +4,7 @@
 //! - `POST /v1/mcp/reload` — reload MCP servers and return reload summary.
 //! - `POST /v1/mcp/call` — execute an MCP tool via the server's McpManager.
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use cade_core::settings::McpServerConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -95,13 +91,11 @@ pub async fn call_mcp_tool(
     Json(body): Json<CallMcpToolRequest>,
 ) -> Result<Json<CallMcpToolResponse>, (StatusCode, Json<Value>)> {
     match state.mcp.call_tool(&body.name, &body.arguments).await {
-        Some(Ok((output, is_error, ui_resource_uri))) => {
-            Ok(Json(CallMcpToolResponse {
-                output,
-                is_error,
-                ui_resource_uri,
-            }))
-        }
+        Some(Ok((output, is_error, ui_resource_uri))) => Ok(Json(CallMcpToolResponse {
+            output,
+            is_error,
+            ui_resource_uri,
+        })),
         Some(Err(e)) => {
             let msg = e.to_string();
             let output = if msg.starts_with("Mcp error:") || msg.starts_with("MCP error:") {
@@ -175,7 +169,9 @@ mod tests {
             agent_metrics: Arc::new(dashmap::DashMap::new()),
             agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
             context_cache: Arc::new(parking_lot::Mutex::new(
-                crate::server::state::SafeLruCache::new(crate::server::state::CONTEXT_CACHE_CAPACITY),
+                crate::server::state::SafeLruCache::new(
+                    crate::server::state::CONTEXT_CACHE_CAPACITY,
+                ),
             )),
             all_skills: Arc::new(RwLock::new(Vec::new())),
             agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -200,7 +196,9 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json_val: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(json_val.get("servers").unwrap().is_array());
     }
@@ -220,7 +218,9 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json_val: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(json_val.get("summary").is_some());
     }

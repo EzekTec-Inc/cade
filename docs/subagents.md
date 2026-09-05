@@ -147,6 +147,20 @@ If a subagent is running a long-horizon task or is suspended awaiting permission
 *   The server intercepts this command via the `/subagents/:id/steer` endpoint, pushes it to the subagent's active instruction stream, and triggers a dynamic LLM redirection turn.
 *   This allows you to change constraints, correct early mistakes, or redirect subagents mid-flight without having to cancel, kill, or restart the entire task.
 
+## Isolation & Harness Execution (`AgentHarness`)
+
+The **`AgentHarness`** module (`crates/cade-agent/src/subagents/harness.rs`) provides unified isolation and execution policies:
+
+| Policy | Mechanism | Use Case |
+|---|---|---|
+| `IsolationPolicy::InProcess` | Runs in-process with shared host environment | Fast read-only tasks & local worker turns |
+| `IsolationPolicy::ReadOnly` | Restricts all filesystem mutation tools | Safe exploration and inspection passes |
+| `IsolationPolicy::WorktreeBranch` | Ephemeral git worktree with dedicated branch | Parallel code refactoring with isolated rollback |
+| `IsolationPolicy::VirtualSandbox` | In-memory copy-on-write filesystem overlay | Sensitive file transforms without host touch |
+| `IsolationPolicy::Docker` | Isolated container instance | Untrusted scripts and build sandboxing |
+
+The harness handles RAII teardown, signal cancellation, and automatic background task reaping.
+
 ## Background runs
 
 Set `background: true` to detach. The call returns immediately with a

@@ -685,7 +685,8 @@ impl HttpTransport {
     ) -> Result<crate::mcp::ReloadSummary> {
         #[derive(Serialize)]
         struct ReloadRequest {
-            configs: Option<std::collections::HashMap<String, cade_core::settings::McpServerConfig>>,
+            configs:
+                Option<std::collections::HashMap<String, cade_core::settings::McpServerConfig>>,
         }
         let body = ReloadRequest { configs };
         let resp = self

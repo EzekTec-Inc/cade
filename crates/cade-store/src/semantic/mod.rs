@@ -8,8 +8,8 @@ pub mod turbovec_engine;
 
 pub use turbovec_engine::{TurboVecSemanticEngine, TurboVecVectorIndex};
 
-use std::path::Path;
 use crate::error::Result;
+use std::path::Path;
 
 /// A ranked match returned from semantic codebase search.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -40,7 +40,12 @@ pub trait SemanticCodeIndex: Send + Sync {
     async fn remove_file(&self, path: &Path) -> Result<()>;
 
     /// Search for code semantically matching the natural language query.
-    async fn search(&self, query: &str, filter: &SearchFilter, limit: usize) -> Result<Vec<CodeMatch>>;
+    async fn search(
+        &self,
+        query: &str,
+        filter: &SearchFilter,
+        limit: usize,
+    ) -> Result<Vec<CodeMatch>>;
 
     /// Persist pending incremental changes safely to disk.
     async fn flush(&self) -> Result<()>;

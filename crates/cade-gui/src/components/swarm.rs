@@ -15,7 +15,6 @@ pub struct SwarmNode {
 
 #[component]
 pub fn SwarmView() -> Element {
-
     let swarm_tree = use_signal(|| SwarmNode {
         id: "lead-coordinator".to_string(),
         name: "Lead Supervisor Agent".to_string(),
@@ -40,17 +39,15 @@ pub fn SwarmView() -> Element {
                 model: "claude-3-5-sonnet".to_string(),
                 status: "Executing".to_string(),
                 tokens_used: 18_900,
-                subagents: vec![
-                    SwarmNode {
-                        id: "sub-qa".to_string(),
-                        name: "QA & Verification Worker".to_string(),
-                        role: "Cargo Test & Clippy Verification".to_string(),
-                        model: "claude-3-5-haiku".to_string(),
-                        status: "Idle".to_string(),
-                        tokens_used: 3_120,
-                        subagents: vec![],
-                    }
-                ],
+                subagents: vec![SwarmNode {
+                    id: "sub-qa".to_string(),
+                    name: "QA & Verification Worker".to_string(),
+                    role: "Cargo Test & Clippy Verification".to_string(),
+                    model: "claude-3-5-haiku".to_string(),
+                    status: "Idle".to_string(),
+                    tokens_used: 3_120,
+                    subagents: vec![],
+                }],
             },
             SwarmNode {
                 id: "sub-reviewer".to_string(),
@@ -60,7 +57,7 @@ pub fn SwarmView() -> Element {
                 status: "Active".to_string(),
                 tokens_used: 6_800,
                 subagents: vec![],
-            }
+            },
         ],
     });
 

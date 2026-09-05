@@ -5,9 +5,9 @@
 
 // region:    --- Imports
 
-use std::collections::HashSet;
 use rmcp::model::Tool;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 
 // endregion: --- Imports
 
@@ -103,7 +103,10 @@ mod tests {
         assert_eq!(normalized.original_name, "test_tool");
         assert!(normalized.is_write);
 
-        let params = normalized.schema.get("parameters").and_then(|p| p.as_object());
+        let params = normalized
+            .schema
+            .get("parameters")
+            .and_then(|p| p.as_object());
         assert!(params.is_some());
         if let Some(p) = params {
             assert_eq!(p.get("type"), Some(&json!("object")));

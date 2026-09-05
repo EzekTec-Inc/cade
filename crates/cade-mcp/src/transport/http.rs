@@ -5,16 +5,16 @@
 
 // region:    --- Imports
 
-use std::collections::HashMap;
 use http::{HeaderName, HeaderValue};
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
 use rmcp::{RoleClient, ServiceExt, service::RunningService};
+use std::collections::HashMap;
 use tracing::info;
 
-use cade_core::settings::McpServerConfig;
 use crate::{Error, Result};
+use cade_core::settings::McpServerConfig;
 
 // endregion: --- Imports
 

@@ -115,7 +115,10 @@ pub async fn stream_workflow_run_handler(
     State(state): State<AppState>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>, StatusCode> {
     let engine = WorkflowEngine::new(state.db.clone());
-    let rx = engine.subscribe_events(&run_id).await.ok_or(StatusCode::NOT_FOUND)?;
+    let rx = engine
+        .subscribe_events(&run_id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     let stream = BroadcastStream::new(rx).filter_map(|res| match res {
         Ok(ev) => {
@@ -137,7 +140,11 @@ pub async fn cancel_workflow_run_handler(
     let cancelled = engine.cancel(&run_id).await;
 
     if cancelled {
-        (StatusCode::OK, Json(json!({ "status": "cancelled", "run_id": run_id }))).into_response()
+        (
+            StatusCode::OK,
+            Json(json!({ "status": "cancelled", "run_id": run_id })),
+        )
+            .into_response()
     } else {
         (
             StatusCode::NOT_FOUND,

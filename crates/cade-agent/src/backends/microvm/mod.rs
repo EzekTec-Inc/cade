@@ -8,10 +8,11 @@ use std::sync::Arc;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
-
 use crate::backends::{BashOutput, DirEntry, ExecutionBackend};
 use crate::{Error, Result};
-use hypervisor::{HypervisorConfig, HypervisorProcess, pack_workspace_tarball, unpack_workspace_tarball};
+use hypervisor::{
+    HypervisorConfig, HypervisorProcess, pack_workspace_tarball, unpack_workspace_tarball,
+};
 use protocol::{GuestDirEntry, GuestRequest, GuestResponse, recv_response, send_request};
 
 /// Execution backend running inside a hardware-virtualized Firecracker MicroVM over vsock.
@@ -28,8 +29,9 @@ impl MicroVmBackend {
         let cfg = config.unwrap_or_default();
         let vsock_uds_path = cfg.vsock_uds_path.clone();
 
-        let hypervisor = HypervisorProcess::spawn(cfg).await
-            .map_err(|e| Error::custom(format!("Failed to initialize Firecracker hypervisor: {e}")))?;
+        let hypervisor = HypervisorProcess::spawn(cfg).await.map_err(|e| {
+            Error::custom(format!("Failed to initialize Firecracker hypervisor: {e}"))
+        })?;
 
         let backend = Self {
             hypervisor: Arc::new(Mutex::new(hypervisor)),
@@ -39,9 +41,11 @@ impl MicroVmBackend {
 
         // Sync initial workspace files if hypervisor process is running
         if let Ok(tarball) = pack_workspace_tarball(primary_dir) {
-            let _ = backend.send_guest_request(GuestRequest::ImportWorkspaceTarball {
-                tarball_bytes: tarball,
-            }).await;
+            let _ = backend
+                .send_guest_request(GuestRequest::ImportWorkspaceTarball {
+                    tarball_bytes: tarball,
+                })
+                .await;
         }
 
         Ok(backend)
@@ -52,13 +56,17 @@ impl MicroVmBackend {
         if !self.vsock_uds_path.exists() {
             // Simulated guest response for non-KVM environments/unit testing
             return match req {
-                GuestRequest::Exec { command, cwd: _cwd, .. } => {
+                GuestRequest::Exec {
+                    command, cwd: _cwd, ..
+                } => {
                     let out = tokio::process::Command::new("sh")
                         .args(["-c", &command])
                         .current_dir(&self.primary_dir)
                         .output()
                         .await
-                        .map_err(|e| Error::custom(format!("MicroVM command execution error: {e}")))?;
+                        .map_err(|e| {
+                            Error::custom(format!("MicroVM command execution error: {e}"))
+                        })?;
 
                     Ok(GuestResponse::ExecResult {
                         stdout: String::from_utf8_lossy(&out.stdout).to_string(),
@@ -76,8 +84,9 @@ impl MicroVmBackend {
                 GuestRequest::WriteFile { path, content } => {
                     let full_path = self.primary_dir.join(path);
                     if let Some(parent) = full_path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| Error::custom(format!("MicroVM write_file parent dir error: {e}")))?;
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            Error::custom(format!("MicroVM write_file parent dir error: {e}"))
+                        })?;
                     }
                     std::fs::write(&full_path, content)
                         .map_err(|e| Error::custom(format!("MicroVM write_file error: {e}")))?;
@@ -104,8 +113,9 @@ impl MicroVmBackend {
                 }
                 GuestRequest::ImportWorkspaceTarball { .. } => Ok(GuestResponse::ImportWorkspaceOk),
                 GuestRequest::ExportWorkspaceTarball => {
-                    let tarball = pack_workspace_tarball(&self.primary_dir)
-                        .map_err(|e| Error::custom(format!("Failed to export workspace tarball: {e}")))?;
+                    let tarball = pack_workspace_tarball(&self.primary_dir).map_err(|e| {
+                        Error::custom(format!("Failed to export workspace tarball: {e}"))
+                    })?;
                     Ok(GuestResponse::WorkspaceTarball {
                         tarball_bytes: tarball,
                     })
@@ -114,19 +124,24 @@ impl MicroVmBackend {
             };
         }
 
-        let mut stream = UnixStream::connect(&self.vsock_uds_path).await
+        let mut stream = UnixStream::connect(&self.vsock_uds_path)
+            .await
             .map_err(|e| Error::custom(format!("Failed to connect to microvm vsock UDS: {e}")))?;
 
-        send_request(&mut stream, &req).await
+        send_request(&mut stream, &req)
+            .await
             .map_err(|e| Error::custom(format!("Failed to send vsock request: {e}")))?;
 
-        recv_response(&mut stream).await
+        recv_response(&mut stream)
+            .await
             .map_err(|e| Error::custom(format!("Failed to receive vsock response: {e}")))
     }
 
     /// Sync modifications made inside the guest back to the host workspace.
     pub async fn sync_back_to_host(&self) -> Result<()> {
-        let resp = self.send_guest_request(GuestRequest::ExportWorkspaceTarball).await?;
+        let resp = self
+            .send_guest_request(GuestRequest::ExportWorkspaceTarball)
+            .await?;
         if let GuestResponse::WorkspaceTarball { tarball_bytes } = resp {
             unpack_workspace_tarball(&tarball_bytes, &self.primary_dir)
                 .map_err(|e| Error::custom(format!("Failed to unpack merged workspace: {e}")))?;
@@ -137,13 +152,9 @@ impl MicroVmBackend {
 
 #[async_trait::async_trait]
 impl ExecutionBackend for MicroVmBackend {
-    async fn exec_bash(
-        &self,
-        command: &str,
-        cwd: &Path,
-        timeout_secs: u64,
-    ) -> Result<BashOutput> {
-        let rel_cwd = cwd.strip_prefix(&self.primary_dir)
+    async fn exec_bash(&self, command: &str, cwd: &Path, timeout_secs: u64) -> Result<BashOutput> {
+        let rel_cwd = cwd
+            .strip_prefix(&self.primary_dir)
             .unwrap_or(cwd)
             .display()
             .to_string();
@@ -155,21 +166,27 @@ impl ExecutionBackend for MicroVmBackend {
         };
 
         match self.send_guest_request(req).await? {
-            GuestResponse::ExecResult { stdout, stderr, exit_code, timed_out } => {
-                Ok(BashOutput {
-                    stdout,
-                    stderr,
-                    exit_code,
-                    timed_out,
-                })
-            }
+            GuestResponse::ExecResult {
+                stdout,
+                stderr,
+                exit_code,
+                timed_out,
+            } => Ok(BashOutput {
+                stdout,
+                stderr,
+                exit_code,
+                timed_out,
+            }),
             GuestResponse::Error { message } => Err(Error::custom(message)),
-            _ => Err(Error::custom("Unexpected response variant from guest daemon")),
+            _ => Err(Error::custom(
+                "Unexpected response variant from guest daemon",
+            )),
         }
     }
 
     async fn read_file(&self, path: &Path) -> Result<String> {
-        let rel_path = path.strip_prefix(&self.primary_dir)
+        let rel_path = path
+            .strip_prefix(&self.primary_dir)
             .unwrap_or(path)
             .display()
             .to_string();
@@ -178,12 +195,15 @@ impl ExecutionBackend for MicroVmBackend {
         match self.send_guest_request(req).await? {
             GuestResponse::FileContent { content } => Ok(content),
             GuestResponse::Error { message } => Err(Error::custom(message)),
-            _ => Err(Error::custom("Unexpected response variant from guest daemon")),
+            _ => Err(Error::custom(
+                "Unexpected response variant from guest daemon",
+            )),
         }
     }
 
     async fn write_file(&self, path: &Path, content: &str) -> Result<()> {
-        let rel_path = path.strip_prefix(&self.primary_dir)
+        let rel_path = path
+            .strip_prefix(&self.primary_dir)
             .unwrap_or(path)
             .display()
             .to_string();
@@ -196,12 +216,15 @@ impl ExecutionBackend for MicroVmBackend {
         match self.send_guest_request(req).await? {
             GuestResponse::WriteOk => Ok(()),
             GuestResponse::Error { message } => Err(Error::custom(message)),
-            _ => Err(Error::custom("Unexpected response variant from guest daemon")),
+            _ => Err(Error::custom(
+                "Unexpected response variant from guest daemon",
+            )),
         }
     }
 
     async fn path_exists(&self, path: &Path) -> bool {
-        let rel_path = path.strip_prefix(&self.primary_dir)
+        let rel_path = path
+            .strip_prefix(&self.primary_dir)
             .unwrap_or(path)
             .display()
             .to_string();
@@ -214,22 +237,26 @@ impl ExecutionBackend for MicroVmBackend {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<DirEntry>> {
-        let rel_path = path.strip_prefix(&self.primary_dir)
+        let rel_path = path
+            .strip_prefix(&self.primary_dir)
             .unwrap_or(path)
             .display()
             .to_string();
 
         let req = GuestRequest::ListDir { path: rel_path };
         match self.send_guest_request(req).await? {
-            GuestResponse::ListDirResult { entries } => {
-                Ok(entries.into_iter().map(|e| DirEntry {
+            GuestResponse::ListDirResult { entries } => Ok(entries
+                .into_iter()
+                .map(|e| DirEntry {
                     path: PathBuf::from(e.path),
                     is_dir: e.is_dir,
                     size: e.size,
-                }).collect())
-            }
+                })
+                .collect()),
             GuestResponse::Error { message } => Err(Error::custom(message)),
-            _ => Err(Error::custom("Unexpected response variant from guest daemon")),
+            _ => Err(Error::custom(
+                "Unexpected response variant from guest daemon",
+            )),
         }
     }
 
@@ -250,11 +277,16 @@ mod tests {
     #[tokio::test]
     async fn test_microvm_backend_file_operations_and_exec() -> std::io::Result<()> {
         let temp = tempdir()?;
-        let backend = MicroVmBackend::new(temp.path(), None).await.expect("Created backend");
+        let backend = MicroVmBackend::new(temp.path(), None)
+            .await
+            .expect("Created backend");
 
         // 1. Write file
         let file_path = temp.path().join("test.txt");
-        backend.write_file(&file_path, "microvm content").await.expect("Wrote file");
+        backend
+            .write_file(&file_path, "microvm content")
+            .await
+            .expect("Wrote file");
 
         // 2. Path exists
         assert!(backend.path_exists(&file_path).await);
@@ -264,7 +296,10 @@ mod tests {
         assert_eq!(content, "microvm content");
 
         // 4. Exec bash
-        let out = backend.exec_bash("echo 'exec in microvm'", temp.path(), 5).await.expect("Exec bash");
+        let out = backend
+            .exec_bash("echo 'exec in microvm'", temp.path(), 5)
+            .await
+            .expect("Exec bash");
         assert_eq!(out.exit_code, 0);
         assert!(out.stdout.contains("exec in microvm"));
 

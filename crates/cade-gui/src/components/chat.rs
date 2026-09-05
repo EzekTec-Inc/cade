@@ -200,7 +200,13 @@ fn chat_sidebar(
             } else {
                 String::new()
             };
-            (conv.id.clone(), conv.title.clone(), date_str, conv.message_count, is_active)
+            (
+                conv.id.clone(),
+                conv.title.clone(),
+                date_str,
+                conv.message_count,
+                is_active,
+            )
         })
         .collect();
 
@@ -684,7 +690,9 @@ fn input_area(
 
         spawn(async move {
             let actual_agent_id = if agent_id_clone.is_empty() {
-                if let Ok(agents) = api_client_clone.list_agents().await && let Some(first) = agents.first() {
+                if let Ok(agents) = api_client_clone.list_agents().await
+                    && let Some(first) = agents.first()
+                {
                     first.id.clone()
                 } else {
                     "default".to_string()
@@ -704,10 +712,17 @@ fn input_area(
                 .await;
 
             match result {
-                Ok(crate::chat_session::ChatTurnOutcome::Completed { assigned_conversation_id, .. }) => {
-                    if active_conv().is_none() && let Some(cid) = assigned_conversation_id {
+                Ok(crate::chat_session::ChatTurnOutcome::Completed {
+                    assigned_conversation_id,
+                    ..
+                }) => {
+                    if active_conv().is_none()
+                        && let Some(cid) = assigned_conversation_id
+                    {
                         active_conv.set(Some(cid));
-                        if let Ok(mut list) = api_client_clone.list_conversations(&agent_id_clone).await {
+                        if let Ok(mut list) =
+                            api_client_clone.list_conversations(&agent_id_clone).await
+                        {
                             list.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
                             convs.set(list);
                         }

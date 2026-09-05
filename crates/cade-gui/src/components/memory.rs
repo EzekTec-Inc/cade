@@ -53,13 +53,31 @@ pub fn MemoryBlocksView() -> Element {
     let mut is_searching = use_signal(|| false);
 
     // Knowledge graph triples state
-    let triples = use_signal(|| vec![
-        ("CADE", "implements", "CapabilityMesh (Native + MCP + Skills)"),
-        ("EmbeddedSession", "links_to", "SQLite & LlmRouter in-process"),
-        ("Sleeptime", "consolidates_at", "98% Context Window Threshold"),
-        ("TokenHeatmap", "allocates", "Pinned (Purple), Short (Cyan), Long (Slate)"),
-        ("KnowledgeEdges", "indexes_via", "sqlite-vec & FTS5 BM25"),
-    ]);
+    let triples = use_signal(|| {
+        vec![
+            (
+                "CADE",
+                "implements",
+                "CapabilityMesh (Native + MCP + Skills)",
+            ),
+            (
+                "EmbeddedSession",
+                "links_to",
+                "SQLite & LlmRouter in-process",
+            ),
+            (
+                "Sleeptime",
+                "consolidates_at",
+                "98% Context Window Threshold",
+            ),
+            (
+                "TokenHeatmap",
+                "allocates",
+                "Pinned (Purple), Short (Cyan), Long (Slate)",
+            ),
+            ("KnowledgeEdges", "indexes_via", "sqlite-vec & FTS5 BM25"),
+        ]
+    });
 
     let mut do_semantic_search = move || {
         let q = search_query().trim().to_string();
@@ -315,7 +333,10 @@ pub fn MemoryBlocksView() -> Element {
 
 /// Dynamic visual context window allocation bar.
 #[component]
-pub fn TokenHeatmapWidget(blocks: Signal<Vec<serde_json::Value>>, model_name: Option<String>) -> Element {
+pub fn TokenHeatmapWidget(
+    blocks: Signal<Vec<serde_json::Value>>,
+    model_name: Option<String>,
+) -> Element {
     let raw_blocks = blocks();
     let model = model_name.unwrap_or_else(|| "claude-3-5-sonnet".to_string());
 
@@ -324,7 +345,11 @@ pub fn TokenHeatmapWidget(blocks: Signal<Vec<serde_json::Value>>, model_name: Op
     let mut long_chars = 0usize;
 
     for b in &raw_blocks {
-        let val_len = b.get("value").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+        let val_len = b
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(|s| s.len())
+            .unwrap_or(0);
         let tier = b.get("tier").and_then(|v| v.as_str()).unwrap_or("short");
         match tier {
             "pinned" => pinned_chars += val_len,

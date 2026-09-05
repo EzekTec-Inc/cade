@@ -1,16 +1,16 @@
 //! TurboVec implementation of [`SemanticCodeIndex`] and [`VectorIndex`].
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use super::{CodeMatch, SearchFilter, SemanticCodeIndex};
 use crate::error::Result;
 use crate::sqlite::Db;
 use crate::sqlite::embedding::{Embedder, SearchResult, VectorIndex};
-use super::{CodeMatch, SearchFilter, SemanticCodeIndex};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[cfg(feature = "turbovec")]
-use parking_lot::RwLock;
-#[cfg(feature = "turbovec")]
 use crate::error::Error;
+#[cfg(feature = "turbovec")]
+use parking_lot::RwLock;
 
 #[cfg(feature = "turbovec")]
 /// TurboVec-backed implementation of the [`VectorIndex`] trait.
@@ -84,9 +84,10 @@ impl VectorIndex for TurboVecVectorIndex {
         let num_id = {
             let mut str_map = self.str_to_id.write();
             let mut id_map = self.id_to_str.write();
-            let num = *str_map
-                .entry(id.to_string())
-                .or_insert_with(|| self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+            let num = *str_map.entry(id.to_string()).or_insert_with(|| {
+                self.next_id
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            });
             id_map.insert(num, (id.to_string(), payload));
             num
         };
@@ -225,7 +226,11 @@ impl TurboVecSemanticEngine {
     }
 
     /// Split source code into overlapping line-based semantic chunks.
-    fn chunk_content(content: &str, chunk_lines: usize, overlap_lines: usize) -> Vec<(usize, usize, String)> {
+    fn chunk_content(
+        content: &str,
+        chunk_lines: usize,
+        overlap_lines: usize,
+    ) -> Vec<(usize, usize, String)> {
         let lines: Vec<&str> = content.lines().collect();
         if lines.is_empty() {
             return Vec::new();
@@ -325,13 +330,21 @@ impl SemanticCodeIndex for TurboVecSemanticEngine {
             }
 
             let conn = self.metadata_db.get()?;
-            conn.execute("DELETE FROM code_chunks WHERE file_path = ?1", rusqlite::params![path_str])?;
+            conn.execute(
+                "DELETE FROM code_chunks WHERE file_path = ?1",
+                rusqlite::params![path_str],
+            )?;
         }
 
         Ok(())
     }
 
-    async fn search(&self, query: &str, filter: &SearchFilter, limit: usize) -> Result<Vec<CodeMatch>> {
+    async fn search(
+        &self,
+        query: &str,
+        filter: &SearchFilter,
+        limit: usize,
+    ) -> Result<Vec<CodeMatch>> {
         let query_emb = self.embedder.embed(query)?;
         if query_emb.len() != self.dim {
             return Ok(Vec::new());
@@ -360,14 +373,22 @@ impl SemanticCodeIndex for TurboVecSemanticEngine {
             }
 
             if let Some(ref prefix) = filter.path_prefix {
-                where_clauses.push(format!("c.file_path LIKE '{}%'", prefix.replace('\'', "''")));
+                where_clauses.push(format!(
+                    "c.file_path LIKE '{}%'",
+                    prefix.replace('\'', "''")
+                ));
             }
 
             if let Some(ref exts) = filter.file_extensions {
                 if !exts.is_empty() {
                     let ext_conditions: Vec<String> = exts
                         .iter()
-                        .map(|ext| format!("c.file_path LIKE '%.{}'", ext.trim_start_matches('.').replace('\'', "''")))
+                        .map(|ext| {
+                            format!(
+                                "c.file_path LIKE '%.{}'",
+                                ext.trim_start_matches('.').replace('\'', "''")
+                            )
+                        })
                         .collect();
                     where_clauses.push(format!("({})", ext_conditions.join(" OR ")));
                 }
@@ -423,7 +444,10 @@ impl SemanticCodeIndex for TurboVecSemanticEngine {
                     Ok(CodeMatch {
                         file_path: row.get(0)?,
                         symbol: row.get(1)?,
-                        line_range: (row.get::<_, i64>(2)? as usize, row.get::<_, i64>(3)? as usize),
+                        line_range: (
+                            row.get::<_, i64>(2)? as usize,
+                            row.get::<_, i64>(3)? as usize,
+                        ),
                         content: row.get(4)?,
                         score,
                     })
@@ -496,7 +520,12 @@ impl SemanticCodeIndex for TurboVecSemanticEngine {
     async fn remove_file(&self, _path: &Path) -> Result<()> {
         Ok(())
     }
-    async fn search(&self, _query: &str, _filter: &SearchFilter, _limit: usize) -> Result<Vec<CodeMatch>> {
+    async fn search(
+        &self,
+        _query: &str,
+        _filter: &SearchFilter,
+        _limit: usize,
+    ) -> Result<Vec<CodeMatch>> {
         Ok(vec![])
     }
     async fn flush(&self) -> Result<()> {
@@ -541,8 +570,14 @@ mod tests {
         let vec_a = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         let vec_b = vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
-        index.insert("doc_a", &vec_a, serde_json::json!({"tag": "a"})).await.unwrap();
-        index.insert("doc_b", &vec_b, serde_json::json!({"tag": "b"})).await.unwrap();
+        index
+            .insert("doc_a", &vec_a, serde_json::json!({"tag": "a"}))
+            .await
+            .unwrap();
+        index
+            .insert("doc_b", &vec_b, serde_json::json!({"tag": "b"}))
+            .await
+            .unwrap();
 
         let results = index.search(&vec_a, 2).await.unwrap();
         assert!(!results.is_empty());
@@ -567,7 +602,10 @@ mod tests {
         engine.index_file(file_path, code).await.unwrap();
 
         let filter = SearchFilter::default();
-        let matches = engine.search("authenticate user token", &filter, 5).await.unwrap();
+        let matches = engine
+            .search("authenticate user token", &filter, 5)
+            .await
+            .unwrap();
         assert!(!matches.is_empty());
         assert_eq!(matches[0].file_path, "src/auth.rs");
         assert!(matches[0].content.contains("authenticate_user"));
@@ -582,9 +620,18 @@ mod tests {
 
         let engine = TurboVecSemanticEngine::new(db, embedder, None).unwrap();
 
-        engine.index_file(Path::new("src/auth.rs"), "fn login() {}").await.unwrap();
-        engine.index_file(Path::new("src/db.rs"), "fn connect() {}").await.unwrap();
-        engine.index_file(Path::new("docs/readme.md"), "documentation file").await.unwrap();
+        engine
+            .index_file(Path::new("src/auth.rs"), "fn login() {}")
+            .await
+            .unwrap();
+        engine
+            .index_file(Path::new("src/db.rs"), "fn connect() {}")
+            .await
+            .unwrap();
+        engine
+            .index_file(Path::new("docs/readme.md"), "documentation file")
+            .await
+            .unwrap();
 
         // 1. Path extension filter
         let filter = SearchFilter {
@@ -616,21 +663,38 @@ mod tests {
         let embedder = Arc::new(DeterministicEmbedder { dim: 16 });
 
         {
-            let engine = TurboVecSemanticEngine::new(db.clone(), embedder.clone(), Some(tv_path.clone())).unwrap();
-            engine.index_file(Path::new("src/main.rs"), "fn main() { println!(\"hello\"); }").await.unwrap();
+            let engine =
+                TurboVecSemanticEngine::new(db.clone(), embedder.clone(), Some(tv_path.clone()))
+                    .unwrap();
+            engine
+                .index_file(
+                    Path::new("src/main.rs"),
+                    "fn main() { println!(\"hello\"); }",
+                )
+                .await
+                .unwrap();
             engine.flush().await.unwrap();
         }
 
         // Reload engine from disk
         {
             let engine_reloaded = TurboVecSemanticEngine::new(db, embedder, Some(tv_path)).unwrap();
-            let matches = engine_reloaded.search("main println", &SearchFilter::default(), 5).await.unwrap();
+            let matches = engine_reloaded
+                .search("main println", &SearchFilter::default(), 5)
+                .await
+                .unwrap();
             assert!(!matches.is_empty());
             assert_eq!(matches[0].file_path, "src/main.rs");
 
             // Test removal
-            engine_reloaded.remove_file(Path::new("src/main.rs")).await.unwrap();
-            let matches_after = engine_reloaded.search("main println", &SearchFilter::default(), 5).await.unwrap();
+            engine_reloaded
+                .remove_file(Path::new("src/main.rs"))
+                .await
+                .unwrap();
+            let matches_after = engine_reloaded
+                .search("main println", &SearchFilter::default(), 5)
+                .await
+                .unwrap();
             assert!(matches_after.is_empty());
         }
     }

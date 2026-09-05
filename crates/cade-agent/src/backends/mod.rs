@@ -13,21 +13,21 @@
 #[cfg(feature = "backend-docker")]
 pub mod docker;
 pub mod local;
+pub mod microvm;
 pub mod readonly;
 #[cfg(feature = "backend-ssh")]
 pub mod ssh;
 pub mod storage;
-pub mod microvm;
 pub mod virtual_sandbox;
 
 #[cfg(feature = "backend-docker")]
 pub use docker::DockerBackend;
 pub use local::LocalBackend;
+pub use microvm::MicroVmBackend;
 pub use readonly::ReadOnlyBackend;
 #[cfg(feature = "backend-ssh")]
 pub use ssh::SshBackend;
 pub use virtual_sandbox::VirtualSandboxBackend;
-pub use microvm::MicroVmBackend;
 
 use std::path::{Path, PathBuf};
 
@@ -252,10 +252,14 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
             } else {
                 let handle = tokio::runtime::Handle::try_current();
                 if let Ok(rt) = handle {
-                    match tokio::task::block_in_place(|| rt.block_on(MicroVmBackend::new(&primary, None))) {
+                    match tokio::task::block_in_place(|| {
+                        rt.block_on(MicroVmBackend::new(&primary, None))
+                    }) {
                         Ok(b) => Box::new(b),
                         Err(e) => {
-                            tracing::warn!("Failed to initialize MicroVmBackend ({e}). Falling back to Virtual sandbox.");
+                            tracing::warn!(
+                                "Failed to initialize MicroVmBackend ({e}). Falling back to Virtual sandbox."
+                            );
                             Box::new(VirtualSandboxBackend::new(primary))
                         }
                     }

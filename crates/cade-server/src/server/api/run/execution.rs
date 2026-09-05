@@ -197,7 +197,9 @@ pub(super) async fn execute_turn_tools(
             agent_id.clone(),
         ))
     };
-    let permissions = cade_core::permissions::PermissionManager::new(cade_core::permissions::PermissionMode::Default);
+    let permissions = cade_core::permissions::PermissionManager::new(
+        cade_core::permissions::PermissionMode::Default,
+    );
     let pipeline = Arc::new(cade_agent::tools::ToolPipeline::new(
         runtime.clone(),
         permissions,

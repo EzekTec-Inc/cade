@@ -5,15 +5,15 @@
 
 // region:    --- Imports
 
+use rmcp::transport::TokioChildProcess;
+use rmcp::{RoleClient, ServiceExt, service::RunningService};
 use std::collections::HashSet;
 use std::sync::OnceLock;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use rmcp::transport::TokioChildProcess;
-use rmcp::{RoleClient, ServiceExt, service::RunningService};
 
-use cade_core::settings::McpServerConfig;
 use crate::{Error, Result};
+use cade_core::settings::McpServerConfig;
 
 // endregion: --- Imports
 
@@ -51,7 +51,9 @@ impl SingletonProcessGuard {
             )));
         }
         set.insert(sig.clone());
-        Ok(Self { signature: Some(sig) })
+        Ok(Self {
+            signature: Some(sig),
+        })
     }
 
     pub async fn release(&mut self) {
@@ -112,7 +114,11 @@ impl StdioTransportAdapter {
     pub async fn connect(
         key: &str,
         config: &McpServerConfig,
-    ) -> Result<(RunningService<RoleClient, ()>, rmcp::Peer<RoleClient>, SingletonProcessGuard)> {
+    ) -> Result<(
+        RunningService<RoleClient, ()>,
+        rmcp::Peer<RoleClient>,
+        SingletonProcessGuard,
+    )> {
         let singleton_guard = SingletonProcessGuard::acquire(key, config).await?;
 
         if let Ok(mut log_file) = std::fs::OpenOptions::new()
@@ -141,7 +147,12 @@ impl StdioTransportAdapter {
         let (transport, _stderr) = TokioChildProcess::builder(cmd)
             .stderr(stderr_io)
             .spawn()
-            .map_err(|e| Error::custom(format!("spawn MCP server '{key}' ({}): {e}", config.command)))?;
+            .map_err(|e| {
+                Error::custom(format!(
+                    "spawn MCP server '{key}' ({}): {e}",
+                    config.command
+                ))
+            })?;
 
         let service = ()
             .serve(transport)
