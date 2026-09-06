@@ -450,6 +450,30 @@ impl TuiApp {
                 self.toggle_last_collapsible_item();
             }
 
+            _ if self.leader_engine.is_active
+                || (k.modifiers.contains(KeyModifiers::CONTROL)
+                    && k.code == KeyCode::Char('x')) =>
+            {
+                let outcome = self.leader_engine.handle_key(k);
+                self.draw_dirty = true;
+                match outcome {
+                    crate::app::leader::LeaderOutcome::Pending => return Ok(None),
+                    crate::app::leader::LeaderOutcome::Dismissed => return Ok(None),
+                    crate::app::leader::LeaderOutcome::Action(action) => {
+                        let cmd = match action {
+                            crate::app::leader::LeaderAction::ModelPicker => "/model",
+                            crate::app::leader::LeaderAction::SessionPicker => "/session",
+                            crate::app::leader::LeaderAction::ThemePicker => "/theme",
+                            crate::app::leader::LeaderAction::UndoCheckpoint => "/undo",
+                            crate::app::leader::LeaderAction::RedoCheckpoint => "/redo",
+                            crate::app::leader::LeaderAction::TogglePermissions => "/permissions",
+                            crate::app::leader::LeaderAction::HelpOverlay => "/help",
+                        };
+                        return Ok(Some(Some(cmd.to_string())));
+                    }
+                }
+            }
+
             KeyCode::Char('?')
                 if k.modifiers.contains(KeyModifiers::CONTROL)
                     || (k.code == KeyCode::Char('?') && self.editor.is_empty()) =>
@@ -708,15 +732,15 @@ impl TuiApp {
                             if let KeyCode::Char('@') = k.code {
                                 let input_text = self.editor.text();
                                 let cursor_pos = self.editor.cursor_pos();
-                                let before = &input_text[..cursor_pos];
-                                let is_start_or_after_space = before.is_empty()
-                                    || before.ends_with(|c: char| c.is_whitespace());
+                                let at_pos = cursor_pos.saturating_sub(1);
+                                let before_at = &input_text[..at_pos];
+                                let is_start_or_after_space = before_at.is_empty()
+                                    || before_at.ends_with(|c: char| c.is_whitespace());
 
                                 if is_start_or_after_space {
                                     if self.editor_input_mode()
                                         != crate::editor::InputMode::SlashCommand
                                     {
-                                        let at_pos = cursor_pos.saturating_sub(1);
                                         self.overlays.push(Box::new(crate::app::PickerState::new(
                                             at_pos,
                                             String::new(),
@@ -728,7 +752,7 @@ impl TuiApp {
                                             self.overlays.push(Box::new(
                                                 crate::autocomplete::AutocompleteOverlay::new(
                                                     suggestions,
-                                                    cursor_pos.saturating_sub(1),
+                                                    at_pos,
                                                     cursor_pos,
                                                 ),
                                             ));

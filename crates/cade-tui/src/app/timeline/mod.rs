@@ -1,6 +1,9 @@
 use crate::app::timeline::render_item::*;
 use crate::colors::ThemeColorsExt;
+pub mod diff_view;
 pub mod render_item;
+
+pub use diff_view::{DiffLayout, DiffViewEngine};
 use super::*;
 
 // -- Timeline adapter

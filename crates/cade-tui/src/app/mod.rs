@@ -3,7 +3,9 @@ pub mod command_palette;
 pub mod copy_overlay;
 pub mod help_overlay;
 pub mod input;
+pub mod leader;
 pub mod layout;
+pub mod notifier;
 pub mod password;
 pub mod permission_overlay;
 pub mod questions;
@@ -927,6 +929,9 @@ pub struct TuiApp {
     /// Next step suggestion provider.
     pub next_step_ac: crate::autocomplete::NextStepAutocompleteProvider,
 
+    // -- Leader Key Chord Engine (Slice 1)
+    pub leader_engine: crate::app::leader::LeaderKeyEngine,
+
     // -- Dynamic overlay stack (Phase 3)
     /// Heterogeneous stack of modal overlays.  The host dispatches
     /// input to `overlays.last_mut()` and renders bottom-to-top.
@@ -1157,6 +1162,7 @@ impl TuiApp {
             slash_ac: crate::autocomplete::SlashCommandProvider::new(vec![]),
             tool_ac: crate::autocomplete::ToolAutocompleteProvider::new(vec![], vec![]),
             next_step_ac: crate::autocomplete::NextStepAutocompleteProvider::new(vec![]),
+            leader_engine: crate::app::leader::LeaderKeyEngine::new(),
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
@@ -1709,6 +1715,9 @@ impl TuiApp {
                 // (the overlay is responsible for its own cursor, if any).
                 input_cursor_pos = None;
             }
+
+            // -- Leader Key Which-Key Bar (Slice 1)
+            self.leader_engine.render_hint_bar(frame, frame.area(), colors);
 
             // Apply selection highlight onto the buffer before the frame is drawn/flushed.
             apply_selection_highlight(

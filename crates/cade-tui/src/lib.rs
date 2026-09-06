@@ -28,6 +28,7 @@ pub mod lua_engine;
 pub mod lua_ui;
 pub mod overlay;
 pub mod overlay_component;
+pub mod path_sanitizer;
 pub mod question;
 pub mod session_tree;
 pub mod signals;
@@ -35,6 +36,7 @@ pub mod skills;
 pub mod slots;
 pub mod subagent_tracker;
 
+pub use app::notifier::{AttentionCue, TerminalNotifier};
 pub use app::{
     RenderLine, ToastLevel, TuiAction, TuiApp, cycle_mode, cycle_mode_back, truncate_str,
 };
@@ -45,6 +47,7 @@ pub use autocomplete::{
 pub use colors::ThemeColors;
 pub use component::{Component, RenderedLine};
 pub use editor::Editor;
+pub use path_sanitizer::PathDropSanitizer;
 pub use question::{Question, QuestionAnswer, QuestionOption, QuestionWidget};
 pub use session_tree::{TreeAction, show_session_tree};
 

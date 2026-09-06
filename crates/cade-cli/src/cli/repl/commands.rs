@@ -277,6 +277,14 @@ impl Repl {
             SlashCmd::Usage => {
                 return self.cmd_usage(pending_input).await;
             }
+            SlashCmd::Details => {
+                let mut app = self.app.lock();
+                app.expand_all = !app.expand_all;
+                app.draw_dirty = true;
+                let state_str = if app.expand_all { "expanded" } else { "collapsed" };
+                app.show_toast(format!("Timeline details {}", state_str), crate::ui::ToastLevel::Info);
+                return Ok(false);
+            }
             SlashCmd::Context => {
                 return self.cmd_context(stdout).await;
             }

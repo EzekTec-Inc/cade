@@ -61,6 +61,8 @@ ignore         = "0.4"
 notify         = "8"
 
 # Misc utilities
+similar        = "2.6"
+toml           = "0.8"
 uuid           = { version = "1", features = ["v4"] }
 tempfile       = "3"
 chrono         = { version = "0.4", features = ["serde"] }

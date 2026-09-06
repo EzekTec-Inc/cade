@@ -40,10 +40,13 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         colors.border_muted(),
     )));
 
-    // Match entries
-    let max_entries = (inner_area.height as usize).saturating_sub(lines.len());
-    for (i, m) in pk.matches.iter().take(max_entries).enumerate() {
-        let selected = i == pk.cursor;
+    // Match entries with sliding scroll window
+    let max_entries = (inner_area.height as usize).saturating_sub(lines.len()).max(1);
+    let (start_idx, end_idx) = picker_scroll_window(pk.cursor, pk.matches.len(), max_entries);
+
+    for (abs_i, m) in pk.matches[start_idx..end_idx].iter().enumerate() {
+        let current_idx = start_idx + abs_i;
+        let selected = current_idx == pk.cursor;
         let (glyph, style) = if selected {
             (
                 "❯",
@@ -338,6 +341,44 @@ pub(crate) fn render_theme_picker(
     frame.render_widget(filter_text, filter_area);
 }
 
+/// Calculate a sliding scroll window that keeps `cursor` visible within `visible` rows.
+pub fn picker_scroll_window(cursor: usize, total: usize, visible: usize) -> (usize, usize) {
+    if total <= visible {
+        return (0, total);
+    }
+    let half = visible / 2;
+    let start = if cursor <= half {
+        0
+    } else if cursor + half >= total {
+        total.saturating_sub(visible)
+    } else {
+        cursor.saturating_sub(half)
+    };
+    let end = (start + visible).min(total);
+    (start, end)
+}
+
 // endregion: --- Theme picker
 
 // region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_picker_scroll_window_small_list() {
+        assert_eq!(picker_scroll_window(0, 5, 10), (0, 5));
+        assert_eq!(picker_scroll_window(3, 5, 10), (0, 5));
+    }
+
+    #[test]
+    fn test_picker_scroll_window_scrolling() {
+        // Cursor at top
+        assert_eq!(picker_scroll_window(0, 30, 8), (0, 8));
+        // Cursor in middle
+        assert_eq!(picker_scroll_window(10, 30, 8), (6, 14));
+        // Cursor at bottom
+        assert_eq!(picker_scroll_window(29, 30, 8), (22, 30));
+    }
+}

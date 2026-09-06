@@ -335,6 +335,8 @@ pub(crate) enum SlashCmd {
     Export(Option<String>),
     /// Show current context window usage.
     Context,
+    /// Toggle global timeline detail expansion.
+    Details,
     /// Dump the last assistant message as stored on the server.
     DebugLast,
     /// Show session cost breakdown (tokens × pricing).
@@ -443,6 +445,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "usage" => Some(SlashCmd::Usage),
         "stats" => Some(SlashCmd::Stats(arg)),
         "cost" => Some(SlashCmd::Cost),
+        "details" | "detail" => Some(SlashCmd::Details),
         "pricing" => Some(SlashCmd::Pricing(arg)),
         "context" => Some(SlashCmd::Context),
         "debug-last" | "debug_last" => Some(SlashCmd::DebugLast),
