@@ -15,14 +15,14 @@ pub struct AnthropicCacheAdapter;
 
 impl PromptCacheManager for AnthropicCacheAdapter {
     fn optimize(&self, req: &mut CompletionRequest) {
-        // 1. Annotate the first system message (static system prompt)
+        // 1. Breakpoint 1: Static system prompt & constitutions
         if let Some(sys_msg) = req.messages.first_mut()
             && sys_msg.role == "system"
         {
             sys_msg.cache_control = Some("ephemeral".to_string());
         }
 
-        // 2. Annotate the last tool schema
+        // 2. Breakpoint 2: Final tool schema
         if let Some(last_tool) = req.tools.last_mut()
             && let Some(obj) = last_tool.as_object_mut()
         {
@@ -32,16 +32,23 @@ impl PromptCacheManager for AnthropicCacheAdapter {
             );
         }
 
-        // 3. Annotate the second-to-last user message (multi-turn history caching)
-        let mut user_count = 0;
-        for msg in req.messages.iter_mut().rev() {
-            if msg.role == "user" {
-                user_count += 1;
-                if user_count == 2 {
-                    msg.cache_control = Some("ephemeral".to_string());
-                    break;
-                }
-            }
+        // 3. Multi-turn conversation breakpoints (up to 2 user turns: milestone + recent)
+        let user_indices: Vec<usize> = req
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+            .collect();
+
+        if user_indices.len() >= 4 {
+            let milestone_idx = user_indices[user_indices.len() / 2];
+            req.messages[milestone_idx].cache_control = Some("ephemeral".to_string());
+
+            let recent_idx = user_indices[user_indices.len().saturating_sub(2)];
+            req.messages[recent_idx].cache_control = Some("ephemeral".to_string());
+        } else if let Some(&target_idx) = user_indices.iter().rev().nth(1).or_else(|| user_indices.last()) {
+            req.messages[target_idx].cache_control = Some("ephemeral".to_string());
         }
     }
 }

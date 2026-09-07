@@ -11,12 +11,37 @@ use cade_ai::{LlmMessage, PromptBudgetManager, catalogue};
 use cade_store::sqlite::{self};
 use serde_json::{Value, json};
 
+/// Strip verbose internal reasoning/thought traces from historical assistant messages.
+pub(crate) fn strip_historical_reasoning_trace(content: &str) -> String {
+    let mut s = content.to_string();
+    while let Some(start) = s.find("<reasoning>") {
+        if let Some(end) = s[start..].find("</reasoning>") {
+            let close = start + end + "</reasoning>".len();
+            s.replace_range(start..close, "");
+        } else {
+            break;
+        }
+    }
+    while let Some(start) = s.find("<thought>") {
+        if let Some(end) = s[start..].find("</thought>") {
+            let close = start + end + "</thought>".len();
+            s.replace_range(start..close, "");
+        } else {
+            break;
+        }
+    }
+    s.trim().to_string()
+}
+
 pub(crate) fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     let mut result: Vec<LlmMessage> = Vec::new();
     let mut i = 0;
 
     while i < messages.len() {
-        let msg = messages[i].clone();
+        let mut msg = messages[i].clone();
+        if msg.role == "assistant" && i + 1 < messages.len() {
+            msg.content = strip_historical_reasoning_trace(&msg.content);
+        }
 
         match msg.role.as_str() {
             "assistant" if msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
@@ -912,6 +937,9 @@ pub(crate) async fn build_context(
         });
     }
 
+    // ── Ephemeral tool output compaction (Slice 2) ───────────────────────────
+    crate::server::compaction::DefaultContextCompactor::compact_stale_tool_outputs(&mut messages, 2, 300);
+
     // ── Intelligent tool selection ────────────────────────────────────────────
     let tool_selector = cade_ai::resolve_tool_selector(&agent.model);
     let tool_schemas = tool_selector.select_tools(&messages, tagged_schemas);
@@ -1114,18 +1142,27 @@ fn assemble_system_prompt_memory(
             );
             if !recalled.is_empty() {
                 let mut recall_lines: Vec<String> = Vec::new();
+                let mut budget_remaining = 2000usize; // ~500 token ceiling
                 for rc in &recalled {
-                    let preview: String = rc.chunk_content.chars().take(300).collect();
-                    recall_lines.push(format!(
-                        "- **[{}]** (chunk {}): {}",
-                        rc.label, rc.chunk_index, preview
+                    let preview: String = rc.chunk_content.chars().take(budget_remaining.min(300)).collect();
+                    if !preview.is_empty() {
+                        budget_remaining = budget_remaining.saturating_sub(preview.len());
+                        recall_lines.push(format!(
+                            "- **[{}]** (chunk {}): {}",
+                            rc.label, rc.chunk_index, preview
+                        ));
+                    }
+                    if budget_remaining == 0 {
+                        break;
+                    }
+                }
+                if !recall_lines.is_empty() {
+                    dynamic_core.push_str(&format!(
+                        "# Recalled Context\n\
+                         The following memory fragments matched your latest message and were automatically recalled:\n{}\n\n",
+                        recall_lines.join("\n")
                     ));
                 }
-                dynamic_core.push_str(&format!(
-                    "# Recalled Context\n\
-                     The following memory fragments matched your latest message and were automatically recalled:\n{}\n\n",
-                    recall_lines.join("\n")
-                ));
             }
         }
 
@@ -1936,5 +1973,49 @@ Load and follow these skills for all work:
 ";
         let skills = parse_required_skills_from_project(block);
         assert_eq!(skills, vec!["spaced-skill", "another-skill"]);
+    }
+}
+
+#[cfg(test)]
+mod reasoning_trace_tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_historical_reasoning_trace() {
+        let content_with_reasoning = "<reasoning>\nLet me think about this step by step...\n</reasoning>\n\nHere is the answer: 42";
+        let cleaned = strip_historical_reasoning_trace(content_with_reasoning);
+        assert_eq!(cleaned, "Here is the answer: 42");
+
+        let content_with_thought = "<thought>\nInternal deliberation...\n</thought>\n\nFinal output.";
+        let cleaned_thought = strip_historical_reasoning_trace(content_with_thought);
+        assert_eq!(cleaned_thought, "Final output.");
+    }
+
+    #[test]
+    fn test_sanitize_messages_strips_only_older_assistant_reasoning() {
+        let msgs = vec![
+            // Older assistant turn with reasoning
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: "<reasoning>Old reasoning</reasoning>\nAnswer 1".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // Current user turn
+            LlmMessage {
+                role: "user".to_string(),
+                content: "Follow up question".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+        ];
+
+        let sanitized = sanitize_messages(msgs);
+        assert_eq!(sanitized[0].content, "Answer 1");
+        assert_eq!(sanitized[1].content, "Follow up question");
     }
 }

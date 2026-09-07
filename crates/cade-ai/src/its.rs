@@ -175,14 +175,108 @@ impl IntelligentToolSelector for NeedleToolSelector {
     }
 }
 
+// ── Intent Tool Selector (Slice 1) ──────────────────────────────────────────
+
+/// Zero-turn tool selector: prunes unrelated specialized tools from Turn 1
+/// while guaranteeing core coding and system tools remain available.
+pub struct IntentToolSelector {
+    pub recent_window: usize,
+    pub char_cap: usize,
+}
+
+impl Default for IntentToolSelector {
+    fn default() -> Self {
+        Self {
+            recent_window: 15,
+            char_cap: 80,
+        }
+    }
+}
+
+impl IntelligentToolSelector for IntentToolSelector {
+    fn select_tools(&self, messages: &[LlmMessage], tools: Vec<TaggedToolSchema>) -> Vec<Value> {
+        let mut conversation_text = String::new();
+        let mut used_tools = HashSet::new();
+
+        let start_idx = messages.len().saturating_sub(self.recent_window);
+        for msg in &messages[start_idx..] {
+            conversation_text.push_str(&msg.content.to_lowercase());
+            conversation_text.push(' ');
+            if let Some(calls) = &msg.tool_calls {
+                for tc in calls {
+                    used_tools.insert(tc.name.clone());
+                }
+            }
+        }
+
+        tools
+            .into_iter()
+            .filter(|tagged| {
+                let name = tagged.schema["name"].as_str().unwrap_or("");
+                let is_core = tagged.tags.iter().any(|t| {
+                    t == "core" || t == "core_mcp" || t == "meta" || t == "native" || t == "cade"
+                }) || is_essential_tool(name);
+
+                if is_core {
+                    return true;
+                }
+
+                if used_tools.contains(name) {
+                    return true;
+                }
+
+                let name_lower = name.to_lowercase();
+                let short_name = name_lower.split("__").last().unwrap_or(&name_lower);
+                if conversation_text.contains(short_name) {
+                    return true;
+                }
+
+                for tag in &tagged.tags {
+                    if !tag.is_empty() && conversation_text.contains(&tag.to_lowercase()) {
+                        return true;
+                    }
+                }
+
+                false
+            })
+            .map(|tagged| tagged.schema)
+            .collect()
+    }
+}
+
+fn is_essential_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "read_file"
+            | "write_file"
+            | "edit_file"
+            | "replace_in_file"
+            | "bash"
+            | "glob"
+            | "grep"
+            | "update_memory"
+            | "update_memory_typed"
+            | "set_plan"
+            | "UpdatePlan"
+            | "finish_task"
+            | "ask_user_question"
+            | "run_subagent"
+            | "cancel_subagent"
+            | "list_agents"
+            | "message_agent"
+    )
+}
+
 // ── Resolver ─────────────────────────────────────────────────────────────────
 
 /// Resolves the optimal tool selector based on the active model ID.
 pub fn resolve_tool_selector(model_id: &str) -> Box<dyn IntelligentToolSelector> {
-    if model_id.contains("needle") || std::env::var("CADE_USE_NEEDLE_ITS").is_ok() {
+    if std::env::var("CADE_DISABLE_TOOL_PRUNING").is_ok() {
+        Box::new(PassThroughToolSelector)
+    } else if model_id.contains("needle") || std::env::var("CADE_USE_NEEDLE_ITS").is_ok() {
         Box::new(NeedleToolSelector::default())
     } else {
-        Box::new(AdaptiveToolSelector::default())
+        Box::new(IntentToolSelector::default())
     }
 }
 
@@ -213,6 +307,76 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0]["name"], "bash");
         assert_eq!(selected[1]["name"], "mcp_tool");
+    }
+
+    #[test]
+    fn test_intent_selector_preserves_core_and_prunes_unrelated() {
+        let selector = IntentToolSelector::default();
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: "Please edit src/main.rs and run cargo test".to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }];
+
+        let tools = vec![
+            TaggedToolSchema {
+                schema: json!({"name": "write_file"}),
+                tags: vec!["core".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({"name": "bash"}),
+                tags: vec!["native".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({"name": "drawio__generate_diagram"}),
+                tags: vec!["diagrams".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({"name": "pptx__generate_slides"}),
+                tags: vec!["presentation".to_string()],
+            },
+        ];
+
+        let selected = selector.select_tools(&messages, tools);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0]["name"], "write_file");
+        assert_eq!(selected[1]["name"], "bash");
+    }
+
+    #[test]
+    fn test_intent_selector_includes_matching_specialized_tool() {
+        let selector = IntentToolSelector::default();
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: "Create a presentation slides deck about architecture".to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }];
+
+        let tools = vec![
+            TaggedToolSchema {
+                schema: json!({"name": "bash"}),
+                tags: vec!["core".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({"name": "pptx__generate_slides"}),
+                tags: vec!["presentation".to_string()],
+            },
+            TaggedToolSchema {
+                schema: json!({"name": "drawio__generate_diagram"}),
+                tags: vec!["diagrams".to_string()],
+            },
+        ];
+
+        let selected = selector.select_tools(&messages, tools);
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().any(|s| s["name"] == "bash"));
+        assert!(selected.iter().any(|s| s["name"] == "pptx__generate_slides"));
     }
 
     #[test]

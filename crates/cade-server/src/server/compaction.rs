@@ -51,6 +51,35 @@ pub trait ContextCompactionEngine: Send + Sync {
 pub struct DefaultContextCompactor;
 
 impl DefaultContextCompactor {
+    /// Collapse verbose tool outputs older than `preserve_recent_turns` into compact metadata tombstones.
+    pub fn compact_stale_tool_outputs(
+        messages: &mut [LlmMessage],
+        preserve_recent_turns: usize,
+        threshold_chars: usize,
+    ) {
+        let total_turns = messages.iter().filter(|m| m.role == "user").count();
+
+        let mut current_turn = 0usize;
+        for msg in messages.iter_mut() {
+            if msg.role == "user" {
+                current_turn += 1;
+            }
+
+            let is_stale = current_turn + preserve_recent_turns <= total_turns;
+            if is_stale && msg.role == "tool" {
+                let char_count = msg.content.chars().count();
+                if char_count > threshold_chars {
+                    let line_count = msg.content.lines().count();
+                    let tool_id = msg.tool_call_id.as_deref().unwrap_or("unknown");
+                    msg.content = format!(
+                        "[tool_output: {} lines ({} chars) from call {} omitted from history; information incorporated in earlier turns]",
+                        line_count, char_count, tool_id
+                    );
+                }
+            }
+        }
+    }
+
     /// Helper to group messages into turns (identical to the legacy group_into_turns).
     fn group_into_turns(
         &self,
@@ -256,5 +285,73 @@ impl ContextCompactionEngine for DefaultContextCompactor {
             Ok(report) => Some(report.summary_length_chars),
             Err(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_stale_tool_outputs_preserves_recent_turns() {
+        let mut messages = vec![
+            // Turn 1 (Old)
+            LlmMessage {
+                role: "user".to_string(),
+                content: "Read file 1".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            LlmMessage {
+                role: "tool".to_string(),
+                content: "a".repeat(1000),
+                tool_call_id: Some("call_1".to_string()),
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: "I read file 1".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // Turn 2 (Recent)
+            LlmMessage {
+                role: "user".to_string(),
+                content: "Read file 2".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            LlmMessage {
+                role: "tool".to_string(),
+                content: "b".repeat(1000),
+                tool_call_id: Some("call_2".to_string()),
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // Turn 3 (Most recent)
+            LlmMessage {
+                role: "user".to_string(),
+                content: "Next step".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+        ];
+
+        DefaultContextCompactor::compact_stale_tool_outputs(&mut messages, 2, 200);
+
+        assert!(messages[1].content.contains("[tool_output:"));
+        assert!(messages[1].content.contains("call_1"));
+        assert_eq!(messages[4].content, "b".repeat(1000));
     }
 }
