@@ -137,6 +137,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) nerd: bool,
     pub(crate) subagent_trackers: &'a [crate::subagent_tracker::SubagentTracker],
     pub(crate) content_version: u64,
+    pub(crate) modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
 }
 
 pub(crate) fn render_frame(
@@ -169,6 +170,7 @@ pub(crate) fn render_frame(
         colors,
         nerd,
         subagent_trackers,
+        modified_files,
         content_version,
         ..
     } = ctx;
@@ -331,6 +333,7 @@ pub(crate) fn render_frame(
             thinking_elapsed: ctx.thinking_elapsed,
             active_plan,
             session_cost_usd: ctx.session_cost_usd,
+            modified_files,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }

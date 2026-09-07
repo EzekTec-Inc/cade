@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
 use futures::stream::StreamExt;
 use once_cell::sync::Lazy;
@@ -22,13 +21,53 @@ pub static GLOBAL_EVENTS_TX: Lazy<broadcast::Sender<Value>> = Lazy::new(|| {
     tx
 });
 
-pub fn broadcast_global_event(event: Value) {
-    let _ = GLOBAL_EVENTS_TX.send(event);
+#[derive(Debug, Deserialize, Default)]
+pub struct StreamGlobalEventsQuery {
+    pub since: Option<i64>,
 }
 
-pub async fn stream_global_events() -> impl axum::response::IntoResponse {
+pub fn publish_global_event(db: Option<&sqlite::Db>, event_type: &str, mut payload: Value) -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let seq = if let Some(d) = db {
+        cade_store::sqlite::append_global_event(d, event_type, &payload.to_string()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("seq".to_string(), json!(seq));
+        obj.insert("event_type".to_string(), json!(event_type));
+        if !obj.contains_key("created_at") {
+            obj.insert("created_at".to_string(), json!(now));
+        }
+    }
+
+    let _ = GLOBAL_EVENTS_TX.send(payload);
+    seq
+}
+
+pub fn broadcast_global_event(event: Value) {
+    let event_type = event
+        .get("event_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("generic")
+        .to_string();
+    publish_global_event(None, &event_type, event);
+}
+
+pub async fn stream_global_events(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StreamGlobalEventsQuery>,
+) -> impl axum::response::IntoResponse {
+    let db = state.db.clone();
+    let since = query.since.unwrap_or(0);
     let rx = GLOBAL_EVENTS_TX.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|res| async move {
+
+    let live_stream = BroadcastStream::new(rx).filter_map(|res| async move {
         match res {
             Ok(val) => {
                 let data = val.to_string();
@@ -39,7 +78,28 @@ pub async fn stream_global_events() -> impl axum::response::IntoResponse {
             Err(_) => None,
         }
     });
-    Sse::new(stream).into_response()
+
+    let stream: futures::stream::BoxStream<'static, Result<Event, std::convert::Infallible>> = if since > 0 {
+        let mut past_events = Vec::new();
+        if let Ok(past) = cade_store::sqlite::global_events_after(&db, since) {
+            for (seq, event_type, payload_str) in past {
+                let mut val: Value = serde_json::from_str(&payload_str).unwrap_or(json!({}));
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("seq".to_string(), json!(seq));
+                    obj.insert("event_type".to_string(), json!(event_type));
+                }
+                past_events.push(Ok::<Event, std::convert::Infallible>(
+                    Event::default().data(val.to_string()),
+                ));
+            }
+        }
+        let replay_stream = futures::stream::iter(past_events);
+        futures::stream::StreamExt::boxed(futures::stream::StreamExt::chain(replay_stream, live_stream))
+    } else {
+        futures::stream::StreamExt::boxed(live_stream)
+    };
+
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
 /// Minimal fallback system prompt used only when the client doesn't supply one
@@ -874,6 +934,20 @@ pub async fn search_memory_handler(
 pub struct InsertArchivalReq {
     pub content: String,
     pub tags: Vec<String>,
+}
+
+/// GET /v1/agents/:id/runs
+pub async fn list_agent_runs(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match cade_store::sqlite::list_agent_runs(&state.db, &agent_id, 20) {
+        Ok(runs) => Ok(Json(json!({ "runs": runs }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )),
+    }
 }
 
 /// POST /v1/agents/:id/archival

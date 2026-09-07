@@ -148,6 +148,7 @@ pub struct ToolPipeline {
     permissions: PermissionManager,
     hooks: Arc<HookEngine>,
     approval_delegate: Arc<dyn ApprovalDelegate>,
+    mutation_observer: Option<Arc<dyn crate::tools::mutation_observer::FileMutationObserver>>,
 }
 
 impl ToolPipeline {
@@ -163,7 +164,17 @@ impl ToolPipeline {
             permissions,
             hooks,
             approval_delegate,
+            mutation_observer: None,
         }
+    }
+
+    /// Attach an observer for file mutation events.
+    pub fn with_mutation_observer(
+        mut self,
+        observer: Arc<dyn crate::tools::mutation_observer::FileMutationObserver>,
+    ) -> Self {
+        self.mutation_observer = Some(observer);
+        self
     }
 
     /// Access the underlying permissions manager.
@@ -290,6 +301,22 @@ impl ToolPipeline {
             ));
         }
 
+        // Snapshot pre-mutation content if this is a file-modifying tool
+        let pre_content_snapshot = if canonical == "write_file"
+            || canonical == "edit_file"
+            || canonical == "replace_in_file"
+            || canonical.ends_with("__write_file")
+            || canonical.ends_with("__replace_in_file")
+        {
+            effective_args
+                .get("path")
+                .and_then(|p| p.as_str())
+                .and_then(|path_str| std::fs::read_to_string(path_str).ok())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         // 4. Dispatch tool execution via ToolRuntime
         let run_result = self
             .runtime
@@ -310,7 +337,27 @@ impl ToolPipeline {
             ),
         };
 
-        // 5. Execute PostToolUse or PostToolUseFailure hooks
+        // 5. If file mutation succeeded, notify mutation observer
+        if !is_error
+            && let Some(ref obs) = self.mutation_observer
+            && (canonical == "write_file"
+                || canonical == "edit_file"
+                || canonical == "replace_in_file"
+                || canonical.ends_with("__write_file")
+                || canonical.ends_with("__replace_in_file"))
+            && let Some(path_str) = effective_args.get("path").and_then(|p| p.as_str())
+        {
+            let path = std::path::PathBuf::from(path_str);
+            let post_content = std::fs::read_to_string(&path).unwrap_or_default();
+            obs.on_file_mutated(crate::tools::mutation_observer::FileMutationEvent {
+                path,
+                pre_content: pre_content_snapshot,
+                post_content,
+                tool_name: tool_name.to_string(),
+            }).await;
+        }
+
+        // 6. Execute PostToolUse or PostToolUseFailure hooks
         if is_error {
             self.hooks
                 .post_tool_use_failure(tool_name, &effective_args, &output, None, None)

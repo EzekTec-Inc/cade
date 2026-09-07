@@ -5,6 +5,7 @@ pub mod artifacts;
 pub mod chat;
 pub mod code;
 pub mod dashboard;
+pub mod live;
 pub mod login;
 pub mod logs_page;
 pub mod markdown;

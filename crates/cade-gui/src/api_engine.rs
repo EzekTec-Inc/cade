@@ -256,9 +256,10 @@ impl ApiClientEngine {
                 approved,
                 feedback,
             } => {
-                let path = format!("/v1/approvals/{approval_id}");
+                let path = format!("/v1/approvals/{approval_id}/action");
+                let action = if approved { "approve" } else { "deny" };
                 let body = serde_json::json!({
-                    "approved": approved,
+                    "action": action,
                     "feedback": feedback
                 });
                 api_request("POST", &path, Some(&body.to_string()), api_key).await?;

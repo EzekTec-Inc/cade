@@ -37,6 +37,7 @@ pub fn Sidebar() -> Element {
                     // Overview Group
                     div { class: "text-[10px] font-bold text-slate-500 px-3 pt-3 pb-1 tracking-wider uppercase", "Overview" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Dashboard, icon: "🎛", label: "Dashboard" }
+                    nav_item { active_page: state.active_page, page: SelectedPage::Live, icon: "🟢", label: "Live Activity" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Code, icon: "⌨", label: "Code" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Chat, icon: "💬", label: "Chat" }
                     nav_item { active_page: state.active_page, page: SelectedPage::Arena, icon: "⚡", label: "Model Arena" }

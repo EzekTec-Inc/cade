@@ -39,6 +39,21 @@ pub async fn log_tool_execution(
             now,
         ],
     );
+
+    crate::server::api::agents::publish_global_event(
+        Some(&state.db),
+        "tool_execution",
+        json!({
+            "id": id,
+            "agent_id": agent_id,
+            "conversation_id": body["conversation_id"].as_str(),
+            "tool_name": body["tool_name"].as_str().unwrap_or("unknown"),
+            "is_error": body["is_error"].as_bool().unwrap_or(false),
+            "output_chars": output_chars,
+            "duration_ms": body["duration_ms"].as_i64().unwrap_or(0),
+        }),
+    );
+
     Ok(Json(json!({ "id": id, "output_chars": output_chars })))
 }
 

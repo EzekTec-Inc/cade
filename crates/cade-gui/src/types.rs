@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 #[derive(Clone, Copy, PartialEq)]
 pub enum SelectedPage {
     Dashboard,
+    Live,
     Code,
     Chat,
     Arena,
@@ -78,6 +79,7 @@ pub struct AppState {
     pub active_stream_id: Signal<Option<String>>,
     pub active_stream: Signal<SafeAbortHandle>,
     pub parsed_messages: Signal<std::collections::HashMap<String, (String, Option<String>)>>,
+    pub pending_approvals: Signal<Vec<serde_json::Value>>,
 }
 
 /// Helper: push a toast notification into global state.

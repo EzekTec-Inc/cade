@@ -1757,6 +1757,18 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
             return Ok(false);
         }
 
+        crate::server::api::agents::publish_global_event(
+            Some(&self.db),
+            "approval_required",
+            serde_json::json!({
+                "id": approval_id,
+                "agent_id": self.parent_agent_id,
+                "subagent_id": self.subagent_id,
+                "tool_name": tool_name,
+                "arguments": args,
+            }),
+        );
+
         // Trigger native desktop notification via CADE's cross-platform desktop notification service
         let title = "CADE — Approval Required";
         let body = format!(

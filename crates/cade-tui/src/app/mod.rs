@@ -932,6 +932,9 @@ pub struct TuiApp {
     // -- Leader Key Chord Engine (Slice 1)
     pub leader_engine: crate::app::leader::LeaderKeyEngine,
 
+    // -- Live Modified Files Tracker (Slice 3)
+    pub modified_files_tracker: crate::app::layout::modified_files::ModifiedFilesTracker,
+
     // -- Dynamic overlay stack (Phase 3)
     /// Heterogeneous stack of modal overlays.  The host dispatches
     /// input to `overlays.last_mut()` and renders bottom-to-top.
@@ -1163,6 +1166,7 @@ impl TuiApp {
             tool_ac: crate::autocomplete::ToolAutocompleteProvider::new(vec![], vec![]),
             next_step_ac: crate::autocomplete::NextStepAutocompleteProvider::new(vec![]),
             leader_engine: crate::app::leader::LeaderKeyEngine::new(),
+            modified_files_tracker: crate::app::layout::modified_files::ModifiedFilesTracker::new(),
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
@@ -1468,6 +1472,9 @@ impl TuiApp {
         // Temporarily take the overlay stack out of self so we can
         // call render_overlay(&mut self) inside the terminal.draw
         // closure (which already borrows self.terminal mutably).
+        let working_dir_buf = std::env::current_dir().unwrap_or_default();
+        let modified_files_entries = self.modified_files_tracker.entries(&working_dir_buf);
+
         let mut overlay_stack = std::mem::take(&mut self.overlays);
         let mut slot_mgr = std::mem::take(&mut self.slots);
 
@@ -1512,6 +1519,7 @@ impl TuiApp {
                 nerd,
                 subagent_trackers: &self.subagent_trackers,
                 content_version: self.content_version,
+                modified_files: &modified_files_entries,
             };
             let (m_skip, cur_pos, msg_area) = render_frame(
                 frame,

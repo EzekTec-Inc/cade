@@ -262,6 +262,16 @@ pub(super) async fn execute_turn_tools(
         let arguments = tc.arguments;
 
         // Send tool-start progress notification
+        crate::server::api::agents::publish_global_event(
+            Some(&state.db),
+            "tool_progress",
+            json!({
+                "agent_id": agent_id,
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "status": "started",
+            }),
+        );
         let _ = tx
             .send(Ok(axum::response::sse::Event::default().data(
                 json!({
@@ -392,6 +402,16 @@ pub(super) async fn execute_turn_tools(
         };
 
         // Send tool-complete progress notification
+        crate::server::api::agents::publish_global_event(
+            Some(&state.db),
+            "tool_progress",
+            json!({
+                "agent_id": agent_id,
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "status": "completed",
+            }),
+        );
         let _ = tx
             .send(Ok(axum::response::sse::Event::default().data(
                 json!({

@@ -15,6 +15,7 @@ pub mod isolation;
 pub mod manager;
 pub mod memory;
 pub mod meta;
+pub mod mutation_observer;
 pub mod pipeline;
 pub mod plan;
 pub mod runtime;
@@ -28,6 +29,10 @@ pub use manager::{
     ToolResult, all_schemas, dispatch, is_mcp_write_tool, schemas_for_names, schemas_for_toolset,
 };
 pub use meta::{all_meta_schemas, register_meta_tools};
+pub use mutation_observer::{
+    ChannelMutationObserver, FileMutationEvent, FileMutationObserver, MutationReceiver,
+    MutationSender,
+};
 pub use pipeline::{
     ApprovalDelegate, AutoApprovalDelegate, DenyAllApprovalDelegate, PipelineOutcome, ToolPipeline,
 };

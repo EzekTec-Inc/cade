@@ -65,6 +65,27 @@ pub fn ChatView() -> Element {
                     active_conversation: state.active_conversation,
                 }
             }
+
+            // Right-hand Side-Tray Context Panel (Phase 4)
+            div { class: "w-72 border-l border-[#1e293b]/70 bg-[#090d16] p-5 flex flex-col space-y-6 hidden xl:flex select-none overflow-y-auto",
+                div { class: "space-y-1.5",
+                    div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider", "Session Agent" }
+                    div { class: "text-xs font-bold text-slate-200 font-mono truncate", "{agent_name}" }
+                    div { class: "text-[11px] font-mono text-cyan-400 bg-[#16171d] px-2.5 py-1 rounded border border-slate-800",
+                        "{(state.selected_agent)().and_then(|a| a.model).unwrap_or_default()}"
+                    }
+                }
+                div { class: "space-y-2 border-t border-slate-800/80 pt-4",
+                    div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between",
+                        span { "Pending Approvals" }
+                        span { class: "px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-mono font-bold", "{(state.pending_approvals)().len()}" }
+                    }
+                }
+                div { class: "space-y-2 border-t border-slate-800/80 pt-4 flex-1",
+                    div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider", "Modified Files" }
+                    div { class: "text-xs font-mono text-slate-500 italic p-3 rounded bg-[#0c101d] border border-slate-800/60", "No modified files in session" }
+                }
+            }
         }
     }
 }

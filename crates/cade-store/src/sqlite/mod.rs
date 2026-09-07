@@ -136,6 +136,14 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS global_events (
+            seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type  TEXT    NOT NULL,
+            payload     TEXT    NOT NULL,
+            created_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_global_events_seq ON global_events(seq);
+
         CREATE TABLE IF NOT EXISTS conversations (
             id          TEXT PRIMARY KEY,
             agent_id    TEXT NOT NULL,
@@ -912,6 +920,26 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 20", [])?;
     }
 
+    if current_version < 21 {
+        let r1 = conn.execute(
+            "CREATE TABLE IF NOT EXISTS global_events (
+                seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type  TEXT    NOT NULL,
+                payload     TEXT    NOT NULL,
+                created_at  INTEGER NOT NULL
+            )",
+            [],
+        );
+        let r2 = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_global_events_seq ON global_events(seq)",
+            [],
+        );
+        if let Err(e) = r1.and(r2) {
+            tracing::warn!("Migration 21 CREATE TABLE global_events failed: {e}");
+        }
+        conn.execute("PRAGMA user_version = 21", [])?;
+    }
+
     Ok(())
 }
 
@@ -968,8 +996,10 @@ pub mod runs;
 pub mod skills;
 pub mod tools;
 pub mod workflows;
+pub mod global_events;
 
 pub use agents::*;
+pub use global_events::*;
 pub use approvals::*;
 pub use conversations::*;
 pub use evidence::*;

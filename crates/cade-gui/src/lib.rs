@@ -76,6 +76,7 @@ fn App() -> Element {
     let active_stream = use_signal(types::SafeAbortHandle::default);
     let parsed_messages =
         use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
+    let mut pending_approvals = use_signal(Vec::<serde_json::Value>::new);
     let mut show_palette = use_signal(|| false);
     let mut palette_query = use_signal(String::new);
 
@@ -93,6 +94,7 @@ fn App() -> Element {
     use_context_provider(|| active_stream_id);
     use_context_provider(|| active_stream);
     use_context_provider(|| parsed_messages);
+    use_context_provider(|| pending_approvals);
 
     let app_state = AppState {
         api_key,
@@ -108,6 +110,7 @@ fn App() -> Element {
         active_stream_id,
         active_stream,
         parsed_messages,
+        pending_approvals,
     };
     use_context_provider(|| app_state);
 
@@ -253,6 +256,24 @@ fn App() -> Element {
                                     toasts.set(list);
                                 }
                             }
+                            "approval_required" => {
+                                let approval_id = event["id"].as_str().unwrap_or("");
+                                if !approval_id.is_empty() {
+                                    let mut list = pending_approvals();
+                                    if !list.iter().any(|a| a["id"].as_str() == Some(approval_id)) {
+                                        list.push(event.clone());
+                                        pending_approvals.set(list);
+                                    }
+                                }
+                            }
+                            "approval_resolved" => {
+                                let approval_id = event["id"].as_str().unwrap_or("");
+                                if !approval_id.is_empty() {
+                                    let mut list = pending_approvals();
+                                    list.retain(|a| a["id"].as_str() != Some(approval_id));
+                                    pending_approvals.set(list);
+                                }
+                            }
                             _ => {}
                         }
                     })
@@ -366,6 +387,8 @@ fn App() -> Element {
                         components::usage::UsageView {}
                     } else if (active_page)() == SelectedPage::Settings {
                         components::settings::SettingsView {}
+                    } else if (active_page)() == SelectedPage::Live {
+                        components::live::LiveView {}
                     } else {
                         components::dashboard::DashboardView {}
                     }

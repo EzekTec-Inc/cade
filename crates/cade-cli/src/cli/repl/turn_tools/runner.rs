@@ -763,6 +763,22 @@ impl Repl {
             return result;
         }
 
+        // Capture baseline content if this is a file edit tool for live side-tray diff tracking
+        let is_file_edit = cade_agent::tools::manager::is_file_edit_tool(tool_name);
+        let file_path_target = if is_file_edit {
+            args.get("file_path")
+                .or_else(|| args.get("path"))
+                .and_then(|p| p.as_str())
+                .map(std::path::PathBuf::from)
+        } else {
+            None
+        };
+        let pre_content = if let Some(ref p) = file_path_target {
+            std::fs::read_to_string(p).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         // Try ToolRuntime first (handles memory, skills, checkpoints, web, etc.).
         // Fall back to native dispatch / MCP for tools ToolRuntime does not handle.
         let timeout_val = args.get("timeout").and_then(|v| v.as_u64());
@@ -822,7 +838,14 @@ impl Repl {
             },
         };
 
-        if !result.is_error && cade_agent::tools::manager::is_file_edit_tool(tool_name) {
+        if !result.is_error && is_file_edit {
+            if let Some(ref p) = file_path_target {
+                let post_content = std::fs::read_to_string(p).unwrap_or_default();
+                let mut a = app.lock();
+                a.modified_files_tracker.record_mutation(p, &pre_content, &post_content);
+                a.draw_dirty = true;
+            }
+
             let path = args["file_path"]
                 .as_str()
                 .or(args["path"].as_str())

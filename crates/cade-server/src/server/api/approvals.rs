@@ -69,5 +69,15 @@ pub async fn action_approval(
     cade_store::sqlite::set_approval_status(&state.db, &id, &status)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    crate::server::api::agents::publish_global_event(
+        Some(&state.db),
+        "approval_resolved",
+        json!({
+            "id": id,
+            "status": status,
+            "feedback": payload.feedback,
+        }),
+    );
+
     Ok(Json(json!({ "id": id, "status": status })))
 }

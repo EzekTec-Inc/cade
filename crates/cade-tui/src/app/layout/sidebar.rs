@@ -22,6 +22,7 @@ pub(crate) struct SidebarState<'a> {
     pub thinking_elapsed: Option<std::time::Duration>,
     pub active_plan: Option<&'a PlanState>,
     pub session_cost_usd: f64,
+    pub modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
 }
 
 impl<'a> SidebarState<'a> {
@@ -221,6 +222,48 @@ pub(crate) fn render_sidebar(
         ]),
         Line::from(""),
         Line::from(Span::styled(
+            " Modified Files ",
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    let mut lines = lines;
+    if state.modified_files.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " (no modified files)",
+            colors.text_dim(),
+        )));
+    } else {
+        // Render up to 6 modified files, with overflow indicator if more
+        let show_limit = 6;
+        for entry in state.modified_files.iter().take(show_limit) {
+            let add_str = format!("+{}", entry.metrics.additions);
+            let del_str = format!("-{}", entry.metrics.deletions);
+            let metrics_len = add_str.len() + del_str.len() + 3; // " +N -M"
+            let path_w = val_w.saturating_sub(metrics_len).max(6);
+            let trunc_path = truncate_str(&entry.relative_path, path_w);
+
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {trunc_path} "), colors.text_primary()),
+                Span::styled(add_str, Style::default().fg(colors.c_success())),
+                Span::styled(" ", colors.text_dim()),
+                Span::styled(del_str, Style::default().fg(colors.c_error())),
+            ]));
+        }
+        if state.modified_files.len() > show_limit {
+            let rem = state.modified_files.len() - show_limit;
+            lines.push(Line::from(Span::styled(
+                format!(" ... and {rem} more file(s)"),
+                colors.text_muted(),
+            )));
+        }
+    }
+
+    lines.extend(vec![
+        Line::from(""),
+        Line::from(Span::styled(
             " Keys ",
             Style::default()
                 .fg(colors.c_primary())
@@ -237,7 +280,7 @@ pub(crate) fn render_sidebar(
         Line::from(Span::styled(" / commands menu", colors.text_muted())),
         Line::from(Span::styled(" Ctrl+P command palette", colors.text_muted())),
         Line::from(Span::styled(" Ctrl+T toggle plan", colors.text_muted())),
-    ];
+    ]);
 
     // Split inner into text content area + sparkline area at bottom.
     let sparkline_h: u16 = if state.token_history.len() >= 2 { 4 } else { 0 };
@@ -292,6 +335,7 @@ mod tests {
             thinking_elapsed: None,
             active_plan: None,
             session_cost_usd: 0.14,
+            modified_files: &[],
         }
     }
 

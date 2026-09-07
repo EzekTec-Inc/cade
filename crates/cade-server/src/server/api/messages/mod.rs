@@ -600,6 +600,18 @@ pub async fn stream_message(
     let run = sqlite::create_run(&state.db, &agent_id, conv_id_ref);
     let run_id: Option<String> = run.ok().map(|r| r.id);
 
+    if let Some(ref rid) = run_id {
+        crate::server::api::agents::publish_global_event(
+            Some(&state.db),
+            "run_started",
+            json!({
+                "run_id": rid,
+                "agent_id": agent_id,
+                "conversation_id": conv_id_ref,
+            }),
+        );
+    }
+
     let max_tokens = catalogue::max_tokens_for_model(&model);
     let reasoning_effort = body
         .get("reasoning_effort")
@@ -769,6 +781,15 @@ pub async fn stream_message(
                     }
                     if let Some(rid) = &run_id_clone {
                         let _ = sqlite::finish_run(&db_clone, rid, "completed");
+                        crate::server::api::agents::publish_global_event(
+                            Some(&db_clone),
+                            "run_finished",
+                            json!({
+                                "run_id": rid,
+                                "agent_id": agent_id_clone,
+                                "status": "completed",
+                            }),
+                        );
                     }
                     // P2: flush accumulated token usage into AgentMetrics so
                     // server-side cost dashboards / future cost guardrails see
@@ -799,6 +820,15 @@ pub async fn stream_message(
                 Err(e) => {
                     if let Some(rid) = &run_id_clone {
                         let _ = sqlite::finish_run(&db_clone, rid, "failed");
+                        crate::server::api::agents::publish_global_event(
+                            Some(&db_clone),
+                            "run_finished",
+                            json!({
+                                "run_id": rid,
+                                "agent_id": agent_id_clone,
+                                "status": "failed",
+                            }),
+                        );
                     }
                     Event::default().data(
                         json!({ "message_type": "error", "error": e.to_string() }).to_string(),

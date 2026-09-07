@@ -249,6 +249,16 @@ pub async fn run_agent(
     // ── Create run record ─────────────────────────────────────────────────
     let run_id = make_run_id(&state, &agent_id, conv_str.as_deref());
 
+    crate::server::api::agents::publish_global_event(
+        Some(&state.db),
+        "run_started",
+        json!({
+            "run_id": run_id,
+            "agent_id": agent_id,
+            "conversation_id": conv_str,
+        }),
+    );
+
     // Snapshot for the async stream task
     let state2 = state.clone();
     let agent_id2 = agent_id.clone();
@@ -388,6 +398,15 @@ pub(crate) async fn run_agent_loop(
         }
 
         let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+        crate::server::api::agents::publish_global_event(
+            Some(&state2.db),
+            "run_finished",
+            json!({
+                "run_id": run_id2,
+                "agent_id": agent_id2,
+                "status": "done",
+            }),
+        );
         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
         return;
     }
@@ -889,6 +908,15 @@ pub(crate) async fn run_agent_loop(
     }
 
     let _ = sqlite::finish_run(&state2.db, &run_id2, exit_status.as_str());
+    crate::server::api::agents::publish_global_event(
+        Some(&state2.db),
+        "run_finished",
+        json!({
+            "run_id": run_id2,
+            "agent_id": agent_id2,
+            "status": exit_status.as_str(),
+        }),
+    );
 
     // ── End of stream ─────────────────────────────────────────────────
     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;

@@ -1,6 +1,7 @@
 pub mod breadcrumb;
 pub mod command_palette;
 pub mod cursor;
+pub mod modified_files;
 pub mod helpers;
 pub mod pickers;
 pub mod question;

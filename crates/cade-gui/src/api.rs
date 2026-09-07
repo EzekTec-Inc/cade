@@ -70,6 +70,13 @@ pub async fn list_agents(api_key: &str) -> Result<Vec<cade_api_types::AgentInfo>
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 
+/// Fetch recent runs for an agent.
+pub async fn list_agent_runs(agent_id: &str, api_key: &str) -> Result<Vec<serde_json::Value>, String> {
+    let body = api_request("GET", &format!("/v1/agents/{agent_id}/runs"), None, api_key).await?;
+    let val: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))?;
+    Ok(val["runs"].as_array().cloned().unwrap_or_default())
+}
+
 /// Fetch messages for a given agent, optionally filtered by conversation.
 pub async fn get_messages(
     agent_id: &str,

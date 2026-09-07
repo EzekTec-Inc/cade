@@ -49,6 +49,27 @@ pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+/// List recent runs for an agent ordered by created_at DESC.
+pub fn list_agent_runs(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<RunRow>> {
+    let conn = db.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_id, conversation_id, status, created_at, updated_at
+         FROM runs WHERE agent_id = ?1
+         ORDER BY created_at DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![agent_id, limit as i64], |r| {
+        Ok(RunRow {
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
+            conversation_id: r.get(2)?,
+            status: r.get(3)?,
+            created_at: r.get(4)?,
+            updated_at: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Append an SSE event payload to the run's event log.
 /// Returns the assigned seq_id.
 pub fn append_run_event(db: &Db, run_id: &str, data: &str) -> Result<i64> {

@@ -58,6 +58,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/agents/{id}/complete", post(complete::complete))
         .route("/v1/agents/{id}/edit", post(edit::edit))
         .route("/v1/agents/{id}/run", post(run::run_agent))
+        .route("/v1/agents/{id}/runs", get(agents::list_agent_runs))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
