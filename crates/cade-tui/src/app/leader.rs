@@ -4,13 +4,13 @@
 
 // region:    --- Imports
 
-use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
+use std::time::{Duration, Instant};
 
 use crate::colors::{ThemeColors, ThemeColorsExt};
 
@@ -171,22 +171,32 @@ impl LeaderKeyEngine {
             ("Esc", "Close"),
         ];
 
-        let mut spans = vec![
-            Span::styled(" Ctrl+X: ", Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD)),
-        ];
+        let mut spans = vec![Span::styled(
+            " Ctrl+X: ",
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        )];
 
         for (key, label) in shortcuts {
-            spans.push(Span::styled(format!("[{key}] "), Style::default().fg(colors.c_success()).add_modifier(Modifier::BOLD)));
-            spans.push(Span::styled(format!("{label}  "), Style::default().fg(colors.c_text_primary())));
+            spans.push(Span::styled(
+                format!("[{key}] "),
+                Style::default()
+                    .fg(colors.c_success())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!("{label}  "),
+                Style::default().fg(colors.c_text_primary()),
+            ));
         }
 
-        let widget = Paragraph::new(Line::from(spans))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(colors.c_primary()))
-                    .title(" Quick Actions "),
-            );
+        let widget = Paragraph::new(Line::from(spans)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(colors.c_primary()))
+                .title(" Quick Actions "),
+        );
 
         frame.render_widget(widget, render_area);
     }

@@ -90,9 +90,7 @@ impl TerminalNotifier {
                 AttentionCue::SubagentComplete | AttentionCue::TurnFinished => {
                     Self::format_osc99(&format!("✅ {}", title), body)
                 }
-                AttentionCue::TaskError => {
-                    Self::format_osc99(&format!("❌ {}", title), body)
-                }
+                AttentionCue::TaskError => Self::format_osc99(&format!("❌ {}", title), body),
             };
             let _ = write!(stdout, "{}", seq);
         }

@@ -938,7 +938,11 @@ pub(crate) async fn build_context(
     }
 
     // ── Ephemeral tool output compaction (Slice 2) ───────────────────────────
-    crate::server::compaction::DefaultContextCompactor::compact_stale_tool_outputs(&mut messages, 2, 300);
+    crate::server::compaction::DefaultContextCompactor::compact_stale_tool_outputs(
+        &mut messages,
+        2,
+        300,
+    );
 
     // ── Intelligent tool selection ────────────────────────────────────────────
     let tool_selector = cade_ai::resolve_tool_selector(&agent.model);
@@ -1144,7 +1148,11 @@ fn assemble_system_prompt_memory(
                 let mut recall_lines: Vec<String> = Vec::new();
                 let mut budget_remaining = 2000usize; // ~500 token ceiling
                 for rc in &recalled {
-                    let preview: String = rc.chunk_content.chars().take(budget_remaining.min(300)).collect();
+                    let preview: String = rc
+                        .chunk_content
+                        .chars()
+                        .take(budget_remaining.min(300))
+                        .collect();
                     if !preview.is_empty() {
                         budget_remaining = budget_remaining.saturating_sub(preview.len());
                         recall_lines.push(format!(
@@ -1986,7 +1994,8 @@ mod reasoning_trace_tests {
         let cleaned = strip_historical_reasoning_trace(content_with_reasoning);
         assert_eq!(cleaned, "Here is the answer: 42");
 
-        let content_with_thought = "<thought>\nInternal deliberation...\n</thought>\n\nFinal output.";
+        let content_with_thought =
+            "<thought>\nInternal deliberation...\n</thought>\n\nFinal output.";
         let cleaned_thought = strip_historical_reasoning_trace(content_with_thought);
         assert_eq!(cleaned_thought, "Final output.");
     }

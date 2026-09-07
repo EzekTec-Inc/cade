@@ -47,7 +47,12 @@ impl PromptCacheManager for AnthropicCacheAdapter {
 
             let recent_idx = user_indices[user_indices.len().saturating_sub(2)];
             req.messages[recent_idx].cache_control = Some("ephemeral".to_string());
-        } else if let Some(&target_idx) = user_indices.iter().rev().nth(1).or_else(|| user_indices.last()) {
+        } else if let Some(&target_idx) = user_indices
+            .iter()
+            .rev()
+            .nth(1)
+            .or_else(|| user_indices.last())
+        {
             req.messages[target_idx].cache_control = Some("ephemeral".to_string());
         }
     }

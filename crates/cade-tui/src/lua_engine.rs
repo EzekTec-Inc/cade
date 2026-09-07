@@ -562,15 +562,25 @@ mod additional_tests {
 
         engine.set_state_modified_files(&entries)?;
 
-        let count: usize = engine.lua.load(r#"
+        let count: usize = engine
+            .lua
+            .load(
+                r#"
             local files = CADE_STATE.modified_files
             return #files
-        "#).eval()?;
+        "#,
+            )
+            .eval()?;
         assert_eq!(count, 1);
 
-        let path: String = engine.lua.load(r#"
+        let path: String = engine
+            .lua
+            .load(
+                r#"
             return CADE_STATE.modified_files[1].path
-        "#).eval()?;
+        "#,
+            )
+            .eval()?;
         assert_eq!(path, "src/main.rs");
 
         Ok(())

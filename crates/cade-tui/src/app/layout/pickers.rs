@@ -41,7 +41,9 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     )));
 
     // Match entries with sliding scroll window
-    let max_entries = (inner_area.height as usize).saturating_sub(lines.len()).max(1);
+    let max_entries = (inner_area.height as usize)
+        .saturating_sub(lines.len())
+        .max(1);
     let (start_idx, end_idx) = picker_scroll_window(pk.cursor, pk.matches.len(), max_entries);
 
     for (abs_i, m) in pk.matches[start_idx..end_idx].iter().enumerate() {

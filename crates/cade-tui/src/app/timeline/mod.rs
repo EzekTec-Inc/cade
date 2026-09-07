@@ -3,8 +3,8 @@ use crate::colors::ThemeColorsExt;
 pub mod diff_view;
 pub mod render_item;
 
-pub use diff_view::{DiffLayout, DiffViewEngine};
 use super::*;
+pub use diff_view::{DiffLayout, DiffViewEngine};
 
 // -- Timeline adapter
 

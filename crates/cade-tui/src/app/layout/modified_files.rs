@@ -5,9 +5,9 @@
 
 // region:    --- Imports
 
+use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use similar::{ChangeTag, TextDiff};
 
 // endregion: --- Imports
 

@@ -134,34 +134,8 @@ pub fn clean_openai_schema(v: &mut Value) {
             map.remove("$ref");
             map.remove("$defs");
 
-            // Clean/simplify oneOf, anyOf, allOf for OpenAI Structured Outputs
-            let sub_schemas = ["anyOf", "allOf", "oneOf"];
-            for key in sub_schemas {
-                if let Some(val) = map.remove(key)
-                    && let Some(arr) = val.as_array()
-                    && !arr.is_empty()
-                {
-                    // Find the first nested schema that is not null-type
-                    let chosen_schema = arr
-                        .iter()
-                        .find(|item| {
-                            item.as_object()
-                                .and_then(|obj| obj.get("type"))
-                                .and_then(|t| t.as_str())
-                                != Some("null")
-                        })
-                        .unwrap_or(&arr[0]);
-
-                    // Extract and merge fields of the chosen nested schema
-                    if let Some(obj) = chosen_schema.as_object() {
-                        for (k, v) in obj {
-                            if k != "type" || !map.contains_key("type") {
-                                map.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                }
-            }
+            // Clean/simplify JSON Schema combinators for OpenAI tool schemas.
+            simplify_schema_combinators(map, false);
 
             for val in map.values_mut() {
                 clean_openai_schema(val);
@@ -170,6 +144,89 @@ pub fn clean_openai_schema(v: &mut Value) {
         Value::Array(arr) => {
             for val in arr.iter_mut() {
                 clean_openai_schema(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn simplify_schema_combinators(map: &mut serde_json::Map<String, Value>, uppercase_types: bool) {
+    for key in ["anyOf", "allOf", "oneOf", "any_of", "all_of", "one_of"] {
+        let Some(val) = map.remove(key) else {
+            continue;
+        };
+        let Some(arr) = val.as_array() else {
+            continue;
+        };
+        let Some(chosen_schema) = arr
+            .iter()
+            .find(|item| !schema_is_null_type(item))
+            .or_else(|| arr.first())
+        else {
+            continue;
+        };
+        let Some(obj) = chosen_schema.as_object() else {
+            continue;
+        };
+
+        for (k, v) in obj {
+            if k != "type" || !map.contains_key("type") {
+                let mut value = v.clone();
+                if uppercase_types && k == "type" {
+                    uppercase_schema_type(&mut value);
+                }
+                if !uppercase_types || !is_gemini_blocked_schema_key(k) {
+                    map.insert(k.clone(), value);
+                }
+            }
+        }
+    }
+}
+
+fn is_gemini_blocked_schema_key(key: &str) -> bool {
+    matches!(
+        key,
+        "$schema"
+            | "$ref"
+            | "$defs"
+            | "additionalProperties"
+            | "nullable"
+            | "deprecated"
+            | "const"
+            | "title"
+            | "default"
+            | "format"
+            | "minimum"
+            | "maximum"
+            | "exclusiveMinimum"
+            | "exclusiveMaximum"
+            | "pattern"
+    ) || key.starts_with("x-google-")
+}
+
+fn schema_is_null_type(v: &Value) -> bool {
+    match v.as_object().and_then(|obj| obj.get("type")) {
+        Some(Value::String(s)) => s.eq_ignore_ascii_case("null"),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|item| item.as_str())
+            .all(|s| s.eq_ignore_ascii_case("null")),
+        _ => false,
+    }
+}
+
+fn uppercase_schema_type(v: &mut Value) {
+    match v {
+        Value::String(s) => *s = s.to_uppercase(),
+        Value::Array(types) => {
+            if let Some(primary_type) = types.iter().find(|t| t.as_str() != Some("null")) {
+                if let Some(s) = primary_type.as_str() {
+                    *v = Value::String(s.to_uppercase());
+                } else {
+                    *v = primary_type.clone();
+                }
+            } else {
+                *v = Value::Null;
             }
         }
         _ => {}
@@ -310,7 +367,16 @@ pub fn clean_gemini_schema(v: &mut Value) {
             map.remove("nullable");
             map.remove("deprecated");
             map.remove("const");
-            // Strip all x-google-* extension fields
+            map.remove("title");
+            map.remove("default");
+            map.remove("format");
+            map.remove("minimum");
+            map.remove("maximum");
+            map.remove("exclusiveMinimum");
+            map.remove("exclusiveMaximum");
+            map.remove("pattern");
+
+            // Strip all x-google-* extension fields.
             let x_google_keys: Vec<String> = map
                 .keys()
                 .filter(|k| k.starts_with("x-google-"))
@@ -319,20 +385,32 @@ pub fn clean_gemini_schema(v: &mut Value) {
             for k in x_google_keys {
                 map.remove(&k);
             }
-            if let Some(Value::Array(types)) = map.get("type") {
-                if let Some(primary_type) = types.iter().find(|t| t.as_str() != Some("null")) {
-                    if let Some(s) = primary_type.as_str() {
-                        map.insert("type".to_string(), Value::String(s.to_uppercase()));
-                    } else {
-                        map.insert("type".to_string(), primary_type.clone());
-                    }
-                } else {
+
+            // Gemini rejects JSON Schema combinators in function declarations.
+            // Flatten to the first non-null branch before recursively cleaning.
+            simplify_schema_combinators(map, true);
+
+            if let Some(type_val) = map.get_mut("type") {
+                uppercase_schema_type(type_val);
+                if type_val.is_null() {
                     map.remove("type");
                 }
-            } else if let Some(Value::String(s)) = map.get("type") {
-                let up = s.to_uppercase();
-                map.insert("type".to_string(), Value::String(up));
             }
+
+            // Gemini only permits `required` for OBJECT nodes.  Many MCP/JSON
+            // schema generators omit `type` on object-like anyOf branches.
+            if (map.contains_key("required") || map.contains_key("properties"))
+                && map.get("type").and_then(|t| t.as_str()) != Some("OBJECT")
+            {
+                map.insert("type".to_string(), Value::String("OBJECT".to_string()));
+            }
+
+            if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT")
+                && !map.contains_key("properties")
+            {
+                map.insert("properties".to_string(), json!({}));
+            }
+
             for val in map.values_mut() {
                 clean_gemini_schema(val);
             }

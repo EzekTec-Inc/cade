@@ -79,25 +79,29 @@ pub async fn stream_global_events(
         }
     });
 
-    let stream: futures::stream::BoxStream<'static, Result<Event, std::convert::Infallible>> = if since > 0 {
-        let mut past_events = Vec::new();
-        if let Ok(past) = cade_store::sqlite::global_events_after(&db, since) {
-            for (seq, event_type, payload_str) in past {
-                let mut val: Value = serde_json::from_str(&payload_str).unwrap_or(json!({}));
-                if let Some(obj) = val.as_object_mut() {
-                    obj.insert("seq".to_string(), json!(seq));
-                    obj.insert("event_type".to_string(), json!(event_type));
+    let stream: futures::stream::BoxStream<'static, Result<Event, std::convert::Infallible>> =
+        if since > 0 {
+            let mut past_events = Vec::new();
+            if let Ok(past) = cade_store::sqlite::global_events_after(&db, since) {
+                for (seq, event_type, payload_str) in past {
+                    let mut val: Value = serde_json::from_str(&payload_str).unwrap_or(json!({}));
+                    if let Some(obj) = val.as_object_mut() {
+                        obj.insert("seq".to_string(), json!(seq));
+                        obj.insert("event_type".to_string(), json!(event_type));
+                    }
+                    past_events.push(Ok::<Event, std::convert::Infallible>(
+                        Event::default().data(val.to_string()),
+                    ));
                 }
-                past_events.push(Ok::<Event, std::convert::Infallible>(
-                    Event::default().data(val.to_string()),
-                ));
             }
-        }
-        let replay_stream = futures::stream::iter(past_events);
-        futures::stream::StreamExt::boxed(futures::stream::StreamExt::chain(replay_stream, live_stream))
-    } else {
-        futures::stream::StreamExt::boxed(live_stream)
-    };
+            let replay_stream = futures::stream::iter(past_events);
+            futures::stream::StreamExt::boxed(futures::stream::StreamExt::chain(
+                replay_stream,
+                live_stream,
+            ))
+        } else {
+            futures::stream::StreamExt::boxed(live_stream)
+        };
 
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }

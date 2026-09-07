@@ -3,8 +3,8 @@ pub mod command_palette;
 pub mod copy_overlay;
 pub mod help_overlay;
 pub mod input;
-pub mod leader;
 pub mod layout;
+pub mod leader;
 pub mod notifier;
 pub mod password;
 pub mod permission_overlay;
@@ -1725,7 +1725,8 @@ impl TuiApp {
             }
 
             // -- Leader Key Which-Key Bar (Slice 1)
-            self.leader_engine.render_hint_bar(frame, frame.area(), colors);
+            self.leader_engine
+                .render_hint_bar(frame, frame.area(), colors);
 
             // Apply selection highlight onto the buffer before the frame is drawn/flushed.
             apply_selection_highlight(

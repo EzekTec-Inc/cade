@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::types::{AppState, SelectedPage, ToastLevel, add_toast};
+use dioxus::prelude::*;
 
 /// Live Agent-Activity & Approvals Dashboard view.
 #[component]

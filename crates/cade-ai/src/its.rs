@@ -376,7 +376,11 @@ mod tests {
         let selected = selector.select_tools(&messages, tools);
         assert_eq!(selected.len(), 2);
         assert!(selected.iter().any(|s| s["name"] == "bash"));
-        assert!(selected.iter().any(|s| s["name"] == "pptx__generate_slides"));
+        assert!(
+            selected
+                .iter()
+                .any(|s| s["name"] == "pptx__generate_slides")
+        );
     }
 
     #[test]

@@ -122,13 +122,23 @@ impl DiffViewEngine {
                 }
                 ChangeTag::Delete => {
                     lines.push(Line::from(vec![
-                        Span::styled("- ", Style::default().fg(colors.c_error()).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "- ",
+                            Style::default()
+                                .fg(colors.c_error())
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(val.to_string(), Style::default().fg(colors.c_error())),
                     ]));
                 }
                 ChangeTag::Insert => {
                     lines.push(Line::from(vec![
-                        Span::styled("+ ", Style::default().fg(colors.c_success()).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "+ ",
+                            Style::default()
+                                .fg(colors.c_success())
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(val.to_string(), Style::default().fg(colors.c_success())),
                     ]));
                 }
@@ -152,12 +162,25 @@ impl DiffViewEngine {
         let left_header = format!("{:width$}", " ORIGINAL", width = col_w);
         let right_header = format!("{:width$}", " MODIFIED", width = col_w);
         lines.push(Line::from(vec![
-            Span::styled(left_header, Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                left_header,
+                Style::default()
+                    .fg(colors.c_text_muted())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" │ ", colors.border_muted()),
-            Span::styled(right_header, Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                right_header,
+                Style::default()
+                    .fg(colors.c_text_muted())
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
 
-        lines.push(Line::from(Span::styled("─".repeat(width as usize), colors.border_muted())));
+        lines.push(Line::from(Span::styled(
+            "─".repeat(width as usize),
+            colors.border_muted(),
+        )));
 
         for pair in pairs {
             let (left_str, left_style) = match pair.left {
@@ -168,7 +191,9 @@ impl DiffViewEngine {
                         s
                     };
                     let pad = format!("{:width$}", truncated, width = col_w);
-                    if pair.change == ChangeTag::Delete || (pair.change == ChangeTag::Insert && pair.right.is_some()) {
+                    if pair.change == ChangeTag::Delete
+                        || (pair.change == ChangeTag::Insert && pair.right.is_some())
+                    {
                         (pad, Style::default().fg(colors.c_error()))
                     } else {
                         (pad, colors.text_dim())

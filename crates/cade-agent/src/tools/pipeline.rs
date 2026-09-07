@@ -354,7 +354,8 @@ impl ToolPipeline {
                 pre_content: pre_content_snapshot,
                 post_content,
                 tool_name: tool_name.to_string(),
-            }).await;
+            })
+            .await;
         }
 
         // 6. Execute PostToolUse or PostToolUseFailure hooks

@@ -842,7 +842,8 @@ impl Repl {
             if let Some(ref p) = file_path_target {
                 let post_content = std::fs::read_to_string(p).unwrap_or_default();
                 let mut a = app.lock();
-                a.modified_files_tracker.record_mutation(p, &pre_content, &post_content);
+                a.modified_files_tracker
+                    .record_mutation(p, &pre_content, &post_content);
                 a.draw_dirty = true;
             }
 

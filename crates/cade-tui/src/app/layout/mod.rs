@@ -1,8 +1,8 @@
 pub mod breadcrumb;
 pub mod command_palette;
 pub mod cursor;
-pub mod modified_files;
 pub mod helpers;
+pub mod modified_files;
 pub mod pickers;
 pub mod question;
 pub mod sidebar;

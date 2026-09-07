@@ -73,6 +73,22 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     ("openai", "GPT-5", "openai/gpt-5", "codex", 100_000, 200_000),
     (
         "openai",
+        "GPT-5.6",
+        "openai/gpt-5.6",
+        "codex",
+        100_000,
+        200_000,
+    ),
+    (
+        "openai",
+        "GPT-5.6 Luna",
+        "openai/gpt-5.6-luna",
+        "codex",
+        100_000,
+        200_000,
+    ),
+    (
+        "openai",
         "GPT-5.5",
         "openai/gpt-5.5",
         "codex",
@@ -421,6 +437,14 @@ mod tests {
     #[test]
     fn max_tokens_unknown_gpt5() {
         assert_eq!(max_tokens_for_model("openai/gpt-5.5-preview"), 100_000);
+        assert_eq!(max_tokens_for_model("openai/gpt-5.6-luna"), 100_000);
+    }
+
+    #[test]
+    fn gpt56_models_are_catalogued_as_codex() {
+        assert_eq!(toolset_for_model("openai/gpt-5.6"), "codex");
+        assert_eq!(toolset_for_model("openai/gpt-5.6-luna"), "codex");
+        assert_eq!(context_window_for_model("openai/gpt-5.6-luna"), 200_000);
     }
 
     #[test]

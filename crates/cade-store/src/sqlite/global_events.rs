@@ -34,7 +34,11 @@ pub fn global_events_after(db: &Db, after_seq: i64) -> Result<Vec<(i64, String, 
          ORDER BY seq ASC",
     )?;
     let rows = stmt.query_map(params![after_seq], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }

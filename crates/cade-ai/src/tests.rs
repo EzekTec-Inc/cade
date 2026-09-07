@@ -858,6 +858,84 @@ fn gemini_tool_prep_end_to_end() {
     assert!(result.contains("\"type\":\"OBJECT\""));
 }
 
+#[test]
+fn clean_gemini_schema_flattens_any_of_required_object_branch() {
+    let mut schema = json!({
+        "any_of": [
+            { "type": "null" },
+            {
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }
+        ]
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    assert!(schema.get("any_of").is_none());
+    assert!(schema.get("anyOf").is_none());
+    assert_eq!(schema["type"], "OBJECT");
+    assert_eq!(schema["required"], json!(["query"]));
+    assert_eq!(schema["properties"]["query"]["type"], "STRING");
+}
+
+#[test]
+fn clean_gemini_schema_flattens_nested_anyof_and_strips_validation_keywords() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "limit": {
+                "anyOf": [
+                    { "type": "null" },
+                    { "type": "integer", "format": "uint", "minimum": 0 }
+                ],
+                "default": null
+            }
+        },
+        "required": ["limit"],
+        "title": "Params"
+    });
+
+    clean_gemini_schema(&mut schema);
+    let limit = schema["properties"]["limit"].as_object().unwrap();
+    let root = schema.as_object().unwrap();
+
+    assert!(!limit.contains_key("anyOf"));
+    assert!(!limit.contains_key("format"));
+    assert!(!limit.contains_key("minimum"));
+    assert!(!limit.contains_key("default"));
+    assert!(!root.contains_key("title"));
+    assert_eq!(schema["type"], "OBJECT");
+    assert_eq!(schema["properties"]["limit"]["type"], "INTEGER");
+}
+
+#[test]
+fn clean_openai_schema_flattens_snake_case_combinators_for_newer_models() {
+    let mut schema = json!({
+        "properties": {
+            "payload": {
+                "one_of": [
+                    { "type": "null" },
+                    {
+                        "type": "object",
+                        "properties": { "name": { "type": "string" } },
+                        "required": ["name"]
+                    }
+                ]
+            }
+        },
+        "type": "object"
+    });
+
+    clean_openai_schema(&mut schema);
+
+    assert!(schema["properties"]["payload"].get("one_of").is_none());
+    assert_eq!(schema["properties"]["payload"]["type"], "object");
+    assert_eq!(schema["properties"]["payload"]["required"], json!(["name"]));
+}
+
 // -- pricing rules: gap models
 
 #[test]
@@ -874,6 +952,14 @@ fn pricing_gpt_41_mini() {
     let p = registry.pricing_for_model("openai/gpt-4.1-mini");
     assert_eq!(p.input, 0.4);
     assert_eq!(p.output, 1.6);
+}
+
+#[test]
+fn pricing_gpt_56_luna() {
+    let registry = crate::ModelRegistry::new();
+    let p = registry.pricing_for_model("openai/gpt-5.6-luna");
+    assert_eq!(p.input, 5.0);
+    assert_eq!(p.output, 30.0);
 }
 
 #[test]
