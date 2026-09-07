@@ -18,6 +18,7 @@ use super::{
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_LIST_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
+const GEMINI_TOOL_SCHEMA_CACHE_VERSION: &str = "gemini-tool-schema-v2";
 
 /// Fetch all generative-content-capable models available to this API key.
 /// Filters to models that support `generateContent` and whose names contain "gemini"
@@ -147,11 +148,12 @@ impl GeminiProvider {
     fn content_hash(model: &str, system_text: &Option<String>, tools: &[Value]) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
+        GEMINI_TOOL_SCHEMA_CACHE_VERSION.hash(&mut h);
         model.hash(&mut h);
         system_text.as_deref().unwrap_or("").hash(&mut h);
         tools.len().hash(&mut h);
         for t in tools {
-            t["name"].as_str().unwrap_or("").hash(&mut h);
+            serde_json::to_string(t).unwrap_or_default().hash(&mut h);
         }
         h.finish()
     }
@@ -866,5 +868,29 @@ mod p7_ttl_tests {
     #[test]
     fn parse_gemini_ttl_strips_whitespace() {
         assert_eq!(parse_gemini_ttl(Some(" 600 ")), 600);
+    }
+
+    #[test]
+    fn content_hash_changes_when_tool_schema_changes() {
+        let system = Some("system".to_string());
+        let tool_v1 = json!({
+            "name": "search",
+            "description": "Search",
+            "parameters": { "type": "OBJECT", "properties": {} }
+        });
+        let tool_v2 = json!({
+            "name": "search",
+            "description": "Search",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": { "query": { "type": "STRING" } },
+                "required": ["query"]
+            }
+        });
+
+        assert_ne!(
+            GeminiProvider::content_hash("gemini-2.5-pro", &system, &[tool_v1]),
+            GeminiProvider::content_hash("gemini-2.5-pro", &system, &[tool_v2])
+        );
     }
 }
