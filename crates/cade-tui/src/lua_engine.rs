@@ -154,6 +154,24 @@ impl LuaEngine {
         Ok(())
     }
 
+    /// Expose active modified files list to Lua plugin environment.
+    pub fn set_state_modified_files(
+        &self,
+        files: &[crate::app::layout::modified_files::ModifiedFileEntry],
+    ) -> mlua::Result<()> {
+        let state: mlua::Table = self.lua.globals().get("CADE_STATE")?;
+        let table = self.lua.create_table()?;
+        for (i, entry) in files.iter().enumerate() {
+            let file_table = self.lua.create_table()?;
+            file_table.set("path", entry.relative_path.clone())?;
+            file_table.set("additions", entry.metrics.additions)?;
+            file_table.set("deletions", entry.metrics.deletions)?;
+            table.set(i + 1, file_table)?;
+        }
+        state.set("modified_files", table)?;
+        Ok(())
+    }
+
     pub fn load_plugins(&self, plugin_dir: &std::path::Path) {
         if !plugin_dir.exists() {
             return;
@@ -529,5 +547,32 @@ mod additional_tests {
 
         let exit_val: mlua::Value = os.get("exit").unwrap();
         assert!(matches!(exit_val, mlua::Value::Nil));
+    }
+
+    #[test]
+    fn test_lua_state_modified_files() -> mlua::Result<()> {
+        let engine = LuaEngine::new()?;
+        let entries = vec![crate::app::layout::modified_files::ModifiedFileEntry {
+            relative_path: "src/main.rs".to_string(),
+            metrics: crate::app::layout::modified_files::FileDiffMetrics {
+                additions: 10,
+                deletions: 2,
+            },
+        }];
+
+        engine.set_state_modified_files(&entries)?;
+
+        let count: usize = engine.lua.load(r#"
+            local files = CADE_STATE.modified_files
+            return #files
+        "#).eval()?;
+        assert_eq!(count, 1);
+
+        let path: String = engine.lua.load(r#"
+            return CADE_STATE.modified_files[1].path
+        "#).eval()?;
+        assert_eq!(path, "src/main.rs");
+
+        Ok(())
     }
 }
