@@ -881,6 +881,54 @@ fn clean_gemini_schema_flattens_any_of_required_object_branch() {
     assert_eq!(schema["properties"]["query"]["type"], "STRING");
 }
 
+fn assert_gemini_required_entries_have_properties(schema: &serde_json::Value) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            if let Some(required) = map.get("required").and_then(|r| r.as_array()) {
+                let props = map
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                    .expect("schema with required must have object properties");
+                for required_name in required {
+                    let required_name = required_name
+                        .as_str()
+                        .expect("required entries must be strings");
+                    assert!(
+                        props.contains_key(required_name),
+                        "required property '{required_name}' missing from properties in {schema}"
+                    );
+                }
+            }
+            for value in map.values() {
+                assert_gemini_required_entries_have_properties(value);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for value in items {
+                assert_gemini_required_entries_have_properties(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn clean_gemini_schema_prunes_required_entries_missing_from_properties() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" }
+        },
+        "required": ["path", "recursive"]
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    assert_eq!(schema["type"], "OBJECT");
+    assert_eq!(schema["required"], json!(["path"]));
+    assert_gemini_required_entries_have_properties(&schema);
+}
+
 #[test]
 fn clean_gemini_schema_flattens_nested_anyof_and_strips_validation_keywords() {
     let mut schema = json!({

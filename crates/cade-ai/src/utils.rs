@@ -204,6 +204,20 @@ fn is_gemini_blocked_schema_key(key: &str) -> bool {
     ) || key.starts_with("x-google-")
 }
 
+fn prune_required_to_existing_properties(map: &mut serde_json::Map<String, Value>) {
+    let Some(props) = map.get("properties").and_then(|p| p.as_object()) else {
+        map.remove("required");
+        return;
+    };
+    let prop_names: std::collections::HashSet<String> = props.keys().cloned().collect();
+
+    let Some(required) = map.get_mut("required").and_then(|r| r.as_array_mut()) else {
+        return;
+    };
+
+    required.retain(|name| name.as_str().is_some_and(|name| prop_names.contains(name)));
+}
+
 fn schema_is_null_type(v: &Value) -> bool {
     match v.as_object().and_then(|obj| obj.get("type")) {
         Some(Value::String(s)) => s.eq_ignore_ascii_case("null"),
@@ -410,6 +424,8 @@ pub fn clean_gemini_schema(v: &mut Value) {
             {
                 map.insert("properties".to_string(), json!({}));
             }
+
+            prune_required_to_existing_properties(map);
 
             for val in map.values_mut() {
                 clean_gemini_schema(val);
