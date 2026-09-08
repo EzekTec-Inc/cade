@@ -365,75 +365,95 @@ fn inline_refs_with_defs(v: &mut Value, defs: &serde_json::Map<String, Value>, d
 /// - `$schema`, `$ref`, `$defs`  — JSON Schema meta/reference fields
 /// - `additionalProperties`      — not supported in Gemini function schemas
 /// - `nullable`                  — defensive; not confirmed to cause errors
+/// - `pattern`, `format`, `title`, `const`, `default`, numeric bounds —
+///   annotation keywords Gemini's function-declaration schema subset rejects
 /// - `x-google-*`               — Google API extension annotations (e.g.
 ///   `x-google-identifier`, `x-google-enum-descriptions`) that appear in MCP
 ///   tool schemas from Google services like Stitch
 ///
+/// The keyword stripping is applied to *schema nodes only*.  The keys of a
+/// `properties` map are user-defined parameter names, so they are preserved
+/// even when they collide with a keyword (e.g. tools parameterized by a
+/// `pattern`, `format`, or `title` string).  Stripping those would delete the
+/// property and leave a dangling `required` entry, which Gemini rejects with
+/// 400 "property is not defined".
+///
 /// Call `inline_schema_refs` first to resolve `$ref` pointers before stripping
 /// `$defs`.
 pub fn clean_gemini_schema(v: &mut Value) {
+    clean_gemini_schema_inner(v, false);
+}
+
+/// Recursive workhorse for [`clean_gemini_schema`].
+///
+/// `is_properties_map` is true for maps that are the value of a `properties`
+/// key: their keys are parameter names and must never be stripped or
+/// type-normalized.
+fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
     match v {
         Value::Object(map) => {
-            map.remove("$schema");
-            map.remove("$ref");
-            map.remove("$defs");
-            map.remove("additionalProperties");
-            map.remove("nullable");
-            map.remove("deprecated");
-            map.remove("const");
-            map.remove("title");
-            map.remove("default");
-            map.remove("format");
-            map.remove("minimum");
-            map.remove("maximum");
-            map.remove("exclusiveMinimum");
-            map.remove("exclusiveMaximum");
-            map.remove("pattern");
+            if !is_properties_map {
+                map.remove("$schema");
+                map.remove("$ref");
+                map.remove("$defs");
+                map.remove("additionalProperties");
+                map.remove("nullable");
+                map.remove("deprecated");
+                map.remove("const");
+                map.remove("title");
+                map.remove("default");
+                map.remove("format");
+                map.remove("minimum");
+                map.remove("maximum");
+                map.remove("exclusiveMinimum");
+                map.remove("exclusiveMaximum");
+                map.remove("pattern");
 
-            // Strip all x-google-* extension fields.
-            let x_google_keys: Vec<String> = map
-                .keys()
-                .filter(|k| k.starts_with("x-google-"))
-                .cloned()
-                .collect();
-            for k in x_google_keys {
-                map.remove(&k);
-            }
-
-            // Gemini rejects JSON Schema combinators in function declarations.
-            // Flatten to the first non-null branch before recursively cleaning.
-            simplify_schema_combinators(map, true);
-
-            if let Some(type_val) = map.get_mut("type") {
-                uppercase_schema_type(type_val);
-                if type_val.is_null() {
-                    map.remove("type");
+                // Strip all x-google-* extension fields.
+                let x_google_keys: Vec<String> = map
+                    .keys()
+                    .filter(|k| k.starts_with("x-google-"))
+                    .cloned()
+                    .collect();
+                for k in x_google_keys {
+                    map.remove(&k);
                 }
+
+                // Gemini rejects JSON Schema combinators in function declarations.
+                // Flatten to the first non-null branch before recursively cleaning.
+                simplify_schema_combinators(map, true);
+
+                if let Some(type_val) = map.get_mut("type") {
+                    uppercase_schema_type(type_val);
+                    if type_val.is_null() {
+                        map.remove("type");
+                    }
+                }
+
+                // Gemini only permits `required` for OBJECT nodes.  Many MCP/JSON
+                // schema generators omit `type` on object-like anyOf branches.
+                if (map.contains_key("required") || map.contains_key("properties"))
+                    && map.get("type").and_then(|t| t.as_str()) != Some("OBJECT")
+                {
+                    map.insert("type".to_string(), Value::String("OBJECT".to_string()));
+                }
+
+                if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT")
+                    && !map.contains_key("properties")
+                {
+                    map.insert("properties".to_string(), json!({}));
+                }
+
+                prune_required_to_existing_properties(map);
             }
 
-            // Gemini only permits `required` for OBJECT nodes.  Many MCP/JSON
-            // schema generators omit `type` on object-like anyOf branches.
-            if (map.contains_key("required") || map.contains_key("properties"))
-                && map.get("type").and_then(|t| t.as_str()) != Some("OBJECT")
-            {
-                map.insert("type".to_string(), Value::String("OBJECT".to_string()));
-            }
-
-            if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT")
-                && !map.contains_key("properties")
-            {
-                map.insert("properties".to_string(), json!({}));
-            }
-
-            prune_required_to_existing_properties(map);
-
-            for val in map.values_mut() {
-                clean_gemini_schema(val);
+            for (key, val) in map.iter_mut() {
+                clean_gemini_schema_inner(val, key == "properties");
             }
         }
         Value::Array(arr) => {
             for val in arr.iter_mut() {
-                clean_gemini_schema(val);
+                clean_gemini_schema_inner(val, false);
             }
         }
         _ => {}

@@ -960,6 +960,52 @@ fn clean_gemini_schema_flattens_nested_anyof_and_strips_validation_keywords() {
 }
 
 #[test]
+fn clean_gemini_schema_preserves_keyword_named_properties() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "pattern": { "type": "string", "description": "Glob pattern" },
+            "format": { "type": "string", "description": "Archive format" },
+            "title": { "type": "string", "description": "Issue title" },
+            "limit": { "type": "integer" }
+        },
+        "required": ["pattern", "format", "title", "limit"]
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    assert_eq!(schema["required"], json!(["pattern", "format", "title", "limit"]));
+    assert!(schema["properties"].get("pattern").is_some(), "property named 'pattern' must survive");
+    assert!(schema["properties"].get("format").is_some(), "property named 'format' must survive");
+    assert!(schema["properties"].get("title").is_some(), "property named 'title' must survive");
+    assert_eq!(schema["properties"]["pattern"]["type"], "STRING");
+    assert_gemini_required_entries_have_properties(&schema);
+}
+
+#[test]
+fn clean_gemini_schema_still_strips_keywords_on_schema_nodes() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0,
+                "title": "Limit"
+            }
+        },
+        "required": ["limit"]
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    let limit = schema["properties"]["limit"].as_object().unwrap();
+    assert!(!limit.contains_key("format"));
+    assert!(!limit.contains_key("minimum"));
+    assert!(!limit.contains_key("title"));
+}
+
+#[test]
 fn clean_openai_schema_flattens_snake_case_combinators_for_newer_models() {
     let mut schema = json!({
         "properties": {

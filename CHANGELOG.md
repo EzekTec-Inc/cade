@@ -15,6 +15,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 - **Native Desktop System Tray Status Manager:** Added `DesktopTrayManager` and `TrayStatus` (`Idle`, `Executing`, `ApprovalRequired`, `Error`) in `crates/cade-desktop` with full serialization support.
 - **Firecracker MicroVM Hypervisor Sandboxing Backend:** Added hardware-virtualized execution backend (`MicroVmBackend`) in `crates/cade-agent` utilizing Linux KVM and vsock duplex communication with automatic fallback.
 
+### Fixed
+
+- **Gemini 2.5/3 Tool Schema Sanitization & Combinator Flattening:** Enhanced `clean_gemini_schema` in `crates/cade-ai/src/utils.rs` to flatten `anyOf`, `oneOf`, `allOf` (and snake_case variants) to valid object schemas, uppercase types, and prune dangling `required` entries missing from `properties`. Resolved Gemini 400 errors where parameter names colliding with schema keywords (such as `pattern`, `format`, `title`) were stripped from `properties` while retained in `required`.
+- **Gemini Thought Signature Wire Compatibility:** Updated `thought_signature` serialization in `crates/cade-ai/src/gemini.rs` to camelCase `thoughtSignature` as expected by Gemini 2.5 and Gemini 3 APIs during tool-call history replay.
+- **OpenAI Newer Models & Combinator Sanitization:** Added catalogue, pricing, and toolset definitions for `openai/gpt-5.6` and `openai/gpt-5.6-luna`. Added snake_case combinator handling to `clean_openai_schema`.
+
 ## [0.2.5] - 2026-08-26
 
 ### Added

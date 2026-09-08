@@ -390,12 +390,12 @@ impl GeminiProvider {
                         let mut part = serde_json::Map::new();
                         part.insert("functionCall".to_string(), Value::Object(fc));
                         if let Some(sig) = &tc.thought_signature {
-                            part.insert("thought_signature".to_string(), json!(sig));
+                            part.insert("thoughtSignature".to_string(), json!(sig));
                         } else {
-                            // Gemini 2.5 Pro requires a thought signature for tool calls to work correctly.
+                            // Gemini 2.5/3 requires a thought signature for tool calls to work correctly.
                             // If missing (e.g. injected or from older history), use the bypass value.
                             part.insert(
-                                "thought_signature".to_string(),
+                                "thoughtSignature".to_string(),
                                 json!("skip_thought_signature_validator"),
                             );
                         }
@@ -892,5 +892,57 @@ mod p7_ttl_tests {
             GeminiProvider::content_hash("gemini-2.5-pro", &system, &[tool_v1]),
             GeminiProvider::content_hash("gemini-2.5-pro", &system, &[tool_v2])
         );
+    }
+
+    #[test]
+    fn tool_call_parts_use_camel_case_thought_signature() {
+        let req = crate::CompletionRequest {
+            model: "gemini/gemini-2.5-pro".into(),
+            messages: vec![
+                crate::LlmMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    tool_call_id: None,
+                    tool_calls: Some(vec![crate::LlmToolCall {
+                        id: "call_1".into(),
+                        name: "search".into(),
+                        arguments: json!({"q": "rust"}),
+                        thought_signature: Some("sig_abc".into()),
+                    }]),
+                    images: None,
+                    cache_control: None,
+                },
+                crate::LlmMessage {
+                    role: "tool".into(),
+                    content: "ok".into(),
+                    tool_call_id: Some("call_1".into()),
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                },
+            ],
+            tools: vec![],
+            max_tokens: 0,
+            reasoning_effort: None,
+        };
+        let (_, contents) = GeminiProvider::to_gemini_contents(&req);
+        let model_part = contents
+            .iter()
+            .find(|c| c["role"] == "model")
+            .expect("model turn exists")
+            .clone();
+        let fc_part = model_part["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p.get("functionCall").is_some())
+            .expect("functionCall part exists");
+        assert!(fc_part.get("thought_signature").is_none());
+        assert_eq!(fc_part["thoughtSignature"], "sig_abc");
+        let tool_turn = contents
+            .iter()
+            .find(|c| c["role"] == "user" && c["parts"][0].get("functionResponse").is_some())
+            .expect("tool-result turn exists");
+        assert_eq!(tool_turn["parts"][0]["functionResponse"]["name"], "search");
     }
 }
