@@ -841,6 +841,8 @@ pub struct TuiApp {
     /// Per-item expansion overrides keyed by stable timeline identity.
     expanded_items: std::collections::HashSet<TimelineKey>,
     pub active_plan: Option<PlanState>,
+    /// When true, hide the right sidebar regardless of terminal width.
+    pub sidebar_hidden: bool,
 
     // -- Streaming state
     streaming_text: String,
@@ -1124,6 +1126,7 @@ impl TuiApp {
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
             active_plan: None,
+            sidebar_hidden: false,
             streaming_text: String::new(),
             streaming_active: false,
             streaming_reveal_len: 0,
@@ -1511,6 +1514,7 @@ impl TuiApp {
                 footer_extra: footer_extra.as_deref(),
                 reasoning_effort,
                 active_plan: active_plan_snap.as_ref(),
+                sidebar_hidden: self.sidebar_hidden,
                 toast,
                 copy_highlight: self.copy_highlight,
                 mouse_selection: None,

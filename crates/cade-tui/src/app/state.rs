@@ -144,6 +144,19 @@ impl TuiApp {
         false
     }
 
+    /// Toggle sidebar visibility override and show a brief toast notification.
+    pub fn toggle_sidebar(&mut self) -> bool {
+        self.sidebar_hidden = !self.sidebar_hidden;
+        self.draw_dirty = true;
+        let (msg, level) = if self.sidebar_hidden {
+            ("Sidebar hidden", ToastLevel::Info)
+        } else {
+            ("Sidebar visible", ToastLevel::Info)
+        };
+        self.show_toast(msg, level);
+        !self.sidebar_hidden
+    }
+
     /// Read `.cade-todo.md` from the current directory and return its contents,
     /// or a message explaining it doesn't exist yet.
     pub fn read_todo_file() -> String {

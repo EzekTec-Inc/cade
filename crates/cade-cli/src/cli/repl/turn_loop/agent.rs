@@ -191,6 +191,7 @@ impl Repl {
                                                 let _ = app.draw();
                                             } else {
                                                 match (k.code, k.modifiers) {
+                                                    (KeyCode::Char('b'), KeyModifiers::CONTROL) => { app.toggle_sidebar(); let _ = app.draw(); }
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
                                                     (KeyCode::Tab, _) => {
                                                         let next_mode = cade_tui::app::cycle_mode(app.mode);

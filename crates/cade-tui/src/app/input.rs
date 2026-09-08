@@ -514,6 +514,11 @@ impl TuiApp {
                 self.pending_paste_images.clear();
                 self.draw_dirty = true;
             }
+            KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_sidebar();
+                let _ = self.draw();
+                return Ok(None);
+            }
             KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 let msg = if let Some(plan) = &mut self.active_plan {
                     plan.is_visible = !plan.is_visible;

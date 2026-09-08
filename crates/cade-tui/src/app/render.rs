@@ -129,6 +129,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) footer_extra: Option<&'a str>,
     pub(crate) reasoning_effort: Option<&'a str>,
     pub(crate) active_plan: Option<&'a PlanState>,
+    pub(crate) sidebar_hidden: bool,
     pub(crate) toast: Option<&'a Toast>,
     pub(crate) copy_highlight: Option<(usize, std::time::Instant)>,
     pub(crate) mouse_selection: Option<usize>,
@@ -182,7 +183,7 @@ pub(crate) fn render_frame(
         return (0, None, ratatui::layout::Rect::default());
     }
 
-    let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT {
+    let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT && !ctx.sidebar_hidden {
         let sidebar_w = SIDEBAR_WIDTH.min(area.width.saturating_sub(24));
         let split =
             Layout::horizontal([Constraint::Min(24), Constraint::Length(sidebar_w)]).split(area);
@@ -778,14 +779,14 @@ fn render_footer_bars(
         ]
     } else {
         vec![
+            Span::styled(" ^B ", colors.primary_bold()),
+            Span::styled("Sidebar", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
             Span::styled(" ^O ", colors.primary_bold()),
             Span::styled("Expand All", colors.text_muted()),
             Span::styled("  │  ", colors.text_dim()),
             Span::styled(" Tab ", colors.primary_bold()),
             Span::styled("Cycle Mode", colors.text_muted()),
-            Span::styled("  │  ", colors.text_dim()),
-            Span::styled(" ^G ", colors.primary_bold()),
-            Span::styled("Collapse Last", colors.text_muted()),
             Span::styled("  │  ", colors.text_dim()),
             Span::styled(" ^P ", colors.primary_bold()),
             Span::styled("Menu", colors.text_muted()),

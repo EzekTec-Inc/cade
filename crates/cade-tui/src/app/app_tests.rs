@@ -385,6 +385,74 @@ fn test_scrolling_constraints_and_velocity_governor() {
 }
 
 #[test]
+fn test_sidebar_hidden_layout_calculation() {
+    let area = ratatui::layout::Rect::new(0, 0, 140, 40);
+    // When sidebar is not hidden and width >= SIDEBAR_BREAKPOINT (110), sidebar split is present
+    let (main_normal, sidebar_normal) = if area.width >= crate::app::SIDEBAR_BREAKPOINT {
+        let sidebar_w = crate::app::SIDEBAR_WIDTH.min(area.width.saturating_sub(24));
+        let split = ratatui::layout::Layout::horizontal([
+            ratatui::layout::Constraint::Min(24),
+            ratatui::layout::Constraint::Length(sidebar_w),
+        ])
+        .split(area);
+        (split[0], Some(split[1]))
+    } else {
+        (area, None)
+    };
+    assert!(sidebar_normal.is_some());
+    assert!(main_normal.width < area.width);
+
+    // When sidebar_hidden is true, sidebar_area must be None and main_area expands to full width
+    let sidebar_hidden = true;
+    let (main_hidden, sidebar_hidden_area) =
+        if area.width >= crate::app::SIDEBAR_BREAKPOINT && !sidebar_hidden {
+            let sidebar_w = crate::app::SIDEBAR_WIDTH.min(area.width.saturating_sub(24));
+            let split = ratatui::layout::Layout::horizontal([
+                ratatui::layout::Constraint::Min(24),
+                ratatui::layout::Constraint::Length(sidebar_w),
+            ])
+            .split(area);
+            (split[0], Some(split[1]))
+        } else {
+            (area, None)
+        };
+    assert!(sidebar_hidden_area.is_none());
+    assert_eq!(main_hidden.width, area.width);
+}
+
+#[test]
+#[ignore = "requires tty"]
+fn test_toggle_sidebar_state_and_toast() {
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test".into(),
+        "test-model".into(),
+        None,
+    );
+    assert!(!app.sidebar_hidden);
+
+    // First toggle: hides sidebar
+    let visible = app.toggle_sidebar();
+    assert!(!visible);
+    assert!(app.sidebar_hidden);
+    assert!(app.draw_dirty);
+    assert_eq!(
+        app.toast.as_ref().map(|t| t.message.as_str()),
+        Some("Sidebar hidden")
+    );
+
+    // Second toggle: reveals sidebar
+    let visible = app.toggle_sidebar();
+    assert!(visible);
+    assert!(!app.sidebar_hidden);
+    assert!(app.draw_dirty);
+    assert_eq!(
+        app.toast.as_ref().map(|t| t.message.as_str()),
+        Some("Sidebar visible")
+    );
+}
+
+#[test]
 #[ignore = "requires tty"]
 fn test_copy_selected_text_basic() {
     let mut app = TuiApp::new(
