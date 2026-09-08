@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-07
+
 ### Added
 
 - **Zero-API Local Vector Embeddings Adapter (`LocalFastEmbedAdapter`):** Added offline 384-dimensional vector embedding generation in `crates/cade-store` with cosine similarity search and SQLite `sqlite-vec` integration.
