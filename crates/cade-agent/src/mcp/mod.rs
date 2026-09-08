@@ -30,7 +30,7 @@ mod stub {
             &self,
             _name: &str,
             _args: &Value,
-        ) -> Option<Result<(String, bool), cade_core::Error>> {
+        ) -> Option<Result<(String, bool, Option<String>), cade_core::Error>> {
             None
         }
         pub async fn owns_tool(&self, _name: &str) -> bool {
