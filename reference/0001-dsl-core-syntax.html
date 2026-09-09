@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reference 0001: Structurizr DSL Core Syntax Quick Reference</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">Reference Sheet 0001 · Quick Reference Card</div>
+      <h1>Structurizr DSL Core Syntax & Landscape Cheat Sheet</h1>
+    </header>
+
+    <h2>Top-Level Hierarchy</h2>
+    <pre><code>workspace [name] [description] {
+    model {
+        // Elements and relationships live here
+    }
+    views {
+        // Diagrams and styling live here
+    }
+}</code></pre>
+
+    <h2>Core Element Declarations</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Keyword</th>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Syntax</th>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>person</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>id = person &lt;name&gt; [desc] [tags]</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Human user or actor</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>softwareSystem</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>id = softwareSystem &lt;name&gt; [desc] [tags]</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Standalone software system</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>-&gt;</code> (relationship)</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>src -&gt; dst [desc] [tech] [tags]</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Unidirectional relationship</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Landscape View Definition</h2>
+    <pre><code>views {
+    systemLandscape &lt;key&gt; [description] {
+        include *
+        autoLayout [tb|bt|lr|rl]
+    }
+
+    theme default
+}</code></pre>
+
+    <h2>Common Gotchas</h2>
+    <ul>
+      <li><strong>Identifiers</strong> (left of <code>=</code>) must be unique within their scope and contain no whitespace.</li>
+      <li>Strings containing spaces must be enclosed in double quotes (<code>"..."</code>).</li>
+      <li><code>include *</code> renders all systems and people in the workspace.</li>
+      <li><code>autoLayout</code> instructs the layout engine to arrange elements automatically (options: <code>tb</code> top-bottom, <code>lr</code> left-right).</li>
+    </ul>
+
+    <div class="nav-footer">
+      <a href="../lessons/0001-core-mental-model.html">← Back to Lesson 0001</a>
+      <span>Reference 0001</span>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lesson 0001: The Core Mental Model & Workspace Structure</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">Lesson 0001 · Structurizr DSL Fundamentals</div>
+      <h1>The Core Mental Model: Model vs. Views</h1>
+    </header>
+
+    <p>
+      Welcome to your first step in Architecture-as-Code. Before writing syntax, we must internalize the single most important principle that separates <strong>Structurizr DSL</strong> from drawing tools like Visio, Miro, or Draw.io:
+    </p>
+
+    <div class="callout">
+      <div class="callout-title">The Fundamental Invariant</div>
+      You do <em>not</em> draw diagrams in Structurizr. You build an underlying <strong>semantic model</strong> of people, systems, and relationships. <strong>Views</strong> are simply visual projections filtered and rendered from that single model.
+    </div>
+
+    <h2>1. The Anatomy of a Workspace</h2>
+    <p>
+      Every Structurizr architecture definition begins with a <code>workspace</code> block containing two mandatory core sections:
+    </p>
+
+    <pre><code>workspace "Enterprise Banking" "High-level architecture landscape" {
+
+    model {
+        // 1. Where actors, systems, and relationships are defined
+        customer = person "Personal Banking Customer" "A customer with an account"
+        bankingApp = softwareSystem "Internet Banking System" "Allows customers to view accounts and make payments"
+
+        customer -> bankingApp "Views account balances and makes payments using" "HTTPS"
+    }
+
+    views {
+        // 2. Where we choose WHAT to show from the model
+        systemLandscape "Overview" "An enterprise overview of our banking landscape" {
+            include *
+            autoLayout
+        }
+
+        theme default
+    }
+}</code></pre>
+
+    <h2>2. Key Elements of the Landscape</h2>
+    <p>
+      For System Landscape Architecture, you only need to master two fundamental element types at this stage:
+    </p>
+
+    <ul>
+      <li>
+        <strong><code>person &lt;identifier&gt; &lt;name&gt; [description] [tags]</code></strong>:<br>
+        Represents a human user, customer, internal operator, or persona who interacts with your systems.
+      </li>
+      <li>
+        <strong><code>softwareSystem &lt;identifier&gt; &lt;name&gt; [description] [tags]</code></strong>:<br>
+        Represents a distinct software system at the highest level of abstraction (e.g. Core Banking System, Fraud Detection Engine, CRM).
+      </li>
+    </ul>
+
+    <h2>3. Connecting Elements (Relationships)</h2>
+    <p>
+      Relationships define unidirectional interactions between two identifiers:
+    </p>
+    <pre><code>sourceIdentifier -> destinationIdentifier "Description of interaction" "Technology / Protocol"</code></pre>
+    <p>
+      <em>Example:</em> <code>customer -> bankingApp "Transfers money using" "JSON/REST"</code>
+    </p>
+
+    <!-- Interactive Retrieval Practice -->
+    <div class="quiz-widget" id="quiz-1">
+      <div class="quiz-title">Knowledge Check: Fluency & Invariant Verification</div>
+      <p>
+        In Structurizr DSL, if you want to show a software system in three different diagrams (e.g., Landscape, Security, and Operations), how is that achieved?
+      </p>
+      <div class="quiz-options">
+        <button class="option-btn" onclick="checkAnswer(1)">Define the softwareSystem once in model, then include it in three views blocks.</button>
+        <button class="option-btn" onclick="checkAnswer(2)">Duplicate the softwareSystem definition inside each of the three view blocks.</button>
+        <button class="option-btn" onclick="checkAnswer(3)">Create three separate workspace files and connect them with external pointers.</button>
+        <button class="option-btn" onclick="checkAnswer(4)">Define three different softwareSystem names with distinct tag descriptions.</button>
+      </div>
+      <div id="feedback-correct" class="feedback correct">
+        <strong>Correct!</strong> Exactly right. The element is declared exactly once inside the <code>model</code> block. Individual views simply project and filter existing elements using expressions like <code>include *</code> or <code>include softwareSystemId</code>.
+      </div>
+      <div id="feedback-incorrect" class="feedback incorrect">
+        <strong>Not quite.</strong> Remember the core rule: the <code>model</code> holds all elements and relationships. Views are only projections. Elements can never be declared inside the <code>views</code> block!
+      </div>
+    </div>
+
+    <h2>Primary Reference & Next Step</h2>
+    <p>
+      Recommended primary reading: <a href="https://docs.structurizr.com/dsl/basics" target="_blank">Structurizr DSL Basics (Official Docs)</a> and the accompanying <a href="../reference/0001-dsl-core-syntax.html">Reference 0001: DSL Core Syntax Card</a>.
+    </p>
+
+    <div class="callout">
+      <div class="callout-title">Teacher Reminder</div>
+      Whenever something is unclear or you want to see an example tailored to your specific system, just ask me in chat!
+    </div>
+
+    <div class="nav-footer">
+      <span>Lesson 0001</span>
+      <a href="../reference/0001-dsl-core-syntax.html">Open Reference Sheet →</a>
+    </div>
+  </div>
+
+  <script>
+    function checkAnswer(chosen) {
+      const correct = document.getElementById('feedback-correct');
+      const incorrect = document.getElementById('feedback-incorrect');
+      if (chosen === 1) {
+        correct.style.display = 'block';
+        incorrect.style.display = 'none';
+      } else {
+        incorrect.style.display = 'block';
+        correct.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

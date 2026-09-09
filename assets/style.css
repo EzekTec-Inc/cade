@@ -1,0 +1,225 @@
+/* Tufte-inspired typography and responsive card layout for lessons and reference sheets */
+:root {
+  --bg-main: #fffff8;
+  --bg-card: #ffffff;
+  --text-main: #111111;
+  --text-muted: #555555;
+  --border-light: #e5e5dc;
+  --accent: #0f4c81;
+  --accent-light: #e8f0f8;
+  --code-bg: #f4f4ec;
+  --success-bg: #e6f4ea;
+  --success-border: #34a853;
+  --error-bg: #fce8e6;
+  --error-border: #ea4335;
+  --font-serif: "ETBembo", "Palatino", "Georgia", serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-main: #141618;
+    --bg-card: #1c1e22;
+    --text-main: #e8e8e6;
+    --text-muted: #9a9b9e;
+    --border-light: #2c2f35;
+    --accent: #62a0ea;
+    --accent-light: #1e2836;
+    --code-bg: #101214;
+    --success-bg: #132a1c;
+    --success-border: #2ba24c;
+    --error-bg: #351a1a;
+    --error-border: #e04b4b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 2rem 1rem;
+  display: flex;
+  justify-content: center;
+}
+
+.container {
+  max-width: 820px;
+  width: 100%;
+}
+
+header {
+  border-bottom: 2px solid var(--border-light);
+  padding-bottom: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+h1 {
+  font-size: 2.2rem;
+  font-weight: normal;
+  margin: 0.25rem 0 0.5rem 0;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 1.5rem;
+  font-weight: normal;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 0.35rem;
+  margin-top: 2rem;
+}
+
+h3 {
+  font-size: 1.2rem;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  margin-top: 1.5rem;
+}
+
+p, li { margin: 0.75rem 0; }
+
+code, pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+code {
+  background-color: var(--code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  border: 1px solid var(--border-light);
+}
+
+pre {
+  background-color: var(--code-bg);
+  padding: 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+.callout {
+  background-color: var(--accent-light);
+  border-left: 4px solid var(--accent);
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  border-radius: 0 6px 6px 0;
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+}
+
+.callout-title {
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+
+.diagram-preview {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+/* Quiz & Feedback Loop Component */
+.quiz-widget {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 2rem 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+  font-family: var(--font-sans);
+}
+
+.quiz-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+}
+
+.quiz-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.option-btn {
+  background: var(--bg-main);
+  border: 1px solid var(--border-light);
+  color: var(--text-main);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.option-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.feedback {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  display: none;
+}
+
+.feedback.correct {
+  display: block;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--text-main);
+}
+
+.feedback.incorrect {
+  display: block;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--text-main);
+}
+
+.nav-footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+}
+
+.nav-footer a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.nav-footer a:hover {
+  text-decoration: underline;
+}

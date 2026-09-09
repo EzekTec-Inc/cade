@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lesson 0002: Relationships, Protocols, and Interaction Semantics</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">Lesson 0002 · Milestone 2: Relationships</div>
+      <h1>Relationships, Protocols, and Interaction Semantics</h1>
+    </header>
+
+    <p>
+      In Lesson 0001, you mastered the rule that <em>elements exist once in the model and are projected into views</em>.
+      Now we look at the arrows connecting them. In system landscapes, ambiguous lines without descriptions or protocols create confusion.
+      Structurizr DSL forces clarity.
+    </p>
+
+    <h2>1. The Anatomy of a Relationship</h2>
+    <p>
+      Relationships in Structurizr DSL are directional and take up to four parameters:
+    </p>
+    <pre><code>sourceIdentifier -&gt; destinationIdentifier [description] [technology] [tags]</code></pre>
+
+    <ul>
+      <li><strong><code>source -&gt; destination</code></strong>: The direction of intent/invocation (who initiates the call).</li>
+      <li><strong><code>description</code></strong>: An active verb phrase describing <em>what business function</em> is happening (e.g. <code>"Submits wire transfer requests to"</code>).</li>
+      <li><strong><code>technology</code></strong> (optional): The technical protocol, format, or transport (e.g. <code>"gRPC / TLS"</code>, <code>"HTTPS / JSON"</code>, <code>"Kafka Topic"</code>).</li>
+      <li><strong><code>tags</code></strong> (optional): Comma-separated labels used for custom styling or filtering (e.g. <code>"Async, Core Banking"</code>).</li>
+    </ul>
+
+    <h2>2. Concrete Landscape Example</h2>
+    <p>
+      Notice how each relationship explains both the <strong>business intent</strong> and the <strong>technical conduit</strong>:
+    </p>
+
+    <pre><code>workspace "Financial Services Landscape" {
+    model {
+        customer = person "Retail Customer" "Bank customer with active checking accounts"
+        webPortal = softwareSystem "Online Banking Portal" "Customer web application"
+        coreBanking = softwareSystem "Core Banking Engine" "Mainframe ledger and transaction engine"
+        fraudDetector = softwareSystem "Real-time Fraud Service" "Evaluates transaction risk scores"
+
+        // Directional relationship flows
+        customer -> webPortal "Initiates bill payments using" "HTTPS / Browser"
+        webPortal -> coreBanking "Executes debit/credit transactions via" "REST / mTLS"
+        coreBanking -> fraudDetector "Streams transactions for risk analysis to" "Apache Kafka"
+    }
+
+    views {
+        systemLandscape "landscape" "Complete end-to-end payment flows" {
+            include *
+            autoLayout lr
+        }
+        theme default
+    }
+}</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Architectural Rule of Thumb</div>
+      Arrows should point in the <strong>direction of the dependency/invocation</strong> (client &rarr; server, publisher &rarr; broker), NOT the direction of the return data payload.
+    </div>
+
+    <!-- Interactive Retrieval Practice -->
+    <div class="quiz-widget" id="quiz-2">
+      <div class="quiz-title">Knowledge Check: Relationship Semantics</div>
+      <p>
+        An architect models a payment service that fetches foreign exchange rates from an external vendor API over HTTPS. Which relationship declaration follows best practices in Structurizr DSL?
+      </p>
+      <div class="quiz-options">
+        <button class="option-btn" onclick="checkAnswer(1)">vendorApi -> paymentService "Returns current FX exchange rates" "JSON"</button>
+        <button class="option-btn" onclick="checkAnswer(2)">paymentService -> vendorApi "Fetches current foreign exchange rates from" "HTTPS / JSON"</button>
+        <button class="option-btn" onclick="checkAnswer(3)">paymentService -> vendorApi "Data flows between both services simultaneously" "Network"</button>
+        <button class="option-btn" onclick="checkAnswer(4)">paymentService <-> vendorApi "Synchronizes foreign exchange rates" "Bidirectional"</button>
+      </div>
+      <div id="feedback-correct" class="feedback correct">
+        <strong>Spot on!</strong> The arrow points from the initiator (<code>paymentService</code>) to the target (<code>vendorApi</code>), with an active verb phrase describing the business purpose and specific protocol technology (<code>HTTPS / JSON</code>).
+      </div>
+      <div id="feedback-incorrect" class="feedback incorrect">
+        <strong>Not quite.</strong> Remember: arrows should originate from the system that <em>initiates</em> the request, describe the intent with an active verb phrase, and state the specific transport protocol.
+      </div>
+    </div>
+
+    <h2>Primary Reference & Next Step</h2>
+    <p>
+      Check the updated <a href="../reference/0002-relationships-reference.html">Reference 0002: Relationships & Protocols Cheat Sheet</a>.
+    </p>
+
+    <div class="nav-footer">
+      <a href="./0001-core-mental-model.html">&larr; Lesson 0001</a>
+      <a href="../reference/0002-relationships-reference.html">Open Reference 0002 &rarr;</a>
+    </div>
+  </div>
+
+  <script>
+    function checkAnswer(chosen) {
+      const correct = document.getElementById('feedback-correct');
+      const incorrect = document.getElementById('feedback-incorrect');
+      if (chosen === 2) {
+        correct.style.display = 'block';
+        incorrect.style.display = 'none';
+      } else {
+        incorrect.style.display = 'block';
+        correct.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

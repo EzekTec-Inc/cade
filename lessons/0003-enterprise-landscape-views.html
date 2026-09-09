@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lesson 0003: Enterprise Boundaries, Groups & Landscape Views</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">Lesson 0003 · Milestone 3: Landscape Views</div>
+      <h1>Enterprise Boundaries, Groups & The System Landscape View</h1>
+    </header>
+
+    <p>
+      Now that you know how to declare elements and connect them with clear protocols, we arrive at the heart of your mission: 
+      <strong>Enterprise System Landscape Architecture</strong>.
+    </p>
+
+    <p>
+      A landscape view answers the highest-level question in enterprise architecture: 
+      <em>"What systems does our organization own, who uses them, and what third-party services do we depend on?"</em>
+    </p>
+
+    <h2>1. The `enterprise` Boundary</h2>
+    <p>
+      In a real enterprise, some systems are owned and operated internally, while others belong to external SaaS providers, banks, or regulatory partners.
+      Structurizr DSL gives you the <code>enterprise</code> block to draw this boundary:
+    </p>
+
+    <pre><code>workspace "Global Retail Enterprise" {
+    model {
+        customer = person "Shopper" "Retail consumer placing orders"
+
+        // Everything inside here is owned by your organization
+        enterprise "Acme Corporation" {
+            storefront = softwareSystem "E-Commerce Storefront" "Public shopping portal"
+            inventory = softwareSystem "Inventory System" "Tracks warehouse stock"
+        }
+
+        // External systems defined OUTSIDE the enterprise block
+        stripe = softwareSystem "Stripe Payment Gateway" "Third-party payment processor"
+        fedex = softwareSystem "FedEx Logistics API" "Third-party courier and shipping tracking"
+
+        // Cross-boundary connections
+        customer -> storefront "Browses products and places orders using" "HTTPS"
+        storefront -> stripe "Authorizes credit card charges with" "REST / HTTPS"
+        storefront -> inventory "Reserves purchased stock in" "gRPC"
+        inventory -> fedex "Schedules parcel pickup via" "HTTPS / JSON"
+    }
+
+    views {
+        systemLandscape "landscape" "Enterprise Landscape Overview" {
+            include *
+            autoLayout lr
+        }
+        theme default
+    }
+}</code></pre>
+
+    <h2>2. Grouping Systems by Domain with `group`</h2>
+    <p>
+      As an enterprise grows from 5 systems to 50, a flat list becomes unreadable. You can organize systems into logical domains using <code>group</code> blocks inside the enterprise:
+    </p>
+
+    <pre><code>enterprise "Acme Corporation" {
+    group "Commerce & Sales" {
+        storefront = softwareSystem "Storefront"
+        pos = softwareSystem "In-Store POS"
+    }
+
+    group "Supply Chain & Fulfillment" {
+        inventory = softwareSystem "Inventory Management"
+        warehouse = softwareSystem "Warehouse Ops"
+    }
+}</code></pre>
+
+    <h2>3. The `systemLandscape` View Block</h2>
+    <p>
+      Unlike a `systemContext` view (which focuses on only <em>one</em> system and its neighbors), a <code>systemLandscape</code> view shows the <strong>entire enterprise forest</strong>:
+    </p>
+    <ul>
+      <li><strong><code>include *</code></strong>: Pulls in all people, enterprise systems, and external systems.</li>
+      <li><strong><code>include &lt;element&gt;</code></strong>: Selectively includes specific systems to focus on a particular capability domain.</li>
+      <li><strong><code>autoLayout lr</code></strong>: Renders elements from Left-to-Right (or <code>tb</code> for Top-to-Bottom).</li>
+    </ul>
+
+    <!-- Interactive Retrieval Practice -->
+    <div class="quiz-widget" id="quiz-3">
+      <div class="quiz-title">Knowledge Check: Enterprise Boundary Scoping</div>
+      <p>
+        You are modeling an internal Human Resources ecosystem that integrates with Workday (SaaS) and an external Payroll Tax Authority. How should the enterprise boundary be structured in Structurizr DSL?
+      </p>
+      <div class="quiz-options">
+        <button class="option-btn" onclick="checkAnswer(1)">Place all systems inside enterprise "MyOrg" and distinguish external ones with tags.</button>
+        <button class="option-btn" onclick="checkAnswer(2)">Define internal HR systems inside enterprise "MyOrg", placing Workday and Tax Authority outside.</button>
+        <button class="option-btn" onclick="checkAnswer(3)">Create an enterprise block for each individual softwareSystem in the workspace model.</button>
+        <button class="option-btn" onclick="checkAnswer(4)">Place Workday in the enterprise block and internal systems in the systemLandscape view.</button>
+      </div>
+      <div id="feedback-correct" class="feedback correct">
+        <strong>Excellent!</strong> Only systems your organization owns and operates belong inside the <code>enterprise</code> block. Third-party SaaS tools, external APIs, and government agencies sit outside the boundary, making enterprise boundaries immediately obvious on diagrams.
+      </div>
+      <div id="feedback-incorrect" class="feedback incorrect">
+        <strong>Not quite.</strong> The <code>enterprise</code> block exists specifically to demarcate your organization's boundary. Internal systems go inside; external third parties (like Workday SaaS and Tax authorities) sit outside.
+      </div>
+    </div>
+
+    <h2>Primary Reference & Next Step</h2>
+    <p>
+      See <a href="../reference/0003-landscape-reference.html">Reference 0003: Enterprise Boundaries & Landscape Cheat Sheet</a>.
+    </p>
+
+    <div class="nav-footer">
+      <a href="./0002-relationships-and-protocols.html">&larr; Lesson 0002</a>
+      <a href="../reference/0003-landscape-reference.html">Open Reference 0003 &rarr;</a>
+    </div>
+  </div>
+
+  <script>
+    function checkAnswer(chosen) {
+      const correct = document.getElementById('feedback-correct');
+      const incorrect = document.getElementById('feedback-incorrect');
+      if (chosen === 2) {
+        correct.style.display = 'block';
+        incorrect.style.display = 'none';
+      } else {
+        incorrect.style.display = 'block';
+        correct.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

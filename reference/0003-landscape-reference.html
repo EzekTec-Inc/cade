@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reference 0003: Enterprise Boundaries & Groups Cheat Sheet</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">Reference Sheet 0003 · Quick Reference Card</div>
+      <h1>Enterprise Boundaries, Groups & Landscape View Syntax</h1>
+    </header>
+
+    <h2>Enterprise Boundary Syntax</h2>
+    <pre><code>model {
+    // 1. Enterprise Scope (Internal Systems)
+    enterprise &lt;name&gt; {
+        systemA = softwareSystem "Internal System A" "Description"
+        
+        // Optional Domain Sub-grouping
+        group "Operations" {
+            systemB = softwareSystem "Internal System B"
+        }
+    }
+
+    // 2. External Scope (Third-Party Systems / SaaS / Partners)
+    externalSaaS = softwareSystem "External SaaS Provider" "Description"
+}</code></pre>
+
+    <h2>Landscape View Syntax</h2>
+    <pre><code>views {
+    systemLandscape &lt;viewKey&gt; [description] {
+        include *                  // Include all people and systems
+        // OR selective includes:
+        // include systemA externalSaaS customer
+
+        autoLayout [tb|bt|lr|rl]   // Direction of auto-layout routing
+    }
+
+    theme default
+}</code></pre>
+
+    <h2>Visual Rendering Behavior</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Construct</th>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Visual Representation</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>enterprise "Name" { ... }</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Dashed rectangular boundary enclosing all internal systems and personas with the enterprise name banner.</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>group "Domain" { ... }</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Inner grouping box clustering related systems (e.g. Sales, Core Banking, Data Lake).</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">External systems (outside enterprise)</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Rendered outside the enterprise boundary box with distinct shading (gray by default).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="nav-footer">
+      <a href="../lessons/0003-enterprise-landscape-views.html">&larr; Back to Lesson 0003</a>
+      <span>Reference 0003</span>
+    </div>
+  </div>
+</body>
+</html>

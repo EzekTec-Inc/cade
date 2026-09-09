@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reference 0002: Relationships & Protocols Quick Reference</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="eyebrow">Reference Sheet 0002 · Quick Reference Card</div>
+      <h1>Relationships, Technology Tags & Semantic Direction</h1>
+    </header>
+
+    <h2>Relationship Syntax</h2>
+    <pre><code>&lt;sourceIdentifier&gt; -&gt; &lt;destinationIdentifier&gt; [description] [technology] [tags]</code></pre>
+
+    <h2>Best Practice Conventions</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Component</th>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Example</th>
+          <th style="text-align:left; padding: 6px 12px; border-bottom: 2px solid var(--border-light);">Guidance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><strong>Direction (<code>-&gt;</code>)</strong></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>app -&gt; database</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Direction of dependency or invocation, never return payload.</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><strong>Description</strong></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>"Queries account records using"</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Active verb phrase answering: <em>What business task is being initiated?</em></td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><strong>Technology</strong></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>"SQL / TCP 5432"</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Protocol, serialization, or network port.</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><strong>Tags</strong></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);"><code>"Sync, Core"</code></td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid var(--border-light);">Used for custom line styling (colors, dashed lines, animations).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Common Anti-Patterns to Avoid</h2>
+    <ul>
+      <li><strong>The "Data Flow" Arrow</strong>: Pointing the arrow from a server back to a client because "data is being sent back". The arrow should point to the system being called.</li>
+      <li><strong>Empty Descriptions</strong>: <code>a -&gt; b</code> with no text. Every relationship in a landscape model must explain the functional reason for the connection.</li>
+      <li><strong>Generic "Uses"</strong>: Writing <code>"Uses"</code> instead of specifying the action (e.g. <code>"Sends payment instructions to"</code>).</li>
+    </ul>
+
+    <div class="nav-footer">
+      <a href="../lessons/0002-relationships-and-protocols.html">&larr; Back to Lesson 0002</a>
+      <span>Reference 0002</span>
+    </div>
+  </div>
+</body>
+</html>
