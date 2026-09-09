@@ -155,6 +155,7 @@ fn router_build_with_no_keys() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -169,6 +170,7 @@ fn router_build_with_anthropic_key() {
         anthropic_api_key: Some("sk-test".into()),
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "anthropic".into(),
     };
@@ -183,6 +185,7 @@ fn router_resolve_explicit_prefix() -> Result<()> {
         anthropic_api_key: Some("sk-test".into()),
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "anthropic".into(),
     };
@@ -202,6 +205,7 @@ fn router_resolve_inferred_prefix() -> Result<()> {
         anthropic_api_key: Some("sk-test".into()),
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "anthropic".into(),
     };
@@ -298,6 +302,7 @@ fn router_resolve_unknown_falls_back_to_default() {
         anthropic_api_key: Some("sk-test".into()),
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "anthropic".into(),
     };
@@ -313,6 +318,7 @@ fn router_resolve_missing_provider_errors() -> Result<()> {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -331,6 +337,7 @@ fn router_add_and_remove_provider() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -370,6 +377,7 @@ fn router_validate_model() {
         anthropic_api_key: Some("sk-test".into()),
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "anthropic".into(),
     };
@@ -385,6 +393,7 @@ fn router_deepseek_prefers_configured_api_over_ollama() -> Result<()> {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -411,6 +420,7 @@ fn router_unconfigured_family_lists_all_candidates() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -438,6 +448,7 @@ fn router_openrouter_failover_does_not_guess_versions() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: Some("test-google-key".into()),
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "gemini".into(),
     };
@@ -534,6 +545,7 @@ fn provider_from_row_anthropic() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -552,6 +564,7 @@ fn provider_from_row_ollama() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -565,6 +578,7 @@ fn provider_from_row_unknown() {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -1057,6 +1071,18 @@ fn pricing_gpt_56_luna() {
 }
 
 #[test]
+fn pricing_deepseek_models() {
+    let registry = crate::ModelRegistry::new();
+    let p_v3 = registry.pricing_for_model("deepseek/deepseek-chat");
+    assert_eq!(p_v3.input, 0.14);
+    assert_eq!(p_v3.output, 0.28);
+
+    let p_r1 = registry.pricing_for_model("deepseek/deepseek-reasoner");
+    assert_eq!(p_r1.input, 0.55);
+    assert_eq!(p_r1.output, 2.19);
+}
+
+#[test]
 fn pricing_gpt_41_full_excludes_mini() {
     let registry = crate::ModelRegistry::new();
     let p = registry.pricing_for_model("openai/gpt-4.1");
@@ -1447,6 +1473,7 @@ fn test_llm_router_openrouter_failover_mapping() {
         anthropic_api_key: Some("test-anthropic-key".to_string()),
         openai_api_key: Some("test-openai-key".to_string()),
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".to_string(),
         llm_provider: "anthropic".to_string(),
     };

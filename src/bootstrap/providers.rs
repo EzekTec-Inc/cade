@@ -21,6 +21,12 @@ pub async fn push_env_providers_to_server(client: &HttpTransport) {
             &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
             None,
         ),
+        (
+            "deepseek",
+            "openai-compatible",
+            &["DEEPSEEK_API_KEY"],
+            Some("https://api.deepseek.com/chat/completions"),
+        ),
     ];
     for (name, kind, vars, base_url) in core {
         let key = vars

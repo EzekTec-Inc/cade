@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- **Native DeepSeek Provider & Models (`deepseek`):** Added first-class support for DeepSeek cloud API (`https://api.deepseek.com/chat/completions`) using the OpenAI-compatible adapter. Auto-registers via `DEEPSEEK_API_KEY` across server, CLI bootstrap, and embedded SDK runtimes.
+- **DeepSeek Catalogue & Pricing Telemetry:** Added `deepseek/deepseek-chat` (DeepSeek-V3) and `deepseek/deepseek-reasoner` (DeepSeek-R1) to `crates/cade-ai/src/catalogue.rs` (64k context, 8,192 max output, `codex` toolset). Configured token pricing rules ($0.14 input / $0.28 output per MTok for V3; $0.55 input / $2.19 output for R1).
+- **Interactive `/model` Picker Integration:** Surfaced DeepSeek models under the `deepseek` group in `cade-tui` and `cade-cli` model pickers with fallback to static catalogue definitions when live model listing is offline.
+
 ## [0.2.6] - 2026-09-07
 
 ### Added

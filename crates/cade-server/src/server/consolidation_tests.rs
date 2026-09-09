@@ -540,6 +540,7 @@ fn mk_state(db: cade_store::sqlite::Db, llm: Arc<dyn LlmProvider>) -> AppState {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         llm_provider: "ollama".into(),
     };
@@ -555,6 +556,7 @@ fn mk_state(db: cade_store::sqlite::Db, llm: Arc<dyn LlmProvider>) -> AppState {
         anthropic_api_key: None,
         openai_api_key: None,
         google_api_key: None,
+        deepseek_api_key: None,
         ollama_base_url: "http://localhost:11434".into(),
         api_key: None,
 

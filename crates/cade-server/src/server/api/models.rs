@@ -36,7 +36,7 @@ pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
     let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
 
-    const KNOWN: &[&str] = &["anthropic", "openai", "gemini", "google", "ollama"];
+    const KNOWN: &[&str] = &["anthropic", "openai", "gemini", "google", "deepseek", "ollama"];
     let all_known: std::collections::HashSet<String> = KNOWN
         .iter()
         .map(|s| s.to_string())

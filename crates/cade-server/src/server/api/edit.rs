@@ -224,6 +224,7 @@ mod tests {
             anthropic_api_key: None,
             openai_api_key: None,
             google_api_key: None,
+            deepseek_api_key: None,
             ollama_base_url: String::new(),
             api_key: None,
 
@@ -239,6 +240,7 @@ mod tests {
                 anthropic_api_key: None,
                 openai_api_key: None,
                 google_api_key: None,
+                deepseek_api_key: None,
                 ollama_base_url: String::new(),
                 llm_provider: String::new(),
             })),
@@ -247,6 +249,7 @@ mod tests {
                     anthropic_api_key: None,
                     openai_api_key: None,
                     google_api_key: None,
+                    deepseek_api_key: None,
                     ollama_base_url: String::new(),
                     llm_provider: String::new(),
                 },

@@ -59,6 +59,16 @@ impl LlmRouter {
             provider_keys.insert("gemini".to_string(), key.clone());
             provider_keys.insert("google".to_string(), key.clone());
         }
+        if let Some(key) = &config.deepseek_api_key {
+            providers.insert(
+                "deepseek".to_string(),
+                Arc::new(openai::OpenAiProvider::new(
+                    key.clone(),
+                    Some("https://api.deepseek.com/chat/completions".to_string()),
+                )),
+            );
+            provider_keys.insert("deepseek".to_string(), key.clone());
+        }
         // Ollama is always available as a local fallback
         providers.insert(
             "ollama".to_string(),
@@ -428,24 +438,31 @@ impl LlmRouter {
                         let n = name.clone();
                         let url = models_url.to_string();
                         tasks.push(Box::pin(async move {
-                            openai::fetch_model_ids(&url, &key)
-                                .await
-                                .into_iter()
-                                .map(|id| {
-                                    let full_id = format!("{n}/{id}");
-                                    ModelEntry {
-                                        provider: n.clone(),
-                                        id: full_id.clone(),
-                                        display_name: id,
-                                        toolset: catalogue::toolset_for_model(&full_id),
-                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
-                                        context_window: catalogue::context_window_for_model(
-                                            &full_id,
-                                        ),
-                                        dynamic: true,
-                                    }
-                                })
-                                .collect()
+                            let live = openai::fetch_model_ids(&url, &key).await;
+                            if live.is_empty() {
+                                CATALOGUE
+                                    .iter()
+                                    .filter(|(p, ..)| *p == n.as_str())
+                                    .map(catalogue::ModelEntry::from_catalogue)
+                                    .collect()
+                            } else {
+                                live.into_iter()
+                                    .map(|id| {
+                                        let full_id = format!("{n}/{id}");
+                                        ModelEntry {
+                                            provider: n.clone(),
+                                            id: full_id.clone(),
+                                            display_name: id,
+                                            toolset: catalogue::toolset_for_model(&full_id),
+                                            max_tokens: catalogue::max_tokens_for_model(&full_id),
+                                            context_window: catalogue::context_window_for_model(
+                                                &full_id,
+                                            ),
+                                            dynamic: true,
+                                        }
+                                    })
+                                    .collect()
+                            }
                         }));
                     }
                 }

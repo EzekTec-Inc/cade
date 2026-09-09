@@ -178,6 +178,23 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         8192,
         1_048_576,
     ),
+    // -- DeepSeek
+    (
+        "deepseek",
+        "DeepSeek-V3",
+        "deepseek/deepseek-chat",
+        "codex",
+        8192,
+        64_000,
+    ),
+    (
+        "deepseek",
+        "DeepSeek-R1",
+        "deepseek/deepseek-reasoner",
+        "codex",
+        8192,
+        64_000,
+    ),
 ];
 
 /// A model entry returned by `GET /v1/models`.
@@ -229,7 +246,7 @@ pub fn toolset_for_model(model_id: &str) -> String {
         m.3.to_string()
     } else if id.starts_with("gemini/") || id.starts_with("google/") {
         "gemini".to_string()
-    } else if id.starts_with("openai/") {
+    } else if id.starts_with("openai/") || id.starts_with("deepseek/") {
         "codex".to_string()
     } else {
         "default".to_string() // Groq, Ollama default to generic openai/anthropic style
@@ -311,6 +328,9 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
         }
         return 128_000;
     }
+    if id.starts_with("deepseek/") {
+        return 64_000;
+    }
     // Groq models (fast inference, smaller windows)
     if id.contains("llama") {
         return 128_000;
@@ -334,6 +354,7 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
         "anthropic" => "anthropic/claude-haiku-4-5".to_string(),
         "openai" => "openai/o4-mini".to_string(),
         "gemini" => "gemini/gemini-2.5-flash".to_string(),
+        "deepseek" => "deepseek/deepseek-chat".to_string(),
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
 }
@@ -445,6 +466,16 @@ mod tests {
         assert_eq!(toolset_for_model("openai/gpt-5.6"), "codex");
         assert_eq!(toolset_for_model("openai/gpt-5.6-luna"), "codex");
         assert_eq!(context_window_for_model("openai/gpt-5.6-luna"), 200_000);
+    }
+
+    #[test]
+    fn deepseek_models_are_catalogued_correctly() {
+        assert_eq!(toolset_for_model("deepseek/deepseek-chat"), "codex");
+        assert_eq!(toolset_for_model("deepseek/deepseek-reasoner"), "codex");
+        assert_eq!(context_window_for_model("deepseek/deepseek-chat"), 64_000);
+        assert_eq!(context_window_for_model("deepseek/deepseek-reasoner"), 64_000);
+        assert_eq!(max_tokens_for_model("deepseek/deepseek-chat"), 8192);
+        assert_eq!(max_tokens_for_model("deepseek/deepseek-reasoner"), 8192);
     }
 
     #[test]

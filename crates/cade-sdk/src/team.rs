@@ -372,6 +372,7 @@ impl TeamSessionBuilder {
                 google_api_key: std::env::var("GEMINI_API_KEY")
                     .ok()
                     .or_else(|| std::env::var("GOOGLE_API_KEY").ok()),
+                deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
                 ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                     .unwrap_or_else(|_| "http://localhost:11434".to_string()),
                 llm_provider: "anthropic".to_string(),

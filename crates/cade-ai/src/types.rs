@@ -9,6 +9,7 @@ pub struct AiConfig {
     pub anthropic_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub google_api_key: Option<String>,
+    pub deepseek_api_key: Option<String>,
     pub ollama_base_url: String,
     pub llm_provider: String,
 }

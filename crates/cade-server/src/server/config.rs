@@ -11,6 +11,7 @@ pub struct ServerConfig {
     pub anthropic_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub google_api_key: Option<String>,
+    pub deepseek_api_key: Option<String>,
     pub ollama_base_url: String,
     /// Auth token required for CLI requests (optional; empty = no auth)
     pub api_key: Option<String>,
@@ -27,6 +28,7 @@ pub enum LlmProviderKind {
     Anthropic,
     OpenAI,
     Gemini,
+    DeepSeek,
     Ollama,
 }
 
@@ -37,9 +39,10 @@ impl std::str::FromStr for LlmProviderKind {
             "anthropic" | "claude" => Ok(Self::Anthropic),
             "openai" | "openai-compatible" => Ok(Self::OpenAI),
             "gemini" | "google" => Ok(Self::Gemini),
+            "deepseek" => Ok(Self::DeepSeek),
             "ollama" | "local" => Ok(Self::Ollama),
             other => Err(crate::server::Error::custom(format!(
-                "Unknown LLM provider '{other}'. Valid: anthropic, openai, gemini, ollama"
+                "Unknown LLM provider '{other}'. Valid: anthropic, openai, gemini, deepseek, ollama"
             ))),
         }
     }
@@ -51,6 +54,7 @@ impl std::fmt::Display for LlmProviderKind {
             Self::Anthropic => write!(f, "anthropic"),
             Self::OpenAI => write!(f, "openai"),
             Self::Gemini => write!(f, "gemini"),
+            Self::DeepSeek => write!(f, "deepseek"),
             Self::Ollama => write!(f, "ollama"),
         }
     }
@@ -62,6 +66,7 @@ pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
         LlmProviderKind::Anthropic => "claude-opus-4-5",
         LlmProviderKind::OpenAI => "gpt-4o",
         LlmProviderKind::Gemini => "gemini-2.5-pro",
+        LlmProviderKind::DeepSeek => "deepseek-chat",
         LlmProviderKind::Ollama => "llama3.2", // most likely installed; user can override
     }
 }
@@ -105,6 +110,14 @@ pub fn detect_provider() -> (LlmProviderKind, String) {
                     .unwrap_or(false)
             },
             LlmProviderKind::Gemini,
+        ),
+        (
+            || {
+                std::env::var("DEEPSEEK_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
+            },
+            LlmProviderKind::DeepSeek,
         ),
     ];
 
@@ -188,6 +201,7 @@ impl ServerConfig {
             google_api_key: std::env::var("GOOGLE_API_KEY")
                 .or_else(|_| std::env::var("GEMINI_API_KEY"))
                 .ok(),
+            deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:11434".to_string()),
             api_key: resolve_api_key(),
@@ -203,6 +217,7 @@ impl ServerConfig {
             anthropic_api_key: self.anthropic_api_key.clone(),
             openai_api_key: self.openai_api_key.clone(),
             google_api_key: self.google_api_key.clone(),
+            deepseek_api_key: self.deepseek_api_key.clone(),
             ollama_base_url: self.ollama_base_url.clone(),
             llm_provider: self.llm_provider.to_string(),
         }
