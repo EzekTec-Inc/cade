@@ -18,9 +18,26 @@ Write-Host "=========================================="
 
 # 1. Fetch Latest Release
 Write-Host "[1/4] Fetching latest release info..."
-$ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
-$Release = Invoke-RestMethod -Uri $ApiUrl
-$LatestVersion = $Release.tag_name
+$LatestVersion = $null
+try {
+    $Headers = @{ "User-Agent" = "CADE-Installer" }
+    $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
+    $Release = Invoke-RestMethod -Uri $ApiUrl -Headers $Headers
+    $LatestVersion = $Release.tag_name
+} catch {
+    # Fallback to redirect resolution if API is rate-limited
+    try {
+        $Req = [System.Net.WebRequest]::Create("https://github.com/$Repo/releases/latest")
+        $Req.AllowAutoRedirect = $false
+        $Resp = $Req.GetResponse()
+        $Location = $Resp.GetResponseHeader("Location")
+        if ($Location) {
+            $LatestVersion = $Location.Substring($Location.LastIndexOf("/") + 1).Trim()
+        }
+    } catch {
+        # Keep null to trigger error below
+    }
+}
 
 if ([string]::IsNullOrEmpty($LatestVersion)) {
     Write-Error "Could not determine latest release version."
@@ -43,15 +60,29 @@ New-Item -ItemType Directory -Force -Path $ExtractDir | Out-Null
 
 # 3. Download and Extract
 Write-Host "[2/4] Downloading $AssetName..."
-Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpFile
+try {
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpFile
+} catch {
+    Write-Error "Failed to download $AssetName from $DownloadUrl. Pre-built binaries may not be published for $LatestVersion yet. You can build from source using: cargo install --path crates/cade-cli"
+    exit 1
+}
 
 Write-Host "[3/4] Extracting binaries..."
 Expand-Archive -Path $TmpFile -DestinationPath $ExtractDir -Force
 
+# Locate binaries (whether flat or in nested directories)
+$CadeExe = Get-ChildItem -Path $ExtractDir -Filter "cade.exe" -Recurse -File | Select-Object -First 1
+$ServerExe = Get-ChildItem -Path $ExtractDir -Filter "cade-server.exe" -Recurse -File | Select-Object -First 1
+
+if (-not $CadeExe -or -not $ServerExe) {
+    Write-Error "Could not locate extracted binaries in archive."
+    exit 1
+}
+
 # 4. Install Binaries
 Write-Host "[4/4] Installing to $InstallDir..."
-Move-Item -Path "$ExtractDir\cade.exe" -Destination "$InstallDir\cade.exe" -Force
-Move-Item -Path "$ExtractDir\cade-server.exe" -Destination "$InstallDir\cade-server.exe" -Force
+Move-Item -Path $CadeExe.FullName -Destination "$InstallDir\cade.exe" -Force
+Move-Item -Path $ServerExe.FullName -Destination "$InstallDir\cade-server.exe" -Force
 
 # Clean up
 Remove-Item -Path $TmpFile -Force

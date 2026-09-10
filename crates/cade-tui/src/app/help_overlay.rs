@@ -31,10 +31,7 @@ impl HelpOverlay {
                 "Esc",
                 "Close floating help overlay or active autocomplete menu",
             ),
-            (
-                "Ctrl+B",
-                "Toggle sidebar / sidetray visibility",
-            ),
+            ("Ctrl+B", "Toggle sidebar / sidetray visibility"),
             (
                 "Ctrl+O",
                 "Toggle timeline expansion (expand/compress all items)",

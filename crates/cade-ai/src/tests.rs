@@ -988,10 +988,22 @@ fn clean_gemini_schema_preserves_keyword_named_properties() {
 
     clean_gemini_schema(&mut schema);
 
-    assert_eq!(schema["required"], json!(["pattern", "format", "title", "limit"]));
-    assert!(schema["properties"].get("pattern").is_some(), "property named 'pattern' must survive");
-    assert!(schema["properties"].get("format").is_some(), "property named 'format' must survive");
-    assert!(schema["properties"].get("title").is_some(), "property named 'title' must survive");
+    assert_eq!(
+        schema["required"],
+        json!(["pattern", "format", "title", "limit"])
+    );
+    assert!(
+        schema["properties"].get("pattern").is_some(),
+        "property named 'pattern' must survive"
+    );
+    assert!(
+        schema["properties"].get("format").is_some(),
+        "property named 'format' must survive"
+    );
+    assert!(
+        schema["properties"].get("title").is_some(),
+        "property named 'title' must survive"
+    );
     assert_eq!(schema["properties"]["pattern"]["type"], "STRING");
     assert_gemini_required_entries_have_properties(&schema);
 }

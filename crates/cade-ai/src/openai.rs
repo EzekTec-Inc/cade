@@ -303,7 +303,6 @@ impl OpenAiProvider {
         )
     }
 
-
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
 
@@ -420,7 +419,12 @@ impl OpenAiProvider {
     }
 
     /// Provide clear, actionable diagnostic guidance when upstream returns 404/400 for preview models.
-    fn format_upstream_error(label: &str, status: reqwest::StatusCode, text: &str, model: &str) -> crate::Error {
+    fn format_upstream_error(
+        label: &str,
+        status: reqwest::StatusCode,
+        text: &str,
+        model: &str,
+    ) -> crate::Error {
         if status == reqwest::StatusCode::NOT_FOUND && is_frontier_preview_model(model) {
             crate::Error::custom(format!(
                 "{label} returned 404 Not Found for model '{model}'. If you are using a partner/enterprise preview or internal gateway, configure OPENAI_PREVIEW_BASE_URL (e.g. export OPENAI_PREVIEW_BASE_URL=\"https://your-gateway.example.com/v1\"). Upstream details: {text}"
@@ -567,7 +571,10 @@ impl OpenAiProvider {
             body["tools"] = Self::build_tools(req);
         }
         if is_o_series(&req.model)
-            && let Some(effort) = req.reasoning_effort.as_deref().and_then(map_reasoning_effort)
+            && let Some(effort) = req
+                .reasoning_effort
+                .as_deref()
+                .and_then(map_reasoning_effort)
         {
             body["reasoning_effort"] = effort.into();
         }
@@ -592,7 +599,11 @@ impl OpenAiProvider {
         if stream {
             body["stream"] = true.into();
         }
-        if let Some(effort) = req.reasoning_effort.as_deref().and_then(map_reasoning_effort) {
+        if let Some(effort) = req
+            .reasoning_effort
+            .as_deref()
+            .and_then(map_reasoning_effort)
+        {
             body["reasoning"] = json!({ "effort": effort });
         }
         body
@@ -631,7 +642,12 @@ impl LlmProvider for OpenAiProvider {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let text = resp.text().await.unwrap_or_default();
-                            return Err(Self::format_upstream_error(label, status, &text, &model_name));
+                            return Err(Self::format_upstream_error(
+                                label,
+                                status,
+                                &text,
+                                &model_name,
+                            ));
                         }
                         Ok(Self::parse_response(&resp.json::<Value>().await?))
                     }

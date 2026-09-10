@@ -85,6 +85,9 @@ M.defaults = {
   completions   = {
     enabled = true,
   },
+  edit          = {
+    enabled = true,
+  },
   mcp = {
     enabled = true,
     debounce_ms = 50,

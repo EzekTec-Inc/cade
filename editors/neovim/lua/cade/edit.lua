@@ -181,17 +181,38 @@ function M.setup_hints()
 end
 
 function M.hover_edit()
+  local cfg = require("cade.config").get()
+  if cfg.edit and cfg.edit.enabled == false then
+    vim.notify("CADE interactive edits are disabled", vim.log.levels.INFO)
+    return
+  end
+
   local mode = vim.fn.mode()
-  if mode ~= "v" and mode ~= "V" and mode ~= "\22" then
-    vim.notify("CADE edit requires a visual selection", vim.log.levels.WARN)
+  local is_normal = (mode == "n")
+  if mode ~= "v" and mode ~= "V" and mode ~= "\22" and not is_normal then
+    vim.notify("CADE edit requires normal or visual mode", vim.log.levels.WARN)
     return
   end
   
-  -- Escape to normal mode to set '< and '> marks
-  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+  if not is_normal then
+    -- Escape to normal mode to set '< and '> marks
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+  end
 
   vim.schedule(function()
-    local selected_text, s_row, s_col, e_row, e_col, mode = get_visual_selection()
+    local selected_text, s_row, s_col, e_row, e_col, sel_mode
+    if is_normal then
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      local r = cursor[1] - 1
+      local line = vim.api.nvim_get_current_line()
+      s_row, s_col = r, 0
+      e_row, e_col = r, #line
+      selected_text = line
+      sel_mode = "V"
+    else
+      selected_text, s_row, s_col, e_row, e_col, sel_mode = get_visual_selection()
+    end
+
     local buf = vim.api.nvim_get_current_buf()
     
     local sel_ns = vim.api.nvim_create_namespace("cade_edit_sel")
@@ -201,7 +222,7 @@ function M.hover_edit()
       hl_group = "Visual",
       priority = 10000,
     }
-    if mode == "V" then
+    if sel_mode == "V" then
       sel_opts.hl_eol = true
     end
     local sel_extmark = vim.api.nvim_buf_set_extmark(buf, sel_ns, s_row, s_col, sel_opts)

@@ -483,7 +483,10 @@ mod tests {
         assert_eq!(toolset_for_model("deepseek/deepseek-chat"), "codex");
         assert_eq!(toolset_for_model("deepseek/deepseek-reasoner"), "codex");
         assert_eq!(context_window_for_model("deepseek/deepseek-chat"), 64_000);
-        assert_eq!(context_window_for_model("deepseek/deepseek-reasoner"), 64_000);
+        assert_eq!(
+            context_window_for_model("deepseek/deepseek-reasoner"),
+            64_000
+        );
         assert_eq!(max_tokens_for_model("deepseek/deepseek-chat"), 8192);
         assert_eq!(max_tokens_for_model("deepseek/deepseek-reasoner"), 8192);
     }

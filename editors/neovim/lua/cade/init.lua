@@ -24,12 +24,14 @@ end
 function M.setup(opts)
   require("cade.config").setup(opts)
   
-  -- Try to setup hover edit hints if edit.lua is present
-  pcall(function()
-    require("cade.edit").setup_hints()
-  end)
-
   local cfg = require("cade.config").get()
+
+  -- Try to setup hover edit hints if edit is enabled
+  if cfg.edit == nil or cfg.edit.enabled ~= false then
+    pcall(function()
+      require("cade.edit").setup_hints()
+    end)
+  end
   
   if cfg.mcp and cfg.mcp.enabled then
     pcall(function()

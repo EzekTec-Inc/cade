@@ -15,19 +15,31 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
         }
     }
 
+    let server_bin_name = if cfg!(windows) {
+        "cade-server.exe"
+    } else {
+        "cade-server"
+    };
     let server_bin = std::env::current_exe()
         .ok()
-        .map(|p| p.with_file_name("cade-server"))
+        .map(|p| p.with_file_name(server_bin_name))
         .filter(|p| p.exists());
 
     if let Some(server_bin) = server_bin {
         tracing::info!("cade-server not running — starting…");
         let mut cmd = std::process::Command::new(&server_bin);
         cade_core::agent_env::apply_agent_env(&mut cmd);
+
+        let log_path = if cfg!(windows) {
+            std::env::temp_dir().join("cade-server.log")
+        } else {
+            std::path::PathBuf::from("/tmp/cade-server.log")
+        };
+
         if let Ok(log) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/cade-server.log")
+            .open(&log_path)
         {
             match log.try_clone() {
                 Ok(log_stderr) => {
@@ -43,7 +55,8 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
             }
         } else {
             tracing::warn!(
-                "Failed to create /tmp/cade-server.log. Server output will go to stderr."
+                "Failed to create {}. Server output will go to stderr.",
+                log_path.display()
             );
         }
         let mut child = cmd
@@ -73,19 +86,24 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
             // Kill the child if it's still running but unresponsive.
             let _ = child.kill();
             return Err(Error::custom(format!(
-                "cade-server failed to become ready within {}s. Check /tmp/cade-server.log\n\
+                "cade-server failed to become ready within {}s. Check {}\n\
                  Or start it manually: {}",
                 total_timeout.as_secs(),
+                log_path.display(),
                 server_bin.display()
             )));
         }
         tracing::info!("cade-server ready.");
         Ok(())
     } else {
-        Err(Error::custom(
-            "Cannot connect to CADE server at {base_url}.\n\
-             Start cade-server first: ./target/release/cade-server",
-        ))
+        let hint = if cfg!(windows) {
+            "Start cade-server first: .\\target\\release\\cade-server.exe"
+        } else {
+            "Start cade-server first: ./target/release/cade-server"
+        };
+        Err(Error::custom(format!(
+            "Cannot connect to CADE server at {base_url}.\n{hint}"
+        )))
     }
 }
 
