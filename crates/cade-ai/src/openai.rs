@@ -15,6 +15,12 @@ use super::{
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
+/// Check if a model represents an unreleased/frontier preview model (e.g. gpt-5, gpt-5.5-pro, gpt-5.6).
+pub(crate) fn is_frontier_preview_model(model: &str) -> bool {
+    let bare = bare_model(model).to_lowercase();
+    bare.starts_with("gpt-5")
+}
+
 fn needs_max_completion_tokens(model: &str) -> bool {
     let bare = bare_model(model).to_lowercase();
     bare.starts_with("gpt-4.5")
@@ -228,6 +234,31 @@ impl OpenAiProvider {
         }
     }
 
+    /// Resolve the target endpoint for a model request.
+    /// If `OPENAI_PREVIEW_BASE_URL` is set and the model is a frontier preview (`gpt-5*`),
+    /// route to the custom gateway rather than the default public chat completions endpoint.
+    fn resolve_endpoint_with_preview(&self, model: &str, preview_override: Option<&str>) -> String {
+        if self.base_url == OPENAI_URL && is_frontier_preview_model(model) {
+            let env_opt = std::env::var("OPENAI_PREVIEW_BASE_URL").ok();
+            let opt = preview_override.or(env_opt.as_deref());
+            if let Some(preview_url) = opt {
+                let trimmed = preview_url.trim().trim_end_matches('/');
+                if !trimmed.is_empty() {
+                    return if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/responses") {
+                        trimmed.to_string()
+                    } else {
+                        format!("{trimmed}/chat/completions")
+                    };
+                }
+            }
+        }
+        self.base_url.clone()
+    }
+
+    fn resolve_endpoint(&self, model: &str) -> String {
+        self.resolve_endpoint_with_preview(model, None)
+    }
+
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
 
@@ -341,6 +372,17 @@ impl OpenAiProvider {
         }
 
         json!(json_messages)
+    }
+
+    /// Provide clear, actionable diagnostic guidance when upstream returns 404/400 for preview models.
+    fn format_upstream_error(label: &str, status: reqwest::StatusCode, text: &str, model: &str) -> crate::Error {
+        if status == reqwest::StatusCode::NOT_FOUND && is_frontier_preview_model(model) {
+            crate::Error::custom(format!(
+                "{label} returned 404 Not Found for model '{model}'. If you are using a partner/enterprise preview or internal gateway, configure OPENAI_PREVIEW_BASE_URL (e.g. export OPENAI_PREVIEW_BASE_URL=\"https://your-gateway.example.com/v1\"). Upstream details: {text}"
+            ))
+        } else {
+            provider_error(label, status, text)
+        }
     }
 
     fn parse_response(body: &Value) -> CompletionResponse {
@@ -474,6 +516,7 @@ impl LlmProvider for OpenAiProvider {
             }
 
             let provider_label = self.provider_label();
+            let target_url = self.resolve_endpoint(&req.model);
 
             retry_with_backoff(
                 "OpenAI::complete",
@@ -481,12 +524,13 @@ impl LlmProvider for OpenAiProvider {
                 std::time::Duration::from_secs(1),
                 |_| {
                     let client = self.client.clone();
-                    let base_url = self.base_url.clone();
+                    let endpoint = target_url.clone();
                     let api_key = self.api_key.clone();
                     let body = body.clone();
                     let label = provider_label;
+                    let model_name = req.model.clone();
                     async move {
-                        let mut req = client.post(&base_url).json(&body);
+                        let mut req = client.post(&endpoint).json(&body);
                         if !api_key.is_empty() {
                             req = req.bearer_auth(&api_key);
                         }
@@ -494,7 +538,7 @@ impl LlmProvider for OpenAiProvider {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let text = resp.text().await.unwrap_or_default();
-                            return Err(provider_error(label, status, &text));
+                            return Err(Self::format_upstream_error(label, status, &text, &model_name));
                         }
                         Ok(Self::parse_response(&resp.json::<Value>().await?))
                     }
@@ -553,6 +597,9 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let provider_label = self.provider_label();
+        let target_url = self.resolve_endpoint(&req.model);
+        let model_name = req.model.clone();
+
         //NOTE: Stephen Z. Ezekwem -- this is where the api call and response is implemented.
         let resp = retry_with_backoff(
             "OpenAI::stream",
@@ -560,12 +607,13 @@ impl LlmProvider for OpenAiProvider {
             std::time::Duration::from_secs(1),
             |_| {
                 let client = self.client.clone();
-                let base_url = self.base_url.clone();
+                let endpoint = target_url.clone();
                 let api_key = self.api_key.clone();
                 let body = body.clone();
                 let label = provider_label;
+                let m_name = model_name.clone();
                 async move {
-                    let mut req = client.post(&base_url).json(&body);
+                    let mut req = client.post(&endpoint).json(&body);
                     if !api_key.is_empty() {
                         req = req.bearer_auth(&api_key);
                     }
@@ -573,7 +621,7 @@ impl LlmProvider for OpenAiProvider {
                     if !resp.status().is_success() {
                         let status = resp.status();
                         let text = resp.text().await.unwrap_or_default();
-                        return Err(provider_error(label, status, &text));
+                        return Err(Self::format_upstream_error(label, status, &text, &m_name));
                     }
                     Ok(resp)
                 }
@@ -619,44 +667,109 @@ impl LlmProvider for OpenAiProvider {
                     }
                     let v_res = serde_json::from_str::<Value>(data);
                     if let Ok(v) = v_res {
-                        let delta = &v["choices"][0]["delta"];
+                        // 1. Standard Chat Completions SSE schema
+                        if let Some(choices) = v.get("choices").and_then(Value::as_array)
+                            && let Some(choice0) = choices.first()
+                        {
+                            let delta = &choice0["delta"];
 
-                        if let Some(text) = delta["content"].as_str()
-                            && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
-                        if let Some(reasoning) = delta["reasoning"].as_str()
-                            && !reasoning.is_empty() { yield Ok(StreamChunk::Reasoning(reasoning.to_string())); }
-                        if let Some(tcs) = delta["tool_calls"].as_array() {
-                            for tc in tcs {
-                                // `index` distinguishes parallel tool calls in one stream
-                                let idx = tc["index"].as_u64().unwrap_or(0) as usize;
-                                let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                                if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
-                                if let Some(n) = tc["function"]["name"].as_str() { entry.1 = n.to_string(); }
-                                if let Some(a) = tc["function"]["arguments"].as_str() { entry.2.push_str(a); }
+                            if let Some(text) = delta["content"].as_str()
+                                && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                            if let Some(reasoning) = delta["reasoning"].as_str()
+                                && !reasoning.is_empty() { yield Ok(StreamChunk::Reasoning(reasoning.to_string())); }
+                            if let Some(tcs) = delta["tool_calls"].as_array() {
+                                for tc in tcs {
+                                    // `index` distinguishes parallel tool calls in one stream
+                                    let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                                    let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                                    if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
+                                    if let Some(n) = tc["function"]["name"].as_str() { entry.1 = n.to_string(); }
+                                    if let Some(a) = tc["function"]["arguments"].as_str() { entry.2.push_str(a); }
+                                }
+                            }
+                            if let Some(reason) = choice0["finish_reason"].as_str() {
+                                if matches!(reason, "stop" | "tool_calls") {
+                                    // Emit every accumulated tool call in index order
+                                    let calls: Vec<(String, String, String)> =
+                                        std::mem::take(&mut tool_map).into_values().collect();
+                                    for (id, name, args_str) in calls {
+                                        if !name.is_empty() {
+                                            let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
+                                                tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
+                                                serde_json::Value::Object(Default::default())
+                                            });
+                                            yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                                        }
+                                    }
+                                    // Don't return here — OpenAI sends usage in a separate chunk
+                                    // before [DONE] when stream_options.include_usage=true.
+                                }
+                                if !finish_emitted {
+                                    yield Ok(StreamChunk::FinishReason(reason.to_string()));
+                                    finish_emitted = true;
+                                }
                             }
                         }
-                        if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
-                            if matches!(reason, "stop" | "tool_calls") {
-                                // Emit every accumulated tool call in index order
-                                let calls: Vec<(String, String, String)> =
-                                    std::mem::take(&mut tool_map).into_values().collect();
-                                for (id, name, args_str) in calls {
-                                    if !name.is_empty() {
-                                        let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
-                                            tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
-                                            serde_json::Value::Object(Default::default())
-                                        });
-                                        yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                        // 2. Modern Responses API / Realtime wire events
+                        else if let Some(event_type) = v.get("type").and_then(Value::as_str) {
+                            match event_type {
+                                "response.output_item.added" => {
+                                    let item = &v["item"];
+                                    if item["type"].as_str() == Some("function_call") {
+                                        let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                                        let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                                        if let Some(call_id) = item["call_id"].as_str().or_else(|| item["id"].as_str()) {
+                                            entry.0 = call_id.to_string();
+                                        }
+                                        if let Some(name) = item["name"].as_str() {
+                                            entry.1 = name.to_string();
+                                        }
+                                        if let Some(args) = item["arguments"].as_str() {
+                                            entry.2.push_str(args);
+                                        }
                                     }
                                 }
-                                // Don't return here — OpenAI sends usage in a separate chunk
-                                // before [DONE] when stream_options.include_usage=true.
-                            }
-                            if !finish_emitted {
-                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
-                                finish_emitted = true;
+                                "response.output_item.done" => {
+                                    let item = &v["item"];
+                                    if item["type"].as_str() == Some("function_call") {
+                                        let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                                        if let Some((id, name, args_str)) = tool_map.remove(&idx)
+                                            && !name.is_empty()
+                                        {
+                                            let args = serde_json::from_str(&args_str).unwrap_or_default();
+                                            yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                                        }
+                                    }
+                                }
+                                "response.function_call_arguments.delta" => {
+                                    let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                                    let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                                    if let Some(delta_args) = v["delta"].as_str() {
+                                        entry.2.push_str(delta_args);
+                                    }
+                                }
+                                "response.text.delta" | "response.output_text.delta" => {
+                                    if let Some(txt) = v["delta"].as_str() && !txt.is_empty() {
+                                        yield Ok(StreamChunk::Text(txt.to_string()));
+                                    }
+                                }
+                                "response.reasoning.delta" => {
+                                    if let Some(res) = v["delta"].as_str() && !res.is_empty() {
+                                        yield Ok(StreamChunk::Reasoning(res.to_string()));
+                                    }
+                                }
+                                "response.done" => {
+                                    if let Some(status) = v["response"]["status"].as_str()
+                                        && !finish_emitted
+                                    {
+                                        yield Ok(StreamChunk::FinishReason(status.to_string()));
+                                        finish_emitted = true;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
+
                         // Usage chunk: may arrive in any chunk, including the separate
                         // empty-choices chunk OpenAI sends after finish_reason.
                         if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {

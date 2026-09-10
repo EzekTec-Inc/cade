@@ -558,3 +558,58 @@ fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> 
 
     Ok(())
 }
+
+// ── Responses API & Preview Gateway Routing Tests ─────────────────────────
+
+#[test]
+fn resolve_endpoint_uses_preview_base_url_for_frontier_models() {
+    let provider = OpenAiProvider::new("test-key".into(), None);
+
+    // Without override, routes to standard OPENAI_URL
+    assert_eq!(
+        provider.resolve_endpoint_with_preview("openai/gpt-4o", None),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        provider.resolve_endpoint_with_preview("openai/gpt-5.6", None),
+        "https://api.openai.com/v1/chat/completions"
+    );
+
+    // With override, frontier models route to preview gateway, while gpt-4o stays on public
+    let preview_gw = Some("https://preview-gateway.corp/v1");
+
+    assert_eq!(
+        provider.resolve_endpoint_with_preview("openai/gpt-4o", preview_gw),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        provider.resolve_endpoint_with_preview("openai/gpt-5.6", preview_gw),
+        "https://preview-gateway.corp/v1/chat/completions"
+    );
+    assert_eq!(
+        provider.resolve_endpoint_with_preview("openai/gpt-5.5-pro", preview_gw),
+        "https://preview-gateway.corp/v1/chat/completions"
+    );
+}
+
+#[test]
+fn format_upstream_error_provides_diagnostic_guidance_for_preview_models() {
+    let err_404 = OpenAiProvider::format_upstream_error(
+        "OpenAI",
+        reqwest::StatusCode::NOT_FOUND,
+        "model_not_found: The model 'gpt-5.6' does not exist",
+        "openai/gpt-5.6",
+    );
+    let msg = err_404.to_string();
+    assert!(msg.contains("404 Not Found"));
+    assert!(msg.contains("OPENAI_PREVIEW_BASE_URL"));
+
+    let err_standard = OpenAiProvider::format_upstream_error(
+        "OpenAI",
+        reqwest::StatusCode::NOT_FOUND,
+        "model_not_found: The model 'gpt-4o' does not exist",
+        "openai/gpt-4o",
+    );
+    let standard_msg = err_standard.to_string();
+    assert!(!standard_msg.contains("OPENAI_PREVIEW_BASE_URL"));
+}
