@@ -47,6 +47,10 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      - name: Ensure GUI dist directory exists for rust-embed
+        shell: bash
+        run: mkdir -p crates/cade-gui/dist
+
       - name: Format check
         run: cargo fmt --all -- --check
 
