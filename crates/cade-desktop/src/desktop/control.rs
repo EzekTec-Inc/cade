@@ -46,9 +46,9 @@ impl DesktopControl {
             if status.success() {
                 return Ok(());
             }
-            return Err(Error::custom(format!(
+            Err(Error::custom(format!(
                 "Could not focus window with title '{title}' on Windows"
-            )));
+            )))
         }
 
         #[cfg(target_os = "macos")]
@@ -65,9 +65,9 @@ impl DesktopControl {
             if status.success() {
                 return Ok(());
             }
-            return Err(Error::custom(format!(
+            Err(Error::custom(format!(
                 "Could not focus window with title '{title}' on macOS"
-            )));
+            )))
         }
 
         #[cfg(target_os = "linux")]
