@@ -1779,3 +1779,18 @@ fn compress_tool_schema_reduces_byte_size_substantially() {
         "compression must reduce schema by ≥ 4x; before={before} after={after}"
     );
 }
+
+// ── Stream error recovery tests ──────────────────────────────────────────
+
+#[test]
+fn sse_stream_error_payload_shape() {
+    let err_msg = "The model 'gpt-5.6' does not exist or you do not have access to it.";
+    let payload = serde_json::json!({
+        "message_type": "error",
+        "error": err_msg,
+    });
+    let s = payload.to_string();
+    let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(parsed["message_type"], "error");
+    assert_eq!(parsed["error"], err_msg);
+}

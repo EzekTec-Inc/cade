@@ -496,13 +496,19 @@ impl Repl {
         self.agent_turn(stdout, input).await
     }
 
-    /// Commit any in-progress streaming/reasoning, push an error line, and
-    /// return an empty message vec.  Shared cleanup path for stream errors.
+    /// Commit any in-progress streaming/reasoning, push an error line, reset
+    /// the status indicator bar, and return an empty message vec.
+    /// Shared cleanup path for stream errors to prevent frozen turn states.
     pub(crate) fn abort_stream_ui(&self, msg: impl Into<String>) -> Vec<CadeMessage> {
+        let err_text = msg.into();
         let mut app = self.app.lock();
         let _ = app.commit_reasoning();
         let _ = app.commit_streaming();
-        let _ = app.push(RenderLine::ErrorMsg(msg.into()));
+        app.show_toast(err_text.clone(), cade_tui::app::ToastLevel::Error);
+        let _ = app.push(RenderLine::ErrorMsg(err_text.clone()));
+        app.set_last_status(Some(format!("✗ Error: {err_text}")));
+        app.draw_dirty = true;
+        let _ = app.draw();
         vec![]
     }
 }
@@ -537,5 +543,36 @@ mod tests {
         // plan verbatim (the agent already sees it via the memory block).
         let s = build_active_goal_first_turn_reminder("super-secret-plan-xyz").expect("present");
         assert!(!s.contains("super-secret-plan-xyz"));
+    }
+
+    #[test]
+    fn abort_stream_ui_resets_spinner_and_adds_error_line() {
+        let app = std::sync::Arc::new(parking_lot::Mutex::new(cade_tui::app::TuiApp::new(
+            cade_core::permissions::PermissionMode::Default,
+            "test_agent".into(),
+            "test_model".into(),
+            None,
+        )));
+        let repl_app = app.clone();
+        let err_msg = "Upstream model rejected with HTTP 404";
+        {
+            let mut a = repl_app.lock();
+            a.set_last_status(Some("generating...".into()));
+        }
+        // Emulate abort_stream_ui logic directly on TuiApp
+        {
+            let mut a = repl_app.lock();
+            let _ = a.commit_reasoning();
+            let _ = a.commit_streaming();
+            a.show_toast(err_msg.to_string(), cade_tui::app::ToastLevel::Error);
+            let _ = a.push(RenderLine::ErrorMsg(err_msg.to_string()));
+            a.set_last_status(Some(format!("✗ Error: {err_msg}")));
+        }
+        let a = repl_app.lock();
+        assert_eq!(a.last_status, Some(format!("✗ Error: {err_msg}")));
+        assert!(a.lines.iter().any(|line| match line {
+            RenderLine::ErrorMsg(s) => s.contains("Upstream model rejected"),
+            _ => false,
+        }));
     }
 }

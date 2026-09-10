@@ -534,6 +534,12 @@ impl HttpTransport {
                         es.close();
                         break;
                     }
+                    if let Ok(v) = serde_json::from_str::<Value>(data)
+                        && let Some(err_msg) = v["error"].as_str()
+                    {
+                        es.close();
+                        return Err(crate::Error::custom(err_msg));
+                    }
                     if let Ok(lm) = serde_json::from_str::<CadeMessage>(data) {
                         on_event(&lm);
                         messages.push(lm);

@@ -313,9 +313,17 @@ impl Repl {
                     }
                     "error" => {
                         if let Some(err) = msg.data.get("error").and_then(|v| v.as_str()) {
+                            if let Some(bar) = &bar_text_arc {
+                                *bar.lock() = format!("✗ Error: {err}");
+                            }
                             let mut app = app_arc.lock();
+                            let _ = app.commit_reasoning();
+                            let _ = app.commit_streaming();
                             app.show_toast(err.to_string(), crate::ui::ToastLevel::Error);
                             let _ = app.push(cade_tui::RenderLine::ErrorMsg(err.to_string()));
+                            app.set_last_status(Some(format!("✗ Error: {err}")));
+                            app.draw_dirty = true;
+                            let _ = app.draw();
                         }
                     }
                     "approval_requested" => {
@@ -442,8 +450,7 @@ impl Repl {
                         msgs
                     }
                     Err(e) => {
-                        let _ = self.app.lock().push(RenderLine::ErrorMsg(e.to_string()));
-                        return Ok(vec![]);
+                        return Ok(self.abort_stream_ui(e.to_string()));
                     }
                 }
             }

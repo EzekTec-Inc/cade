@@ -838,6 +838,13 @@ pub async fn stream_message(
             Ok::<Event, std::convert::Infallible>(event)
         });
 
+    let sse_stream = futures::StreamExt::chain(
+        sse_stream,
+        futures::stream::once(async {
+            Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]"))
+        }),
+    );
+
     drop(acc);
     drop(usage_acc);
     let _ = background;
