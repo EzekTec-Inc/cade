@@ -1493,9 +1493,8 @@ fn upsert_with_embedder_writes_blob() -> Result<()> {
 
     // Decode and verify the f32 values round-tripped.
     let mut floats = Vec::with_capacity(4);
-    for chunk in bytes.chunks_exact(4) {
-        let arr: [u8; 4] = chunk.try_into().expect("chunks_exact(4)");
-        floats.push(f32::from_le_bytes(arr));
+    for arr in bytes.as_chunks::<4>().0 {
+        floats.push(f32::from_le_bytes(*arr));
     }
     assert_eq!(floats, vec![0.25_f32, 0.5, 0.75, 1.0]);
     Ok(())
