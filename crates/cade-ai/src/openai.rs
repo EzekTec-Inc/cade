@@ -14,6 +14,7 @@ use super::{
 };
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
+const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
 /// Check if a model represents an unreleased/frontier preview model (e.g. gpt-5, gpt-5.5-pro, gpt-5.6).
 pub(crate) fn is_frontier_preview_model(model: &str) -> bool {
@@ -38,6 +39,20 @@ fn is_o_series(model: &str) -> bool {
         || bare.starts_with("gpt-5.5-pro")
         || bare.starts_with("gpt-5.6")
         || bare.starts_with("gpt-5")
+}
+
+fn requires_responses_api_for_tools_with_reasoning(req: &CompletionRequest) -> bool {
+    is_frontier_preview_model(&req.model) && !req.tools.is_empty() && req.reasoning_effort.is_some()
+}
+
+fn map_reasoning_effort(effort: &str) -> Option<&'static str> {
+    match effort {
+        "xhigh" => Some("high"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        _ => None,
+    }
 }
 
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
@@ -237,27 +252,57 @@ impl OpenAiProvider {
     /// Resolve the target endpoint for a model request.
     /// If `OPENAI_PREVIEW_BASE_URL` is set and the model is a frontier preview (`gpt-5*`),
     /// route to the custom gateway rather than the default public chat completions endpoint.
-    fn resolve_endpoint_with_preview(&self, model: &str, preview_override: Option<&str>) -> String {
+    fn append_endpoint_path(base_url: &str, path: &str) -> String {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/responses") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}{path}")
+        }
+    }
+
+    fn resolve_endpoint_with_preview(
+        &self,
+        model: &str,
+        use_responses_api: bool,
+        preview_override: Option<&str>,
+    ) -> String {
+        let endpoint_path = if use_responses_api {
+            "/responses"
+        } else {
+            "/chat/completions"
+        };
+
+        if self.base_url == OPENAI_URL && use_responses_api {
+            return OPENAI_RESPONSES_URL.to_string();
+        }
+
         if self.base_url == OPENAI_URL && is_frontier_preview_model(model) {
             let env_opt = std::env::var("OPENAI_PREVIEW_BASE_URL").ok();
             let opt = preview_override.or(env_opt.as_deref());
             if let Some(preview_url) = opt {
-                let trimmed = preview_url.trim().trim_end_matches('/');
+                let trimmed = preview_url.trim();
                 if !trimmed.is_empty() {
-                    return if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/responses") {
-                        trimmed.to_string()
-                    } else {
-                        format!("{trimmed}/chat/completions")
-                    };
+                    return Self::append_endpoint_path(trimmed, endpoint_path);
                 }
             }
         }
-        self.base_url.clone()
+
+        if use_responses_api && self.base_url.ends_with("/chat/completions") {
+            self.base_url.replace("/chat/completions", "/responses")
+        } else {
+            self.base_url.clone()
+        }
     }
 
-    fn resolve_endpoint(&self, model: &str) -> String {
-        self.resolve_endpoint_with_preview(model, None)
+    fn resolve_endpoint_for_request(&self, req: &CompletionRequest) -> String {
+        self.resolve_endpoint_with_preview(
+            &req.model,
+            requires_responses_api_for_tools_with_reasoning(req),
+            None,
+        )
     }
+
 
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
@@ -427,47 +472,130 @@ impl OpenAiProvider {
 
     fn build_tools(req: &CompletionRequest) -> Value {
         let tools: Vec<Value> = capped_tools(&req.tools)
+            .into_iter()
+            .map(Self::openai_tool_from_schema)
+            .collect();
+        json!(tools)
+    }
+
+    fn build_responses_tools(req: &CompletionRequest) -> Value {
+        let tools: Vec<Value> = capped_tools(&req.tools)
             .iter()
-            .map(|s| {
-                let params_val = s
-                    .get("parameters")
-                    .or_else(|| s.get("input_schema"))
-                    .or_else(|| s.get("function").and_then(|f| f.get("parameters")));
-
-                let mut params = params_val
-                    .filter(|v| !v.is_null())
-                    .cloned()
-                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-                crate::utils::inline_schema_refs(&mut params);
-                clean_openai_schema(&mut params);
-                seal_top_level_additional_properties(&mut params);
-
-                let name = tool_name(s).unwrap_or("unknown_tool").to_string();
-                let description = s
-                    .get("description")
-                    .or_else(|| s.get("function").and_then(|f| f.get("description")))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-
-                if name == "unknown_tool" {
-                    tracing::warn!(
-                        "OpenAI: missing tool name in schema: {}",
-                        serde_json::to_string(s).unwrap_or_default()
-                    );
-                }
-
+            .map(|schema| {
+                let tool = Self::openai_tool_from_schema(schema);
+                let function = &tool["function"];
                 json!({
                     "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": description,
-                        "parameters": params,
-                        "strict": false
-                    }
+                    "name": function["name"].clone(),
+                    "description": function["description"].clone(),
+                    "parameters": function["parameters"].clone(),
+                    "strict": function["strict"].clone()
                 })
             })
             .collect();
         json!(tools)
+    }
+
+    fn openai_tool_from_schema(schema: &Value) -> Value {
+        let params_val = schema
+            .get("parameters")
+            .or_else(|| schema.get("input_schema"))
+            .or_else(|| schema.get("function").and_then(|f| f.get("parameters")));
+
+        let mut params = params_val
+            .filter(|v| !v.is_null())
+            .cloned()
+            .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+        crate::utils::inline_schema_refs(&mut params);
+        clean_openai_schema(&mut params);
+        seal_top_level_additional_properties(&mut params);
+
+        let name = tool_name(schema).unwrap_or("unknown_tool").to_string();
+        let description = schema
+            .get("description")
+            .or_else(|| schema.get("function").and_then(|f| f.get("description")))
+            .cloned()
+            .unwrap_or(Value::Null);
+
+        if name == "unknown_tool" {
+            tracing::warn!(
+                "OpenAI: missing tool name in schema: {}",
+                serde_json::to_string(schema).unwrap_or_default()
+            );
+        }
+
+        json!({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": params,
+                "strict": false
+            }
+        })
+    }
+
+    fn build_body(&self, req: &CompletionRequest, stream: bool) -> Value {
+        if requires_responses_api_for_tools_with_reasoning(req) {
+            self.build_responses_body(req, stream)
+        } else {
+            self.build_chat_body(req, stream)
+        }
+    }
+
+    fn build_chat_body(&self, req: &CompletionRequest, stream: bool) -> Value {
+        let bare_model_id = if self.base_url == OPENAI_URL {
+            bare_model(&req.model)
+        } else {
+            &req.model
+        };
+        let token_field = if needs_max_completion_tokens(bare_model_id) {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        let mut body = json!({
+            "model": bare_model_id,
+            "messages": Self::to_openai_messages(req),
+            token_field: req.max_tokens,
+        });
+        if stream {
+            body["stream"] = true.into();
+            body["stream_options"] = json!({ "include_usage": true });
+        }
+        if !req.tools.is_empty() {
+            body["tools"] = Self::build_tools(req);
+        }
+        if is_o_series(&req.model)
+            && let Some(effort) = req.reasoning_effort.as_deref().and_then(map_reasoning_effort)
+        {
+            body["reasoning_effort"] = effort.into();
+        }
+        if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
+            body["include_reasoning"] = true.into();
+        }
+        body
+    }
+
+    fn build_responses_body(&self, req: &CompletionRequest, stream: bool) -> Value {
+        let bare_model_id = if self.base_url == OPENAI_URL {
+            bare_model(&req.model)
+        } else {
+            &req.model
+        };
+        let mut body = json!({
+            "model": bare_model_id,
+            "input": Self::to_openai_messages(req),
+            "max_output_tokens": req.max_tokens,
+            "tools": Self::build_responses_tools(req),
+        });
+        if stream {
+            body["stream"] = true.into();
+        }
+        if let Some(effort) = req.reasoning_effort.as_deref().and_then(map_reasoning_effort) {
+            body["reasoning"] = json!({ "effort": effort });
+        }
+        body
     }
 }
 
@@ -478,45 +606,10 @@ impl LlmProvider for OpenAiProvider {
         let span = crate::gen_ai_span!("openai", req);
 
         let fut = async move {
-            let bare_model_id = if self.base_url == OPENAI_URL {
-                bare_model(&req.model)
-            } else {
-                &req.model
-            };
-            let mut body = if needs_max_completion_tokens(bare_model_id) {
-                json!({
-                    "model": bare_model_id,
-                    "messages": Self::to_openai_messages(req),
-                    "max_completion_tokens": req.max_tokens
-                })
-            } else {
-                json!({
-                    "model": bare_model_id,
-                    "messages": Self::to_openai_messages(req),
-                    "max_tokens": req.max_tokens
-                })
-            };
-            if !req.tools.is_empty() {
-                body["tools"] = Self::build_tools(req);
-            }
-            if is_o_series(&req.model)
-                && let Some(effort) = &req.reasoning_effort
-            {
-                let mapped = match effort.as_str() {
-                    "xhigh" => "high",
-                    e @ ("low" | "medium" | "high") => e,
-                    _ => "",
-                };
-                if !mapped.is_empty() {
-                    body["reasoning_effort"] = mapped.into();
-                }
-            }
-            if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
-                body["include_reasoning"] = true.into();
-            }
+            let body = self.build_body(req, false);
 
             let provider_label = self.provider_label();
-            let target_url = self.resolve_endpoint(&req.model);
+            let target_url = self.resolve_endpoint_for_request(req);
 
             retry_with_backoff(
                 "OpenAI::complete",
@@ -555,49 +648,10 @@ impl LlmProvider for OpenAiProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         let req_model = req.model.clone();
-        let bare_model_id = if self.base_url == OPENAI_URL {
-            bare_model(&req_model)
-        } else {
-            &req_model
-        };
-        let mut body = if needs_max_completion_tokens(bare_model_id) {
-            json!({
-                "model": bare_model_id,
-                "messages": Self::to_openai_messages(req),
-                "max_completion_tokens": req.max_tokens,
-                "stream": true,
-                "stream_options": { "include_usage": true }
-            })
-        } else {
-            json!({
-                "model": bare_model_id,
-                "messages": Self::to_openai_messages(req),
-                "max_tokens": req.max_tokens,
-                "stream": true,
-                "stream_options": { "include_usage": true }
-            })
-        };
-        if !req.tools.is_empty() {
-            body["tools"] = Self::build_tools(req);
-        }
-        if is_o_series(&req.model)
-            && let Some(effort) = &req.reasoning_effort
-        {
-            let mapped = match effort.as_str() {
-                "xhigh" => "high",
-                e @ ("low" | "medium" | "high") => e,
-                _ => "",
-            };
-            if !mapped.is_empty() {
-                body["reasoning_effort"] = mapped.into();
-            }
-        }
-        if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
-            body["include_reasoning"] = true.into();
-        }
+        let body = self.build_body(req, true);
 
         let provider_label = self.provider_label();
-        let target_url = self.resolve_endpoint(&req.model);
+        let target_url = self.resolve_endpoint_for_request(req);
         let model_name = req.model.clone();
 
         //NOTE: Stephen Z. Ezekwem -- this is where the api call and response is implemented.
