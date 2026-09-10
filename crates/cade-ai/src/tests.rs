@@ -1116,6 +1116,10 @@ fn pricing_gpt_5_series() {
     let p_mini = registry.pricing_for_model("openai/gpt-5-mini");
     assert_eq!(p_mini.input, 1.1);
     assert_eq!(p_mini.output, 4.4);
+
+    let p_pro = registry.pricing_for_model("openai/gpt-5.5-pro");
+    assert_eq!(p_pro.input, 15.0);
+    assert_eq!(p_pro.output, 60.0);
 }
 
 #[test]

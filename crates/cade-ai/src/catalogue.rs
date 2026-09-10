@@ -70,13 +70,13 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         200_000,
     ),
     // -- OpenAI
-    ("openai", "GPT-5", "openai/gpt-5", "codex", 100_000, 200_000),
+    ("openai", "GPT-5", "openai/gpt-5", "codex", 16384, 200_000),
     (
         "openai",
         "GPT-5.6",
         "openai/gpt-5.6",
         "codex",
-        100_000,
+        16384,
         200_000,
     ),
     (
@@ -84,7 +84,7 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         "GPT-5.6 Luna",
         "openai/gpt-5.6-luna",
         "codex",
-        100_000,
+        16384,
         200_000,
     ),
     (
@@ -92,7 +92,15 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         "GPT-5.5",
         "openai/gpt-5.5",
         "codex",
-        100_000,
+        16384,
+        200_000,
+    ),
+    (
+        "openai",
+        "GPT-5.5 Pro",
+        "openai/gpt-5.5-pro",
+        "codex",
+        16384,
         200_000,
     ),
     (
@@ -263,11 +271,10 @@ pub fn max_tokens_for_model(model_id: &str) -> u32 {
         m.4
     } else if id.starts_with("anthropic/claude-") {
         128_000
-    } else if id.starts_with("openai/o")
-        || id.starts_with("openai/gpt-5")
-        || id.starts_with("gpt-5")
-    {
+    } else if id.starts_with("openai/o") {
         100_000
+    } else if id.starts_with("openai/gpt-5") || id.starts_with("gpt-5") {
+        16384
     } else if id.starts_with("gemini/")
         || id.starts_with("google/gemini")
         || id.starts_with("openai/")
@@ -457,15 +464,18 @@ mod tests {
 
     #[test]
     fn max_tokens_unknown_gpt5() {
-        assert_eq!(max_tokens_for_model("openai/gpt-5.5-preview"), 100_000);
-        assert_eq!(max_tokens_for_model("openai/gpt-5.6-luna"), 100_000);
+        assert_eq!(max_tokens_for_model("openai/gpt-5.5-preview"), 16384);
+        assert_eq!(max_tokens_for_model("openai/gpt-5.6-luna"), 16384);
+        assert_eq!(max_tokens_for_model("openai/gpt-5.5-pro"), 16384);
     }
 
     #[test]
     fn gpt56_models_are_catalogued_as_codex() {
         assert_eq!(toolset_for_model("openai/gpt-5.6"), "codex");
         assert_eq!(toolset_for_model("openai/gpt-5.6-luna"), "codex");
+        assert_eq!(toolset_for_model("openai/gpt-5.5-pro"), "codex");
         assert_eq!(context_window_for_model("openai/gpt-5.6-luna"), 200_000);
+        assert_eq!(context_window_for_model("openai/gpt-5.5-pro"), 200_000);
     }
 
     #[test]
@@ -489,10 +499,11 @@ mod tests {
     }
 
     #[test]
-    fn max_tokens_bare_gpt5_defaults_to_high_budget() {
-        // Bare OpenAI model IDs should still align with gpt-5 defaults to avoid truncation.
-        assert_eq!(max_tokens_for_model("gpt-5"), 100_000);
-        assert_eq!(max_tokens_for_model("gpt-5.1-preview"), 100_000);
+    fn max_tokens_bare_gpt5_defaults_to_safe_budget() {
+        // Bare OpenAI model IDs should clamp to safe 16384 ceiling to prevent upstream schema rejection.
+        assert_eq!(max_tokens_for_model("gpt-5"), 16384);
+        assert_eq!(max_tokens_for_model("gpt-5.1-preview"), 16384);
+        assert_eq!(max_tokens_for_model("gpt-5.5-pro"), 16384);
     }
     // -- context_window_for_model
 

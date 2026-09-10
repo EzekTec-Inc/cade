@@ -26,7 +26,12 @@ fn needs_max_completion_tokens(model: &str) -> bool {
 
 fn is_o_series(model: &str) -> bool {
     let bare = bare_model(model).to_lowercase();
-    bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
+    bare.starts_with("o1")
+        || bare.starts_with("o3")
+        || bare.starts_with("o4")
+        || bare.starts_with("gpt-5.5-pro")
+        || bare.starts_with("gpt-5.6")
+        || bare.starts_with("gpt-5")
 }
 
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.

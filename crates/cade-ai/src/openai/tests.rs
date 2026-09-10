@@ -85,8 +85,21 @@ fn needs_max_completion_tokens_reasoning_models() {
     assert!(needs_max_completion_tokens("o4-mini"));
     assert!(needs_max_completion_tokens("gpt-4.5"));
     assert!(needs_max_completion_tokens("gpt-5"));
+    assert!(needs_max_completion_tokens("gpt-5.5-pro"));
+    assert!(needs_max_completion_tokens("gpt-5.6"));
     assert!(!needs_max_completion_tokens("gpt-4o"));
     assert!(!needs_max_completion_tokens("gpt-4o-mini"));
+}
+
+#[test]
+fn is_o_series_identifies_frontier_reasoning_models() {
+    assert!(is_o_series("openai/o1-mini"));
+    assert!(is_o_series("openai/o3-mini"));
+    assert!(is_o_series("openai/gpt-5.5-pro"));
+    assert!(is_o_series("openai/gpt-5.6"));
+    assert!(is_o_series("gpt-5"));
+    assert!(!is_o_series("openai/gpt-4o"));
+    assert!(!is_o_series("deepseek/deepseek-chat"));
 }
 
 #[test]
