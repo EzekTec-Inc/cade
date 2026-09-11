@@ -546,6 +546,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires tty"]
     fn abort_stream_ui_resets_spinner_and_adds_error_line() {
         let app = std::sync::Arc::new(parking_lot::Mutex::new(cade_tui::app::TuiApp::new(
             cade_core::permissions::PermissionMode::Default,

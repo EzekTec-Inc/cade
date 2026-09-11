@@ -13,6 +13,7 @@
 #[cfg(feature = "backend-docker")]
 pub mod docker;
 pub mod local;
+#[cfg(unix)]
 pub mod microvm;
 pub mod readonly;
 #[cfg(feature = "backend-ssh")]
@@ -23,6 +24,7 @@ pub mod virtual_sandbox;
 #[cfg(feature = "backend-docker")]
 pub use docker::DockerBackend;
 pub use local::LocalBackend;
+#[cfg(unix)]
 pub use microvm::MicroVmBackend;
 pub use readonly::ReadOnlyBackend;
 #[cfg(feature = "backend-ssh")]
@@ -244,28 +246,38 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
         )),
         ExecutionBackendKind::MicroVm => {
             let primary = std::env::current_dir().unwrap_or_default();
-            if !microvm::hypervisor::HypervisorProcess::is_kvm_available() {
+            #[cfg(unix)]
+            {
+                if !microvm::hypervisor::HypervisorProcess::is_kvm_available() {
+                    tracing::warn!(
+                        "KVM hardware acceleration (/dev/kvm) is unavailable. Falling back to Virtual sandbox."
+                    );
+                    Box::new(VirtualSandboxBackend::new(primary))
+                } else {
+                    let handle = tokio::runtime::Handle::try_current();
+                    if let Ok(rt) = handle {
+                        match tokio::task::block_in_place(|| {
+                            rt.block_on(MicroVmBackend::new(&primary, None))
+                        }) {
+                            Ok(b) => Box::new(b),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to initialize MicroVmBackend ({e}). Falling back to Virtual sandbox."
+                                );
+                                Box::new(VirtualSandboxBackend::new(primary))
+                            }
+                        }
+                    } else {
+                        Box::new(VirtualSandboxBackend::new(primary))
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
                 tracing::warn!(
-                    "KVM hardware acceleration (/dev/kvm) is unavailable. Falling back to Virtual sandbox."
+                    "MicroVM backend (KVM Firecracker) is only supported on Unix systems. Falling back to Virtual sandbox."
                 );
                 Box::new(VirtualSandboxBackend::new(primary))
-            } else {
-                let handle = tokio::runtime::Handle::try_current();
-                if let Ok(rt) = handle {
-                    match tokio::task::block_in_place(|| {
-                        rt.block_on(MicroVmBackend::new(&primary, None))
-                    }) {
-                        Ok(b) => Box::new(b),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to initialize MicroVmBackend ({e}). Falling back to Virtual sandbox."
-                            );
-                            Box::new(VirtualSandboxBackend::new(primary))
-                        }
-                    }
-                } else {
-                    Box::new(VirtualSandboxBackend::new(primary))
-                }
             }
         }
     }
