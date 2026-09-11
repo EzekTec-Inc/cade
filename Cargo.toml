@@ -17,6 +17,10 @@ members = [
     "crates/cade-askpass",
     "crates/cade-server-bin",
 ]
+default-members = [
+    ".",
+    "crates/cade-server-bin",
+]
 resolver = "3"
 
 [workspace.dependencies]
