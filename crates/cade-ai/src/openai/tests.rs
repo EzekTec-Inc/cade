@@ -680,3 +680,93 @@ fn format_upstream_error_provides_diagnostic_guidance_for_preview_models() {
     let standard_msg = err_standard.to_string();
     assert!(!standard_msg.contains("OPENAI_PREVIEW_BASE_URL"));
 }
+
+#[test]
+fn to_openai_messages_never_emits_null_content() -> Result<()> {
+    let req = CompletionRequest {
+        model: "openai/gpt-5.5-2026-04-23".into(),
+        messages: vec![
+            crate::LlmMessage {
+                role: "system".into(),
+                content: "System prompt".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            crate::LlmMessage {
+                role: "user".into(),
+                content: "Run a command".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // Assistant message after tool invocation with empty content (input[2])
+            crate::LlmMessage {
+                role: "assistant".into(),
+                content: "".into(),
+                tool_call_id: None,
+                tool_calls: Some(vec![crate::LlmToolCall {
+                    id: "call_123".into(),
+                    name: "bash".into(),
+                    arguments: json!({"command": "ls"}),
+                    thought_signature: None,
+                }]),
+                images: None,
+                cache_control: None,
+            },
+            // Tool output message
+            crate::LlmMessage {
+                role: "tool".into(),
+                content: "file1.txt\nfile2.txt".into(),
+                tool_call_id: Some("call_123".into()),
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // Assistant message with empty content and no tool calls
+            crate::LlmMessage {
+                role: "assistant".into(),
+                content: "".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+        ],
+        tools: vec![],
+        max_tokens: 1000,
+        reasoning_effort: None,
+    };
+
+    let messages = OpenAiProvider::to_openai_messages(&req);
+    let arr = messages.as_array().ok_or("Should be an array")?;
+
+    for (idx, msg) in arr.iter().enumerate() {
+        let content = &msg["content"];
+        assert!(
+            !content.is_null(),
+            "Message at index {idx} has null content, which OpenAI rejects with: 'Invalid type for input[{idx}].content: expected one of an array of objects or string, but got null instead.'"
+        );
+        assert!(
+            content.is_string() || content.is_array(),
+            "Message at index {idx} content must be string or array of objects, got {content:?}"
+        );
+    }
+
+    // Also verify when serialized in Responses API body
+    let provider = OpenAiProvider::new("test-key".into(), None);
+    let body = provider.build_body(&req, false);
+    if let Some(input) = body.get("input").and_then(|v| v.as_array()) {
+        for (idx, item) in input.iter().enumerate() {
+            let content = &item["content"];
+            assert!(
+                !content.is_null(),
+                "Responses API input[{idx}].content must not be null"
+            );
+        }
+    }
+
+    Ok(())
+}

@@ -427,20 +427,10 @@ impl OpenAiProvider {
                         "type": "function",
                         "function": { "name": tc.name, "arguments": tc.arguments.to_string() }
                     })).collect();
-                    let content = if m.content.is_empty() {
-                        Value::Null
-                    } else {
-                        Value::String(m.content.clone())
-                    };
-                    json!({"role": "assistant", "content": content, "tool_calls": tcs})
+                    json!({"role": "assistant", "content": m.content, "tool_calls": tcs})
                 }
                 "assistant" => {
-                    let content = if m.content.is_empty() {
-                        Value::Null
-                    } else {
-                        Value::String(m.content.clone())
-                    };
-                    json!({"role": "assistant", "content": content})
+                    json!({"role": "assistant", "content": m.content})
                 }
                 _ => {
                     // When images are attached, build a multi-part content array.
@@ -574,7 +564,7 @@ impl OpenAiProvider {
             .get("description")
             .or_else(|| schema.get("function").and_then(|f| f.get("description")))
             .cloned()
-            .unwrap_or(Value::Null);
+            .unwrap_or_else(|| Value::String("".to_string()));
 
         if name == "unknown_tool" {
             tracing::warn!(
