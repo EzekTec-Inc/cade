@@ -108,6 +108,14 @@
     "pricing": { "input": 0.55, "output": 2.19, "cache_read": 0.14, "cache_write": 0.0 }
   },
   {
+    "contains_any": ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+    "pricing": { "input": 0.28, "output": 0.56, "cache_read": 0.14, "cache_write": 0.0 }
+  },
+  {
+    "contains_any": ["deepseek-flash", "deepseek/deepseek-flash"],
+    "pricing": { "input": 0.14, "output": 0.28, "cache_read": 0.07, "cache_write": 0.0 }
+  },
+  {
     "contains_any": ["deepseek-chat", "deepseek/deepseek-chat", "deepseek-v3"],
     "pricing": { "input": 0.14, "output": 0.28, "cache_read": 0.014, "cache_write": 0.0 }
   },

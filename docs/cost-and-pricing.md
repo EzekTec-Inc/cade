@@ -116,6 +116,19 @@ are capped at 128 tools to match provider limits while keeping priority meta
 tools (including `load_skill` and core memory-writing tools like `update_memory`) 
 as well as essential MCP tools (with `serena__`, `cade-rag__`, and `cade-ide-mcp__` prefixes) available.
 
+### DeepSeek pricing & cache accounting
+
+DeepSeek models are bundled with tiered pricing per 1 million tokens:
+
+| Model | Input | Output | Cache Read | Cache Write |
+|---|---|---|---|---|
+| `deepseek/deepseek-flash` | $0.14 | $0.28 | $0.07 | $0.00 |
+| `deepseek/deepseek-v4-pro` | $0.28 | $0.56 | $0.14 | $0.00 |
+| `deepseek/deepseek-chat` (V3) | $0.14 | $0.28 | $0.014 | $0.00 |
+| `deepseek/deepseek-reasoner` (R1) | $0.55 | $2.19 | — | — |
+
+CADE automatically extracts `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` from DeepSeek responses, crediting cache hits to `cache_read_tokens` for precise session billing.
+
 ## Inspecting historical cost
 
 ```sql

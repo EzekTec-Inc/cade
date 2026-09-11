@@ -41,6 +41,7 @@ that crate and its dependents — not the entire project.
 | `ANTHROPIC_API_KEY` | — | Anthropic/Claude API key |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `GOOGLE_API_KEY` | — | Google Gemini API key |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API key |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
 | `CADE_SERVER_PORT` | `8284` | Server listen port |
 | `CADE_DB_PATH` | `~/.cade/cade.db` | SQLite database path |
@@ -72,6 +73,22 @@ OpenAI Responses API tool definitions must use the flat function-tool shape:
 the top level of each tool object. CADE intentionally sets `strict` to `false`
 so optional fields and runtime MCP-provided nested schemas remain compatible
 with OpenAI-compatible tool calling.
+
+### DeepSeek provider
+
+DeepSeek is configured as an OpenAI-compatible provider with native dialect handling:
+
+| Endpoint | URL |
+|----------|-----|
+| Chat completions | `https://api.deepseek.com/chat/completions` |
+| Model catalogue | `https://api.deepseek.com/models` |
+
+DeepSeek support in CADE features:
+- **Thinking & Reasoning Stream**: Ingests `delta.reasoning_content` in SSE streams and `message.reasoning_content` in batch completions, rendering intermediate thinking tokens in real time in the typewriter UI and preserving thoughts in `<reasoning>` blocks.
+- **Thinking Mode Controls**: Maps requested reasoning effort into DeepSeek's `thinking: {"type": "enabled" | "disabled"}` and `reasoning_effort: "none" | "low" | "medium" | "high" | "max"`.
+- **Model Invariant Enforcement**: Automatically suppresses `tools` and `tool_choice` for `deepseek-reasoner` (R1) to comply with DeepSeek API constraints and prevent HTTP 400 errors.
+- **1M Context Windows**: Supports DeepSeek V4 models (`deepseek-flash` and `deepseek-v4-pro`) with 1,000,000 token context limits and 32,768 max completion tokens.
+- **Prompt Cache Accounting**: Directly parses `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` to calculate discounted cache-read pricing.
 
 ### CLI
 

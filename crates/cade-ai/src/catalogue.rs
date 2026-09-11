@@ -199,9 +199,25 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
         "deepseek",
         "DeepSeek-R1",
         "deepseek/deepseek-reasoner",
-        "codex",
+        "none",
         8192,
         64_000,
+    ),
+    (
+        "deepseek",
+        "DeepSeek-V4-Flash",
+        "deepseek/deepseek-flash",
+        "codex",
+        32_768,
+        1_000_000,
+    ),
+    (
+        "deepseek",
+        "DeepSeek-V4-Pro",
+        "deepseek/deepseek-v4-pro",
+        "codex",
+        32_768,
+        1_000_000,
     ),
 ];
 
@@ -247,6 +263,10 @@ fn parse_cade_model_id(model_id: &str) -> Option<(&str, &str)> {
 /// Determine the toolset for a specific model ID. Defaults to "default" if unknown.
 pub fn toolset_for_model(model_id: &str) -> String {
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
+    let bare = id.strip_prefix("deepseek/").unwrap_or(id);
+    if bare == "deepseek-reasoner" {
+        return "none".to_string();
+    }
     if let Some(m) = CATALOGUE
         .iter()
         .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
@@ -259,6 +279,12 @@ pub fn toolset_for_model(model_id: &str) -> String {
     } else {
         "default".to_string() // Groq, Ollama default to generic openai/anthropic style
     }
+}
+
+/// Returns false if the model explicitly does not support tool calling (e.g. deepseek-reasoner).
+pub fn supports_tools_for_model(model_id: &str) -> bool {
+    let toolset = toolset_for_model(model_id);
+    toolset != "none" && toolset != "unsupported"
 }
 
 /// Determine the max output tokens for a specific model ID. Defaults to 4096 if unknown.
@@ -336,6 +362,9 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
         return 128_000;
     }
     if id.starts_with("deepseek/") {
+        if id.contains("flash") || id.contains("v4") {
+            return 1_000_000;
+        }
         return 64_000;
     }
     // Groq models (fast inference, smaller windows)
@@ -391,7 +420,7 @@ mod tests {
             assert!(!display.is_empty(), "empty display for {id}");
             assert!(!id.is_empty(), "empty id");
             assert!(
-                ["default", "codex", "gemini"].contains(toolset),
+                ["default", "codex", "gemini", "none"].contains(toolset),
                 "invalid toolset '{toolset}' for {id}"
             );
             assert!(*max_tok > 0, "zero max_tokens for {id}");
@@ -481,7 +510,10 @@ mod tests {
     #[test]
     fn deepseek_models_are_catalogued_correctly() {
         assert_eq!(toolset_for_model("deepseek/deepseek-chat"), "codex");
-        assert_eq!(toolset_for_model("deepseek/deepseek-reasoner"), "codex");
+        assert_eq!(toolset_for_model("deepseek/deepseek-reasoner"), "none");
+        assert!(supports_tools_for_model("deepseek/deepseek-chat"));
+        assert!(!supports_tools_for_model("deepseek/deepseek-reasoner"));
+        assert!(!supports_tools_for_model("deepseek-reasoner"));
         assert_eq!(context_window_for_model("deepseek/deepseek-chat"), 64_000);
         assert_eq!(
             context_window_for_model("deepseek/deepseek-reasoner"),

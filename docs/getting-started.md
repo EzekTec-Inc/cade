@@ -24,6 +24,7 @@ CADE requires access to a Large Language Model to operate. You must configure an
 - Anthropic — `ANTHROPIC_API_KEY=sk-ant-...`
 - OpenAI — `OPENAI_API_KEY=sk-...`
 - Google Gemini — `GOOGLE_API_KEY=...`
+- DeepSeek — `DEEPSEEK_API_KEY=sk-...`
 - Local Ollama — no key needed; just have `ollama` running
 
 ## 3. Building from Source (Alternative)

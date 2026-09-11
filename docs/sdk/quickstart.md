@@ -17,6 +17,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 # or
 export GEMINI_API_KEY="AIzaSy..."
+# or
+export DEEPSEEK_API_KEY="sk-..."
 # or point to a local Ollama instance (default: http://localhost:11434)
 ```
 

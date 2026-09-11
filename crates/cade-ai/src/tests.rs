@@ -2,6 +2,7 @@
 type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
 use super::*;
+use crate::openai::OpenAiProvider;
 use serde_json::json;
 
 // -- bare_model
@@ -1508,4 +1509,352 @@ fn test_llm_router_openrouter_failover_mapping() {
         .unwrap();
     assert_eq!(prov2, "openai");
     assert_eq!(model2, "gpt-4o-mini");
+}
+
+// -- DeepSeek reasoning tests (Issue #170)
+
+#[test]
+fn test_openai_provider_deepseek_label() {
+    let p_ds = OpenAiProvider::new(
+        "test-key".into(),
+        Some("https://api.deepseek.com/chat/completions".into()),
+    );
+    assert_eq!(p_ds.provider_label(), "DeepSeek");
+
+    let p_openai = OpenAiProvider::new("test-key".into(), None);
+    assert_eq!(p_openai.provider_label(), "OpenAI");
+
+    let p_groq = OpenAiProvider::new(
+        "test-key".into(),
+        Some("https://api.groq.com/openai/v1".into()),
+    );
+    assert_eq!(p_groq.provider_label(), "Groq");
+}
+
+#[test]
+fn test_openai_provider_deepseek_reasoning_content_batch() {
+    // 1. When reasoning_content and content are both present (typical DeepSeek R1 response)
+    let body = json!({
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": "Calculating life, universe, and everything..."
+                }
+            }
+        ]
+    });
+    let resp = OpenAiProvider::parse_response(&body);
+    assert_eq!(
+        resp.content.as_deref(),
+        Some("<reasoning>\nCalculating life, universe, and everything...\n</reasoning>\n\nThe answer is 42.")
+    );
+
+    // 2. When only reasoning_content is present
+    let body_reasoning_only = json!({
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "Still thinking..."
+                }
+            }
+        ]
+    });
+    let resp = OpenAiProvider::parse_response(&body_reasoning_only);
+    assert_eq!(
+        resp.content.as_deref(),
+        Some("<reasoning>\nStill thinking...\n</reasoning>")
+    );
+
+    // 3. Fallback to legacy "reasoning" key for other providers (e.g. Groq/OpenRouter)
+    let body_legacy_reasoning = json!({
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "Done.",
+                    "reasoning": "Groq thought process"
+                }
+            }
+        ]
+    });
+    let resp = OpenAiProvider::parse_response(&body_legacy_reasoning);
+    assert_eq!(
+        resp.content.as_deref(),
+        Some("<reasoning>\nGroq thought process\n</reasoning>\n\nDone.")
+    );
+}
+
+#[tokio::test]
+async fn test_openai_provider_deepseek_reasoning_content_stream() -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_stream::StreamExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 2048];
+            let _ = socket.read(&mut buf).await;
+            let sse_data = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
+data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"DeepSeek thinking step 1\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" and step 2\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"Final result\"}}]}\n\n\
+data: [DONE]\n\n";
+            let _ = socket.write_all(sse_data.as_bytes()).await;
+        }
+    });
+
+    let provider = OpenAiProvider::new(
+        "test-key".into(),
+        Some(format!("http://127.0.0.1:{port}/chat/completions")),
+    );
+    let req = CompletionRequest {
+        model: "deepseek/deepseek-reasoner".into(),
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: "Solve this problem".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![],
+        max_tokens: 100,
+        reasoning_effort: None,
+    };
+
+    let mut stream = provider.stream(&req).await?;
+    let mut reasoning_accum = String::new();
+    let mut text_accum = String::new();
+
+    while let Some(chunk_res) = stream.next().await {
+        match chunk_res? {
+            StreamChunk::Reasoning(r) => reasoning_accum.push_str(&r),
+            StreamChunk::Text(t) => text_accum.push_str(&t),
+            StreamChunk::Done => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(reasoning_accum, "DeepSeek thinking step 1 and step 2");
+    assert_eq!(text_accum, "Final result");
+
+    Ok(())
+}
+
+#[test]
+fn test_openai_provider_deepseek_reasoner_suppresses_tools() {
+    let provider = OpenAiProvider::new(
+        "test-key".into(),
+        Some("https://api.deepseek.com/chat/completions".into()),
+    );
+    let sample_tool = json!({
+        "name": "test_tool",
+        "description": "A test tool",
+        "parameters": {
+            "type": "object",
+            "properties": { "arg": { "type": "string" } }
+        }
+    });
+
+    // 1. deepseek/deepseek-reasoner must suppress tools
+    let req_prefixed = CompletionRequest {
+        model: "deepseek/deepseek-reasoner".into(),
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: "Think about this".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![sample_tool.clone()],
+        max_tokens: 1000,
+        reasoning_effort: None,
+    };
+    let body_prefixed = provider.build_chat_body(&req_prefixed, false);
+    assert!(
+        body_prefixed.get("tools").is_none(),
+        "deepseek-reasoner should not receive tools payload"
+    );
+
+    // 2. bare deepseek-reasoner must also suppress tools
+    let req_bare = CompletionRequest {
+        model: "deepseek-reasoner".into(),
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: "Think about this".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![sample_tool.clone()],
+        max_tokens: 1000,
+        reasoning_effort: None,
+    };
+    let body_bare = provider.build_chat_body(&req_bare, false);
+    assert!(
+        body_bare.get("tools").is_none(),
+        "bare deepseek-reasoner should not receive tools payload"
+    );
+
+    // 3. deepseek/deepseek-chat supports tools and must preserve them
+    let req_chat = CompletionRequest {
+        model: "deepseek/deepseek-chat".into(),
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: "Use a tool".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![sample_tool],
+        max_tokens: 1000,
+        reasoning_effort: None,
+    };
+    let body_chat = provider.build_chat_body(&req_chat, false);
+    assert!(
+        body_chat.get("tools").is_some(),
+        "deepseek-chat should receive tools payload"
+    );
+}
+
+#[test]
+fn test_openai_provider_deepseek_thinking_serialization() {
+    let provider = OpenAiProvider::new(
+        "test-key".into(),
+        Some("https://api.deepseek.com/chat/completions".into()),
+    );
+
+    // 1. When reasoning_effort is None: neither thinking nor reasoning_effort should be set
+    let req_none = CompletionRequest {
+        model: "deepseek/deepseek-chat".into(),
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: "Hello".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![],
+        max_tokens: 500,
+        reasoning_effort: None,
+    };
+    let body_none = provider.build_chat_body(&req_none, false);
+    assert!(body_none.get("thinking").is_none());
+    assert!(body_none.get("reasoning_effort").is_none());
+
+    // 2. When reasoning_effort is "low"
+    let mut req_low = req_none.clone();
+    req_low.reasoning_effort = Some("low".into());
+    let body_low = provider.build_chat_body(&req_low, false);
+    assert_eq!(body_low["thinking"]["type"], "enabled");
+    assert_eq!(body_low["reasoning_effort"], "low");
+
+    // 3. When reasoning_effort is "high"
+    let mut req_high = req_none.clone();
+    req_high.reasoning_effort = Some("high".into());
+    let body_high = provider.build_chat_body(&req_high, false);
+    assert_eq!(body_high["thinking"]["type"], "enabled");
+    assert_eq!(body_high["reasoning_effort"], "high");
+
+    // 4. When reasoning_effort is "max"
+    let mut req_max = req_none.clone();
+    req_max.reasoning_effort = Some("max".into());
+    let body_max = provider.build_chat_body(&req_max, false);
+    assert_eq!(body_max["thinking"]["type"], "enabled");
+    assert_eq!(body_max["reasoning_effort"], "max");
+
+    // 5. When reasoning_effort is "none" or "disabled"
+    let mut req_disabled = req_none.clone();
+    req_disabled.reasoning_effort = Some("none".into());
+    let body_disabled = provider.build_chat_body(&req_disabled, false);
+    assert_eq!(body_disabled["thinking"]["type"], "disabled");
+    assert_eq!(body_disabled["reasoning_effort"], "none");
+}
+
+#[test]
+fn test_openai_provider_deepseek_cache_token_accounting() {
+    // 1. DeepSeek top-level prompt_cache_hit_tokens
+    let ds_usage = json!({
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "prompt_cache_hit_tokens": 750,
+        "prompt_cache_miss_tokens": 250
+    });
+    let tu = crate::openai::parse_token_usage(&ds_usage, "deepseek/deepseek-flash").unwrap();
+    assert_eq!(tu.input_tokens, 250);
+    assert_eq!(tu.output_tokens, 200);
+    assert_eq!(tu.cache_read_tokens, 750);
+    assert_eq!(tu.model, "deepseek/deepseek-flash");
+
+    // 2. OpenAI prompt_tokens_details.cached_tokens
+    let oai_usage = json!({
+        "prompt_tokens": 500,
+        "completion_tokens": 100,
+        "prompt_tokens_details": {
+            "cached_tokens": 300
+        }
+    });
+    let tu_oai = crate::openai::parse_token_usage(&oai_usage, "openai/gpt-4o").unwrap();
+    assert_eq!(tu_oai.input_tokens, 200);
+    assert_eq!(tu_oai.output_tokens, 100);
+    assert_eq!(tu_oai.cache_read_tokens, 300);
+
+    // 3. Zero usage returns None
+    let zero_usage = json!({
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+    });
+    assert!(crate::openai::parse_token_usage(&zero_usage, "deepseek/deepseek-flash").is_none());
+}
+
+#[test]
+fn test_catalogue_deepseek_v4_models() {
+    assert_eq!(
+        catalogue::context_window_for_model("deepseek/deepseek-flash"),
+        1_000_000
+    );
+    assert_eq!(
+        catalogue::context_window_for_model("deepseek/deepseek-v4-pro"),
+        1_000_000
+    );
+    assert_eq!(
+        catalogue::max_tokens_for_model("deepseek/deepseek-flash"),
+        32_768
+    );
+    assert_eq!(
+        catalogue::max_tokens_for_model("deepseek/deepseek-v4-pro"),
+        32_768
+    );
+    assert_eq!(
+        catalogue::toolset_for_model("deepseek/deepseek-flash"),
+        "codex"
+    );
+    assert_eq!(
+        catalogue::toolset_for_model("deepseek/deepseek-v4-pro"),
+        "codex"
+    );
+    assert!(catalogue::supports_tools_for_model(
+        "deepseek/deepseek-flash"
+    ));
+    assert!(catalogue::supports_tools_for_model(
+        "deepseek/deepseek-v4-pro"
+    ));
+
+    // Router candidate inference for bare model names
+    let flash_cands = infer_provider_candidates("deepseek-flash");
+    assert!(flash_cands.contains(&"deepseek"));
+    let pro_cands = infer_provider_candidates("deepseek-v4-pro");
+    assert!(pro_cands.contains(&"deepseek"));
 }

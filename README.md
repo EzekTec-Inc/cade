@@ -49,7 +49,7 @@ CADE does:  scaffolds → writes code → runs tests → builds Docker image →
 | **A shell that understands you** | Persistent memory across sessions — CADE remembers your project, preferences, and past decisions |
 | **Batteries included** | Ships its own server, TUI, desktop control, MCP support, and 30+ built-in skills — nothing else to install |
 | **Your machine, your rules** | Runs 100% locally. Your code never leaves your filesystem unless you choose to call an LLM API |
-| **Any LLM, one interface** | Anthropic, OpenAI, Google Gemini, Ollama, OpenRouter — including GPT/o-series and GPT-5-style OpenAI models — switch models mid-conversation with `/model` |
+| **Any LLM, one interface** | Anthropic, OpenAI, Google Gemini, DeepSeek, Ollama, OpenRouter — including GPT/o-series, DeepSeek V4 (1M context) & R1 reasoning models — switch models mid-conversation with `/model` |
 | **Desktop-aware** | Screenshots, window control, clipboard, notifications — CADE can see what you see |
 
 ---
@@ -315,7 +315,7 @@ CADE is a Cargo workspace of 18 crates:
 src/             → Root package: CLI client binary entry point
 crates/
 ├── cade-core        → Core types, CapabilityMesh seam, permissions, settings, skills, hooks
-├── cade-ai          → LLM providers (Anthropic, OpenAI, Gemini, Ollama, OpenRouter), ITS, prompt caching
+├── cade-ai          → LLM providers (Anthropic, OpenAI, Gemini, DeepSeek, Ollama, OpenRouter), ITS, prompt caching
 ├── cade-api-types   → Shared API schemas, event streams, and request/response types
 ├── cade-store       → SQLite persistence (WAL/r2d2), AES-GCM encryption, vector embeddings
 ├── cade-server      → Axum HTTP API, context building, Sleeptime memory consolidation

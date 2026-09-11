@@ -55,6 +55,55 @@ fn map_reasoning_effort(effort: &str) -> Option<&'static str> {
     }
 }
 
+pub(crate) fn is_deepseek_request(base_url: &str, model: &str) -> bool {
+    base_url.contains("deepseek.com")
+        || model.starts_with("deepseek/")
+        || model.starts_with("deepseek-")
+}
+
+pub(crate) fn map_deepseek_reasoning_effort(effort: &str) -> (&'static str, &'static str) {
+    match effort.to_lowercase().as_str() {
+        "none" | "off" | "disabled" => ("disabled", "none"),
+        "low" => ("enabled", "low"),
+        "medium" => ("enabled", "medium"),
+        "high" | "xhigh" => ("enabled", "high"),
+        "max" => ("enabled", "max"),
+        _ => ("enabled", "high"),
+    }
+}
+
+pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage> {
+    let in_tok = usage["prompt_tokens"]
+        .as_u64()
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(u32::MAX);
+    let out_tok = usage["completion_tokens"]
+        .as_u64()
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(u32::MAX);
+    let cache_tok = usage["prompt_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(u32::MAX);
+
+    if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
+        Some(TokenUsage {
+            // Providers include cached tokens in prompt_tokens, so subtract to get non-cached input
+            input_tokens: in_tok.saturating_sub(cache_tok),
+            output_tokens: out_tok,
+            cache_read_tokens: cache_tok,
+            cache_write_tokens: 0,
+            model: model.to_string(),
+        })
+    } else {
+        None
+    }
+}
+
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
 ///
 /// Handles two response shapes:
@@ -237,11 +286,13 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
 impl OpenAiProvider {
     /// Return a human-readable label for this provider instance.
     /// Used in error messages so users see "OpenRouter" instead of "OpenAI".
-    fn provider_label(&self) -> &'static str {
+    pub(crate) fn provider_label(&self) -> &'static str {
         if self.base_url.contains("openrouter.ai") {
             "OpenRouter"
         } else if self.base_url.contains("api.groq.com") {
             "Groq"
+        } else if self.base_url.contains("deepseek.com") {
+            "DeepSeek"
         } else if self.base_url != OPENAI_URL {
             "OpenAI-compatible"
         } else {
@@ -434,7 +485,7 @@ impl OpenAiProvider {
         }
     }
 
-    fn parse_response(body: &Value) -> CompletionResponse {
+    pub(crate) fn parse_response(body: &Value) -> CompletionResponse {
         let choice = &body["choices"][0];
         let finish_reason = choice["finish_reason"]
             .as_str()
@@ -445,7 +496,11 @@ impl OpenAiProvider {
             .as_str()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        if let Some(reasoning) = msg["reasoning"].as_str().filter(|s| !s.is_empty()) {
+        let reasoning_val = msg["reasoning_content"]
+            .as_str()
+            .or_else(|| msg["reasoning"].as_str())
+            .filter(|s| !s.is_empty());
+        if let Some(reasoning) = reasoning_val {
             if let Some(c) = &mut content {
                 *c = format!("<reasoning>\n{}\n</reasoning>\n\n{}", reasoning, c);
             } else {
@@ -547,7 +602,7 @@ impl OpenAiProvider {
         }
     }
 
-    fn build_chat_body(&self, req: &CompletionRequest, stream: bool) -> Value {
+    pub(crate) fn build_chat_body(&self, req: &CompletionRequest, stream: bool) -> Value {
         let bare_model_id = if self.base_url == OPENAI_URL {
             bare_model(&req.model)
         } else {
@@ -567,10 +622,16 @@ impl OpenAiProvider {
             body["stream"] = true.into();
             body["stream_options"] = json!({ "include_usage": true });
         }
-        if !req.tools.is_empty() {
+        if !req.tools.is_empty() && crate::catalogue::supports_tools_for_model(&req.model) {
             body["tools"] = Self::build_tools(req);
         }
-        if is_o_series(&req.model)
+        if is_deepseek_request(&self.base_url, &req.model) {
+            if let Some(effort_str) = req.reasoning_effort.as_deref() {
+                let (thinking_type, effort) = map_deepseek_reasoning_effort(effort_str);
+                body["thinking"] = json!({ "type": thinking_type });
+                body["reasoning_effort"] = effort.into();
+            }
+        } else if is_o_series(&req.model)
             && let Some(effort) = req
                 .reasoning_effort
                 .as_deref()
@@ -745,7 +806,10 @@ impl LlmProvider for OpenAiProvider {
 
                             if let Some(text) = delta["content"].as_str()
                                 && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
-                            if let Some(reasoning) = delta["reasoning"].as_str()
+                            let reasoning_val = delta["reasoning_content"]
+                                .as_str()
+                                .or_else(|| delta["reasoning"].as_str());
+                            if let Some(reasoning) = reasoning_val
                                 && !reasoning.is_empty() { yield Ok(StreamChunk::Reasoning(reasoning.to_string())); }
                             if let Some(tcs) = delta["tool_calls"].as_array() {
                                 for tc in tcs {
@@ -842,20 +906,10 @@ impl LlmProvider for OpenAiProvider {
 
                         // Usage chunk: may arrive in any chunk, including the separate
                         // empty-choices chunk OpenAI sends after finish_reason.
-                        if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
-                            let in_tok   = usage["prompt_tokens"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
-                            let out_tok  = usage["completion_tokens"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
-                            let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0).try_into().unwrap_or(u32::MAX);
-                            if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
-                                yield Ok(StreamChunk::Usage(TokenUsage {
-                                    // OpenAI includes cached tokens in prompt_tokens, so subtract to get non-cached input
-                                    input_tokens:       in_tok.saturating_sub(cache_tok),
-                                    output_tokens:      out_tok,
-                                    cache_read_tokens:  cache_tok,
-                                    cache_write_tokens: 0,
-                                    model:              req_model.clone(),
-                                }));
-                            }
+                        if let Some(usage) = v.get("usage").filter(|u| !u.is_null())
+                            && let Some(tu) = parse_token_usage(usage, &req_model)
+                        {
+                            yield Ok(StreamChunk::Usage(tu));
                         }
                     }
                         }

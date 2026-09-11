@@ -129,6 +129,7 @@ Per-checkout state, written by the CLI:
 | `ANTHROPIC_API_KEY` | Anthropic key |
 | `OPENAI_API_KEY` | OpenAI key |
 | `GOOGLE_API_KEY` | Gemini key |
+| `DEEPSEEK_API_KEY` | DeepSeek key |
 
 ### Cost guardrails (see [cost-and-pricing.md](cost-and-pricing.md))
 
