@@ -1549,7 +1549,9 @@ fn test_openai_provider_deepseek_reasoning_content_batch() {
     let resp = OpenAiProvider::parse_response(&body);
     assert_eq!(
         resp.content.as_deref(),
-        Some("<reasoning>\nCalculating life, universe, and everything...\n</reasoning>\n\nThe answer is 42.")
+        Some(
+            "<reasoning>\nCalculating life, universe, and everything...\n</reasoning>\n\nThe answer is 42."
+        )
     );
 
     // 2. When only reasoning_content is present

@@ -34,7 +34,7 @@ export RUSTC_WRAPPER=sccache   # add to your shell profile
 # Debug build
 cargo build
 
-# Release build
+# Release build (builds both target/release/cade and target/release/cade-server)
 cargo build --release
 
 # Build with semantic search (local embeddings via fastembed + sqlite-vec)

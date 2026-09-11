@@ -41,7 +41,9 @@ cargo build --release
 ```
 
 The release binaries are `target/release/cade` (CLI) and `target/release/cade-server`
-(HTTP server).
+(HTTP server). The workspace `default-members` include both binaries, so a normal
+`cargo build --release` keeps the client and server in sync. Restart any running
+`cade-server` after rebuilding provider code.
 
 ### Semantic Memory Search (optional)
 

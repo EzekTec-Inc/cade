@@ -428,8 +428,19 @@ fn settings_manager_merged_hooks() -> Result<()> {
 
     let mgr = SettingsManager::new(dir.path())?;
     let hooks = mgr.merged_hooks();
-    // Local runs first (highest priority), then project, then global
-    assert_eq!(hooks.pre_tool_use.len(), 2);
+    // Local runs first (highest priority), then project, then global.
+    // The global layer comes from the developer's real ~/.cade/settings.json,
+    // so this test verifies local/project precedence without assuming an empty
+    // global configuration.
+    assert!(hooks.pre_tool_use.len() >= 2);
+    assert!(matches!(
+        hooks.pre_tool_use[0].hooks[0],
+        crate::settings::HookDef::Command { ref command, .. } if command == "echo local"
+    ));
+    assert!(matches!(
+        hooks.pre_tool_use[1].hooks[0],
+        crate::settings::HookDef::Command { ref command, .. } if command == "echo proj"
+    ));
 
     Ok(())
 }

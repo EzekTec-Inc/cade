@@ -102,8 +102,13 @@ Therefore, Rig's static, compile-time tool-definition pattern is **incompatible 
 ### 3.3 OpenAI Responses API and OpenRouter Runtime Notes
 
 CADE keeps bespoke provider serialization logic because upstream OpenAI-compatible
-APIs do not all accept the same tool schema. For GPT-5-style OpenAI Responses
-API requests, function tools are serialized in the flat Responses API shape:
+APIs do not all accept the same tool schema or conversation-history shape. This
+is a deliberate **deep module** seam in `crates/cade-ai`: callers send a
+provider-neutral `CompletionRequest`, while the OpenAI implementation owns every
+upstream-specific payload invariant.
+
+For GPT-5-style OpenAI Responses API requests, function tools are serialized in
+the flat Responses API shape:
 
 ```json
 {
@@ -121,6 +126,37 @@ required for Responses API compatibility; nesting them under a secondary
 `tools[0].name`. CADE sets `strict` to `false` deliberately because many tools
 are discovered from MCP servers at runtime and may include optional fields or
 loose nested schemas that should not be rejected by strict OpenAI validation.
+
+The Responses API also uses a different historical tool-call replay format than
+Chat Completions. CADE must not pass Chat Completions messages with
+`tool_calls: [...]` into the Responses API `input` array. Instead,
+`OpenAiProvider::to_responses_input` converts persisted conversation turns into
+Responses-native input items:
+
+```json
+{
+  "type": "function_call",
+  "call_id": "call_123",
+  "name": "bash",
+  "arguments": "{\"command\":\"ls\"}"
+}
+```
+
+and tool results into:
+
+```json
+{
+  "type": "function_call_output",
+  "call_id": "call_123",
+  "output": "..."
+}
+```
+
+Normal `user` / `assistant` / system-derived messages remain role/content items,
+and `content` is always serialized as a string or valid multimodal content array,
+never `null`. This prevents OpenAI validation errors such as
+`input[2].content` being `null` or `input[2].tool_calls` being an unknown
+parameter.
 
 OpenAI-compatible providers may also enforce request-specific tool limits. CADE
 caps OpenAI tool payloads at 128 tools and applies priority filtering before

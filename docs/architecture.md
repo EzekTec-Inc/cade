@@ -35,6 +35,12 @@ plugins/
 
 ## Process model & SDK runtime
 
+The root workspace `default-members` include both the interactive client and the
+server daemon. A normal `cargo build --release` produces both
+`target/release/cade` and `target/release/cade-server`; after changing provider
+or agent-loop code, restart the daemon so the running process is not using stale
+serialization logic.
+
 CADE supports two execution topologies:
 
 1. **Interactive Client/Daemon Model**:

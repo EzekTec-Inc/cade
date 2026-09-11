@@ -74,6 +74,19 @@ the top level of each tool object. CADE intentionally sets `strict` to `false`
 so optional fields and runtime MCP-provided nested schemas remain compatible
 with OpenAI-compatible tool calling.
 
+OpenAI Responses API conversation input is **not** Chat Completions message
+history. Do not pass assistant messages containing `tool_calls` or tool messages
+containing `tool_call_id` directly into `/v1/responses`. The provider seam in
+`crates/cade-ai/src/openai.rs` must convert them through
+`OpenAiProvider::to_responses_input`:
+
+- assistant tool calls → `{"type":"function_call","call_id":"...","name":"...","arguments":"..."}`
+- tool outputs → `{"type":"function_call_output","call_id":"...","output":"..."}`
+- normal messages → role/content objects with non-null `content`
+
+This keeps OpenAI's `input` array valid and prevents upstream 400 errors such as
+`Unknown parameter: 'input[2].tool_calls'` and invalid `null` content.
+
 ### DeepSeek provider
 
 DeepSeek is configured as an OpenAI-compatible provider with native dialect handling:
@@ -174,6 +187,8 @@ cargo build --release -p cade-store --no-default-features --features bundled-sql
 cargo build --release
 
 # Binaries: target/release/cade, target/release/cade-server
+# The workspace default-members build both binaries; restart cade-server after
+# rebuilding provider or agent-loop code so the running daemon is not stale.
 ```
 
 ## Adding a New LLM Provider

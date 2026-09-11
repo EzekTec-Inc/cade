@@ -42,7 +42,7 @@ cd CADE
 # Debug build (faster, no optimizations):
 cargo build
 
-# Release build (slower, optimized):
+# Release build (slower, optimized; builds cade.exe and cade-server.exe):
 cargo build --release
 ```
 

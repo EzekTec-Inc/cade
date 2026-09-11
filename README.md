@@ -63,6 +63,10 @@ CADE does:  scaffolds → writes code → runs tests → builds Docker image →
 git clone https://github.com/EzekTec-Inc/CADE && cd CADE
 cargo build --release
 
+# This builds both release binaries:
+# - ./target/release/cade
+# - ./target/release/cade-server
+
 # 2. Start the server (pick your LLM provider)
 ANTHROPIC_API_KEY=sk-ant-... ./target/release/cade-server
 
@@ -296,6 +300,11 @@ sudo apt install libpipewire-0.3-dev libclang-dev libgbm-dev xdotool
 git clone https://github.com/EzekTec-Inc/CADE && cd CADE
 cargo build --release
 ```
+
+The default workspace build produces both `target/release/cade` and
+`target/release/cade-server`. If you are testing provider changes, restart any
+running `cade-server` process after rebuilding so the daemon picks up the new
+provider serialization code.
 
 For a leaner binary without semantic search (~50MB smaller):
 ```bash
