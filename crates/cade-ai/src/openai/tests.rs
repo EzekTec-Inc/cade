@@ -770,3 +770,103 @@ fn to_openai_messages_never_emits_null_content() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn to_responses_input_serializes_valid_responses_api_schema() -> Result<()> {
+    let req = CompletionRequest {
+        model: "openai/gpt-5.5-2026-04-23".into(),
+        messages: vec![
+            crate::LlmMessage {
+                role: "system".into(),
+                content: "System prompt".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            crate::LlmMessage {
+                role: "user".into(),
+                content: "Run a command".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // Assistant message that invoked tools
+            crate::LlmMessage {
+                role: "assistant".into(),
+                content: "".into(),
+                tool_call_id: None,
+                tool_calls: Some(vec![crate::LlmToolCall {
+                    id: "call_123".into(),
+                    name: "bash".into(),
+                    arguments: json!({"command": "ls"}),
+                    thought_signature: None,
+                }]),
+                images: None,
+                cache_control: None,
+            },
+            // Tool output message
+            crate::LlmMessage {
+                role: "tool".into(),
+                content: "file1.txt\nfile2.txt".into(),
+                tool_call_id: Some("call_123".into()),
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+            // User follow-up
+            crate::LlmMessage {
+                role: "user".into(),
+                content: "Now analyze the files".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            },
+        ],
+        tools: vec![],
+        max_tokens: 1000,
+        reasoning_effort: None,
+    };
+
+    let input_val = OpenAiProvider::to_responses_input(&req);
+    let items = input_val.as_array().ok_or("input should be an array")?;
+
+    // Verify item 0: Developer/system message
+    assert_eq!(items[0]["role"], "developer");
+    assert_eq!(items[0]["content"], "System prompt");
+
+    // Verify item 1: User message
+    assert_eq!(items[1]["role"], "user");
+    assert_eq!(items[1]["content"], "Run a command");
+
+    // Verify item 2: Function call item (NOT assistant with tool_calls!)
+    assert_eq!(items[2]["type"], "function_call");
+    assert_eq!(items[2]["call_id"], "call_123");
+    assert_eq!(items[2]["name"], "bash");
+    assert_eq!(items[2]["arguments"], "{\"command\":\"ls\"}");
+    assert!(
+        items[2].get("tool_calls").is_none(),
+        "Responses API items must not contain tool_calls"
+    );
+
+    // Verify item 3: Function call output item
+    assert_eq!(items[3]["type"], "function_call_output");
+    assert_eq!(items[3]["call_id"], "call_123");
+    assert_eq!(items[3]["output"], "file1.txt\nfile2.txt");
+
+    // Verify item 4: User follow-up
+    assert_eq!(items[4]["role"], "user");
+    assert_eq!(items[4]["content"], "Now analyze the files");
+
+    // Crucial check: verify that NO item in input has a 'tool_calls' field
+    for (idx, item) in items.iter().enumerate() {
+        assert!(
+            item.get("tool_calls").is_none(),
+            "input[{idx}] contains 'tool_calls', which OpenAI /v1/responses rejects with 400 Bad Request"
+        );
+    }
+
+    Ok(())
+}

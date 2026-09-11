@@ -459,6 +459,85 @@ impl OpenAiProvider {
         json!(json_messages)
     }
 
+    pub(crate) fn to_responses_input(req: &CompletionRequest) -> Value {
+        let is_o_series = is_o_series(&req.model);
+
+        let mut combined_system = String::new();
+        let mut processed_messages = Vec::new();
+
+        for m in &req.messages {
+            if m.role == "system" {
+                if !combined_system.is_empty() {
+                    combined_system.push_str("\n\n");
+                }
+                combined_system.push_str(&m.content);
+            } else {
+                processed_messages.push(m);
+            }
+        }
+
+        let mut json_items = Vec::new();
+
+        if !combined_system.is_empty() {
+            let role = if is_o_series { "developer" } else { "system" };
+            json_items.push(json!({"role": role, "content": combined_system}));
+        }
+
+        for m in processed_messages {
+            match m.role.as_str() {
+                "tool" => {
+                    let tid = m.tool_call_id.as_deref().unwrap_or("");
+                    if !tid.is_empty() {
+                        json_items.push(json!({
+                            "type": "function_call_output",
+                            "call_id": tid,
+                            "output": m.content
+                        }));
+                    }
+                }
+                "assistant" => {
+                    if !m.content.is_empty() {
+                        json_items.push(json!({
+                            "role": "assistant",
+                            "content": m.content
+                        }));
+                    }
+                    if let Some(tool_calls) = &m.tool_calls {
+                        for tc in tool_calls {
+                            json_items.push(json!({
+                                "type": "function_call",
+                                "call_id": tc.id,
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string()
+                            }));
+                        }
+                    }
+                }
+                _ => {
+                    if m.role == "user"
+                        && let Some(images) = &m.images
+                        && !images.is_empty()
+                    {
+                        let mut parts: Vec<Value> = images.iter().map(|img| json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", img.media_type, img.data)
+                            }
+                        })).collect();
+                        if !m.content.is_empty() {
+                            parts.push(json!({"type": "text", "text": m.content}));
+                        }
+                        json_items.push(json!({"role": m.role, "content": parts}));
+                    } else {
+                        json_items.push(json!({"role": m.role, "content": m.content}));
+                    }
+                }
+            }
+        }
+
+        json!(json_items)
+    }
+
     /// Provide clear, actionable diagnostic guidance when upstream returns 404/400 for preview models.
     fn format_upstream_error(
         label: &str,
@@ -643,7 +722,7 @@ impl OpenAiProvider {
         };
         let mut body = json!({
             "model": bare_model_id,
-            "input": Self::to_openai_messages(req),
+            "input": Self::to_responses_input(req),
             "max_output_tokens": req.max_tokens,
             "tools": Self::build_responses_tools(req),
         });
