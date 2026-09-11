@@ -273,10 +273,6 @@ impl OpenAiProvider {
             "/chat/completions"
         };
 
-        if self.base_url == OPENAI_URL && use_responses_api {
-            return OPENAI_RESPONSES_URL.to_string();
-        }
-
         if self.base_url == OPENAI_URL && is_frontier_preview_model(model) {
             let env_opt = std::env::var("OPENAI_PREVIEW_BASE_URL").ok();
             let opt = preview_override.or(env_opt.as_deref());
@@ -286,6 +282,10 @@ impl OpenAiProvider {
                     return Self::append_endpoint_path(trimmed, endpoint_path);
                 }
             }
+        }
+
+        if self.base_url == OPENAI_URL && use_responses_api {
+            return OPENAI_RESPONSES_URL.to_string();
         }
 
         if use_responses_api && self.base_url.ends_with("/chat/completions") {
