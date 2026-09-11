@@ -37,7 +37,8 @@ jobs:
             libxcb-shm0-dev \
             libclang-dev \
             libegl1-mesa-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libgbm-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

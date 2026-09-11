@@ -117,12 +117,11 @@ fn copy_via_shell_commands(text: &str) -> bool {
     // macOS pbcopy
     #[cfg(target_os = "macos")]
     {
-        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
-            if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
-                    return child.wait().map(|s| s.success()).unwrap_or(false);
-                }
-            }
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn()
+            && let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(text.as_bytes()).is_ok()
+        {
+            return child.wait().map(|s| s.success()).unwrap_or(false);
         }
     }
 
@@ -177,12 +176,11 @@ fn copy_via_shell_commands(text: &str) -> bool {
     // Windows native clip
     #[cfg(target_os = "windows")]
     {
-        if let Ok(mut child) = Command::new("clip").stdin(Stdio::piped()).spawn() {
-            if let Some(mut stdin) = child.stdin.take() {
-                if stdin.write_all(text.as_bytes()).is_ok() {
-                    return child.wait().map(|s| s.success()).unwrap_or(false);
-                }
-            }
+        if let Ok(mut child) = Command::new("clip").stdin(Stdio::piped()).spawn()
+            && let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(text.as_bytes()).is_ok()
+        {
+            return child.wait().map(|s| s.success()).unwrap_or(false);
         }
     }
 
