@@ -290,7 +290,7 @@ const CHARS_PER_TOKEN: usize = 3;
 /// Mapping rules (provider prefix match):
 ///   * `anthropic/*`  → `anthropic/claude-haiku-4-5`
 ///   * `openai/*`     → `openai/gpt-4o-mini`
-///   * `gemini/*`     → `gemini/gemini-2.5-flash`
+///   * `gemini/*`     → `gemini/gemini-3.6-flash`
 ///   * `openrouter/*:<free>` → passthrough (free-tier models share the same
 ///     strict 20 RPM / 200 RPD rate limit; using a different free model for
 ///     compaction would compete with the primary for the same quota).
@@ -319,7 +319,7 @@ pub(crate) fn default_compaction_model(primary_model: &str) -> String {
         return "openai/gpt-4o-mini".to_string();
     }
     if primary_model.starts_with("gemini/") {
-        return "gemini/gemini-2.5-flash".to_string();
+        return "gemini/gemini-3.6-flash".to_string();
     }
     // Unknown provider (incl. ollama/*, custom): preserve passthrough — local
     // models cost nothing and unknown providers may not have a cheaper SKU.

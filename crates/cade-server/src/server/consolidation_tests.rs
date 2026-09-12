@@ -832,7 +832,7 @@ fn default_compaction_openai_uses_4o_mini() {
 fn default_compaction_gemini_uses_flash() {
     assert_eq!(
         default_compaction_model("gemini/gemini-2.5-pro"),
-        "gemini/gemini-2.5-flash"
+        "gemini/gemini-3.6-flash"
     );
 }
 
@@ -897,8 +897,8 @@ fn default_compaction_already_cheap_openai_idempotent() {
 #[test]
 fn default_compaction_already_cheap_gemini_idempotent() {
     assert_eq!(
-        default_compaction_model("gemini/gemini-2.5-flash"),
-        "gemini/gemini-2.5-flash"
+        default_compaction_model("gemini/gemini-3.6-flash"),
+        "gemini/gemini-3.6-flash"
     );
 }
 
