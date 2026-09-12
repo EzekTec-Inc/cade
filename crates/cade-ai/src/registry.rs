@@ -123,6 +123,9 @@ impl ModelRegistry {
     /// Returns approximate per-token pricing for a model.
     /// Evaluates rules in order. Unknown models get zero rates.
     pub fn pricing_for_model(&self, model_id: &str) -> ModelPricing {
+        let normalized_model_id = crate::catalogue::normalize_model_id_for_lookup(model_id);
+        let model_id = normalized_model_id.as_str();
+
         // 1. Try matching specific (non-generic fallback) rules from default_pricing.json first
         for rule in &self.rules {
             if !rule.is_generic_fallback() && rule.matches(model_id) {
@@ -306,6 +309,27 @@ mod tests {
         // Should pull from llm_providers
         assert_eq!(p.input, 2.5); // $2.50 per 1M tokens
         assert_eq!(p.output, 10.0); // $10.00 per 1M tokens
+    }
+
+    #[test]
+    fn pricing_llm_providers_resolves_bare_openai_gpt4o() {
+        let registry = ModelRegistry::new();
+        let prefixed = registry.pricing_for_model("openai/gpt-4o");
+        let bare = registry.pricing_for_model("gpt-4o");
+        assert_eq!(bare, prefixed);
+    }
+
+    #[test]
+    fn pricing_resolves_bare_openai_reasoning_models() {
+        let registry = ModelRegistry::new();
+        assert_eq!(
+            registry.pricing_for_model("o1"),
+            registry.pricing_for_model("openai/o1")
+        );
+        assert_eq!(
+            registry.pricing_for_model("gpt-5"),
+            registry.pricing_for_model("openai/gpt-5")
+        );
     }
 
     #[test]

@@ -55,6 +55,8 @@ CADE can spawn "subagents" to handle complex or long-running tasks in the backgr
 - If you ask CADE to "do a deep code review of crate X," it will likely launch a background subagent.
 - **Tracker Cards:** Background subagents appear as color-coded cards in the UI (`green` for safe read-only tasks, `yellow` for write tasks).
 - Subagents automatically sync their findings back to the main agent when they finish.
+- Subagent and team-coordination tools are available when the Agentic capability pack is enabled.
+- When CADE restores an existing agent that has no attached tools, startup automatically relinks the default tool set unless you explicitly supplied `--tools`; `--tools ""` intentionally keeps the session tool-free.
 
 ## 5. Security & Permissions
 

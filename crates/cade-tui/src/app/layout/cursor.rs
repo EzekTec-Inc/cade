@@ -1,5 +1,10 @@
 use crate::app::*;
 use crate::colors::ThemeColorsExt;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::widgets::Widget;
+use tui_textarea::TextArea;
 
 pub(crate) fn input_mode_badge(mode: InputMode, colors: &ThemeColors) -> (&'static str, RC) {
     match mode {
@@ -105,6 +110,35 @@ pub(crate) fn calc_visual_cursor(
     (visual_x, visual_y)
 }
 
+pub(crate) fn rendered_textarea_cursor_position(
+    textarea: &TextArea<'_>,
+    area: Rect,
+    cursor_style: Style,
+) -> Option<(u16, u16)> {
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+
+    let mut buf = Buffer::empty(area);
+    textarea.render(area, &mut buf);
+
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            let cell = buf.cell((x, y))?;
+            let style = cell.style();
+            if cursor_style.fg.is_some()
+                && cursor_style.bg.is_some()
+                && style.fg == cursor_style.fg
+                && style.bg == cursor_style.bg
+            {
+                return Some((x.saturating_sub(area.x), y.saturating_sub(area.y)));
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +154,51 @@ mod tests {
         // Should compile and run without panicking on char boundaries!
         assert_eq!(y, 0);
         assert!(x > 0);
+    }
+
+    #[test]
+    fn test_calc_visual_cursor_uses_rendered_textarea_width_without_prompt_prefix() {
+        let buf = "abcdefghij";
+        let cursor_row = 0;
+        let cursor_col = 10;
+        let rendered_textarea_width = 10;
+
+        let (x, y) = calc_visual_cursor(buf, cursor_row, cursor_col, rendered_textarea_width, 0);
+
+        assert_eq!(y, 1);
+        assert_eq!(x, 0);
+    }
+
+    #[test]
+    fn test_rendered_textarea_cursor_position_tracks_library_wrap_for_tabs() {
+        let cursor_style = Style::default().fg(RC::Red).bg(RC::Blue);
+        let mut textarea = TextArea::from(["abc\tdef"]);
+        textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
+        textarea.set_cursor_style(cursor_style);
+        textarea.move_cursor(tui_textarea::CursorMove::Jump(0, 4));
+
+        let rendered =
+            rendered_textarea_cursor_position(&textarea, Rect::new(0, 0, 6, 3), cursor_style);
+
+        assert_eq!(rendered, Some((0, 1)));
+        assert_ne!(
+            calc_visual_cursor("abc\tdef", 0, 4, 6, 0),
+            rendered.unwrap()
+        );
+    }
+
+    #[test]
+    fn test_rendered_textarea_cursor_position_tracks_library_viewport() {
+        let cursor_style = Style::default().fg(RC::Red).bg(RC::Blue);
+        let mut textarea = TextArea::from(["alpha beta gamma delta"]);
+        textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
+        textarea.set_cursor_style(cursor_style);
+        textarea.move_cursor(tui_textarea::CursorMove::End);
+
+        let rendered =
+            rendered_textarea_cursor_position(&textarea, Rect::new(0, 0, 6, 2), cursor_style);
+
+        assert_eq!(rendered, Some((5, 1)));
     }
 
     #[test]

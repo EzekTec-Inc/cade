@@ -19,7 +19,7 @@ use super::types::*;
 /// Uses `notify` 6.x `RecommendedWatcher` (inotify on Linux, FSEvents on macOS,
 /// ReadDirectoryChangesW on Windows). The watcher runs on a dedicated std thread
 /// (notify is not async-native) and forwards events to a `tokio::sync::mpsc` channel.
-pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
+pub fn spawn_skill_watcher(cwd: &Path, agent_id: Option<&str>) -> tokio::sync::mpsc::Receiver<()> {
     use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -35,6 +35,13 @@ pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
         let global_skills = ch.join("skills");
         if global_skills.exists() {
             watch_dirs.push(global_skills);
+        }
+
+        if let Some(id) = agent_id {
+            let agent_skills = ch.join("subagents").join(id).join("skills");
+            if agent_skills.exists() {
+                watch_dirs.push(agent_skills);
+            }
         }
     }
 
@@ -83,13 +90,10 @@ pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
                             | EventKind::Remove(RemoveKind::File)
                             | EventKind::Remove(RemoveKind::Any)
                     );
-                    // Only care about SKILL.MD files
-                    let is_skill_file = event.paths.iter().any(|p| {
-                        p.file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|n| n.to_uppercase() == "SKILL.MD")
-                            .unwrap_or(false)
-                    });
+                    let is_skill_file = event
+                        .paths
+                        .iter()
+                        .any(|p| is_watched_skill_file(p, &watch_dirs));
                     if relevant && is_skill_file {
                         // Non-blocking send — drop if receiver is behind
                         let _ = tx.try_send(());
@@ -101,6 +105,69 @@ pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
     });
 
     rx
+}
+
+fn is_watched_skill_file(path: &Path, watch_dirs: &[PathBuf]) -> bool {
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name.eq_ignore_ascii_case("SKILL.MD") {
+        return true;
+    }
+
+    let is_markdown = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md"))
+        .unwrap_or(false);
+    is_markdown
+        && watch_dirs
+            .iter()
+            .any(|dir| path.parent() == Some(dir.as_path()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn watched_skill_file_includes_skill_md_case_insensitively() {
+        let watch_dirs = vec![PathBuf::from("skills")];
+        assert!(is_watched_skill_file(
+            Path::new("skills/skill/SKILL.MD"),
+            &watch_dirs
+        ));
+        assert!(is_watched_skill_file(
+            Path::new("skills/skill/SKILL.md"),
+            &watch_dirs
+        ));
+    }
+
+    #[test]
+    fn watched_skill_file_includes_direct_markdown_skills() {
+        let watch_dirs = vec![PathBuf::from("skills")];
+        assert!(is_watched_skill_file(
+            Path::new("skills/review.md"),
+            &watch_dirs
+        ));
+    }
+
+    #[test]
+    fn watched_skill_file_rejects_nested_reference_markdown_files() {
+        let watch_dirs = vec![PathBuf::from("skills")];
+        assert!(!is_watched_skill_file(
+            Path::new("skills/review/references/notes.md"),
+            &watch_dirs
+        ));
+    }
+
+    #[test]
+    fn watched_skill_file_rejects_non_markdown_files() {
+        let watch_dirs = vec![PathBuf::from("skills")];
+        assert!(!is_watched_skill_file(
+            Path::new("skills/review.txt"),
+            &watch_dirs
+        ));
+    }
 }
 
 /// Convert a GitHub tree URL to a raw SKILL.MD URL.

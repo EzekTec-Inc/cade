@@ -322,6 +322,14 @@ impl Repl {
                                                             }
                                                     }
                                                     // Ctrl+T — toggle plan/todos panel
+                                                    (KeyCode::Char('v') | KeyCode::Char('V'), m)
+                                                        if m.contains(KeyModifiers::CONTROL)
+                                                            || m.contains(KeyModifiers::ALT) =>
+                                                    {
+                                                        if app.paste_from_clipboard() {
+                                                            let _ = app.draw();
+                                                        }
+                                                    }
                                                     (KeyCode::Char('t'), KeyModifiers::CONTROL)
                                                     | (KeyCode::Char('\x14'), _) => {
                                                         if let Some(plan) = &mut app.active_plan {
@@ -374,19 +382,16 @@ impl Repl {
                                     }
                             }
                         } else if let Some(mut app) = tick_app.try_lock() {
-                            // Mouse / resize — best-effort, fine to drop
-                            if let Event::Mouse(m) = evt {
-                                if app.slots.handle_mouse(m) {
-                                    let _ = app.draw();
-                                } else {
-                                    let is_inside_messages = m.column >= app.messages_area.x
-                                        && m.column < app.messages_area.x + app.messages_area.width
-                                        && m.row >= app.messages_area.y
-                                        && m.row < app.messages_area.y + app.messages_area.height;
-                                    if is_inside_messages && app.handle_scroll_mouse(m.kind) {
-                                        let _ = app.draw();
-                                    }
+                            // Mouse / paste / resize — best-effort, fine to drop
+                            match evt {
+                                Event::Mouse(m) => {
+                                    let _ = app.handle_message_area_mouse_event(m);
                                 }
+                                Event::Paste(text) => {
+                                    app.handle_bracketed_paste_text(&text);
+                                    let _ = app.draw();
+                                }
+                                _ => {}
                             }
                         }
                     }

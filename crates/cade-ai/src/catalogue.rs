@@ -250,14 +250,32 @@ impl ModelEntry {
     }
 }
 
-fn parse_cade_model_id(model_id: &str) -> Option<(&str, &str)> {
+pub fn normalize_model_id_for_lookup(model_id: &str) -> String {
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    let parts: Vec<&str> = id.split('/').collect();
-    if parts.len() == 2 {
-        Some((parts[0], parts[1]))
-    } else {
-        None
+    if id.contains('/') {
+        return model_id.to_string();
     }
+
+    let lower = id.to_ascii_lowercase();
+    if lower.starts_with("gpt-")
+        || lower.starts_with("chatgpt")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+    {
+        return format!("openai/{id}");
+    }
+
+    model_id.to_string()
+}
+
+fn parse_cade_model_id(model_id: &str) -> Option<(String, String)> {
+    let normalized = normalize_model_id_for_lookup(model_id);
+    let id = normalized
+        .strip_prefix("openrouter/")
+        .unwrap_or(&normalized);
+    let (provider, model) = id.split_once('/')?;
+    Some((provider.to_string(), model.to_string()))
 }
 
 /// Determine the toolset for a specific model ID. Defaults to "default" if unknown.
@@ -325,6 +343,8 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
         return n;
     }
 
+    let normalized_model_id = normalize_model_id_for_lookup(model_id);
+    let model_id = normalized_model_id.as_str();
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
 
     // Exact catalogue match
@@ -337,7 +357,7 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
 
     // Try llm_providers database
     if let Some(cl) = parse_cade_model_id(model_id)
-        .and_then(|(p, m)| llm_providers::get_model(p, m))
+        .and_then(|(p, m)| llm_providers::get_model(&p, &m))
         .and_then(|m| m.context_length)
     {
         return cl as u32;
@@ -451,6 +471,40 @@ mod tests {
         assert_eq!(me.max_tokens, entry.4);
         assert_eq!(me.context_window, entry.5);
         assert!(!me.dynamic);
+    }
+
+    #[test]
+    fn normalize_model_id_for_lookup_prefixes_bare_openai_models() {
+        assert_eq!(normalize_model_id_for_lookup("gpt-4o"), "openai/gpt-4o");
+        assert_eq!(
+            normalize_model_id_for_lookup("chatgpt-4o-latest"),
+            "openai/chatgpt-4o-latest"
+        );
+        assert_eq!(normalize_model_id_for_lookup("o3-mini"), "openai/o3-mini");
+        assert_eq!(
+            normalize_model_id_for_lookup("openai/gpt-4o"),
+            "openai/gpt-4o"
+        );
+        assert_eq!(
+            normalize_model_id_for_lookup("gemini/gemini-2.5-pro"),
+            "gemini/gemini-2.5-pro"
+        );
+    }
+
+    #[test]
+    fn context_window_resolves_bare_openai_models() {
+        assert_eq!(
+            context_window_for_model("gpt-4o"),
+            context_window_for_model("openai/gpt-4o")
+        );
+        assert_eq!(
+            context_window_for_model("o3-mini"),
+            context_window_for_model("openai/o3-mini")
+        );
+        assert_eq!(
+            context_window_for_model("gpt-5"),
+            context_window_for_model("openai/gpt-5")
+        );
     }
 
     // -- toolset_for_model

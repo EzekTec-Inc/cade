@@ -34,7 +34,7 @@ use crate::colors::ThemeColors;
 use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
-use super::layout::cursor::{calc_input_rows, input_mode_badge};
+use super::layout::cursor::{calc_input_rows, input_mode_badge, rendered_textarea_cursor_position};
 use super::layout::sidebar::{SidebarState, render_sidebar};
 use super::layout::toast::render_toast;
 use super::timeline::{
@@ -587,33 +587,37 @@ fn render_input_or_question(
         textarea.set_placeholder_text(input_placeholder);
         textarea.set_placeholder_style(colors.text_muted());
         textarea.set_cursor_line_style(Style::default());
-        textarea.set_cursor_style(
-            Style::default()
-                .fg(colors.c_bg_base())
-                .bg(colors.c_primary()),
-        );
+        let cursor_style = Style::default()
+            .fg(colors.c_bg_base())
+            .bg(colors.c_primary());
+        textarea.set_cursor_style(cursor_style);
         textarea.set_style(Style::default());
 
         frame.render_widget(&*textarea, input_chunks[1]);
 
-        let input = textarea.lines().join("\n");
+        let rendered_cursor =
+            rendered_textarea_cursor_position(&*textarea, input_chunks[1], cursor_style);
+        let (visual_x, relative_visual_y) = rendered_cursor.unwrap_or_else(|| {
+            let input = textarea.lines().join("\n");
+            let (visual_x, visual_y) = super::layout::cursor::calc_visual_cursor(
+                &input,
+                textarea.cursor().0,
+                textarea.cursor().1,
+                input_chunks[1].width,
+                0,
+            );
 
-        let (visual_x, visual_y) = super::layout::cursor::calc_visual_cursor(
-            &input,
-            textarea.cursor().0,
-            textarea.cursor().1,
-            input_chunks[1].width,
-            prefix_w,
-        );
+            let relative_visual_y = if visual_y >= input_chunks[1].height {
+                let scroll_top = visual_y
+                    .saturating_sub(input_chunks[1].height)
+                    .saturating_add(1);
+                visual_y.saturating_sub(scroll_top)
+            } else {
+                visual_y
+            };
 
-        let relative_visual_y = if visual_y >= input_chunks[1].height {
-            let scroll_top = visual_y
-                .saturating_sub(input_chunks[1].height)
-                .saturating_add(1);
-            visual_y.saturating_sub(scroll_top)
-        } else {
-            visual_y
-        };
+            (visual_x, relative_visual_y)
+        });
 
         *last_input_width = input_chunks[1].width;
 

@@ -1088,16 +1088,9 @@ impl TuiApp {
         colors: ThemeColors,
     ) -> Self {
         let terminal = ratatui::init();
-        // Enable mouse capture on startup (Claude Code approach).
-        // The terminal will capture all mouse events (clicks, scrolls, drags),
-        // requiring a modifier key (Shift/Option) for native text selection.
-        // Use /mouse to toggle this off and return to native terminal handling.
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            EnableBracketedPaste,
-            EnableFocusChange,
-            EnableMouseCapture
-        );
+        // Leave mouse capture disabled by default so native terminal text selection
+        // works immediately. Users can opt into TUI-owned mouse gestures with /mouse.
+        let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange);
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
         // swallows the query. Unrecognized escape codes are safely ignored by VT100
@@ -1148,7 +1141,7 @@ impl TuiApp {
             session_cost_usd: 0.0,
             turn_count: 0,
             token_history: Vec::new(),
-            mouse_capture_disabled: false,
+            mouse_capture_disabled: true,
             messages_area: Rect::default(),
             copy_highlight: None,
             selection_start: None,
@@ -1213,7 +1206,7 @@ impl TuiApp {
         if self.mouse_capture_disabled {
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
             self.show_toast(
-                "Mouse capture disabled (native selection active)",
+                "Mouse capture disabled (native terminal selection active)",
                 ToastLevel::Info,
             );
         } else {
@@ -2056,7 +2049,12 @@ impl TuiApp {}
 impl Drop for TuiApp {
     fn drop(&mut self) {
         let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            DisableBracketedPaste,
+            DisableFocusChange,
+            DisableMouseCapture
+        );
         ratatui::restore();
     }
 }

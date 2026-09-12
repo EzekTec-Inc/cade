@@ -92,6 +92,36 @@ fn needs_max_completion_tokens_reasoning_models() {
 }
 
 #[test]
+fn parse_token_usage_supports_chat_completions_shape() {
+    let usage = json!({
+        "prompt_tokens": 100,
+        "completion_tokens": 25,
+        "prompt_tokens_details": { "cached_tokens": 10 }
+    });
+
+    let parsed = parse_token_usage(&usage, "gpt-4o").expect("usage should parse");
+    assert_eq!(parsed.input_tokens, 90);
+    assert_eq!(parsed.cache_read_tokens, 10);
+    assert_eq!(parsed.output_tokens, 25);
+    assert_eq!(parsed.model, "openai/gpt-4o");
+}
+
+#[test]
+fn parse_token_usage_supports_responses_api_shape() {
+    let usage = json!({
+        "input_tokens": 100,
+        "output_tokens": 25,
+        "input_tokens_details": { "cached_tokens": 10 }
+    });
+
+    let parsed = parse_token_usage(&usage, "o3-mini").expect("usage should parse");
+    assert_eq!(parsed.input_tokens, 90);
+    assert_eq!(parsed.cache_read_tokens, 10);
+    assert_eq!(parsed.output_tokens, 25);
+    assert_eq!(parsed.model, "openai/o3-mini");
+}
+
+#[test]
 fn is_o_series_identifies_frontier_reasoning_models() {
     assert!(is_o_series("openai/o1-mini"));
     assert!(is_o_series("openai/o3-mini"));

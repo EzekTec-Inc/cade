@@ -31,8 +31,7 @@ All registered tool schemas (with DB tags)
 
 ## Tool Classification
 
-Tools are classified by their **DB registration tags** — not by hardcoded name
-lists. The tag contract:
+Tools are first classified by their **DB registration tags**, then filtered by the active capability set. The tag contract:
 
 | Source | Tags | Compressed? | Pruned? |
 |--------|------|-------------|---------|
@@ -41,9 +40,9 @@ lists. The tag contract:
 | MCP tools (third-party, from MCP servers) | `["cade", "mcp"]` | Yes (if unused) | Yes (if desktop_* and unused) |
 
 This means:
-- **Adding a new meta tool** only requires adding its schema to `meta.rs` — ITS auto-discovers it.
+- **Adding a new meta tool** requires adding its schema to `meta.rs` and, if it belongs to an optional capability pack, classifying it in `tools/catalog.rs`.
 - **Adding a new MCP server** requires no ITS changes — all MCP tools are auto-tagged `"mcp"` at registration.
-- **No hardcoded tool name lists** exist in the ITS layer.
+- **Capability packs are explicit** for CADE-owned optional tools. Agent/team coordination schemas such as `run_subagent`, `run_parallel_subagents`, `run_team`, `cancel_subagent`, `wait`, `intercom`, and `subagent_supervisor` require `Capability::Agentic`.
 
 ### Prefix-Agnostic Budget Limits
 

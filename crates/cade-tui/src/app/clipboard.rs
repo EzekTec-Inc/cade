@@ -30,10 +30,12 @@ pub(crate) fn read_clipboard_image() -> Option<(String, u32, u32, String)> {
     }
 }
 
-/// Read text content from the OS clipboard (arboard).
+/// Read text content from the OS clipboard using native access first, then platform CLI fallbacks.
 pub(crate) fn read_clipboard_text() -> Option<String> {
-    let mut cb = arboard::Clipboard::new().ok()?;
-    cb.get_text().ok()
+    arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut cb| cb.get_text().ok())
+        .or_else(read_text_via_shell_commands)
 }
 
 impl TuiApp {
@@ -185,6 +187,82 @@ fn copy_via_shell_commands(text: &str) -> bool {
     }
 
     false
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout).ok()
+}
+
+fn read_text_via_shell_commands() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(text) = command_stdout("pbpaste", &[]) {
+            return Some(text);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(text) = command_stdout("wl-paste", &["--no-newline"]) {
+            return Some(text);
+        }
+        if let Some(text) = command_stdout("xclip", &["-selection", "clipboard", "-out"]) {
+            return Some(text);
+        }
+        if let Some(text) = command_stdout("xsel", &["--clipboard", "--output"]) {
+            return Some(text);
+        }
+        if let Some(text) = command_stdout(
+            "powershell.exe",
+            &["-NoProfile", "-Command", "Get-Clipboard"],
+        ) {
+            return Some(text);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(text) =
+            command_stdout("powershell", &["-NoProfile", "-Command", "Get-Clipboard"])
+        {
+            return Some(text);
+        }
+        if let Some(text) = command_stdout(
+            "powershell.exe",
+            &["-NoProfile", "-Command", "Get-Clipboard"],
+        ) {
+            return Some(text);
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn command_stdout_returns_none_for_missing_program() {
+        assert!(super::command_stdout("cade-command-that-does-not-exist", &[]).is_none());
+    }
+
+    #[test]
+    fn command_stdout_returns_none_for_failed_program() {
+        #[cfg(target_os = "windows")]
+        let result = super::command_stdout("cmd", &["/C", "exit 1"]);
+
+        #[cfg(not(target_os = "windows"))]
+        let result = super::command_stdout("false", &[]);
+
+        assert!(result.is_none());
+    }
 }
 
 impl TuiApp {

@@ -158,80 +158,103 @@ impl TuiApp {
                     }
                 }
                 Event::Paste(text) => {
-                    // Bracketed paste: the terminal wrapped the pasted content
-                    // in paste-start / paste-end markers so crossterm delivers
-                    // it as a single string.
-                    //
-                    // Drag-onto-terminal: many terminals (Kitty, WezTerm,
-                    // iTerm2, Windows Terminal) convert a dragged file into a
-                    // bracketed paste of its URI (`file:///path/to/file`) or
-                    // plain path.  If the pasted text looks like a single image
-                    // file path we try to load it as an image instead of text.
-                    let trimmed = text.trim();
-                    if self.try_paste_image_file_path(trimmed) {
-                        // Image file was loaded — skip normal text paste.
-                    } else if let Some(normalized_path) =
-                        self.try_normalize_pasted_file_path(trimmed)
-                    {
-                        self.editor.handle_paste(&normalized_path);
-                        self.last_status = None;
-                    } else {
-                        self.editor.handle_paste(&text);
-                        self.last_status = None;
-                    }
+                    self.handle_bracketed_paste_text(&text);
                     self.draw()?;
                 }
                 Event::Resize(_, _) => {
                     self.draw()?;
                 }
                 Event::Mouse(m) => {
-                    if self.slots.handle_mouse(m) {
-                        self.draw()?;
-                    } else {
-                        let is_inside_messages = m.column >= self.messages_area.x
-                            && m.column < self.messages_area.x + self.messages_area.width
-                            && m.row >= self.messages_area.y
-                            && m.row < self.messages_area.y + self.messages_area.height;
-
-                        match m.kind {
-                            crossterm::event::MouseEventKind::Down(
-                                crossterm::event::MouseButton::Left,
-                            ) => {
-                                if is_inside_messages {
-                                    self.selection_active = true;
-                                    self.selection_start = Some((m.column, m.row));
-                                    self.selection_current = Some((m.column, m.row));
-                                    self.draw()?;
-                                }
-                            }
-                            crossterm::event::MouseEventKind::Drag(
-                                crossterm::event::MouseButton::Left,
-                            ) => {
-                                if self.selection_active {
-                                    self.selection_current = Some((m.column, m.row));
-                                    self.draw()?;
-                                }
-                            }
-                            crossterm::event::MouseEventKind::Up(
-                                crossterm::event::MouseButton::Left,
-                            ) => {
-                                if self.selection_active {
-                                    self.selection_current = Some((m.column, m.row));
-                                    self.copy_selected_text();
-                                    self.draw()?;
-                                }
-                            }
-                            _ => {
-                                if is_inside_messages && self.handle_scroll_mouse(m.kind) {
-                                    self.draw()?;
-                                }
-                            }
-                        }
-                    }
+                    let _ = self.handle_message_area_mouse_event(m)?;
                 }
                 _ => {}
             }
         }
+    }
+
+    pub fn handle_bracketed_paste_text(&mut self, text: &str) {
+        // Bracketed paste: the terminal wrapped the pasted content in
+        // paste-start / paste-end markers so crossterm delivers it as one string.
+        // Drag-onto-terminal often appears as a file URI/path; load image files
+        // as attachments and normalize non-image file paths for @mentions.
+        let trimmed = text.trim();
+        if self.try_paste_image_file_path(trimmed) {
+            return;
+        }
+
+        if let Some(normalized_path) = self.try_normalize_pasted_file_path(trimmed) {
+            self.editor.handle_paste(&normalized_path);
+        } else {
+            self.editor.handle_paste(text);
+        }
+        self.last_status = None;
+        self.draw_dirty = true;
+    }
+
+    pub fn paste_from_clipboard(&mut self) -> bool {
+        if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image() {
+            self.handle_image_paste(&media_type, b64, w, h);
+            self.show_toast("Pasted image from clipboard", ToastLevel::Success);
+            self.draw_dirty = true;
+            return true;
+        }
+
+        if let Some(text) = crate::app::clipboard::read_clipboard_text() {
+            self.handle_bracketed_paste_text(&text);
+            return true;
+        }
+
+        false
+    }
+
+    pub fn handle_message_area_mouse_event(
+        &mut self,
+        m: crossterm::event::MouseEvent,
+    ) -> Result<bool> {
+        if self.slots.handle_mouse(m) {
+            self.draw()?;
+            return Ok(true);
+        }
+
+        let is_inside_messages = m.column >= self.messages_area.x
+            && m.column < self.messages_area.x + self.messages_area.width
+            && m.row >= self.messages_area.y
+            && m.row < self.messages_area.y + self.messages_area.height;
+
+        match m.kind {
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                if is_inside_messages {
+                    self.selection_active = true;
+                    self.selection_start = Some((m.column, m.row));
+                    self.selection_current = Some((m.column, m.row));
+                    self.draw()?;
+                    return Ok(true);
+                }
+            }
+            crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                if self.selection_active {
+                    self.selection_current = Some((m.column, m.row));
+                    self.draw()?;
+                    return Ok(true);
+                }
+            }
+            crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                if self.selection_active {
+                    self.selection_current = Some((m.column, m.row));
+                    self.copy_selected_text();
+                    self.draw()?;
+                    return Ok(true);
+                }
+            }
+            _ => {
+                if is_inside_messages && self.handle_scroll_mouse(m.kind) {
+                    self.draw()?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
 
     fn handle_key_input(
@@ -435,14 +458,7 @@ impl TuiApp {
                 if k.modifiers.contains(KeyModifiers::CONTROL)
                     || k.modifiers.contains(KeyModifiers::ALT) =>
             {
-                if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image()
-                {
-                    self.handle_image_paste(&media_type, b64, w, h);
-                    self.show_toast("Pasted image from clipboard", ToastLevel::Success);
-                } else if let Some(text) = crate::app::clipboard::read_clipboard_text() {
-                    self.editor.handle_paste(&text);
-                    self.draw_dirty = true;
-                }
+                self.paste_from_clipboard();
                 return Ok(None);
             }
 
@@ -550,13 +566,12 @@ impl TuiApp {
                 if partial.starts_with('/') {
                     let suggestions = self.slash_ac.completions(&input_text, cursor_pos);
                     if !suggestions.is_empty() {
-                        self.overlays.push(Box::new(
-                            crate::autocomplete::AutocompleteOverlay::new(
-                                suggestions,
-                                word_start,
-                                cursor_pos,
-                            ),
-                        ));
+                        crate::autocomplete::AutocompleteOverlay::upsert_on_stack(
+                            &mut self.overlays,
+                            suggestions,
+                            word_start,
+                            cursor_pos,
+                        );
                         self.draw_dirty = true;
                         return Ok(None);
                     }
@@ -566,13 +581,12 @@ impl TuiApp {
                 if partial.starts_with(':') {
                     let suggestions = self.tool_ac.completions(&input_text, cursor_pos);
                     if !suggestions.is_empty() {
-                        self.overlays.push(Box::new(
-                            crate::autocomplete::AutocompleteOverlay::new(
-                                suggestions,
-                                word_start,
-                                cursor_pos,
-                            ),
-                        ));
+                        crate::autocomplete::AutocompleteOverlay::upsert_on_stack(
+                            &mut self.overlays,
+                            suggestions,
+                            word_start,
+                            cursor_pos,
+                        );
                         self.draw_dirty = true;
                         return Ok(None);
                     }
@@ -582,13 +596,12 @@ impl TuiApp {
                 if partial.starts_with('?') {
                     let suggestions = self.next_step_ac.completions(&input_text, cursor_pos);
                     if !suggestions.is_empty() {
-                        self.overlays.push(Box::new(
-                            crate::autocomplete::AutocompleteOverlay::new(
-                                suggestions,
-                                word_start,
-                                cursor_pos,
-                            ),
-                        ));
+                        crate::autocomplete::AutocompleteOverlay::upsert_on_stack(
+                            &mut self.overlays,
+                            suggestions,
+                            word_start,
+                            cursor_pos,
+                        );
                         self.draw_dirty = true;
                         return Ok(None);
                     }
@@ -725,13 +738,12 @@ impl TuiApp {
                                 let suggestions =
                                     self.slash_ac.completions(&input_text, cursor_pos);
                                 if !suggestions.is_empty() {
-                                    self.overlays.push(Box::new(
-                                        crate::autocomplete::AutocompleteOverlay::new(
-                                            suggestions,
-                                            cursor_pos.saturating_sub(1),
-                                            cursor_pos,
-                                        ),
-                                    ));
+                                    crate::autocomplete::AutocompleteOverlay::upsert_on_stack(
+                                        &mut self.overlays,
+                                        suggestions,
+                                        cursor_pos.saturating_sub(1),
+                                        cursor_pos,
+                                    );
                                 }
                             }
                             if let KeyCode::Char('@') = k.code {
@@ -754,13 +766,12 @@ impl TuiApp {
                                     } else {
                                         let suggestions = self.slash_ac.at_completions("");
                                         if !suggestions.is_empty() {
-                                            self.overlays.push(Box::new(
-                                                crate::autocomplete::AutocompleteOverlay::new(
-                                                    suggestions,
-                                                    at_pos,
-                                                    cursor_pos,
-                                                ),
-                                            ));
+                                            crate::autocomplete::AutocompleteOverlay::upsert_on_stack(
+                                                &mut self.overlays,
+                                                suggestions,
+                                                at_pos,
+                                                cursor_pos,
+                                            );
                                         }
                                     }
                                 }

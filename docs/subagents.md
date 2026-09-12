@@ -30,6 +30,13 @@ run_subagent(
 Returns the subagent's final assistant message. Intermediate text and
 tool calls are **not** streamed back to the parent — only the result.
 
+Subagent and team-coordination tools are part of the optional **Agentic**
+capability pack. A session must have `Capability::Agentic` enabled to expose
+schemas such as `run_subagent`, `subagent`, `wait`, `intercom`,
+`subagent_supervisor`, `run_parallel_subagents`, `run_team`,
+`cancel_subagent`, `list_agents`, `message_agent`, `reflect`, and
+`store_artifact`.
+
 ### Selection by `mode`
 
 The `mode` argument is matched against the discovered subagent
@@ -92,6 +99,17 @@ Frontmatter fields:
 - `tools` (optional) — `all`, `readonly`, or a specific list
 
 Same-name conflict: project > global > built-in.
+
+## Startup tool recovery
+
+CADE normally restores the last active agent for the current project. If that
+reused agent has no attached tools and the user did not provide an explicit
+`--tools` filter, startup automatically relinks the default capability-aware
+tool set so the agent is usable again after stale database state or interrupted
+registration.
+
+Explicit tool filters are respected. In particular, `--tools ""` remains a
+true zero-tool mode and does not trigger automatic relinking.
 
 ## Defence layers (recursion safety)
 

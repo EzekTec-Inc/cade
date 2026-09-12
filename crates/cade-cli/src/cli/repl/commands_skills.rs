@@ -168,6 +168,7 @@ impl Repl {
                         .await;
 
                     *self.skills.lock() = new_skills;
+                    self.populate_autocomplete().await;
 
                     self.tui_ok(format!(
                         "  ✓ Skills reloaded  ({new_count} loaded, was {prev_count})"

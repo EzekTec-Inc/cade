@@ -75,16 +75,19 @@ pub(crate) fn map_deepseek_reasoning_effort(effort: &str) -> (&'static str, &'st
 pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage> {
     let in_tok = usage["prompt_tokens"]
         .as_u64()
+        .or_else(|| usage["input_tokens"].as_u64())
         .unwrap_or(0)
         .try_into()
         .unwrap_or(u32::MAX);
     let out_tok = usage["completion_tokens"]
         .as_u64()
+        .or_else(|| usage["output_tokens"].as_u64())
         .unwrap_or(0)
         .try_into()
         .unwrap_or(u32::MAX);
     let cache_tok = usage["prompt_tokens_details"]["cached_tokens"]
         .as_u64()
+        .or_else(|| usage["input_tokens_details"]["cached_tokens"].as_u64())
         .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
         .unwrap_or(0)
         .try_into()
@@ -92,12 +95,12 @@ pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage
 
     if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
         Some(TokenUsage {
-            // Providers include cached tokens in prompt_tokens, so subtract to get non-cached input
+            // Providers include cached tokens in total input tokens, so subtract to get non-cached input.
             input_tokens: in_tok.saturating_sub(cache_tok),
             output_tokens: out_tok,
             cache_read_tokens: cache_tok,
             cache_write_tokens: 0,
-            model: model.to_string(),
+            model: crate::catalogue::normalize_model_id_for_lookup(model),
         })
     } else {
         None

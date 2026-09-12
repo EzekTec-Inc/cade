@@ -49,6 +49,32 @@ async fn archive_and_clear_active_goal(
     }
     let _ = client.delete_memory(agent_id, "active_goal").await;
 }
+
+fn should_relink_reused_agent(attached_tool_count: usize, tool_filter: Option<&[String]>) -> bool {
+    tool_filter.is_none() && attached_tool_count == 0
+}
+
+async fn relink_reused_agent_if_unwired(
+    client: &agent::HttpTransport,
+    agent_id: &str,
+    toolset: Toolset,
+    capabilities: &CapabilitySet,
+    tool_filter: Option<&[String]>,
+) {
+    let attached = match client.get_agent_tools(agent_id).await {
+        Ok(tools) => tools,
+        Err(e) => {
+            tracing::debug!("startup tool relink skipped for {agent_id}: {e}");
+            return;
+        }
+    };
+
+    if should_relink_reused_agent(attached.len(), tool_filter) {
+        tracing::info!("Agent {agent_id} has no attached tools; relinking startup tools");
+        register_and_attach_with_caps_filtered(client, agent_id, toolset, capabilities, None).await;
+    }
+}
+
 use cade_agent::agent::HttpTransport;
 use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
 use cade_agent::agent::session::SessionStore;
@@ -306,6 +332,15 @@ pub async fn resolve_agent_and_conversation(
         a
     };
 
+    relink_reused_agent_if_unwired(
+        client,
+        &agent.id,
+        toolset,
+        capabilities,
+        tool_filter.as_deref(),
+    )
+    .await;
+
     let loaded_skills = discover_all_skills(cwd, Some(&agent.id), None);
     if !loaded_skills.is_empty() {
         tracing::info!("Loaded {} skill(s)", loaded_skills.len());
@@ -551,5 +586,27 @@ Load and follow these skills for all work:
 ";
         let skills = parse_required_skills(block);
         assert_eq!(skills, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn relink_reused_agent_when_unfiltered_and_unwired() {
+        assert!(should_relink_reused_agent(0, None));
+    }
+
+    #[test]
+    fn do_not_relink_reused_agent_when_tools_already_attached() {
+        assert!(!should_relink_reused_agent(1, None));
+    }
+
+    #[test]
+    fn do_not_relink_when_explicit_zero_tool_filter_requested() {
+        let filter: &[String] = &[];
+        assert!(!should_relink_reused_agent(0, Some(filter)));
+    }
+
+    #[test]
+    fn do_not_relink_when_explicit_tool_filter_requested() {
+        let filter = vec!["bash".to_string(), "read_file".to_string()];
+        assert!(!should_relink_reused_agent(0, Some(&filter)));
     }
 }

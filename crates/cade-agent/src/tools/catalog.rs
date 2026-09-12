@@ -19,8 +19,18 @@ fn tool_name(schema: &Value) -> &str {
 fn meta_tool_capability(name: &str) -> Option<Capability> {
     match name {
         // Agentic pack
-        "run_subagent" | "list_agents" | "message_agent" | "reflect" => Some(Capability::Agentic),
-        "store_artifact" => Some(Capability::Agentic),
+        "run_subagent"
+        | "subagent"
+        | "wait"
+        | "intercom"
+        | "subagent_supervisor"
+        | "run_parallel_subagents"
+        | "run_team"
+        | "cancel_subagent"
+        | "list_agents"
+        | "message_agent"
+        | "reflect"
+        | "store_artifact" => Some(Capability::Agentic),
 
         // Advanced memory pack
         "update_memory_typed" | "link_memory_evidence" | "update_memory_field" => {
@@ -86,8 +96,25 @@ pub fn native_schemas_for_capabilities(toolset: Toolset, caps: &CapabilitySet) -
 mod tests {
     use super::*;
 
+    fn agentic_tool_names() -> &'static [&'static str] {
+        &[
+            "run_subagent",
+            "subagent",
+            "wait",
+            "intercom",
+            "subagent_supervisor",
+            "run_parallel_subagents",
+            "run_team",
+            "cancel_subagent",
+            "list_agents",
+            "message_agent",
+            "reflect",
+            "store_artifact",
+        ]
+    }
+
     #[test]
-    fn core_caps_exclude_desktop_and_web() {
+    fn core_caps_exclude_desktop_web_and_agentic_tools() {
         let caps = CapabilitySet::core();
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);
@@ -101,7 +128,12 @@ mod tests {
 
         // Core excludes optional packs
         assert!(!meta_names.contains(&"web_search"));
-        assert!(!meta_names.contains(&"run_subagent"));
+        for name in agentic_tool_names() {
+            assert!(
+                !meta_names.contains(name),
+                "{name} should require agentic capability"
+            );
+        }
         assert!(!native_names.contains(&"desktop_screenshot"));
     }
 
@@ -115,7 +147,12 @@ mod tests {
         let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
         assert!(meta_names.contains(&"web_search"));
-        assert!(meta_names.contains(&"run_subagent"));
+        for name in agentic_tool_names() {
+            assert!(
+                meta_names.contains(name),
+                "{name} should be included by full capabilities"
+            );
+        }
         assert!(native_names.contains(&"desktop_screenshot"));
     }
 
@@ -130,7 +167,12 @@ mod tests {
         let meta_names: Vec<&str> = meta.iter().map(tool_name).collect();
         let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
-        assert!(meta_names.contains(&"run_subagent"));
+        for name in agentic_tool_names() {
+            assert!(
+                meta_names.contains(name),
+                "{name} should be enabled by agentic capability"
+            );
+        }
         assert!(!meta_names.contains(&"web_search"));
         assert!(!native_names.contains(&"desktop_screenshot"));
     }

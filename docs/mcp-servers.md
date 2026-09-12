@@ -110,6 +110,46 @@ Compatible servers (configured in CADE's own dev environment):
 | `context7` | Library documentation lookup |
 | `git-mcp-server` | Git operations |
 | `github-mcp-server` | GitHub API |
+| `structurizr-mcp` | Structurizr DSL validation, parsing, inspections, and view export to Mermaid/PlantUML |
+
+## Structurizr MCP
+
+Structurizr publishes an official MCP server at `https://docs.structurizr.com/ai/mcp`.
+CADE can connect to the hosted read-only endpoint directly over HTTP:
+
+```json
+{
+  "mcpServers": {
+    "structurizr-mcp": {
+      "url": "https://mcp.structurizr.com/mcp",
+      "write_tools": [],
+      "disabled": false
+    }
+  }
+}
+```
+
+The hosted endpoint enables the DSL, Mermaid, and PlantUML tools. Server-side workspace create/read/update/delete tools are not enabled by default here, because they require a self-hosted Structurizr MCP server plus Structurizr server credentials.
+
+To self-host all or selected Structurizr tools, run the official Docker image or Java WAR from Structurizr and point CADE at the local `/mcp` URL. For example:
+
+```json
+{
+  "mcpServers": {
+    "structurizr-mcp-local": {
+      "url": "http://localhost:3000/mcp",
+      "write_tools": [
+        "delete_workspace_from_a_structurizr_server",
+        "update_a_workspace_on_a_structurizr_server",
+        "create_workspace_on_a_structurizr_server"
+      ],
+      "disabled": false
+    }
+  }
+}
+```
+
+After editing MCP settings, run `/mcp reload` in CADE to hot-load the server.
 
 ## Authoring an MCP server
 

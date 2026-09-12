@@ -307,7 +307,7 @@ impl Repl {
             .filter(|&n| n > 0)
             .unwrap_or(4);
         tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
-        let skill_reload_rx = cade_core::skills::spawn_skill_watcher(&cwd);
+        let skill_reload_rx = cade_core::skills::spawn_skill_watcher(&cwd, Some(&agent_id));
         let mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
         let plugin_reload_rx = spawn_plugin_watcher(&cwd);
 
@@ -904,9 +904,12 @@ impl Repl {
                 while self.skill_reload_rx.try_recv().is_ok() {}
             }
             if skill_changed {
-                let new_skills = cade_core::skills::discover_all_skills(&self.cwd, None, None);
+                let agent_id = self.agent_id();
+                let new_skills =
+                    cade_core::skills::discover_all_skills(&self.cwd, Some(&agent_id), None);
                 let new_count = new_skills.len();
                 *self.skills.lock() = new_skills.clone();
+                self.populate_autocomplete().await;
                 let names: Vec<String> = new_skills.iter().map(|s| s.name.clone()).collect();
                 let list = names.join(", ");
                 self.tui_ok(format!(

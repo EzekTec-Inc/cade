@@ -609,6 +609,29 @@ impl AutocompleteOverlay {
         }
     }
 
+    pub fn upsert_on_stack(
+        overlays: &mut Vec<Box<dyn crate::overlay_component::OverlayComponent>>,
+        suggestions: Vec<Completion>,
+        word_start: usize,
+        cursor_pos: usize,
+    ) {
+        if let Some(existing) = overlays
+            .iter_mut()
+            .rev()
+            .filter_map(|o| o.as_any_mut())
+            .find_map(|a| a.downcast_mut::<Self>())
+        {
+            existing.suggestions = suggestions;
+            existing.word_start = word_start;
+            existing.cursor_pos = cursor_pos;
+            existing.selected_idx = 0;
+            existing.dismissed = false;
+            existing.result = None;
+        } else {
+            overlays.push(Box::new(Self::new(suggestions, word_start, cursor_pos)));
+        }
+    }
+
     pub fn update_suggestions(
         &mut self,
         input: &str,
@@ -849,5 +872,93 @@ mod tests {
 
         // It should complete safely without panicking.
         assert!(overlay.suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_autocomplete_overlay_upsert_reuses_existing_overlay() {
+        let mut overlays: Vec<Box<dyn crate::overlay_component::OverlayComponent>> = Vec::new();
+
+        AutocompleteOverlay::upsert_on_stack(
+            &mut overlays,
+            vec![Completion {
+                text: "/help".to_string(),
+                description: Some("Show help".to_string()),
+            }],
+            0,
+            1,
+        );
+        AutocompleteOverlay::upsert_on_stack(
+            &mut overlays,
+            vec![Completion {
+                text: "/history".to_string(),
+                description: Some("Show history".to_string()),
+            }],
+            0,
+            2,
+        );
+
+        assert_eq!(overlays.len(), 1);
+
+        let overlay = overlays[0]
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<AutocompleteOverlay>())
+            .expect("autocomplete overlay should be reused");
+        assert_eq!(overlay.suggestions.len(), 1);
+        assert_eq!(overlay.suggestions[0].text, "/history");
+        assert_eq!(overlay.word_start, 0);
+        assert_eq!(overlay.cursor_pos, 2);
+        assert_eq!(overlay.selected_idx, 0);
+    }
+
+    #[test]
+    fn test_autocomplete_overlay_upsert_preserves_other_overlays() {
+        struct StubOverlay;
+
+        impl crate::overlay_component::OverlayComponent for StubOverlay {
+            fn id(&self) -> &'static str {
+                "stub"
+            }
+
+            fn render_overlay(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: ratatui::layout::Rect,
+                _colors: &crate::colors::ThemeColors,
+            ) {
+            }
+
+            fn handle_input(
+                &mut self,
+                _key: crossterm::event::KeyEvent,
+            ) -> crate::overlay_component::OverlayInputResult {
+                crate::overlay_component::OverlayInputResult::NotHandled
+            }
+        }
+
+        let mut overlays: Vec<Box<dyn crate::overlay_component::OverlayComponent>> =
+            vec![Box::new(StubOverlay)];
+
+        AutocompleteOverlay::upsert_on_stack(
+            &mut overlays,
+            vec![Completion {
+                text: "/help".to_string(),
+                description: None,
+            }],
+            0,
+            1,
+        );
+        AutocompleteOverlay::upsert_on_stack(
+            &mut overlays,
+            vec![Completion {
+                text: "/history".to_string(),
+                description: None,
+            }],
+            0,
+            2,
+        );
+
+        assert_eq!(overlays.len(), 2);
+        assert_eq!(overlays[0].id(), "stub");
+        assert_eq!(overlays[1].id(), "autocomplete_suggestions");
     }
 }

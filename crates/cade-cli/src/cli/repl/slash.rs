@@ -10,7 +10,23 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Show available commands".into(),
         },
         SlashCommandDef {
+            name: "?".into(),
+            description: "Show available commands".into(),
+        },
+        SlashCommandDef {
+            name: "menu".into(),
+            description: "Show available commands".into(),
+        },
+        SlashCommandDef {
             name: "exit".into(),
+            description: "Exit CADE".into(),
+        },
+        SlashCommandDef {
+            name: "quit".into(),
+            description: "Exit CADE".into(),
+        },
+        SlashCommandDef {
+            name: "q".into(),
             description: "Exit CADE".into(),
         },
         SlashCommandDef {
@@ -70,7 +86,15 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "List, reload or create skills".into(),
         },
         SlashCommandDef {
+            name: "skill".into(),
+            description: "List, reload or create skills".into(),
+        },
+        SlashCommandDef {
             name: "subagents".into(),
+            description: "Browse available subagent modes".into(),
+        },
+        SlashCommandDef {
+            name: "agents-list".into(),
             description: "Browse available subagent modes".into(),
         },
         SlashCommandDef {
@@ -78,7 +102,35 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Manage agent teams".into(),
         },
         SlashCommandDef {
+            name: "team".into(),
+            description: "Manage agent teams".into(),
+        },
+        SlashCommandDef {
+            name: "approvals".into(),
+            description: "Review pending approvals".into(),
+        },
+        SlashCommandDef {
+            name: "approval-list".into(),
+            description: "Review pending approvals".into(),
+        },
+        SlashCommandDef {
+            name: "approve".into(),
+            description: "Approve a pending action".into(),
+        },
+        SlashCommandDef {
+            name: "deny".into(),
+            description: "Deny a pending action".into(),
+        },
+        SlashCommandDef {
+            name: "steer".into(),
+            description: "Send steering to an active operation".into(),
+        },
+        SlashCommandDef {
             name: "providers".into(),
+            description: "Show all configured AI providers".into(),
+        },
+        SlashCommandDef {
+            name: "provider-list".into(),
             description: "Show all configured AI providers".into(),
         },
         SlashCommandDef {
@@ -122,6 +174,14 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Delete the current agent".into(),
         },
         SlashCommandDef {
+            name: "del".into(),
+            description: "Delete the current agent".into(),
+        },
+        SlashCommandDef {
+            name: "rm-agent".into(),
+            description: "Delete the current agent".into(),
+        },
+        SlashCommandDef {
             name: "yolo".into(),
             description: "Enable bypass-permissions mode".into(),
         },
@@ -139,6 +199,10 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
         },
         SlashCommandDef {
             name: "default".into(),
+            description: "Return to auto mode".into(),
+        },
+        SlashCommandDef {
+            name: "normal".into(),
             description: "Return to auto mode".into(),
         },
         SlashCommandDef {
@@ -198,6 +262,18 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Dump the last assistant message".into(),
         },
         SlashCommandDef {
+            name: "debug_last".into(),
+            description: "Dump the last assistant message".into(),
+        },
+        SlashCommandDef {
+            name: "details".into(),
+            description: "Toggle timeline detail expansion".into(),
+        },
+        SlashCommandDef {
+            name: "detail".into(),
+            description: "Toggle timeline detail expansion".into(),
+        },
+        SlashCommandDef {
             name: "cost".into(),
             description: "Show session cost breakdown".into(),
         },
@@ -210,11 +286,23 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Create a working-tree checkpoint".into(),
         },
         SlashCommandDef {
+            name: "cp".into(),
+            description: "Create a working-tree checkpoint".into(),
+        },
+        SlashCommandDef {
             name: "undo".into(),
             description: "Undo the last checkpoint".into(),
         },
         SlashCommandDef {
             name: "tree".into(),
+            description: "Browse and restore checkpoints".into(),
+        },
+        SlashCommandDef {
+            name: "session-tree".into(),
+            description: "Browse and restore checkpoints".into(),
+        },
+        SlashCommandDef {
+            name: "checkpoints".into(),
             description: "Browse and restore checkpoints".into(),
         },
         SlashCommandDef {
@@ -234,7 +322,15 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Show session summary".into(),
         },
         SlashCommandDef {
+            name: "summary".into(),
+            description: "Show session summary".into(),
+        },
+        SlashCommandDef {
             name: "compact".into(),
+            description: "Trigger session consolidation".into(),
+        },
+        SlashCommandDef {
+            name: "consolidate".into(),
             description: "Trigger session consolidation".into(),
         },
         SlashCommandDef {
@@ -247,6 +343,10 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
         },
         SlashCommandDef {
             name: "marketplace".into(),
+            description: "Browse the plugin marketplace".into(),
+        },
+        SlashCommandDef {
+            name: "plugins".into(),
             description: "Browse the plugin marketplace".into(),
         },
         SlashCommandDef {
@@ -275,6 +375,102 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
         },
     ]
 }
+
+#[cfg(test)]
+const PARSED_SLASH_TRIGGERS: &[&str] = &[
+    "help",
+    "?",
+    "menu",
+    "exit",
+    "quit",
+    "q",
+    "clear",
+    "summarize",
+    "summary",
+    "agent",
+    "info",
+    "new",
+    "new-agent",
+    "pin",
+    "agents",
+    "resume",
+    "delete",
+    "del",
+    "rm-agent",
+    "init",
+    "remember",
+    "memory",
+    "search",
+    "feedback",
+    "skills",
+    "skill",
+    "subagents",
+    "agents-list",
+    "teams",
+    "team",
+    "approvals",
+    "approval-list",
+    "approve",
+    "deny",
+    "steer",
+    "marketplace",
+    "plugins",
+    "reload",
+    "update",
+    "trust",
+    "mouse",
+    "theme",
+    "providers",
+    "provider-list",
+    "connect",
+    "disconnect",
+    "approve-always",
+    "deny-always",
+    "permissions",
+    "hooks",
+    "rename",
+    "toolset",
+    "yolo",
+    "plan",
+    "todos",
+    "todo",
+    "default",
+    "normal",
+    "mode",
+    "model",
+    "reasoning",
+    "mcp",
+    "mcp-save",
+    "link",
+    "unlink",
+    "logout",
+    "stream",
+    "usage",
+    "stats",
+    "cost",
+    "details",
+    "detail",
+    "pricing",
+    "context",
+    "debug-last",
+    "debug_last",
+    "export",
+    "checkpoint",
+    "cp",
+    "undo",
+    "tree",
+    "session-tree",
+    "checkpoints",
+    "fork",
+    "artifacts",
+    "reflect",
+    "backend",
+    "compaction-model",
+    "compact",
+    "consolidate",
+    "gui",
+    "dashboard",
+];
 
 #[derive(Debug)]
 pub(crate) enum SlashCmd {
@@ -473,5 +669,45 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn slash_autocomplete_defs_cover_every_parsed_trigger() {
+        let defs: BTreeSet<String> = all_slash_command_defs()
+            .into_iter()
+            .map(|cmd| cmd.name)
+            .collect();
+
+        let missing: Vec<&str> = PARSED_SLASH_TRIGGERS
+            .iter()
+            .copied()
+            .filter(|trigger| !defs.contains(*trigger))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "autocomplete is missing parsed slash triggers: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn every_declared_parsed_trigger_dispatches() {
+        let skill_ids = Vec::new();
+        let undispatched: Vec<&str> = PARSED_SLASH_TRIGGERS
+            .iter()
+            .copied()
+            .filter(|trigger| parse_slash_with_skills(&format!("/{trigger}"), &skill_ids).is_none())
+            .collect();
+
+        assert!(
+            undispatched.is_empty(),
+            "declared slash triggers do not dispatch: {undispatched:?}"
+        );
     }
 }
