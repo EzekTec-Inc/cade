@@ -740,6 +740,9 @@ impl Repl {
             SlashCmd::Hooks => {
                 return self.cmd_hooks().await;
             }
+            SlashCmd::Doctor => {
+                return self.cmd_doctor().await;
+            }
             SlashCmd::Theme(theme_arg) => {
                 return self.cmd_theme(theme_arg).await;
             }

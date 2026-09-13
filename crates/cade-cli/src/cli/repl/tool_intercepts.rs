@@ -170,7 +170,10 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
     }
 
     fn doctor_status(&self) -> std::result::Result<String, cade_agent::Error> {
-        Ok("Subagent system status: OK. Multi-agent concurrency slots available.".to_string())
+        let report = cade_core::doctor::check_multiplexer_and_keys();
+        let mut out = "Subagent system status: OK. Multi-agent concurrency slots available.\n".to_string();
+        out.push_str(&report.to_formatted_summary());
+        Ok(out)
     }
 }
 

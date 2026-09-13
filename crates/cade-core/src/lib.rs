@@ -16,6 +16,8 @@ pub mod bootstrap_token;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod doctor;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod hooks;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod permissions;

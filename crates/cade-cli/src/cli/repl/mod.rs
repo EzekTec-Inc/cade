@@ -7,6 +7,7 @@ pub mod commands_checkpoints;
 pub mod commands_context;
 pub mod commands_cost;
 pub mod commands_delete;
+pub mod commands_doctor;
 pub mod commands_help;
 pub mod commands_hooks;
 pub mod commands_init;

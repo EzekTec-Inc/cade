@@ -300,6 +300,10 @@ const SECTIONS: &[Section] = &[
                 desc: "Show configured hooks",
             },
             CmdEntry {
+                cmd: "/doctor",
+                desc: "Check system health, multiplexer & key passthrough",
+            },
+            CmdEntry {
                 cmd: "/feedback",
                 desc: "Report issues / give feedback",
             },

@@ -370,6 +370,10 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Open the Web GUI dashboard in browser".into(),
         },
         SlashCommandDef {
+            name: "doctor".into(),
+            description: "Check system health, multiplexer & key passthrough".into(),
+        },
+        SlashCommandDef {
             name: "dashboard".into(),
             description: "Open the Web GUI dashboard in browser".into(),
         },
@@ -470,6 +474,7 @@ const PARSED_SLASH_TRIGGERS: &[&str] = &[
     "consolidate",
     "gui",
     "dashboard",
+    "doctor",
 ];
 
 #[derive(Debug)]
@@ -570,6 +575,8 @@ pub(crate) enum SlashCmd {
     Mouse,
     /// Open the Web GUI dashboard in browser (ADR 17)
     Gui,
+    /// Run diagnostic health checks (multiplexers, key passthrough, etc.)
+    Doctor,
 }
 
 pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -656,6 +663,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "compaction-model" => Some(SlashCmd::CompactionModel(arg.unwrap_or_default())),
         "compact" | "consolidate" => Some(SlashCmd::Compact),
         "gui" | "dashboard" => Some(SlashCmd::Gui),
+        "doctor" => Some(SlashCmd::Doctor),
         // Skill slash commands: /skill:commit, /skill:review, or just /commit, /review, etc.
         other if skill_ids.contains(&other.to_string()) => {
             Some(SlashCmd::RunSkill(other.to_string(), arg))
@@ -709,5 +717,18 @@ mod tests {
             undispatched.is_empty(),
             "declared slash triggers do not dispatch: {undispatched:?}"
         );
+    }
+
+    #[test]
+    fn test_parse_doctor_slash_command() {
+        let skills = Vec::new();
+        assert!(matches!(
+            parse_slash_with_skills("/doctor", &skills),
+            Some(SlashCmd::Doctor)
+        ));
+        assert!(matches!(
+            parse_slash_with_skills("  /doctor  ", &skills),
+            Some(SlashCmd::Doctor)
+        ));
     }
 }
