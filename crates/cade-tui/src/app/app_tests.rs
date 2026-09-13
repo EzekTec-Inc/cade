@@ -382,6 +382,26 @@ fn test_scrolling_constraints_and_velocity_governor() {
     );
     assert!(consumed_scroll_key);
     assert!(app.scroll_target > 3);
+
+    // Printable shifted characters (like Shift+J and Shift+K) must NOT be consumed
+    assert!(!app.handle_scroll_key(
+        crossterm::event::KeyCode::Char('J'),
+        crossterm::event::KeyModifiers::SHIFT,
+    ));
+    assert!(!app.handle_scroll_key(
+        crossterm::event::KeyCode::Char('K'),
+        crossterm::event::KeyModifiers::SHIFT,
+    ));
+
+    // Dedicated follow-mode / scroll shortcuts (Alt+J, Ctrl+End) MUST be consumed
+    assert!(app.handle_scroll_key(
+        crossterm::event::KeyCode::Char('j'),
+        crossterm::event::KeyModifiers::ALT,
+    ));
+    assert!(app.handle_scroll_key(
+        crossterm::event::KeyCode::End,
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
 }
 
 #[test]
@@ -600,4 +620,80 @@ fn test_toggle_last_collapsible_item_assistant_code_block() {
     // Toggling again collapses it
     app.toggle_last_collapsible_item();
     assert!(app.expanded_items.is_empty());
+}
+
+#[test]
+#[ignore = "requires tty"]
+fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test-agent".to_string(),
+        "test-model".to_string(),
+        None,
+    );
+
+    assert_eq!(app.editor.text(), "");
+    assert_eq!(app.scroll, 0);
+    assert_eq!(app.scroll_target, 0);
+
+    let mut history = vec![];
+    let mut hist_idx = None;
+
+    // 1. Shift+J at scroll == 0 must append 'J' to editor buffer
+    let key_j = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('J'),
+        crossterm::event::KeyModifiers::SHIFT,
+    );
+    let res = app.handle_key_input(key_j, &mut history, &mut hist_idx).unwrap();
+    assert_eq!(res, None);
+    assert_eq!(app.editor.text(), "J");
+    assert_eq!(app.scroll, 0);
+
+    // 2. Shift+K at scroll == 0 must append 'K' to editor buffer
+    let key_k = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('K'),
+        crossterm::event::KeyModifiers::SHIFT,
+    );
+    let res = app.handle_key_input(key_k, &mut history, &mut hist_idx).unwrap();
+    assert_eq!(res, None);
+    assert_eq!(app.editor.text(), "JK");
+    assert_eq!(app.scroll, 0);
+
+    // 3. User scrolls up into history (scroll > 0)
+    app.scroll = 20;
+    app.scroll_target = 20;
+    app.follow = false;
+
+    // Shift+J when scroll > 0 must STILL type 'J' into editor and preserve scroll offset
+    let res = app.handle_key_input(key_j, &mut history, &mut hist_idx).unwrap();
+    assert_eq!(res, None);
+    assert_eq!(app.editor.text(), "JKJ");
+    assert_eq!(app.scroll, 20);
+
+    // 4. Dedicated follow-mode shortcut: Alt+Shift+J resets scroll to bottom
+    let key_alt_j = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('J'),
+        crossterm::event::KeyModifiers::ALT | crossterm::event::KeyModifiers::SHIFT,
+    );
+    let res = app.handle_key_input(key_alt_j, &mut history, &mut hist_idx).unwrap();
+    assert_eq!(res, None);
+    assert_eq!(app.scroll_target, 0);
+    assert!(app.follow);
+    // Editor buffer remains unchanged
+    assert_eq!(app.editor.text(), "JKJ");
+
+    // 5. Dedicated follow-mode shortcut: Ctrl+End resets scroll to bottom
+    app.scroll = 15;
+    app.scroll_target = 15;
+    app.follow = false;
+
+    let key_ctrl_end = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::End,
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    let res = app.handle_key_input(key_ctrl_end, &mut history, &mut hist_idx).unwrap();
+    assert_eq!(res, None);
+    assert_eq!(app.scroll_target, 0);
+    assert!(app.follow);
+    assert_eq!(app.editor.text(), "JKJ");
 }

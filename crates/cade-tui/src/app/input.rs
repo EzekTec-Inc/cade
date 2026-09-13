@@ -257,7 +257,7 @@ impl TuiApp {
         Ok(false)
     }
 
-    fn handle_key_input(
+    pub(crate) fn handle_key_input(
         &mut self,
         k: KeyEvent,
         history: &mut [String],
@@ -410,7 +410,7 @@ impl TuiApp {
             }
         }
 
-        // Delegate scroll keys (Shift+K, Shift+J, PageUp, PageDown) to unified handler
+        // Delegate scroll keys (Alt+K/J, PageUp, PageDown, Ctrl+End) to unified handler
         if self.handle_scroll_key(k.code, k.modifiers) {
             let _ = self.draw();
             return Ok(None);
@@ -431,19 +431,6 @@ impl TuiApp {
                     self.editor.expand_pastes();
                     return Ok(Some(Some(self.editor.text()))); // Submit if non-empty
                 }
-            }
-
-            KeyCode::Char('j') | KeyCode::Char('J')
-                if k.modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                // "Follow" mode: reset scroll and jump to bottom.
-                if self.scroll > 0 {
-                    self.scroll = 0;
-                    self.draw_dirty = true;
-                    // Provide brief visual confirmation
-                    self.show_toast("Jumped to bottom", ToastLevel::Info);
-                }
-                return Ok(None);
             }
 
             KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
