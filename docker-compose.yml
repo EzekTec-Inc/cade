@@ -16,29 +16,10 @@ services:
     environment:
       - RUST_LOG=info
       - CADE_SERVER_PORT=8284
-      - CADE_ALLOWED_ORIGIN=https://${CADE_DOMAIN:-cade.yourdomain.com}
+      - CADE_ALLOWED_ORIGIN=${CADE_ALLOWED_ORIGIN:-*}
       # Required LLM Provider keys
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
 
-  caddy:
-    image: caddy:latest
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      # Mount the Caddyfile
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      # Persist Let's Encrypt certificates
-      - caddy_data:/data
-      - caddy_config:/config
-    environment:
-      - CADE_DOMAIN=${CADE_DOMAIN:-cade.yourdomain.com}
-    depends_on:
-      - cade-server
-
 volumes:
   cade_data:
-  caddy_data:
-  caddy_config:
