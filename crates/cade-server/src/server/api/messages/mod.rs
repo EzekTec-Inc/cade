@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::server::state::AppState;
 use cade_ai::catalogue;
-use cade_ai::{CompletionRequest, LlmMessage, LlmToolCall, MessageImage, StreamChunk, TokenUsage};
+use cade_ai::{CompletionRequest, LlmMessage, LlmToolCall, MessageImage};
 use cade_store::sqlite::{self, MessageRow};
 
 /// Maximum length for auto-generated conversation titles (chars from first user message).
@@ -489,36 +489,14 @@ pub async fn stream_message(
         Ok(c) => c,
         Err(r) => return r,
     };
-    let conv_str = conv_id.clone();
-    let conv_id_ref = conv_str.as_deref();
-
-    // Track last-active timestamp; needs_consolidation is set inside build_context
-    // when turns are actually dropped — not unconditionally on every message.
-    {
-        let mut activity = state.agent_activity.write().await;
-        let entry =
-            activity
-                .entry(agent_id.clone())
-                .or_insert(crate::server::state::AgentActivity {
-                    last_active_ts: 0,
-                    needs_consolidation: false,
-                    conversation_id: conv_id.clone(),
-                    last_consolidation_turn: 0,
-                    last_omitted_turns: 0,
-                });
-        entry.last_active_ts = chrono::Utc::now().timestamp();
-        entry.conversation_id = conv_id.clone();
-    }
 
     let is_tool_return = body["role"].as_str() == Some("tool");
-
-    // 1. Persist incoming message FIRST
-    if is_tool_return {
+    let input = if is_tool_return {
         let tr = &body["tool_return"];
         persist(
             &state,
             &agent_id,
-            conv_id_ref,
+            conv_id.as_deref(),
             "tool",
             json!({
                 "content": tr["content"].as_str().unwrap_or(""),
@@ -526,330 +504,28 @@ pub async fn stream_message(
                 "tool_name": tr["tool_name"].as_str().unwrap_or("")
             }),
         );
+        String::new()
     } else {
-        let input = match body["input"].as_str().filter(|s| !s.is_empty()) {
+        match body["input"].as_str().filter(|s| !s.is_empty()) {
             Some(s) => s.to_string(),
             None => return err(StatusCode::BAD_REQUEST, "missing 'input'"),
-        };
-        // ephemeral=true: system-injected re-prompt — send to LLM but don't
-        // persist to the DB so it never appears in conversation history.
-        let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
-        if !is_ephemeral {
-            // Auto-title new conversations from the first user message
-            if let Some(cid) = conv_id_ref {
-                maybe_set_conv_title(&state, cid, &input);
-            }
-            persist(
-                &state,
-                &agent_id,
-                conv_id_ref,
-                "user",
-                json!({ "content": input }),
-            );
-        }
-    }
-
-    // 2. If this was a tool return, check if all results for this turn have arrived.
-    if is_tool_return {
-        match sqlite::pending_tool_results(&state.db, &agent_id, conv_id_ref) {
-            Ok((received, expected)) if received < expected => {
-                tracing::debug!("Stream: tool results {received}/{expected} — waiting");
-                let s = futures::stream::once(async {
-                    Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]"))
-                });
-                return Sse::new(s).into_response();
-            }
-            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-            _ => {}
-        }
-    }
-
-    // 3. Build context from DB
-    let (model, mut messages, tools) = match build_context(
-        state.clone(),
-        agent_id.clone(),
-        conv_id.clone(),
-        is_tool_return,
-    )
-    .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => return err(StatusCode::NOT_FOUND, &e),
-    };
-
-    // 3b. Ephemeral messages were not persisted — inject into context so the
-    // LLM actually sees them.  Without this the re-prompt text is silently
-    // lost and the LLM is called with the same context that already produced
-    // an empty response.
-    if !is_tool_return {
-        let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
-        if is_ephemeral && let Some(input) = body["input"].as_str().filter(|s| !s.is_empty()) {
-            messages.push(LlmMessage {
-                role: "user".to_string(),
-                content: input.to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-                images: None,
-                cache_control: None,
-            });
-        }
-    }
-
-    let background = body["background"].as_bool().unwrap_or(false);
-    // Create a run for background (and also for foreground — keeps history for reconnect)
-    let run = sqlite::create_run(&state.db, &agent_id, conv_id_ref);
-    let run_id: Option<String> = run.ok().map(|r| r.id);
-
-    if let Some(ref rid) = run_id {
-        crate::server::api::agents::publish_global_event(
-            Some(&state.db),
-            "run_started",
-            json!({
-                "run_id": rid,
-                "agent_id": agent_id,
-                "conversation_id": conv_id_ref,
-            }),
-        );
-    }
-
-    let max_tokens = catalogue::max_tokens_for_model(&model);
-    let reasoning_effort = body
-        .get("reasoning_effort")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let req = CompletionRequest {
-        model,
-        messages,
-        tools,
-        max_tokens,
-        reasoning_effort,
-    };
-    let state_clone = state.clone();
-    let agent_id_clone = agent_id.clone();
-    let conv_id_clone = conv_str.clone();
-    let run_id_clone = run_id.clone();
-    let db_clone = state.db.clone();
-
-    // Open LLM stream.
-    // On failure, return a well-formed SSE stream with an error event + [DONE]
-    // instead of a raw HTTP 502. This prevents reqwest_eventsource from
-    // triggering the client's SSE fallback (which would re-persist the user
-    // message and call the blocking endpoint — duplicating DB entries).
-    let llm_stream = match state.llm.stream(&req).await {
-        Ok(s) => s,
-        Err(e) => {
-            let err_msg = e.to_string();
-            tracing::error!("LLM stream open failed: {err_msg}");
-            if let Some(rid) = &run_id {
-                let _ = sqlite::finish_run(&state.db, rid, "failed");
-            }
-            let s = futures::stream::iter([
-                Ok::<Event, std::convert::Infallible>(
-                    Event::default()
-                        .data(json!({ "message_type": "error", "error": err_msg }).to_string()),
-                ),
-                Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]")),
-            ]);
-            return Sse::new(s).into_response();
         }
     };
 
-    let acc = std::sync::Arc::new(parking_lot::Mutex::new((
-        String::new(),
-        Vec::<Value>::new(),
-        String::new(),
-    )));
-    let acc_clone = acc.clone();
-    // Accumulate token usage across chunks
-    let usage_acc = std::sync::Arc::new(parking_lot::Mutex::new(TokenUsage::default()));
-    let usage_acc2 = usage_acc.clone();
-    let usage_acc3 = usage_acc.clone();
+    let runtime = crate::server::api::run::runtime::ServerAgentRuntime::new(state);
+    let handle = runtime
+        .start(crate::server::api::run::runtime::RunRequest {
+            agent_id,
+            conversation_id: conv_id,
+            input,
+        })
+        .await;
 
-    // Extract last_omitted_turns if any turns were drop-compacted
-    let last_omitted = {
-        let mut activity = state.agent_activity.write().await;
-        if let Some(entry) = activity.get_mut(&agent_id) {
-            std::mem::take(&mut entry.last_omitted_turns)
-        } else {
-            0
-        }
-    };
-
-    // First SSE event: metadata (conversation_id + run_id)
-    let meta_event = {
-        let mut events = vec![Ok::<Event, std::convert::Infallible>(
-            Event::default().data(
-                json!({
-                    "message_type": "stream_start",
-                    "conversation_id": conv_str,
-                    "run_id": run_id,
-                })
-                .to_string(),
-            ),
-        )];
-        if last_omitted > 0 {
-            events.push(Ok::<Event, std::convert::Infallible>(
-                Event::default().data(json!({
-                    "message_type": "system_notice",
-                    "level": "success",
-                    "message": format!("[Compaction: {last_omitted} older turns omitted from active context window]"),
-                }).to_string())
-            ));
-        }
-        futures::stream::iter(events)
-    };
-
-    let sse_stream =
-        futures::StreamExt::map(llm_stream, move |chunk: cade_ai::Result<StreamChunk>| {
-            // Persist each event to run_events so the stream is resumable
-            let emit = |data: Value| -> Event {
-                if let Some(rid) = &run_id_clone
-                    && let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string())
-                {
-                    let mut d = data.clone();
-                    if let Some(obj) = d.as_object_mut() {
-                        obj.insert("run_id".to_string(), serde_json::Value::String(rid.clone()));
-                        obj.insert("seq_id".to_string(), serde_json::Value::Number(seq.into()));
-                    }
-                    return Event::default().data(d.to_string());
-                }
-                Event::default().data(data.to_string())
-            };
-
-            let event = match chunk {
-                Ok(StreamChunk::Reasoning(text)) => {
-                    {
-                        let mut g = acc_clone.lock();
-                        g.2.push_str(&text);
-                    }
-                    emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
-                }
-                Ok(StreamChunk::Text(text)) => {
-                    {
-                        let mut g = acc_clone.lock();
-                        g.0.push_str(&text);
-                    }
-                    emit(json!({ "message_type": "assistant_message", "content": text }))
-                }
-                Ok(StreamChunk::ToolCall(tc)) => {
-                    if let Ok(v) = serde_json::to_value(&tc) {
-                        acc_clone.lock().1.push(v);
-                    }
-                    emit(json!({
-                        "message_type": "tool_call_message",
-                        "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
-                    }))
-                }
-                Ok(StreamChunk::Usage(u)) => {
-                    {
-                        let mut acc = usage_acc2.lock();
-                        acc.input_tokens = acc.input_tokens.max(u.input_tokens);
-                        acc.output_tokens = acc.output_tokens.max(u.output_tokens);
-                        acc.cache_read_tokens = acc.cache_read_tokens.max(u.cache_read_tokens);
-                        acc.cache_write_tokens = acc.cache_write_tokens.max(u.cache_write_tokens);
-                        acc.model = u.model.clone();
-                    }
-                    Event::default().comment("usage_updated")
-                }
-                Ok(StreamChunk::FinishReason(reason)) => emit(json!({
-                    "message_type": "finish_reason",
-                    "reason": reason,
-                })),
-                Ok(StreamChunk::Done) => {
-                    {
-                        let g = acc_clone.lock();
-                        // Skip persisting empty assistant responses — they clutter
-                        // the conversation and produce invalid turn ordering on
-                        // next context load (e.g. Gemini consecutive-user-turn 400).
-                        if !g.0.is_empty() || !g.1.is_empty() || !g.2.is_empty() {
-                            let mut content = g.0.clone();
-                            if !g.2.is_empty() {
-                                content =
-                                    format!("<reasoning>\n{}\n</reasoning>\n\n{}", g.2, content);
-                            }
-                            persist(
-                                &state_clone,
-                                &agent_id_clone,
-                                conv_id_clone.as_deref(),
-                                "assistant",
-                                json!({
-                                    "content": content,
-                                    "tool_calls": g.1
-                                }),
-                            );
-                        }
-                    }
-                    if let Some(rid) = &run_id_clone {
-                        let _ = sqlite::finish_run(&db_clone, rid, "completed");
-                        crate::server::api::agents::publish_global_event(
-                            Some(&db_clone),
-                            "run_finished",
-                            json!({
-                                "run_id": rid,
-                                "agent_id": agent_id_clone,
-                                "status": "completed",
-                            }),
-                        );
-                    }
-                    // P2: flush accumulated token usage into AgentMetrics so
-                    // server-side cost dashboards / future cost guardrails see
-                    // cache_read + cache_write tokens (previously dropped).
-                    {
-                        let u = usage_acc3.lock();
-                        let snap = u.clone();
-                        let agent_metrics = state_clone.agent_metrics.clone();
-                        let agent_id_for_metrics = agent_id_clone.clone();
-                        tokio::spawn(async move {
-                            let map = agent_metrics;
-                            map.entry(agent_id_for_metrics)
-                                .or_default()
-                                .accumulate_usage(&snap);
-                        });
-                    }
-                    let u = usage_acc3.lock();
-                    let snap = u.clone();
-                    emit(json!({
-                        "message_type":      "usage_statistics",
-                        "input_tokens":      snap.input_tokens,
-                        "output_tokens":     snap.output_tokens,
-                        "cache_read_tokens":  snap.cache_read_tokens,
-                        "cache_write_tokens": snap.cache_write_tokens,
-                        "model":             snap.model,
-                    }))
-                }
-                Err(e) => {
-                    if let Some(rid) = &run_id_clone {
-                        let _ = sqlite::finish_run(&db_clone, rid, "failed");
-                        crate::server::api::agents::publish_global_event(
-                            Some(&db_clone),
-                            "run_finished",
-                            json!({
-                                "run_id": rid,
-                                "agent_id": agent_id_clone,
-                                "status": "failed",
-                            }),
-                        );
-                    }
-                    Event::default().data(
-                        json!({ "message_type": "error", "error": e.to_string() }).to_string(),
-                    )
-                }
-            };
-            Ok::<Event, std::convert::Infallible>(event)
-        });
-
-    let sse_stream = futures::StreamExt::chain(
-        sse_stream,
-        futures::stream::once(async {
-            Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]"))
-        }),
+    let stream = tokio_stream::StreamExt::map(
+        tokio_stream::wrappers::ReceiverStream::new(handle.events),
+        |res| res.map(Event::from),
     );
-
-    drop(acc);
-    drop(usage_acc);
-    let _ = background;
-
-    Sse::new(futures::StreamExt::chain(meta_event, sse_stream)).into_response()
+    Sse::new(stream).into_response()
 }
 
 // -- Helpers

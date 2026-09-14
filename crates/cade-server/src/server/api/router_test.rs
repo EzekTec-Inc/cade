@@ -394,3 +394,73 @@ async fn test_create_conversation_fork() {
     assert_eq!(cloned_messages[0].content.as_str().unwrap(), "Hello");
     assert_ne!(cloned_messages[0].id, "msg1"); // ID must be newly generated
 }
+
+#[tokio::test]
+async fn test_stream_message_delegates_to_canonical_server_agent_runtime() {
+    let state = make_state(Some("tok".to_string()));
+    let db = state.db.clone();
+
+    // Create an agent record
+    let agent = cade_store::sqlite::AgentRow {
+        id: "compat_agent".to_string(),
+        name: "Compat Agent".to_string(),
+        description: None,
+        model: "test_model".to_string(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&db, &agent).unwrap();
+
+    let app = router(state);
+
+    // Call compatibility route: POST /v1/agents/:id/messages/stream
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/agents/compat_agent/messages/stream")
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::json!({
+            "input": "test prompt for compatibility runtime delegation"
+        }).to_string()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "text/event-stream"
+    );
+
+    // Read streamed events from canonical runtime
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert!(body_text.contains("[DONE]"));
+
+    // Verify durable state created by canonical runtime
+    let runs = cade_store::sqlite::list_agent_runs(&db, "compat_agent", 10).unwrap();
+    assert_eq!(runs.len(), 1, "canonical ServerAgentRuntime must create exactly one durable run");
+    assert_eq!(runs[0].agent_id, "compat_agent");
+
+    // Verify user message was persisted by canonical runtime
+    let msgs = cade_store::sqlite::list_messages(&db, "compat_agent", None, 10).unwrap();
+    assert!(!msgs.is_empty(), "user message must be persisted by ServerAgentRuntime");
+    assert_eq!(msgs[0].role, "user");
+}
+
+#[test]
+fn test_architecture_presentation_adapters_do_not_own_server_or_ai() {
+    let tui_cargo = include_str!("../../../../../crates/cade-tui/Cargo.toml");
+    assert!(!tui_cargo.contains("cade-server"), "cade-tui must never depend on cade-server");
+    assert!(!tui_cargo.contains("cade-ai"), "cade-tui must never depend on cade-ai");
+    assert!(!tui_cargo.contains("cade-store"), "cade-tui must never depend on cade-store");
+
+    let api_types_cargo = include_str!("../../../../../crates/cade-api-types/Cargo.toml");
+    assert!(!api_types_cargo.contains("cade-server"), "cade-api-types must never depend on cade-server");
+    assert!(!api_types_cargo.contains("cade-agent"), "cade-api-types must never depend on cade-agent");
+}
