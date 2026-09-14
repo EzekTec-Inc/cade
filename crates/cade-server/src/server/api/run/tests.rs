@@ -1070,6 +1070,53 @@ mod sse_protocol_tests {
 }
 
 #[cfg(test)]
+mod runtime_contract_tests {
+    use super::runtime::{RunRequest, ServerAgentRuntime};
+    use super::*;
+
+    #[tokio::test]
+    async fn runtime_start_creates_a_durable_run_and_returns_its_handle() -> Result<(), String> {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: "agent-x".to_owned(),
+            name: "Test agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+        let runtime = ServerAgentRuntime::new(state.clone());
+
+        let handle = runtime
+            .start(RunRequest {
+                agent_id: "agent-x".to_owned(),
+                conversation_id: None,
+                input: "hello".to_owned(),
+            })
+            .await;
+
+        let run = cade_store::sqlite::get_run(&state.db, &handle.run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "runtime start must create a durable run".to_owned())?;
+        if run.agent_id != "agent-x" {
+            return Err(format!("run must belong to agent-x, got {}", run.agent_id));
+        }
+        if state.agent_activity.read().await.get("agent-x").is_none() {
+            return Err("runtime start must record agent activity".to_owned());
+        }
+
+        drop(handle.events);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod run_agent_helpers_tests {
     use super::*;
     use serde_json::json;

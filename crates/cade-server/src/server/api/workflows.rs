@@ -1,6 +1,6 @@
 //! Automated Webhook Workflow Router & Dispatcher (PRD #99 / Issue #101).
 
-use crate::server::api::run::run_agent_loop;
+use crate::server::api::run::runtime::{RunRequest, ServerAgentRuntime};
 use crate::server::state::AppState;
 use crate::server::workflows::{WorkflowDef, WorkflowEngine};
 use axum::{
@@ -253,36 +253,22 @@ pub async fn dispatch_workflow(
         workflow_name, prompt_input
     );
 
-    let run_row = match sqlite::create_run(&state.db, &agent_id, None) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to create run record: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
-    let execution_id = run_row.id.clone();
-
-    let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let loop_run_id = execution_id.clone();
-    let loop_state = state.clone();
-    let loop_agent_id = agent_id.clone();
-
-    tokio::spawn(async move {
-        run_agent_loop(
-            loop_state.clone(),
-            loop_agent_id.clone(),
-            None,
-            loop_run_id,
-            None,
-            tx,
-            prompt,
-        )
+    let runtime = ServerAgentRuntime::new(state);
+    let handle = runtime
+        .start(RunRequest {
+            agent_id: agent_id.clone(),
+            conversation_id: None,
+            input: prompt,
+        })
         .await;
+    let execution_id = handle.run_id.clone();
+
+    // Workflows run without an HTTP presentation adapter. Retain the event
+    // receiver until the runtime reaches a terminal outcome so the loop does
+    // not interpret a dropped receiver as client cancellation.
+    tokio::spawn(async move {
+        let mut events = handle.events;
+        while events.recv().await.is_some() {}
     });
 
     (

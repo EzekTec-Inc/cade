@@ -44,6 +44,7 @@ use serde_json::{Value, json};
 use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve_conversation};
 use crate::server::state::AppState;
 
+pub(crate) mod runtime;
 pub mod storage_impl;
 /// Maximum agentic turns per request (prevents infinite loops).
 mod subagent;
@@ -170,24 +171,7 @@ fn tool_turn_max_tokens() -> Option<u32> {
         .or(Some(4096))
 }
 
-// ── Pre-spawn helpers ─────────────────────────────────────────────────────
-
-/// Record that the agent is active and update its conversation pointer.
-async fn update_activity(state: &AppState, agent_id: &str, conv_id: Option<String>) {
-    let mut activity = state.agent_activity.write().await;
-    let entry =
-        activity
-            .entry(agent_id.to_owned())
-            .or_insert(crate::server::state::AgentActivity {
-                last_active_ts: 0,
-                needs_consolidation: false,
-                conversation_id: conv_id.clone(),
-                last_consolidation_turn: 0,
-                last_omitted_turns: 0,
-            });
-    entry.last_active_ts = chrono::Utc::now().timestamp();
-    entry.conversation_id = conv_id;
-}
+// ── Request helpers ───────────────────────────────────────────────────────
 
 /// Extract and validate the `input` field from the request body.
 fn parse_input(body: &Value) -> Result<String, Response> {
@@ -203,84 +187,32 @@ fn detect_theme_cmd(input: &str) -> Option<String> {
     input.strip_prefix("/theme ").map(|s| s.trim().to_string())
 }
 
-/// Create a run record in the DB, falling back to a timestamp-based local ID
-/// if the DB write fails.
-fn make_run_id(state: &AppState, agent_id: &str, conv_str: Option<&str>) -> String {
-    sqlite::create_run(&state.db, agent_id, conv_str)
-        .map(|r| r.id)
-        .unwrap_or_else(|_| format!("run-local-{}", chrono::Utc::now().timestamp()))
-}
-
 /// `POST /v1/agents/:id/run`
 pub async fn run_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    // ── Resolve / create conversation ─────────────────────────────────────
-    let conv_id: Option<String> = match resolve_conversation(&state, &agent_id, &body) {
-        Ok(c) => c,
-        Err(r) => return r,
+    let conversation_id = match resolve_conversation(&state, &agent_id, &body) {
+        Ok(conversation_id) => conversation_id,
+        Err(response) => return response,
     };
-    let conv_str = conv_id.clone();
-
-    // ── Update activity ───────────────────────────────────────────────────
-    update_activity(&state, &agent_id, conv_id.clone()).await;
-
-    // ── Parse & persist user message ──────────────────────────────────────
     let input = match parse_input(&body) {
-        Ok(s) => s,
-        Err(r) => return r,
+        Ok(input) => input,
+        Err(response) => return response,
     };
-    let theme_cmd = detect_theme_cmd(&input);
-    if theme_cmd.is_none() {
-        if let Some(cid) = conv_str.as_deref() {
-            maybe_set_conv_title(&state, cid, &input);
-        }
-        persist(
-            &state,
-            &agent_id,
-            conv_str.as_deref(),
-            "user",
-            json!({ "content": input }),
-        );
-    }
 
-    // ── Create run record ─────────────────────────────────────────────────
-    let run_id = make_run_id(&state, &agent_id, conv_str.as_deref());
+    let runtime = runtime::ServerAgentRuntime::new(state);
+    let handle = runtime
+        .start(runtime::RunRequest {
+            agent_id,
+            conversation_id,
+            input,
+        })
+        .await;
 
-    crate::server::api::agents::publish_global_event(
-        Some(&state.db),
-        "run_started",
-        json!({
-            "run_id": run_id,
-            "agent_id": agent_id,
-            "conversation_id": conv_str,
-        }),
-    );
-
-    // Snapshot for the async stream task
-    let state2 = state.clone();
-    let agent_id2 = agent_id.clone();
-    let conv_id2 = conv_str.clone();
-    let run_id2 = run_id.clone();
-
-    // ── Build SSE stream ──────────────────────────────────────────────────
-    // We use an mpsc channel to bridge the async loop into an SSE stream.
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
-
-    let input_clone = input.clone();
-    tokio::spawn(run_agent_loop(
-        state2,
-        agent_id2,
-        conv_id2,
-        run_id2,
-        theme_cmd,
-        tx,
-        input_clone,
-    ));
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    tracing::debug!(run_id = %handle.run_id, "agent run accepted by server runtime");
+    let stream = tokio_stream::wrappers::ReceiverStream::new(handle.events);
     Sse::new(stream).into_response()
 }
 
