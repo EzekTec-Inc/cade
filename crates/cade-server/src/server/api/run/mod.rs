@@ -9,7 +9,9 @@
 //!   3. If the LLM emits tool calls, execute them (native + MCP) and persist
 //!      the results.
 //!   4. Rebuild context → call LLM again → stream — repeat until
-//!      `finish_reason` is not `"tool_use"` or the turn cap is reached.
+//!      `finish_reason` is not `"tool_use"` or the adaptive turn budget is
+//!      exhausted (base `MAX_TURNS`, escalated by distinct tool work, see
+//!      [`adaptive_turn_budget`]).
 //!
 //! The client receives a single continuous SSE stream.  All tool_call and
 //! tool_result events are included so the GUI can render them inline.
@@ -52,7 +54,22 @@ mod subagent;
 #[path = "tests.rs"]
 mod tests;
 
+/// Default maximum agentic turns per request (prevents infinite loops).
+/// Overridable via the `CADE_MAX_TURNS` env var (see [`max_turns`]).
 const MAX_TURNS: usize = 20;
+
+/// Maximum consecutive identical tool invocations (same tool + same
+/// arguments) before the agentic loop is classified as degenerate and
+/// aborted.  A model that keeps retrying the exact same call instead of
+/// converging would otherwise burn turns and tokens all the way to
+/// [`MAX_TURNS`].
+const MAX_IDENTICAL_REPEAT_TOOL_CALLS: usize = 3;
+
+/// Default cap on the *adaptive* turn budget, expressed as a multiple of
+/// [`MAX_TURNS`].  The per-run budget starts at the base cap and grows with
+/// genuinely distinct tool work (see [`adaptive_turn_budget`]); this bound
+/// prevents a productive-but-unbounded loop from running away.
+const TURN_CEILING_MULTIPLIER: usize = 5;
 
 /// Maximum bytes of a tool's `output` to send over SSE before truncation.
 mod execution;
@@ -111,15 +128,73 @@ pub(super) fn parse_max_session_cost(raw: Option<&str>) -> Option<f64> {
         .filter(|v| *v > 0.0)
 }
 
-/// P4: read `CADE_MAX_SESSION_COST_USD` env var.
+/// Resolve the session cost cap (in USD).
 ///
-/// When set to a positive number, the agentic loop aborts as soon as the
-/// agent's cumulative cost (across the server's lifetime, computed via
-/// `AgentMetrics::compute_cost_usd`) exceeds this value.  Unset, empty, or
-/// non-positive values disable the guardrail entirely.
-fn max_session_cost_usd() -> Option<f64> {
-    // Default to a safe limit of $5.00 to prevent runaway loops if unset.
-    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref()).or(Some(5.0))
+/// Precedence: `CADE_MAX_SESSION_COST_USD` env var > `.cade/settings.json`
+/// (`max_session_cost_usd`, project wins over global) > built-in default.
+/// When no cap is configured anywhere, the guardrail defaults to `$120.00`.
+fn max_session_cost_usd(settings_cap: Option<f64>) -> Option<f64> {
+    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref())
+        .or(settings_cap)
+        .or(Some(120.0))
+}
+
+/// Parse a `CADE_MAX_TURNS`-style env value into an optional cap.
+/// Pure function for testability.
+///
+/// `None`, empty, zero, or non-numeric input → `None` (= fall back to the
+/// built-in [`MAX_TURNS`] default).  Positive values clamp the agentic
+/// loop to that many LLM turns.
+pub(super) fn parse_max_turns(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+}
+
+/// Read `CADE_MAX_TURNS` env var.
+///
+/// Sets the *base* agentic turn budget: the loop can always run at least
+/// this many turns, and the adaptive mechanism ([`adaptive_turn_budget`])
+/// extends it further while the run keeps making genuinely new tool calls.
+/// Unset, empty, zero, or non-numeric values keep the [`MAX_TURNS`] default
+/// of 20.
+fn max_turns() -> usize {
+    parse_max_turns(std::env::var("CADE_MAX_TURNS").ok().as_deref()).unwrap_or(MAX_TURNS)
+}
+
+/// Parse a `CADE_MAX_TURNS_CEILING`-style env value into an optional cap.
+/// Pure function for testability.  Positive values clamp the adaptive turn
+/// budget; anything else falls back to [`TURN_CEILING_MULTIPLIER`] × base.
+pub(super) fn parse_max_turns_ceiling(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+}
+
+/// Resolve the absolute ceiling for the adaptive turn budget.
+///
+/// `CADE_MAX_TURNS_CEILING` overrides the default of
+/// [`TURN_CEILING_MULTIPLIER`] × the base budget, so a run can never exceed
+/// this many LLM turns.
+fn turns_ceiling(base: usize) -> usize {
+    parse_max_turns_ceiling(std::env::var("CADE_MAX_TURNS_CEILING").ok().as_deref())
+        .unwrap_or_else(|| base.saturating_mul(TURN_CEILING_MULTIPLIER))
+}
+
+/// Compute the adaptive turn budget from the number of *distinct* tool
+/// calls performed so far.  Pure function for testability.
+///
+/// Each genuinely new tool fingerprint (tool + arguments) earns 2 extra
+/// turns of headroom so legitimate long tasks aren't cut at the base cap,
+/// but the budget is clamped to `[base, ceiling]`.  A model that stops
+/// producing new work stops earning headroom — repeated or cycling calls
+/// are handled by the degenerate-loop detector instead of extending the run.
+pub(super) fn adaptive_turn_budget(
+    base: usize,
+    ceiling: usize,
+    distinct_tool_calls: usize,
+) -> usize {
+    base.saturating_add(distinct_tool_calls.saturating_mul(2))
+        .min(ceiling)
+        .max(base)
 }
 
 /// P4: shared `ModelRegistry` used to price token totals against the
@@ -391,6 +466,16 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     }
 
     let mut turns = 0usize;
+    let max_turns = max_turns();
+    let turns_ceiling = turns_ceiling(max_turns);
+    // P4: resolve the session cost cap from `.cade/settings.json`
+    // (`max_session_cost_usd`, project wins over global).  The env var
+    // override and the built-in default are applied inside
+    // [`max_session_cost_usd`].
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let session_cost_cap = cade_core::settings::SettingsManager::new(&cwd)
+        .ok()
+        .and_then(|s| s.max_session_cost_usd());
     // M9r: track the loop exit reason so `finish_run` records the right
     // status.  Any break preceded by an `"message_type": "error"` SSE
     // event flips this to `Error`; the natural "no more tool calls"
@@ -403,12 +488,33 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     const ACTIVE_GOAL_NUDGE_INTERVAL: usize = 5;
     let mut tool_calls_since_goal_update: usize = 0;
 
+    // ── Adaptive turn budget ─────────────────────────────────────────
+    // The loop starts with `max_turns` and grows its budget as the model
+    // performs genuinely *new* tool work (fresh fingerprints), so long but
+    // productive tasks are not cut at the base cap while idle or repeating
+    // runs are.  Bounded by `turns_ceiling`.
+    let mut distinct_fingerprints: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut distinct_tool_calls: usize = 0;
+
+    // ── Degenerate-loop detection ─────────────────────────────────────
+    // Watch for the same tool being invoked repeatedly with identical
+    // arguments.  When that happens `MAX_IDENTICAL_REPEAT_TOOL_CALLS`
+    // times in a row, the model is stuck retrying rather than converging —
+    // abort early instead of silently burning turns and tokens.
+    let mut prev_tool_fingerprint: Option<String> = None;
+    let mut identical_repeat_run: usize = 0;
+    // Set while iterating tool results; surfaced as an SSE error before
+    // the next LLM turn.
+    let mut loop_degenerate: Option<String> = None;
+
     loop {
         turns += 1;
-        if turns > MAX_TURNS {
+        let budget = adaptive_turn_budget(max_turns, turns_ceiling, distinct_tool_calls);
+        if turns > budget {
             send(json!({
                 "message_type": "error",
-                "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
+                "error": format!("Agentic loop exceeded {budget} turns (base {max_turns}) — stopping"),
             }))
             .await;
             exit_status = RunExitStatus::Error;
@@ -427,10 +533,11 @@ pub(crate) async fn run_agent_loop_with_dependencies(
 
         // ── P4: cost guardrail ────────────────────────────────────────
         // Abort when cumulative session cost (across the server's lifetime
-        // for this agent) exceeds the configured cap.  Disabled by default
-        // (unset env var → no cap).  Pricing comes from ~/.cade/pricing.json
-        // or the bundled fallback table.
-        if let Some(cap) = max_session_cost_usd() {
+        // for this agent) exceeds the configured cap.  The cap comes from
+        // `.cade/settings.json`, the CADE_MAX_SESSION_COST_USD env var, or
+        // the built-in $120.00 default (see [`max_session_cost_usd`]).
+        // Pricing comes from ~/.cade/pricing.json or the bundled fallback table.
+        if let Some(cap) = max_session_cost_usd(session_cost_cap) {
             let map = state2.agent_metrics.clone();
             if let Some(m) = map.get(&agent_id2) {
                 let pricing = pricing_registry()
@@ -440,7 +547,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     send(json!({
                         "message_type": "error",
                         "error": format!(
-                            "Session cost cap reached (${:.4} ≥ ${:.4}); set CADE_MAX_SESSION_COST_USD to a higher value to continue.",
+                            "Session cost cap reached (${:.4} ≥ ${:.4}); raise `max_session_cost_usd` in .cade/settings.json (or CADE_MAX_SESSION_COST_USD) to continue.",
                             cost, cap
                         ),
                     })).await;
@@ -812,6 +919,45 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     tool_calls_since_goal_update = 0;
                 }
             }
+
+            // ── Degenerate-loop fingerprint tracking ────────────────────
+            // Fingerprint = tool name + normalized arguments (truncated so
+            // large payloads don't bloat memory).  Identical consecutive
+            // fingerprints mean the model is retrying the exact same call.
+            let fingerprint = {
+                let args = serde_json::to_string(&arguments).unwrap_or_default();
+                format!(
+                    "{}|{}",
+                    result.tool_name,
+                    truncate_at_char_boundary(&args, 256)
+                )
+            };
+            // Adaptive budget: genuinely new fingerprints extend headroom.
+            if distinct_fingerprints.insert(fingerprint.clone()) {
+                distinct_tool_calls += 1;
+            }
+            if prev_tool_fingerprint.as_deref() == Some(fingerprint.as_str()) {
+                identical_repeat_run += 1;
+            } else {
+                prev_tool_fingerprint = Some(fingerprint);
+                identical_repeat_run = 1;
+            }
+            if identical_repeat_run >= MAX_IDENTICAL_REPEAT_TOOL_CALLS {
+                loop_degenerate = Some(result.tool_name.clone());
+            }
+        }
+
+        // ── Abort on a degenerate repeated-tool loop ────────────────────
+        if let Some(tool_name) = loop_degenerate.take() {
+            let msg = format!(
+                "Agentic loop detected: `{tool_name}` invoked \
+                 {MAX_IDENTICAL_REPEAT_TOOL_CALLS} times in a row with identical arguments \
+                 — stopping instead of repeating"
+            );
+            tracing::warn!(agent_id = %agent_id2, run_id = %run_id2, "{msg}");
+            send(json!({ "message_type": "error", "error": msg })).await;
+            exit_status = RunExitStatus::Error;
+            break;
         }
 
         // ── A5: Inject freshness nudge if active_goal hasn't been updated ──

@@ -233,7 +233,7 @@ CADE stores state per-project so you pick up right where you left off:
 - **Intelligent Tool Selection (ITS)** — A local ONNX cross-encoder reranks and filters tools before each LLM call, so the model only sees what's relevant. [Learn more →](docs/intelligent-tool-selection.md)
 - **Dynamic MCP Auto-Discovery** — Connect any third-party Model Context Protocol server, and CADE will automatically discover and register its tools dynamically, featuring prefix-agnostic routing and output budget regulation. [Learn more →](docs/mcp-servers.md)
 - **Semantic Memory Search** — Hybrid keyword + cosine similarity search via local embeddings (`fastembed` + `sqlite-vec`), merged with Reciprocal Rank Fusion.
-- **Cost Guardrails** — Set `CADE_MAX_SESSION_COST_USD=2.00` to auto-stop when spend crosses your threshold. [Learn more →](docs/cost-and-pricing.md)
+- **Cost Guardrails** — Set `max_session_cost_usd` in `.cade/settings.json` (or `CADE_MAX_SESSION_COST_USD=2.00`) to auto-stop when spend crosses your threshold. [Learn more →](docs/cost-and-pricing.md)
 - **Execution Backends** — Run tools locally, inside Docker containers, or over SSH. [Learn more →](docs/execution-backends.md)
 - **WASM Dashboard** — Visit `http://localhost:8284/dashboard` for a browser-based view of your agents. [Learn more →](docs/gui-dashboard.md)
 

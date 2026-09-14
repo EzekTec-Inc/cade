@@ -26,6 +26,23 @@ pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
     re.replace_all(text, "")
 }
 
+/// Resolve the session cost cap (in USD) for the sidebar budget gauge.
+///
+/// Precedence: `CADE_MAX_SESSION_COST_USD` env var > `.cade/settings.json`
+/// (`max_session_cost_usd`, project wins over global) > `$120.00` default.
+fn resolve_session_cost_cap(cwd: &std::path::Path) -> f64 {
+    std::env::var("CADE_MAX_SESSION_COST_USD")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+        .or_else(|| {
+            cade_core::settings::SettingsManager::new(cwd)
+                .ok()
+                .and_then(|s| s.max_session_cost_usd())
+        })
+        .unwrap_or(120.00)
+}
+
 use parking_lot::Mutex;
 use std::io::Write;
 use std::sync::Arc;
@@ -880,6 +897,8 @@ pub struct TuiApp {
     pub session_tokens: (u64, u64),
     /// Cumulative session cost in USD for sidebar budget gauge.
     pub session_cost_usd: f64,
+    /// Session cost cap in USD (from .cade/settings.json, env var, or default).
+    pub session_cost_cap_usd: f64,
     /// Number of completed user→assistant turn pairs.
     pub turn_count: u32,
     /// Rolling history of context-window percentages (one per turn).
@@ -1139,6 +1158,7 @@ impl TuiApp {
             context_pct: None,
             session_tokens: (0, 0),
             session_cost_usd: 0.0,
+            session_cost_cap_usd: resolve_session_cost_cap(&std::env::current_dir().unwrap_or_default()),
             turn_count: 0,
             token_history: Vec::new(),
             mouse_capture_disabled: true,
@@ -1449,7 +1469,12 @@ impl TuiApp {
         {
             self.toast = None;
         }
-        let toast: Option<&Toast> = self.toast.as_ref();
+        let is_processing = self.is_processing();
+        let toast: Option<&Toast> = if is_processing {
+            None
+        } else {
+            self.toast.as_ref()
+        };
         let colors: &ThemeColors = &self.colors;
         let nerd = self.use_nerd_fonts;
 
@@ -1501,6 +1526,7 @@ impl TuiApp {
                 context_pct,
                 session_tokens: self.session_tokens,
                 session_cost_usd: self.session_cost_usd,
+                session_cost_cap_usd: self.session_cost_cap_usd,
                 turn_count,
                 token_history,
                 header_lines,
@@ -1509,6 +1535,7 @@ impl TuiApp {
                 active_plan: active_plan_snap.as_ref(),
                 sidebar_hidden: self.sidebar_hidden,
                 toast,
+                is_processing,
                 copy_highlight: self.copy_highlight,
                 mouse_selection: None,
                 expanded_items,
@@ -1571,8 +1598,9 @@ impl TuiApp {
                 }
             }
 
-            // Render MCP boot status card floating in the top right
-            if let Some(ref progress) = self.mcp_boot_status
+            // Render MCP boot status card floating in the top right (suppressed while processing)
+            if !is_processing
+                && let Some(ref progress) = self.mcp_boot_status
                 && !self.mcp_closed
             {
                 let boot_map = progress.lock().clone();

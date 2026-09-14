@@ -458,3 +458,49 @@ fn test_execution_backend_kind_parsing() {
     assert_eq!(b_local, ExecutionBackendKind::Local);
     assert_eq!(b_local.as_str(), "local");
 }
+
+#[test]
+fn project_settings_max_session_cost_usd() -> Result<()> {
+    let json = r#"{
+        "max_session_cost_usd": 2.50,
+        "max_tokens_per_turn": 4096
+    }"#;
+    let ps: ProjectSettings = serde_json::from_str(json)?;
+    assert_eq!(ps.max_session_cost_usd, Some(2.50));
+    assert_eq!(ps.max_tokens_per_turn, Some(4096));
+
+    Ok(())
+}
+
+#[test]
+fn project_settings_max_session_cost_usd_defaults_none() -> Result<()> {
+    let json = r#"{"auto_checkpoint": true}"#;
+    let ps: ProjectSettings = serde_json::from_str(json)?;
+    assert_eq!(ps.max_session_cost_usd, None);
+
+    Ok(())
+}
+
+#[test]
+fn settings_manager_max_session_cost_usd_project_wins() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let cade_dir = dir.path().join(".cade");
+    fs::create_dir_all(&cade_dir)?;
+
+    let project_json = r#"{"max_session_cost_usd": 2.50}"#;
+    fs::write(cade_dir.join("settings.json"), project_json)?;
+
+    let mgr = SettingsManager::new(dir.path())?;
+    assert_eq!(mgr.max_session_cost_usd(), Some(2.50));
+
+    Ok(())
+}
+
+#[test]
+fn settings_manager_max_session_cost_usd_unset() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mgr = SettingsManager::new(dir.path())?;
+    assert_eq!(mgr.max_session_cost_usd(), None);
+
+    Ok(())
+}

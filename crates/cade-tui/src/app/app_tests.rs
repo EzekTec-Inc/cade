@@ -584,6 +584,7 @@ fn test_prepared_cache_width_invalidation() {
 }
 
 #[test]
+#[ignore = "requires tty"]
 fn test_toggle_last_collapsible_item_assistant_code_block() {
     use crate::app::RenderLine;
     use crate::app::TuiApp;
@@ -706,4 +707,54 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
     assert_eq!(app.scroll_target, 0);
     assert!(app.follow);
     assert_eq!(app.editor.text(), "JKJ");
+}
+
+#[test]
+fn test_is_processing_and_toast_suppression() {
+    use crate::app::{ToastLevel, TuiApp};
+
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test-agent".to_string(),
+        "test-model".to_string(),
+        None,
+    );
+
+    // 1. Idle state: not processing, toasts are allowed
+    assert!(!app.is_processing());
+    app.show_toast("Idle toast", ToastLevel::Info);
+    assert!(app.toast.is_some());
+    assert_eq!(app.toast.as_ref().unwrap().message, "Idle toast");
+
+    // 2. Starting thinking: is_processing becomes true, active toast is cleared
+    let _arc = app.start_thinking("Processing task...");
+    assert!(app.is_processing());
+    assert!(
+        app.toast.is_none(),
+        "Active toast must be dismissed when processing starts"
+    );
+
+    // 3. Attempting to show toast while thinking: must be suppressed/dropped
+    app.show_toast("Suppressed toast", ToastLevel::Warning);
+    assert!(
+        app.toast.is_none(),
+        "Toasts must not be queued or displayed while processing"
+    );
+
+    // 4. Stop thinking: returns to idle
+    let _ = app.stop_thinking();
+    assert!(!app.is_processing());
+    app.show_toast("After processing toast", ToastLevel::Success);
+    assert!(app.toast.is_some());
+    assert_eq!(app.toast.as_ref().unwrap().message, "After processing toast");
+
+    // 5. Streaming active: is_processing is true, toast dropped
+    app.streaming_active = true;
+    assert!(app.is_processing());
+    app.toast = None;
+    app.show_toast("Streaming toast", ToastLevel::Info);
+    assert!(
+        app.toast.is_none(),
+        "Toasts must not be queued or displayed while streaming"
+    );
 }

@@ -1199,6 +1199,53 @@ mod p4_guardrail_tests {
         assert_eq!(parse_tool_turn_max_tokens(Some("4096")), Some(4096));
         assert_eq!(parse_tool_turn_max_tokens(Some(" 512 ")), Some(512));
     }
+
+    // ── CADE_MAX_TURNS cap ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_max_turns_unset_and_invalid_keep_default() {
+        assert_eq!(parse_max_turns(None), None);
+        assert_eq!(parse_max_turns(Some("")), None);
+        assert_eq!(parse_max_turns(Some("   ")), None);
+        assert_eq!(parse_max_turns(Some("0")), None);
+        assert_eq!(parse_max_turns(Some("-3")), None);
+        assert_eq!(parse_max_turns(Some("abc")), None);
+    }
+
+    #[test]
+    fn parse_max_turns_positive_returns_cap() {
+        assert_eq!(parse_max_turns(Some("30")), Some(30));
+        assert_eq!(parse_max_turns(Some(" 100 ")), Some(100));
+    }
+
+    #[test]
+    fn parse_max_turns_ceiling_unset_and_invalid_keep_multiplier_default() {
+        assert_eq!(parse_max_turns_ceiling(None), None);
+        assert_eq!(parse_max_turns_ceiling(Some("")), None);
+        assert_eq!(parse_max_turns_ceiling(Some("0")), None);
+        assert_eq!(parse_max_turns_ceiling(Some("-1")), None);
+        assert_eq!(parse_max_turns_ceiling(Some("abc")), None);
+    }
+
+    #[test]
+    fn parse_max_turns_ceiling_positive_returns_cap() {
+        assert_eq!(parse_max_turns_ceiling(Some("150")), Some(150));
+        assert_eq!(parse_max_turns_ceiling(Some(" 40 ")), Some(40));
+    }
+
+    #[test]
+    fn adaptive_turn_budget_starts_at_base_without_new_work() {
+        assert_eq!(adaptive_turn_budget(20, 100, 0), 20);
+        assert_eq!(adaptive_turn_budget(5, 25, 0), 5);
+    }
+
+    #[test]
+    fn adaptive_turn_budget_grows_with_distinct_work_and_clamps_to_ceiling() {
+        assert_eq!(adaptive_turn_budget(20, 100, 5), 30);
+        assert_eq!(adaptive_turn_budget(20, 100, 100), 100);
+        // ceiling below base → base wins (budget never shrinks below base).
+        assert_eq!(adaptive_turn_budget(20, 10, 100), 20);
+    }
 }
 
 #[cfg(test)]
@@ -1531,6 +1578,173 @@ mod runtime_contract_tests {
         }
         if context_calls.load(Ordering::SeqCst) != 2 {
             return Err("runtime must rebuild context after persisting a tool result".to_owned());
+        }
+        Ok(())
+    }
+
+    /// LLM that always requests a tool call and never produces a final
+    /// answer.  With `vary_arguments == false` every turn is byte-identical
+    /// (exercises the degenerate-loop detector); with `true` arguments
+    /// change each turn (exercises the turn budget).  `stop_after_tools` lets
+    /// a test finish after N tool turns with a normal final answer.
+    struct RepeatingToolLlm {
+        stream_calls: AtomicUsize,
+        vary_arguments: bool,
+        stop_after_tools: Option<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for RepeatingToolLlm {
+        async fn complete(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::custom("complete is not used"))
+        }
+
+        async fn stream(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<StreamChunk>> + Send>,
+            >,
+        > {
+            let call = self.stream_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(stop_after) = self.stop_after_tools
+                && call >= stop_after
+            {
+                return Ok(Box::pin(tokio_stream::iter(vec![
+                    Ok(StreamChunk::Text("done".to_owned())),
+                    Ok(StreamChunk::Done),
+                ])));
+            }
+            let arguments = if self.vary_arguments {
+                serde_json::json!({ "query": format!("query-{call}") })
+            } else {
+                serde_json::json!({ "query": "stuck-query" })
+            };
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamChunk::ToolCall(LlmToolCall {
+                    id: format!("repeating-tool-call-{call}"),
+                    name: "stuck_tool".to_owned(),
+                    arguments,
+                    thought_signature: None,
+                })),
+                Ok(StreamChunk::Done),
+            ])))
+        }
+    }
+
+    struct LoopOutcome {
+        executor_calls: usize,
+        run_status: String,
+        persisted_events: String,
+    }
+
+    async fn run_repeating_llm(
+        agent_id: &str,
+        vary_arguments: bool,
+        stop_after_tools: Option<usize>,
+    ) -> Result<LoopOutcome, String> {
+        let llm = Arc::new(RepeatingToolLlm {
+            stream_calls: AtomicUsize::new(0),
+            vary_arguments,
+            stop_after_tools,
+        }) as Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: agent_id.to_owned(),
+            name: "Repeating agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+
+        let capability_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = ServerAgentRuntime::with_dependencies(
+            state.clone(),
+            Arc::new(RecordingContextBuilder {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(ToolResultCapabilityExecutor {
+                calls: capability_calls.clone(),
+            }),
+        );
+        let handle = runtime
+            .start(RunRequest {
+                agent_id: agent_id.to_owned(),
+                conversation_id: None,
+                input: "repeat forever".to_owned(),
+            })
+            .await;
+        let mut events = handle.events;
+        while events.recv().await.is_some() {}
+
+        let run = cade_store::sqlite::get_run(&state.db, &handle.run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "run must be queryable after the loop stopped".to_owned())?;
+        let persisted = cade_store::sqlite::run_events_after(&state.db, &handle.run_id, -1)
+            .map_err(|error| error.to_string())?;
+        let joined = persisted
+            .iter()
+            .map(|(_, event)| event.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        Ok(LoopOutcome {
+            executor_calls: capability_calls.load(Ordering::SeqCst),
+            run_status: run.status,
+            persisted_events: joined,
+        })
+    }
+
+    #[tokio::test]
+    async fn runtime_aborts_on_identical_repeated_tool_calls() -> Result<(), String> {
+        // Same tool + identical arguments every turn: the degenerate-loop
+        // detector must stop the run after MAX_IDENTICAL_REPEAT_TOOL_CALLS
+        // executor dispatches instead of burning all 20 turns.
+        let outcome = run_repeating_llm("agent-degenerate", false, None).await?;
+        if outcome.executor_calls != MAX_IDENTICAL_REPEAT_TOOL_CALLS {
+            return Err(format!(
+                "degenerate loop must stop after {} identical calls, executor ran {} times",
+                MAX_IDENTICAL_REPEAT_TOOL_CALLS, outcome.executor_calls
+            ));
+        }
+        if outcome.run_status != "error" {
+            return Err(format!(
+                "degenerate abort must record status 'error', got '{}'",
+                outcome.run_status
+            ));
+        }
+        if !outcome.persisted_events.contains("Agentic loop detected") {
+            return Err("degenerate abort must surface an SSE error event".to_owned());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_escalates_turn_budget_for_distinct_tool_work() -> Result<(), String> {
+        // 24 distinct (but never-converging) tool turns would blow past the
+        // default base cap of 20.  The adaptive budget grows +2 per new
+        // fingerprint, so the run completes normally instead of aborting.
+        let outcome = run_repeating_llm("agent-escalate", true, Some(24)).await?;
+        if outcome.executor_calls != 24 {
+            return Err(format!(
+                "adaptive budget must let a 24-turn productive run finish, executor ran {} times",
+                outcome.executor_calls
+            ));
+        }
+        if outcome.run_status != "done" {
+            return Err(format!(
+                "escalated run must finish with status 'done', got '{}'",
+                outcome.run_status
+            ));
         }
         Ok(())
     }

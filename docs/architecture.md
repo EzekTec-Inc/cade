@@ -80,7 +80,7 @@ integrations, talk to the same server/API surface.
    - Call the LLM (`cade-ai::providers::*`) with the full toolset.
    - Stream `text` / `tool_call` / `tool_result` / `finish` events to the CLI.
    - Dispatch every tool call via `cade-agent::tools::manager::dispatch`.
-   - Loop until the LLM emits `finish` or `MAX_TURNS=20` is hit.
+   - Loop until the LLM emits `finish` or the adaptive turn budget is exhausted. The budget starts at `MAX_TURNS=20` (override with `CADE_MAX_TURNS`), grows `+2` per distinct tool call, and is bounded by `CADE_MAX_TURNS_CEILING` (default `5 × MAX_TURNS`).
 3. Each tool result is persisted to `tool_executions` with `output_chars`
    and an Unicode-correct character count for cost telemetry.
 4. After the turn, the server may run **Sleeptime consolidation** if the

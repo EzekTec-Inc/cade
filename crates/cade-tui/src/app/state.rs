@@ -217,6 +217,9 @@ impl TuiApp {
     }
 
     pub fn show_toast(&mut self, message: impl Into<String>, level: ToastLevel) {
+        if self.is_processing() {
+            return;
+        }
         self.toast = Some(Toast {
             message: message.into(),
             level,
@@ -376,6 +379,7 @@ impl TuiApp {
     /// Start the thinking animation.  Returns the shared text Arc so callers
     /// can update the status text (e.g. assessing timer, tool name updates).
     pub fn start_thinking(&mut self, text: impl Into<String>) -> Arc<Mutex<String>> {
+        self.toast = None; // Dismiss any active toast immediately when processing starts
         self.scroll_instant(0); // snap to bottom at the start of every agent turn
         let arc = Arc::new(Mutex::new(text.into()));
         self.thinking = Some(ThinkingState {
@@ -404,6 +408,19 @@ impl TuiApp {
         self.thinking = None;
         self.signals.thinking.write(false);
         secs
+    }
+
+    /// Returns `true` if CADE is actively processing or working on a task.
+    ///
+    /// This includes LLM reasoning/inference (`thinking`), streaming output (`streaming_active`),
+    /// or active background subagent tasks.
+    pub fn is_processing(&self) -> bool {
+        self.thinking.is_some()
+            || self.streaming_active
+            || self
+                .subagent_trackers
+                .iter()
+                .any(|t| matches!(t.status, crate::subagent_tracker::SubagentStatus::Running))
     }
 
     pub fn open_theme_picker(

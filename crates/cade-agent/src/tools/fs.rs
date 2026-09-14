@@ -118,7 +118,28 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
         resolved.push(comp);
     }
 
-    if !resolved.starts_with(root) {
+    let root_canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    let strip_unc = |p: &Path| -> PathBuf {
+        #[cfg(windows)]
+        {
+            let s = p.to_string_lossy();
+            if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                return PathBuf::from(stripped);
+            }
+        }
+        p.to_path_buf()
+    };
+
+    let resolved_stripped = strip_unc(&resolved);
+    let root_stripped = strip_unc(root);
+    let root_canonical_stripped = strip_unc(&root_canonical);
+
+    if !resolved.starts_with(root)
+        && !resolved.starts_with(&root_canonical)
+        && !resolved_stripped.starts_with(&root_stripped)
+        && !resolved_stripped.starts_with(&root_canonical_stripped)
+    {
         return Err(crate::Error::custom(format!(
             "path '{}' (resolved to '{}') is outside the allowed filesystem root '{}'",
             raw_path,

@@ -116,6 +116,10 @@ pub struct GlobalSettings {
     /// Maximum tokens per turn. Exceeding this triggers a split turn boundary cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens_per_turn: Option<usize>,
+    /// Maximum session cost cap (in USD). The agentic loop aborts as soon as the
+    /// agent's cumulative cost exceeds this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_session_cost_usd: Option<f64>,
     /// Extra context file paths (appended to AGENTS.md discovery results).
     #[serde(default)]
     pub extra_context_files: Vec<std::path::PathBuf>,
@@ -270,6 +274,10 @@ pub struct ProjectSettings {
     /// Maximum tokens per turn. Exceeding this triggers a split turn boundary cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens_per_turn: Option<usize>,
+    /// Maximum session cost cap (in USD). The agentic loop aborts as soon as the
+    /// agent's cumulative cost exceeds this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_session_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

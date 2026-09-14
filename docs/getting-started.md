@@ -87,8 +87,10 @@ Type a message and hit Enter.
 - **Set project context** — `/init` writes a starter `project` memory block
   by inspecting the current directory.
 - **Add an MCP server** — see [mcp-servers.md](mcp-servers.md).
-- **Cap your spend** — `export CADE_MAX_SESSION_COST_USD=2.00` aborts the
-  agentic loop once cumulative cost crosses $2. Full list in
+- **Cap your spend** — add `"max_session_cost_usd": 2.00` to
+  `.cade/settings.json` (committable, shared with your team) or run
+  `export CADE_MAX_SESSION_COST_USD=2.00` to abort the agentic loop once
+  cumulative cost crosses $2. Full list in
   [configuration.md](configuration.md).
 - **Open the WASM dashboard** — visit `http://localhost:8284/dashboard` while
   the server is running. Details in [gui-dashboard.md](gui-dashboard.md).

@@ -51,7 +51,31 @@ impl VirtualSandboxBackend {
         // Attempt to canonicalize to resolve symlinks if the path exists
         let canonical = normalized.canonicalize().unwrap_or(normalized);
 
-        if !canonical.starts_with(&self.workspace_root) {
+        let root_canonical = self
+            .workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace_root.clone());
+
+        let strip_unc = |p: &Path| -> PathBuf {
+            #[cfg(windows)]
+            {
+                let s = p.to_string_lossy();
+                if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                    return PathBuf::from(stripped);
+                }
+            }
+            p.to_path_buf()
+        };
+
+        let canon_stripped = strip_unc(&canonical);
+        let root_stripped = strip_unc(&root_canonical);
+        let ws_stripped = strip_unc(&self.workspace_root);
+
+        if !canonical.starts_with(&self.workspace_root)
+            && !canonical.starts_with(&root_canonical)
+            && !canon_stripped.starts_with(&root_stripped)
+            && !canon_stripped.starts_with(&ws_stripped)
+        {
             return Err(crate::Error::custom(format!(
                 "Security Exception: Access denied to path '{:?}' outside sandbox boundary '{:?}'",
                 path, self.workspace_root
@@ -205,8 +229,8 @@ mod tests {
         assert_eq!(read_res.unwrap(), "hello");
 
         // Breakout attempt outside sandbox
-        let unsafe_file = Path::new("/etc/passwd");
-        let break_res = backend.read_file(unsafe_file).await;
+        let unsafe_file = temp_dir.path().parent().unwrap().join("breakout.txt");
+        let break_res = backend.read_file(&unsafe_file).await;
         assert!(break_res.is_err());
         assert!(
             break_res

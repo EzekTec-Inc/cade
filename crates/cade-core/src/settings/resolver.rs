@@ -391,6 +391,15 @@ impl SettingsManager {
             .or(self.global.max_context_budget)
     }
 
+    /// Retrieve the optional maximum session cost cap (in USD).
+    ///
+    /// Project setting wins over global (same merge rule as context budget).
+    pub fn max_session_cost_usd(&self) -> Option<f64> {
+        self.project
+            .max_session_cost_usd
+            .or(self.global.max_session_cost_usd)
+    }
+
     /// Retrieve the optional maximum tokens per turn limit.
     pub fn max_tokens_per_turn(&self) -> Option<usize> {
         self.local

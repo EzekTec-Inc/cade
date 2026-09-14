@@ -123,6 +123,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) context_pct: Option<u8>,
     pub(crate) session_tokens: (u64, u64),
     pub(crate) session_cost_usd: f64,
+    pub(crate) session_cost_cap_usd: f64,
     pub(crate) turn_count: u32,
     pub(crate) token_history: &'a [u8],
     pub(crate) header_lines: &'a [RenderLine],
@@ -131,6 +132,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) active_plan: Option<&'a PlanState>,
     pub(crate) sidebar_hidden: bool,
     pub(crate) toast: Option<&'a Toast>,
+    pub(crate) is_processing: bool,
     pub(crate) copy_highlight: Option<(usize, std::time::Instant)>,
     pub(crate) mouse_selection: Option<usize>,
     pub(crate) expanded_items: &'a std::collections::HashSet<TimelineKey>,
@@ -334,13 +336,16 @@ pub(crate) fn render_frame(
             thinking_elapsed: ctx.thinking_elapsed,
             active_plan,
             session_cost_usd: ctx.session_cost_usd,
+            session_cost_cap_usd: ctx.session_cost_cap_usd,
             modified_files,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }
 
-    // -- Toast notifications
-    if let Some(toast) = toast {
+    // -- Toast notifications: suppressed while CADE is processing or working on a task
+    if !ctx.is_processing
+        && let Some(toast) = toast
+    {
         render_toast(frame, main_area, toast, colors);
     }
 

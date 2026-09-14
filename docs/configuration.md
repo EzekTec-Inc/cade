@@ -133,10 +133,16 @@ Per-checkout state, written by the CLI:
 
 ### Cost guardrails (see [cost-and-pricing.md](cost-and-pricing.md))
 
+The session cost cap is also available in settings files as
+`max_session_cost_usd` under `.cade/settings.json` (project) or
+`~/.cade/settings.json` (global).
+
 | Variable | Default |
 |---|---|
-| `CADE_MAX_SESSION_COST_USD` | unset |
+| `CADE_MAX_SESSION_COST_USD` | `120.00` (built-in; env var overrides settings) |
 | `CADE_TOOL_TURN_MAX_TOKENS` | unset |
+| `CADE_MAX_TURNS` | `20` (base adaptive budget) |
+| `CADE_MAX_TURNS_CEILING` | `5 × CADE_MAX_TURNS` |
 | `CADE_GEMINI_CACHE_TTL_SECS` | 3600 |
 
 ### Context window
