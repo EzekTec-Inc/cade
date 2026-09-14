@@ -423,9 +423,12 @@ async fn test_stream_message_delegates_to_canonical_server_agent_runtime() {
         .uri("/v1/agents/compat_agent/messages/stream")
         .header("Authorization", "Bearer tok")
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::json!({
-            "input": "test prompt for compatibility runtime delegation"
-        }).to_string()))
+        .body(Body::from(
+            serde_json::json!({
+                "input": "test prompt for compatibility runtime delegation"
+            })
+            .to_string(),
+        ))
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
@@ -444,23 +447,45 @@ async fn test_stream_message_delegates_to_canonical_server_agent_runtime() {
 
     // Verify durable state created by canonical runtime
     let runs = cade_store::sqlite::list_agent_runs(&db, "compat_agent", 10).unwrap();
-    assert_eq!(runs.len(), 1, "canonical ServerAgentRuntime must create exactly one durable run");
+    assert_eq!(
+        runs.len(),
+        1,
+        "canonical ServerAgentRuntime must create exactly one durable run"
+    );
     assert_eq!(runs[0].agent_id, "compat_agent");
 
     // Verify user message was persisted by canonical runtime
     let msgs = cade_store::sqlite::list_messages(&db, "compat_agent", None, 10).unwrap();
-    assert!(!msgs.is_empty(), "user message must be persisted by ServerAgentRuntime");
+    assert!(
+        !msgs.is_empty(),
+        "user message must be persisted by ServerAgentRuntime"
+    );
     assert_eq!(msgs[0].role, "user");
 }
 
 #[test]
 fn test_architecture_presentation_adapters_do_not_own_server_or_ai() {
     let tui_cargo = include_str!("../../../../../crates/cade-tui/Cargo.toml");
-    assert!(!tui_cargo.contains("cade-server"), "cade-tui must never depend on cade-server");
-    assert!(!tui_cargo.contains("cade-ai"), "cade-tui must never depend on cade-ai");
-    assert!(!tui_cargo.contains("cade-store"), "cade-tui must never depend on cade-store");
+    assert!(
+        !tui_cargo.contains("cade-server"),
+        "cade-tui must never depend on cade-server"
+    );
+    assert!(
+        !tui_cargo.contains("cade-ai"),
+        "cade-tui must never depend on cade-ai"
+    );
+    assert!(
+        !tui_cargo.contains("cade-store"),
+        "cade-tui must never depend on cade-store"
+    );
 
     let api_types_cargo = include_str!("../../../../../crates/cade-api-types/Cargo.toml");
-    assert!(!api_types_cargo.contains("cade-server"), "cade-api-types must never depend on cade-server");
-    assert!(!api_types_cargo.contains("cade-agent"), "cade-api-types must never depend on cade-agent");
+    assert!(
+        !api_types_cargo.contains("cade-server"),
+        "cade-api-types must never depend on cade-server"
+    );
+    assert!(
+        !api_types_cargo.contains("cade-agent"),
+        "cade-api-types must never depend on cade-agent"
+    );
 }
