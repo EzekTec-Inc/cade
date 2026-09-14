@@ -246,25 +246,6 @@ fn read_text_via_shell_commands() -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn command_stdout_returns_none_for_missing_program() {
-        assert!(super::command_stdout("cade-command-that-does-not-exist", &[]).is_none());
-    }
-
-    #[test]
-    fn command_stdout_returns_none_for_failed_program() {
-        #[cfg(target_os = "windows")]
-        let result = super::command_stdout("cmd", &["/C", "exit 1"]);
-
-        #[cfg(not(target_os = "windows"))]
-        let result = super::command_stdout("false", &[]);
-
-        assert!(result.is_none());
-    }
-}
-
 impl TuiApp {
     #[cfg(not(feature = "clipboard-images"))]
     pub(crate) fn try_paste_image_file_path(&mut self, _text: &str) -> bool {
@@ -376,5 +357,24 @@ impl TuiApp {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn command_stdout_returns_none_for_missing_program() {
+        assert!(super::command_stdout("cade-command-that-does-not-exist", &[]).is_none());
+    }
+
+    #[test]
+    fn command_stdout_returns_none_for_failed_program() {
+        #[cfg(target_os = "windows")]
+        let result = super::command_stdout("cmd", &["/C", "exit 1"]);
+
+        #[cfg(not(target_os = "windows"))]
+        let result = super::command_stdout("false", &[]);
+
+        assert!(result.is_none());
     }
 }
