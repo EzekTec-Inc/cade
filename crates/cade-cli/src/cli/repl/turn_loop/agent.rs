@@ -419,20 +419,8 @@ impl Repl {
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
 
-        let mut turn_stats = TurnStats::default();
-        if is_cancelled {
-            // Skip tool execution so we don't trigger auto-reprompts on empty responses
-        } else {
-            self.dispatch_tool_calls(
-                stdout,
-                messages,
-                input,
-                Some(bar_text),
-                false,
-                &mut turn_stats,
-            )
-            .await?;
-        }
+        let _ = messages;
+        let turn_stats = TurnStats::default();
 
         // (The ephemeral active_goal reminder was removed in favor of a hard block in dispatch_tool_calls)
 

@@ -28,9 +28,7 @@ pub mod commands_theme;
 pub mod commands_tree;
 pub mod format;
 pub mod pickers;
-pub mod tool_intercepts;
 pub mod turn_loop;
-pub mod turn_tools;
 pub mod ui_push;
 
 use crate::Result;
@@ -60,11 +58,6 @@ const BANNER: &str = r#"
  Type /help for commands, /exit to quit
 "#;
 
-/// Injected as a follow-up user message when the LLM produces an empty response
-/// after a tool execution (no text, no new tool call).  Prevents silent turn ends.
-pub(crate) const EMPTY_YIELD_REPROMPT: &str = "Tool execution complete. \
-Please provide a text response explaining the result, what you found, \
-or what you are doing next.";
 
 // -- Slash commands
 
@@ -128,13 +121,6 @@ pub(crate) fn short_mode_label(mode: PermissionMode) -> &'static str {
     }
 }
 
-// -- Tool preflight result
-
-#[derive(Debug)]
-pub(crate) enum ToolPreflightResult {
-    Approved,
-    Blocked(cade_agent::tools::ToolResult),
-}
 
 struct ReplLuaHookRunner {
     app: Arc<Mutex<TuiApp>>,

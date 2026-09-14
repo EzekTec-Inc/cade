@@ -190,6 +190,126 @@ impl HttpTransport {
         Ok(resp.json().await?)
     }
 
+    /// Start a server-owned agent run and render its ordered runtime events.
+    ///
+    /// The server owns context construction, policy, model calls, tool execution,
+    /// persistence, and cancellation. Clients only render this event stream.
+    pub async fn start_run<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        conversation_id: Option<&str>,
+        on_event: F,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let mut body = json!({ "input": input });
+        if let Some(conversation_id) = conversation_id {
+            body["conversation_id"] = conversation_id.into();
+        }
+        self.start_run_cancellable(agent_id, input, conversation_id, on_event, None)
+            .await
+    }
+
+    /// Start a server-owned run and translate a presentation cancellation flag
+    /// into the runtime's durable cancellation command.
+    pub async fn start_run_cancellable<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        conversation_id: Option<&str>,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let mut body = json!({ "input": input });
+        if let Some(conversation_id) = conversation_id {
+            body["conversation_id"] = conversation_id.into();
+        }
+        self.consume_run_stream(
+            EventSource::new(
+                self.client
+                    .post(self.url(&format!("/agents/{agent_id}/run")))
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body),
+            )
+            .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
+            on_event,
+            cancel,
+        )
+        .await
+    }
+
+    /// Request cancellation of a server-owned run.
+    pub async fn cancel_run(&self, run_id: &str) -> Result<serde_json::Value> {
+        let response = self
+            .client
+            .post(self.url(&format!("/runs/{run_id}/cancel")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "cancel_run failed {}",
+                response.status()
+            )));
+        }
+        Ok(response.json().await?)
+    }
+
+    async fn consume_run_stream<F>(
+        &self,
+        mut events: EventSource,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let mut messages = Vec::new();
+        let mut run_id = None;
+        let mut cancellation_requested = false;
+        while let Some(event) = events.next().await {
+            if !cancellation_requested
+                && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+                && let Some(id) = run_id.as_deref()
+            {
+                self.cancel_run(id).await?;
+                cancellation_requested = true;
+            }
+            match event {
+                Ok(reqwest_eventsource::Event::Open) => {}
+                Ok(reqwest_eventsource::Event::Message(message)) => {
+                    let data = message.data.trim();
+                    if data.is_empty() {
+                        continue;
+                    }
+                    if data == "[DONE]" {
+                        events.close();
+                        break;
+                    }
+                    let message: CadeMessage = serde_json::from_str(data).map_err(|error| {
+                        crate::Error::custom(format!("invalid run event: {error}"))
+                    })?;
+                    if run_id.is_none() {
+                        run_id = message.run_id().map(str::to_owned);
+                    }
+                    on_event(&message);
+                    messages.push(message);
+                }
+                Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(error) => {
+                    events.close();
+                    return Err(crate::Error::custom(error.to_string()));
+                }
+            }
+        }
+        Ok(messages)
+    }
+
     /// Resume a background run from a given seq_id, streaming events via SSE.
     /// Calls `on_event` for each replayed event, returns full list.
     pub async fn resume_run<F>(
@@ -208,32 +328,13 @@ impl HttpTransport {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .query(&[("starting_after", after_seq.to_string())]);
 
-        let mut es = EventSource::new(request)
-            .map_err(|e| crate::Error::custom(format!("EventSource: {e}")))?;
-        let mut messages = Vec::new();
-
-        while let Some(event) = es.next().await {
-            match event {
-                Ok(reqwest_eventsource::Event::Open) => {}
-                Ok(reqwest_eventsource::Event::Message(msg)) => {
-                    let data = msg.data.trim();
-                    if data.is_empty() || data == "[DONE]" {
-                        es.close();
-                        break;
-                    }
-                    if let Ok(lm) = serde_json::from_str::<CadeMessage>(data) {
-                        on_event(&lm);
-                        messages.push(lm);
-                    }
-                }
-                Err(reqwest_eventsource::Error::StreamEnded) => break,
-                Err(_) => {
-                    es.close();
-                    break;
-                }
-            }
-        }
-        Ok(messages)
+        self.consume_run_stream(
+            EventSource::new(request)
+                .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
+            on_event,
+            None,
+        )
+        .await
     }
 
     // -- Messages

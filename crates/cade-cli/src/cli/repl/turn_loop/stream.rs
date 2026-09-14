@@ -20,10 +20,7 @@ impl Repl {
         tool_call_id: &str,
         tool_name: &str,
         tool_output: &str,
-        // When true, user message is sent to LLM but NOT persisted to DB.
-        // Used for system-injected re-prompts (EMPTY_YIELD_REPROMPT) so they
-        // don't pollute conversation history or consume future context window.
-        ephemeral: bool,
+        _ephemeral: bool,
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<parking_lot::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
@@ -354,105 +351,26 @@ impl Repl {
         let agent_id = self.agent_id();
         let cancel = &self.cancel_turn;
 
-        fn is_cancel(e: &cade_agent::Error) -> bool {
-            matches!(e, cade_agent::Error::Custom(s) if s == "__cancelled__")
-        }
 
         let conv_id = self.conversation_id();
         let conv_ref = conv_id.as_deref();
 
-        let messages = if is_tool_return {
-            let reasoning_effort = self.reasoning_effort.lock().clone();
-            match self
-                .client
-                .stream_tool_return_cancellable(
-                    &agent_id,
-                    tool_call_id,
-                    tool_name,
-                    tool_output,
-                    false,
-                    conv_ref,
-                    reasoning_effort.as_deref(),
-                    on_event,
-                    Some(cancel),
-                )
-                .await
-            {
-                Ok(m) => m,
-                Err(e) if is_cancel(&e) => {
-                    ui_task.abort();
-                    return Ok(self.abort_stream_ui("Turn interrupted"));
-                }
-                Err(e) => {
-                    ui_task.abort();
-                    return Ok(self.abort_stream_ui(e.to_string()));
-                }
-            }
-        } else {
-            use std::sync::atomic::Ordering;
-            let streaming = self.streaming_enabled.load(Ordering::SeqCst);
-            if streaming {
-                // Consume any pasted images on the first (non-tool-return) turn.
-                // Subsequent turns (tool returns, follow-ups) carry no images.
-                let turn_images = if !is_tool_return {
-                    std::mem::take(&mut self.pending_turn_images)
-                } else {
-                    vec![]
-                };
-                let reasoning_effort = self.reasoning_effort.lock().clone();
-                match self
-                    .client
-                    .stream_message_cancellable_with_images(
-                        &agent_id,
-                        input,
-                        conv_ref,
-                        ephemeral,
-                        turn_images,
-                        reasoning_effort.as_deref(),
-                        on_event,
-                        Some(cancel),
-                    )
-                    .await
-                {
-                    Ok(m) => m,
-                    Err(e) if is_cancel(&e) => {
-                        ui_task.abort();
-                        return Ok(self.abort_stream_ui("Turn interrupted"));
-                    }
-                    Err(e) => {
-                        ui_task.abort();
-                        return Ok(self.abort_stream_ui(e.to_string()));
-                    }
-                }
-            } else {
-                // Non-streaming path — single HTTP request, print result at end.
-                // UI task is unused; abort it immediately.
+        let _ = (
+            is_tool_return,
+            tool_call_id,
+            tool_name,
+            tool_output,
+            ephemeral,
+        );
+        let messages = match self
+            .client
+            .start_run_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel))
+            .await
+        {
+            Ok(messages) => messages,
+            Err(error) => {
                 ui_task.abort();
-                let turn_images_ns = if !is_tool_return {
-                    std::mem::take(&mut self.pending_turn_images)
-                } else {
-                    vec![]
-                };
-                match self
-                    .client
-                    .send_message_with_images(&agent_id, input, turn_images_ns, ephemeral)
-                    .await
-                {
-                    Ok(msgs) => {
-                        for msg in &msgs {
-                            if let Some(text) = msg.assistant_text()
-                                && !text.is_empty()
-                            {
-                                let _ = self.app.lock().push_streaming_chunk(text);
-                            }
-                        }
-                        let _ = self.app.lock().commit_streaming();
-                        msgs
-                    }
-                    Err(e) => {
-                        return Ok(self.abort_stream_ui(e.to_string()));
-                    }
-                }
+                return Ok(self.abort_stream_ui(error.to_string()));
             }
         };
 
