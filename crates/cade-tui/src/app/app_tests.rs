@@ -644,7 +644,9 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
         crossterm::event::KeyCode::Char('J'),
         crossterm::event::KeyModifiers::SHIFT,
     );
-    let res = app.handle_key_input(key_j, &mut history, &mut hist_idx).unwrap();
+    let res = app
+        .handle_key_input(key_j, &mut history, &mut hist_idx)
+        .unwrap();
     assert_eq!(res, None);
     assert_eq!(app.editor.text(), "J");
     assert_eq!(app.scroll, 0);
@@ -654,7 +656,9 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
         crossterm::event::KeyCode::Char('K'),
         crossterm::event::KeyModifiers::SHIFT,
     );
-    let res = app.handle_key_input(key_k, &mut history, &mut hist_idx).unwrap();
+    let res = app
+        .handle_key_input(key_k, &mut history, &mut hist_idx)
+        .unwrap();
     assert_eq!(res, None);
     assert_eq!(app.editor.text(), "JK");
     assert_eq!(app.scroll, 0);
@@ -665,7 +669,9 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
     app.follow = false;
 
     // Shift+J when scroll > 0 must STILL type 'J' into editor and preserve scroll offset
-    let res = app.handle_key_input(key_j, &mut history, &mut hist_idx).unwrap();
+    let res = app
+        .handle_key_input(key_j, &mut history, &mut hist_idx)
+        .unwrap();
     assert_eq!(res, None);
     assert_eq!(app.editor.text(), "JKJ");
     assert_eq!(app.scroll, 20);
@@ -675,7 +681,9 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
         crossterm::event::KeyCode::Char('J'),
         crossterm::event::KeyModifiers::ALT | crossterm::event::KeyModifiers::SHIFT,
     );
-    let res = app.handle_key_input(key_alt_j, &mut history, &mut hist_idx).unwrap();
+    let res = app
+        .handle_key_input(key_alt_j, &mut history, &mut hist_idx)
+        .unwrap();
     assert_eq!(res, None);
     assert_eq!(app.scroll_target, 0);
     assert!(app.follow);
@@ -691,7 +699,9 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
         crossterm::event::KeyCode::End,
         crossterm::event::KeyModifiers::CONTROL,
     );
-    let res = app.handle_key_input(key_ctrl_end, &mut history, &mut hist_idx).unwrap();
+    let res = app
+        .handle_key_input(key_ctrl_end, &mut history, &mut hist_idx)
+        .unwrap();
     assert_eq!(res, None);
     assert_eq!(app.scroll_target, 0);
     assert!(app.follow);

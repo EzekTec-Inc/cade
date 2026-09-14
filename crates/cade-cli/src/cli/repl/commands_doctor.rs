@@ -2,7 +2,7 @@
 
 use super::Repl;
 use crate::Result;
-use cade_core::doctor::{check_multiplexer_and_keys, MultiplexerKind};
+use cade_core::doctor::{MultiplexerKind, check_multiplexer_and_keys};
 
 impl Repl {
     pub(crate) async fn cmd_doctor(&mut self) -> Result<bool> {
@@ -39,7 +39,9 @@ impl Repl {
                 self.tui_dim(format!("      Fix: {}", issue.remediation));
             }
             self.tui_blank();
-            self.tui_dim("    After editing ~/.tmux.conf, reload with: tmux source-file ~/.tmux.conf");
+            self.tui_dim(
+                "    After editing ~/.tmux.conf, reload with: tmux source-file ~/.tmux.conf",
+            );
         } else if matches!(report.multiplexer, MultiplexerKind::Tmux { .. }) {
             self.tui_ok("  ✓ Key Passthrough: No conflicting un-prefixed root bindings detected.");
         }

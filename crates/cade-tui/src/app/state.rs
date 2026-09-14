@@ -522,18 +522,14 @@ impl TuiApp {
 
         match code {
             // Alt+K or Alt+Shift+K — scroll up 10 lines
-            KeyCode::Char('k') | KeyCode::Char('K')
-                if modifiers.contains(KeyModifiers::ALT) =>
-            {
+            KeyCode::Char('k') | KeyCode::Char('K') if modifiers.contains(KeyModifiers::ALT) => {
                 self.follow = false;
                 self.scroll_target = self.scroll_target.saturating_add(10);
                 self.draw_dirty = true;
                 true
             }
             // Alt+J, Alt+Shift+J, or Ctrl+End — snap to bottom ("Follow" mode)
-            KeyCode::Char('j') | KeyCode::Char('J')
-                if modifiers.contains(KeyModifiers::ALT) =>
-            {
+            KeyCode::Char('j') | KeyCode::Char('J') if modifiers.contains(KeyModifiers::ALT) => {
                 if self.scroll > 0 || self.scroll_target > 0 {
                     self.show_toast("Jumped to bottom", ToastLevel::Info);
                 }

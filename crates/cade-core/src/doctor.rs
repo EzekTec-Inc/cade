@@ -51,7 +51,9 @@ impl DoctorReport {
                 }
             }
             MultiplexerKind::Screen { session } => {
-                out.push_str(&format!("  Multiplexer: GNU Screen detected (session: {session})\n"));
+                out.push_str(&format!(
+                    "  Multiplexer: GNU Screen detected (session: {session})\n"
+                ));
             }
             MultiplexerKind::None => {
                 out.push_str("  Multiplexer: None (direct TTY session)\n");
@@ -61,12 +63,17 @@ impl DoctorReport {
         if !self.key_passthrough_issues.is_empty() {
             out.push_str("\n  ⚠ Key Passthrough Conflicts:\n");
             for issue in &self.key_passthrough_issues {
-                out.push_str(&format!("    • Key '{}': {}\n", issue.key, issue.description));
+                out.push_str(&format!(
+                    "    • Key '{}': {}\n",
+                    issue.key, issue.description
+                ));
                 out.push_str(&format!("      Action: {}\n", issue.action));
                 out.push_str(&format!("      Remediation: {}\n", issue.remediation));
             }
         } else if matches!(self.multiplexer, MultiplexerKind::Tmux { .. }) {
-            out.push_str("  ✓ Key Passthrough: No conflicting un-prefixed root bindings detected in tmux.\n");
+            out.push_str(
+                "  ✓ Key Passthrough: No conflicting un-prefixed root bindings detected in tmux.\n",
+            );
         }
 
         for info in &self.info {
@@ -114,7 +121,10 @@ pub fn parse_tmux_root_key_issues(root_table_output: &str) -> Vec<KeyPassthrough
         // Check if the key is a bare single printable character (e.g. 'H', 'J', 'K', 'L', 'a'-'z', '0'-'9')
         // Modifiers like M-H or C-h have prefix/hyphen and len > 1.
         let is_bare_printable = (key_token.len() == 1
-            && key_token.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()))
+            && key_token
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric()))
             || is_shifted_bare_letter(key_token);
 
         if is_bare_printable {
