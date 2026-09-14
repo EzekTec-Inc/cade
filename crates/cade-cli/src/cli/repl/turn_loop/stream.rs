@@ -20,7 +20,7 @@ impl Repl {
         tool_call_id: &str,
         tool_name: &str,
         tool_output: &str,
-        _ephemeral: bool,
+        ephemeral: bool,
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<parking_lot::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
@@ -350,7 +350,6 @@ impl Repl {
         // -- Streaming call (network I/O — on_event never touches TuiApp)
         let agent_id = self.agent_id();
         let cancel = &self.cancel_turn;
-
 
         let conv_id = self.conversation_id();
         let conv_ref = conv_id.as_deref();

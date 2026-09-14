@@ -72,7 +72,10 @@ pub async fn run_headless_stream_json(
     let started = std::time::Instant::now();
     let output = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
     let output_for_event = output.clone();
-    println!("{}", json!({ "type": "init", "agent_id": agent_id, "model": model }));
+    println!(
+        "{}",
+        json!({ "type": "init", "agent_id": agent_id, "model": model })
+    );
     let _ = std::io::stdout().flush();
 
     let result = client

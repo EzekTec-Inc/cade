@@ -422,7 +422,7 @@ impl Repl {
         let _ = messages;
         let turn_stats = TurnStats::default();
 
-        // (The ephemeral active_goal reminder was removed in favor of a hard block in dispatch_tool_calls)
+        // The canonical runtime owns tool execution; the CLI only renders its events.
 
         // Blank line after every agent turn for visual block separation.
         let _ = self.app.lock().push(RenderLine::Blank);
