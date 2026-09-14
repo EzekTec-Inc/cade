@@ -41,7 +41,7 @@ use cade_store::sqlite;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve_conversation};
+use super::messages::{err, maybe_set_conv_title, persist, resolve_conversation};
 use crate::server::state::AppState;
 
 pub(crate) mod runtime;
@@ -223,15 +223,20 @@ pub(super) type SseTx = tokio::sync::mpsc::Sender<Result<Event, std::convert::In
 ///
 /// Handles `/theme <name>` commands and the full multi-turn agentic loop.
 /// All SSE events are sent via `tx`; the caller owns the receiver side.
-pub(crate) async fn run_agent_loop(
+pub(crate) async fn run_agent_loop_with_dependencies(
     state2: AppState,
-    agent_id2: String,
-    conv_id2: Option<String>,
-    run_id2: String,
-    theme_cmd: Option<String>,
+    request: runtime::LoopRequest,
     tx: SseTx,
-    input: String,
+    context_builder: std::sync::Arc<dyn runtime::ContextBuilder>,
+    capability_executor: std::sync::Arc<dyn runtime::CapabilityExecutor>,
 ) {
+    let runtime::LoopRequest {
+        agent_id: agent_id2,
+        conversation_id: conv_id2,
+        run_id: run_id2,
+        theme_command: theme_cmd,
+        input,
+    } = request;
     let send_raw = |json_string: String| {
         let tx = tx.clone();
         let ev = Event::default().data(json_string);
@@ -417,8 +422,7 @@ pub(crate) async fn run_agent_loop(
         // embedded in run_agent_loop's Future, which combined with the
         // consolidation + LLM streaming futures overflows the tokio worker
         // thread stack when processing large archival/historic queries.
-        let (model, messages, tools) = match Box::pin(build_context(
-            state2.clone(),
+        let (model, messages, tools) = match Box::pin(context_builder.build(
             agent_id2.clone(),
             conv_id2.clone(),
             is_tool_return,
@@ -500,8 +504,7 @@ pub(crate) async fn run_agent_loop(
                 // multiple HashMaps, etc. Boxing moves them to the heap
                 // and prevents the overflow recovery path from doubling
                 // the stack pressure of the main build_context call.
-                let (model2, mut messages2, tools2) = match Box::pin(build_context(
-                    state2.clone(),
+                let (model2, mut messages2, tools2) = match Box::pin(context_builder.build(
                     agent_id2.clone(),
                     conv_id2.clone(),
                     is_tool_return, // reuse — never double-increment on retry
@@ -688,15 +691,15 @@ pub(crate) async fn run_agent_loop(
         // RC5-FIX: Hoist ToolRuntime creation outside per-tool-call loop.
         // One runtime instance is reused across all tool calls in this turn,
         // avoiding redundant Arc::new + AppState clones per tool call.
-        let turn_results = execution::execute_turn_tools(
-            state2.clone(),
-            agent_id2.clone(),
-            conv_id2.clone(),
-            input.clone(),
-            tool_calls,
-            tx.clone(),
-        )
-        .await;
+        let turn_results = capability_executor
+            .execute(
+                agent_id2.clone(),
+                conv_id2.clone(),
+                input.clone(),
+                tool_calls,
+                tx.clone(),
+            )
+            .await;
 
         for (result, arguments) in turn_results {
             // H3: persist the FULL output to the DB so future build_context

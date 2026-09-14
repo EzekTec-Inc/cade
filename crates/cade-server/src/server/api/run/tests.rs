@@ -1071,8 +1071,271 @@ mod sse_protocol_tests {
 
 #[cfg(test)]
 mod runtime_contract_tests {
-    use super::runtime::{RunRequest, ServerAgentRuntime};
+    use super::runtime::{
+        CapabilityExecutor, ContextBuilder, RunContext, RunRequest, ServerAgentRuntime,
+    };
     use super::*;
+    use cade_agent::tools::manager::ToolResult;
+    use cade_ai::{LlmMessage, LlmToolCall, StreamChunk};
+    use serde_json::Value;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct RecordingContextBuilder {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ContextBuilder for RecordingContextBuilder {
+        async fn build(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _is_tool_return: bool,
+        ) -> Result<RunContext, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok((
+                "test".to_owned(),
+                vec![LlmMessage {
+                    role: "user".to_owned(),
+                    content: "bounded context".to_owned(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                }],
+                Vec::new(),
+            ))
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingCapabilityExecutor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl CapabilityExecutor for RecordingCapabilityExecutor {
+        async fn execute(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _input: String,
+            _tool_calls: Vec<LlmToolCall>,
+            _events: SseTx,
+        ) -> Vec<(ToolResult, Value)> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        }
+    }
+
+    struct FinalResponseLlm;
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for FinalResponseLlm {
+        async fn complete(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::custom("complete is not used"))
+        }
+
+        async fn stream(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<StreamChunk>> + Send>,
+            >,
+        > {
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamChunk::Text("completed".to_owned())),
+                Ok(StreamChunk::Done),
+            ])))
+        }
+    }
+
+    struct ToolThenFinalLlm {
+        stream_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for ToolThenFinalLlm {
+        async fn complete(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::custom("complete is not used"))
+        }
+
+        async fn stream(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<StreamChunk>> + Send>,
+            >,
+        > {
+            let call = self.stream_calls.fetch_add(1, Ordering::SeqCst);
+            let chunks = if call == 0 {
+                vec![
+                    Ok(StreamChunk::ToolCall(LlmToolCall {
+                        id: "tool-call-1".to_owned(),
+                        name: "test_tool".to_owned(),
+                        arguments: serde_json::json!({}),
+                        thought_signature: None,
+                    })),
+                    Ok(StreamChunk::Done),
+                ]
+            } else {
+                vec![
+                    Ok(StreamChunk::Text("completed".to_owned())),
+                    Ok(StreamChunk::Done),
+                ]
+            };
+            Ok(Box::pin(tokio_stream::iter(chunks)))
+        }
+    }
+
+    #[derive(Clone)]
+    struct ToolResultCapabilityExecutor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl CapabilityExecutor for ToolResultCapabilityExecutor {
+        async fn execute(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _input: String,
+            tool_calls: Vec<LlmToolCall>,
+            _events: SseTx,
+        ) -> Vec<(ToolResult, Value)> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tool_calls
+                .into_iter()
+                .map(|call| {
+                    (
+                        ToolResult {
+                            tool_call_id: call.id,
+                            tool_name: call.name,
+                            output: "tool completed".to_owned(),
+                            is_error: false,
+                            ui_resource_uri: None,
+                        },
+                        call.arguments,
+                    )
+                })
+                .collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_routes_model_tool_calls_through_its_capability_executor() -> Result<(), String>
+    {
+        let llm = Arc::new(ToolThenFinalLlm {
+            stream_calls: AtomicUsize::new(0),
+        }) as Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: "agent-capability".to_owned(),
+            name: "Capability agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+
+        let context_calls = Arc::new(AtomicUsize::new(0));
+        let capability_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = ServerAgentRuntime::with_dependencies(
+            state,
+            Arc::new(RecordingContextBuilder {
+                calls: context_calls.clone(),
+            }),
+            Arc::new(ToolResultCapabilityExecutor {
+                calls: capability_calls.clone(),
+            }),
+        );
+
+        let mut handle = runtime
+            .start(RunRequest {
+                agent_id: "agent-capability".to_owned(),
+                conversation_id: None,
+                input: "use a tool".to_owned(),
+            })
+            .await;
+        while handle.events.recv().await.is_some() {}
+
+        if capability_calls.load(Ordering::SeqCst) != 1 {
+            return Err(
+                "runtime must execute model tool calls through its capability executor".to_owned(),
+            );
+        }
+        if context_calls.load(Ordering::SeqCst) != 2 {
+            return Err("runtime must rebuild context after persisting a tool result".to_owned());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_uses_its_context_builder_for_a_completed_run() -> Result<(), String> {
+        let llm = Arc::new(FinalResponseLlm) as Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: "agent-context".to_owned(),
+            name: "Context agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+
+        let context_calls = Arc::new(AtomicUsize::new(0));
+        let capability_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = ServerAgentRuntime::with_dependencies(
+            state,
+            Arc::new(RecordingContextBuilder {
+                calls: context_calls.clone(),
+            }),
+            Arc::new(RecordingCapabilityExecutor {
+                calls: capability_calls.clone(),
+            }),
+        );
+
+        let mut handle = runtime
+            .start(RunRequest {
+                agent_id: "agent-context".to_owned(),
+                conversation_id: None,
+                input: "hello".to_owned(),
+            })
+            .await;
+        while handle.events.recv().await.is_some() {}
+
+        if context_calls.load(Ordering::SeqCst) != 1 {
+            return Err("runtime must build bounded context once for a final response".to_owned());
+        }
+        if capability_calls.load(Ordering::SeqCst) != 0 {
+            return Err(
+                "runtime must not execute capabilities when the model returns none".to_owned(),
+            );
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn runtime_start_creates_a_durable_run_and_returns_its_handle() -> Result<(), String> {
