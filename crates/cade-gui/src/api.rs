@@ -109,7 +109,7 @@ where
     F: FnMut(cade_api_types::StreamEvent),
 {
     let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
-    let path = format!("/v1/agents/{agent_id}/messages/stream");
+    let path = format!("/v1/agents/{agent_id}/run");
     let mut body_obj = serde_json::json!({ "input": input });
     if let Some(cid) = conversation_id {
         body_obj["conversation_id"] = serde_json::Value::String(cid.to_string());
@@ -193,6 +193,81 @@ where
     // Process any remaining data after the stream closes
     dispatch_sse_lines(&buffer, &mut on_event)?;
 
+    Ok(())
+}
+
+/// Request cancellation for an active server-owned run.
+pub async fn cancel_run(run_id: &str, api_key: &str) -> Result<serde_json::Value, String> {
+    let path = format!("/v1/runs/{run_id}/cancel");
+    let body = api_request("POST", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Replay events for a run after a given cursor sequence ID.
+pub async fn resume_run_stream<F>(
+    run_id: &str,
+    starting_after: Option<i64>,
+    api_key: &str,
+    mut on_event: F,
+) -> Result<(), String>
+where
+    F: FnMut(cade_api_types::StreamEvent),
+{
+    let window = web_sys::window().ok_or_else(|| "No window".to_string())?;
+    let path = match starting_after {
+        Some(seq) => format!("/v1/runs/{run_id}/stream?starting_after={seq}"),
+        None => format!("/v1/runs/{run_id}/stream"),
+    };
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+    let request = Request::new_with_str_and_init(&path, &opts).map_err(|e| format!("{:?}", e))?;
+    request
+        .headers()
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .map_err(|e| format!("{:?}", e))?;
+
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("{:?}", e))?;
+    let resp: Response = resp_value.dyn_into().map_err(|e| format!("{:?}", e))?;
+    if !resp.ok() {
+        return Err(format!("HTTP error: {}", resp.status()));
+    }
+    let stream = resp.body().ok_or_else(|| "No response body".to_string())?;
+    let reader: ReadableStreamDefaultReader = stream
+        .get_reader()
+        .dyn_into()
+        .map_err(|e| format!("{:?}", e))?;
+    let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
+    let mut buffer = String::new();
+    loop {
+        let result = JsFuture::from(reader.read())
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+        let done = Reflect::get(&result, &JsValue::from_str("done"))
+            .map(|v| v.as_bool().unwrap_or(false))
+            .unwrap_or(false);
+        if done {
+            break;
+        }
+        let value =
+            Reflect::get(&result, &JsValue::from_str("value")).map_err(|e| format!("{:?}", e))?;
+        if value.is_null() || value.is_undefined() {
+            continue;
+        }
+        let uint8array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{:?}", e))?;
+        let chunk = decoder
+            .decode_with_buffer_source(&uint8array.into())
+            .map_err(|e| format!("{:?}", e))?;
+        buffer.push_str(&chunk);
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_str = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+            dispatch_sse_lines(&event_str, &mut on_event)?;
+        }
+    }
+    dispatch_sse_lines(&buffer, &mut on_event)?;
     Ok(())
 }
 
