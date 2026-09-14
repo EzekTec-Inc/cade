@@ -119,10 +119,22 @@ pub(crate) struct LoopRequest {
     pub input: String,
 }
 
+/// Ordered run event envelope emitted by the canonical runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunEventEnvelope {
+    pub data: String,
+}
+
+impl From<RunEventEnvelope> for Event {
+    fn from(env: RunEventEnvelope) -> Self {
+        Event::default().data(env.data)
+    }
+}
+
 /// Handle returned when a durable agent run has been accepted.
 pub struct RunHandle {
     pub run_id: String,
-    pub events: tokio::sync::mpsc::Receiver<Result<Event, std::convert::Infallible>>,
+    pub events: tokio::sync::mpsc::Receiver<Result<RunEventEnvelope, std::convert::Infallible>>,
 }
 
 /// Small server-owned interface for beginning the canonical agentic loop.

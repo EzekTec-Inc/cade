@@ -706,6 +706,18 @@ impl EmbeddedSessionBuilder {
 
         let _permissions = PermissionManager::new(self.permission_mode);
 
+        let router = Arc::new(tokio::sync::RwLock::new(LlmRouter::new(AiConfig::default())));
+        let config = Arc::new(cade_server_lib::server::config::ServerConfig::default());
+        let app_state = cade_server_lib::server::state::AppState::new_in_process(
+            db.clone(),
+            provider.clone(),
+            router,
+            config,
+            Arc::new(McpManager::empty()),
+        );
+        let agent_runtime =
+            cade_server_lib::server::api::run::runtime::ServerAgentRuntime::new(app_state);
+
         Ok(EmbeddedSession {
             agent_id,
             model: self.model,
@@ -714,6 +726,7 @@ impl EmbeddedSessionBuilder {
             provider,
             runtime: Arc::new(runtime),
             max_turns: self.max_turns,
+            agent_runtime,
         })
     }
 }
@@ -731,6 +744,7 @@ pub struct EmbeddedSession {
     provider: Arc<dyn LlmProvider>,
     runtime: Arc<ToolRuntime>,
     max_turns: usize,
+    agent_runtime: cade_server_lib::server::api::run::runtime::ServerAgentRuntime,
 }
 
 impl EmbeddedSession {
@@ -755,159 +769,22 @@ impl EmbeddedSession {
         &self.runtime
     }
 
-    /// Build context messages array (system prompt + memory blocks + message history).
-    fn build_messages_context(&self, conversation_id: Option<&str>) -> Result<Vec<LlmMessage>> {
-        let mut messages = Vec::new();
-
-        // 1. System prompt & persistent memory blocks
-        let mut sys = self.system_prompt.clone().unwrap_or_default();
-        let memory_blocks = cade_store::sqlite::get_memory_blocks_full(&self.db, &self.agent_id)
-            .map_err(|e| Error::custom(format!("failed to load memory: {e}")))?;
-
-        if !memory_blocks.is_empty() {
-            if !sys.is_empty() {
-                sys.push_str("\n\n");
-            }
-            sys.push_str("# Memory\n");
-            for (label, value, _, _) in memory_blocks {
-                sys.push_str(&format!("[{label}]\n{value}\n\n"));
-            }
-        }
-
-        if !sys.trim().is_empty() {
-            messages.push(LlmMessage {
-                role: "system".to_string(),
-                content: sys.trim().to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-                images: None,
-                cache_control: None,
-            });
-        }
-
-        // 2. Chat history
-        let history =
-            cade_store::sqlite::list_messages(&self.db, &self.agent_id, conversation_id, 100)
-                .map_err(|e| Error::custom(format!("failed to load history: {e}")))?;
-
-        for m in history {
-            let text = if let Value::String(s) = m.content {
-                s
-            } else {
-                m.content.to_string()
-            };
-            messages.push(LlmMessage {
-                role: m.role,
-                content: text,
-                tool_call_id: None,
-                tool_calls: None,
-                images: None,
-                cache_control: None,
-            });
-        }
-
-        Ok(messages)
-    }
-
     /// Send a prompt and execute the agentic loop to convergence in-process.
     pub async fn prompt(&self, text: &str) -> Result<String> {
-        let conversation_id = format!("conv-{}", self.agent_id);
-
-        // 1. Persist user message
-        let user_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-        let _ = cade_store::sqlite::insert_message(
-            &self.db,
-            &MessageRow {
-                id: user_msg_id,
-                agent_id: self.agent_id.clone(),
-                conversation_id: Some(conversation_id.clone()),
-                role: "user".to_string(),
-                content: Value::String(text.to_string()),
-                char_count: text.len(),
-            },
-        );
-
-        let tools = all_schemas(false);
+        use futures::StreamExt;
+        let mut stream = self.stream_prompt(text).await?;
         let mut final_content = String::new();
-
-        // 2. Agentic turn loop
-        for _turn in 0..self.max_turns {
-            let messages = self.build_messages_context(Some(&conversation_id))?;
-            let req = CompletionRequest {
-                model: self.model.clone(),
-                messages,
-                tools: tools.clone(),
-                max_tokens: 4096,
-                reasoning_effort: None,
-            };
-
-            let resp = self.provider.complete(&req).await?;
-            let text_chunk = resp.content.unwrap_or_default();
-            if !text_chunk.is_empty() {
-                final_content = text_chunk.clone();
-            }
-
-            if resp.tool_calls.is_empty() {
-                // Done - persist assistant message
-                let asst_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-                let _ = cade_store::sqlite::insert_message(
-                    &self.db,
-                    &MessageRow {
-                        id: asst_msg_id,
-                        agent_id: self.agent_id.clone(),
-                        conversation_id: Some(conversation_id.clone()),
-                        role: "assistant".to_string(),
-                        content: Value::String(final_content.clone()),
-                        char_count: final_content.len(),
-                    },
-                );
-                break;
-            }
-
-            // Persist assistant message with tool call
-            let asst_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-            let _ = cade_store::sqlite::insert_message(
-                &self.db,
-                &MessageRow {
-                    id: asst_msg_id,
-                    agent_id: self.agent_id.clone(),
-                    conversation_id: Some(conversation_id.clone()),
-                    role: "assistant".to_string(),
-                    content: Value::String(text_chunk.clone()),
-                    char_count: text_chunk.len(),
-                },
-            );
-
-            // Execute each tool call
-            for tc in resp.tool_calls {
-                let tool_res = self
-                    .runtime
-                    .execute(tc.id.clone(), &tc.name, &tc.arguments)
-                    .await
-                    .unwrap_or_else(|| RuntimeToolResult {
-                        tool_call_id: tc.id.clone(),
-                        tool_name: tc.name.clone(),
-                        output: format!("Error: Tool '{}' not found.", tc.name),
-                        is_error: true,
-                        ui_resource_uri: None,
-                    });
-
-                // Persist tool result
-                let tool_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-                let _ = cade_store::sqlite::insert_message(
-                    &self.db,
-                    &MessageRow {
-                        id: tool_msg_id,
-                        agent_id: self.agent_id.clone(),
-                        conversation_id: Some(conversation_id.clone()),
-                        role: "tool".to_string(),
-                        content: Value::String(tool_res.output),
-                        char_count: 0,
-                    },
-                );
+        while let Some(event) = stream.next().await {
+            match event {
+                CadeStreamEvent::MessageDelta(delta) => {
+                    final_content.push_str(&delta);
+                }
+                CadeStreamEvent::Error(err) => {
+                    return Err(Error::custom(err));
+                }
+                _ => {}
             }
         }
-
         Ok(final_content)
     }
 
@@ -917,226 +794,40 @@ impl EmbeddedSession {
         text: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = CadeStreamEvent> + Send>>> {
         let (tx, rx) = mpsc::channel(64);
+        let conversation_id = format!("conv-{}", self.agent_id);
 
-        let agent_id = self.agent_id.clone();
-        let model = self.model.clone();
-        let db = self.db.clone();
-        let provider = self.provider.clone();
-        let runtime = self.runtime.clone();
-        let max_turns = self.max_turns;
-        let user_text = text.to_string();
-        let sys_prompt = self.system_prompt.clone();
+        let handle = self
+            .agent_runtime
+            .start(cade_server_lib::server::api::run::runtime::RunRequest {
+                agent_id: self.agent_id.clone(),
+                conversation_id: Some(conversation_id),
+                input: text.to_string(),
+            })
+            .await;
 
         tokio::spawn(async move {
-            let conversation_id = format!("conv-{agent_id}");
-
-            // 1. Persist user message
-            let user_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-            let _ = cade_store::sqlite::insert_message(
-                &db,
-                &MessageRow {
-                    id: user_msg_id,
-                    agent_id: agent_id.clone(),
-                    conversation_id: Some(conversation_id.clone()),
-                    role: "user".to_string(),
-                    content: Value::String(user_text.clone()),
-                    char_count: user_text.len(),
-                },
-            );
-
-            let tools = all_schemas(false);
-            let mut final_content = String::new();
-
-            for _turn in 0..max_turns {
-                // Build context
-                let mut messages = Vec::new();
-                let mut sys = sys_prompt.clone().unwrap_or_default();
-                let memory_blocks =
-                    cade_store::sqlite::get_memory_blocks_full(&db, &agent_id).unwrap_or_default();
-
-                if !memory_blocks.is_empty() {
-                    if !sys.is_empty() {
-                        sys.push_str("\n\n");
+            let mut stream = handle.events;
+            while let Some(res) = stream.recv().await {
+                if let Ok(event) = res {
+                    let data = event.data;
+                    let trimmed = data.trim();
+                    if trimmed.is_empty() {
+                        continue;
                     }
-                    sys.push_str("# Memory\n");
-                    for (label, value, _, _) in memory_blocks {
-                        sys.push_str(&format!("[{label}]\n{value}\n\n"));
+                    if trimmed == "[DONE]" {
+                        break;
                     }
-                }
-
-                if !sys.trim().is_empty() {
-                    messages.push(LlmMessage {
-                        role: "system".to_string(),
-                        content: sys.trim().to_string(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                        images: None,
-                        cache_control: None,
-                    });
-                }
-
-                let history =
-                    cade_store::sqlite::list_messages(&db, &agent_id, Some(&conversation_id), 100)
-                        .unwrap_or_default();
-                for m in history {
-                    let txt = if let Value::String(s) = m.content {
-                        s
-                    } else {
-                        m.content.to_string()
-                    };
-                    messages.push(LlmMessage {
-                        role: m.role,
-                        content: txt,
-                        tool_call_id: None,
-                        tool_calls: None,
-                        images: None,
-                        cache_control: None,
-                    });
-                }
-
-                let req = CompletionRequest {
-                    model: model.clone(),
-                    messages,
-                    tools: tools.clone(),
-                    max_tokens: 4096,
-                    reasoning_effort: None,
-                };
-
-                let mut current_turn_text = String::new();
-                let mut current_tool_calls: Vec<LlmToolCall> = Vec::new();
-
-                match provider.stream(&req).await {
-                    Ok(mut stream) => {
-                        use futures::StreamExt;
-                        while let Some(chunk_res) = stream.next().await {
-                            match chunk_res {
-                                Ok(StreamChunk::Text(delta)) => {
-                                    current_turn_text.push_str(&delta);
-                                    let _ = tx.send(CadeStreamEvent::MessageDelta(delta)).await;
-                                }
-                                Ok(StreamChunk::Reasoning(thought)) => {
-                                    let _ = tx.send(CadeStreamEvent::Thought(thought)).await;
-                                }
-                                Ok(StreamChunk::ToolCall(tc)) => {
-                                    current_tool_calls.push(tc);
-                                }
-                                Ok(StreamChunk::Usage(u)) => {
-                                    let _ = tx
-                                        .send(CadeStreamEvent::Usage {
-                                            input_tokens: u.input_tokens as u64,
-                                            output_tokens: u.output_tokens as u64,
-                                            model: u.model,
-                                        })
-                                        .await;
-                                }
-                                Ok(StreamChunk::FinishReason(r)) => {
-                                    let _ = tx.send(CadeStreamEvent::Finished { outcome: r }).await;
-                                }
-                                Ok(StreamChunk::Done) => {}
-                                Err(e) => {
-                                    let _ = tx.send(CadeStreamEvent::Error(e.to_string())).await;
-                                }
-                            }
+                    if let Ok(stream_event) =
+                        serde_json::from_str::<cade_api_types::StreamEvent>(trimmed)
+                    {
+                        if let Some(cade_event) =
+                            CadeStreamEvent::from_stream_event(&stream_event)
+                        {
+                            let _ = tx.send(cade_event).await;
                         }
                     }
-                    Err(e) => {
-                        // Fallback to complete
-                        if let Ok(resp) = provider.complete(&req).await {
-                            if let Some(c) = resp.content {
-                                current_turn_text = c.clone();
-                                let _ = tx.send(CadeStreamEvent::MessageDelta(c)).await;
-                            }
-                            current_tool_calls = resp.tool_calls;
-                        } else {
-                            let _ = tx.send(CadeStreamEvent::Error(e.to_string())).await;
-                            break;
-                        }
-                    }
-                }
-
-                if !current_turn_text.is_empty() {
-                    final_content = current_turn_text.clone();
-                }
-
-                if current_tool_calls.is_empty() {
-                    let asst_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-                    let _ = cade_store::sqlite::insert_message(
-                        &db,
-                        &MessageRow {
-                            id: asst_msg_id,
-                            agent_id: agent_id.clone(),
-                            conversation_id: Some(conversation_id.clone()),
-                            role: "assistant".to_string(),
-                            content: Value::String(final_content.clone()),
-                            char_count: final_content.len(),
-                        },
-                    );
-                    break;
-                }
-
-                // Persist assistant message with tool calls
-                let asst_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-                let _ = cade_store::sqlite::insert_message(
-                    &db,
-                    &MessageRow {
-                        id: asst_msg_id,
-                        agent_id: agent_id.clone(),
-                        conversation_id: Some(conversation_id.clone()),
-                        role: "assistant".to_string(),
-                        content: Value::String(current_turn_text.clone()),
-                        char_count: current_turn_text.len(),
-                    },
-                );
-
-                for tc in current_tool_calls {
-                    let _ = tx
-                        .send(CadeStreamEvent::ToolExecuting {
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
-                            arguments: tc.arguments.clone(),
-                        })
-                        .await;
-
-                    let tool_res = runtime
-                        .execute(tc.id.clone(), &tc.name, &tc.arguments)
-                        .await
-                        .unwrap_or_else(|| RuntimeToolResult {
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
-                            output: format!("Error: Tool '{}' not found.", tc.name),
-                            is_error: true,
-                            ui_resource_uri: None,
-                        });
-
-                    let _ = tx
-                        .send(CadeStreamEvent::ToolCompleted {
-                            tool_call_id: tool_res.tool_call_id.clone(),
-                            tool_name: tool_res.tool_name.clone(),
-                            output: tool_res.output.clone(),
-                            is_error: tool_res.is_error,
-                        })
-                        .await;
-
-                    let tool_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-                    let _ = cade_store::sqlite::insert_message(
-                        &db,
-                        &MessageRow {
-                            id: tool_msg_id,
-                            agent_id: agent_id.clone(),
-                            conversation_id: Some(conversation_id.clone()),
-                            role: "tool".to_string(),
-                            content: Value::String(tool_res.output),
-                            char_count: 0,
-                        },
-                    );
                 }
             }
-
-            let _ = tx
-                .send(CadeStreamEvent::Finished {
-                    outcome: "completed".to_string(),
-                })
-                .await;
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))

@@ -202,7 +202,9 @@ async fn emit_run_event(db: &sqlite::Db, run_id: &str, tx: &SseTx, mut payload: 
         object.insert("seq_id".to_owned(), Value::from(sequence));
     }
     let _ = tx
-        .send(Ok(Event::default().data(payload.to_string())))
+        .send(Ok(runtime::RunEventEnvelope {
+            data: payload.to_string(),
+        }))
         .await;
 }
 
@@ -231,12 +233,16 @@ pub async fn run_agent(
         .await;
 
     tracing::debug!(run_id = %handle.run_id, "agent run accepted by server runtime");
-    let stream = tokio_stream::wrappers::ReceiverStream::new(handle.events);
+    let stream = tokio_stream::StreamExt::map(
+        tokio_stream::wrappers::ReceiverStream::new(handle.events),
+        |res| res.map(Event::from),
+    );
     Sse::new(stream).into_response()
 }
 
 /// Type alias for the SSE sender used by [`run_agent_loop`].
-pub(super) type SseTx = tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>;
+pub(super) type SseTx =
+    tokio::sync::mpsc::Sender<Result<runtime::RunEventEnvelope, std::convert::Infallible>>;
 
 /// Async body of [`run_agent`], extracted for readability.
 ///
@@ -376,7 +382,11 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             json!({ "message_type": "run_done", "status": "done" }),
         )
         .await;
-        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        let _ = tx
+            .send(Ok(runtime::RunEventEnvelope {
+                data: "[DONE]".to_string(),
+            }))
+            .await;
         return;
     }
 
@@ -896,7 +906,11 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     .await;
 
     // ── End of transport stream ────────────────────────────────────────
-    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+    let _ = tx
+            .send(Ok(runtime::RunEventEnvelope {
+                data: "[DONE]".to_string(),
+            }))
+            .await;
 }
 
 pub(super) fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str) {

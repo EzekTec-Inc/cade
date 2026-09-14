@@ -153,9 +153,9 @@ async fn emit_tool_progress(
         object.insert("seq_id".to_owned(), Value::from(sequence));
     }
     let _ = tx
-        .send(Ok(
-            axum::response::sse::Event::default().data(envelope.to_string())
-        ))
+        .send(Ok(super::runtime::RunEventEnvelope {
+            data: envelope.to_string(),
+        }))
         .await;
 }
 

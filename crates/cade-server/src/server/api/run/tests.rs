@@ -101,11 +101,9 @@ async fn emit_run_event_persists_cursor_before_forwarding_transport_event() -> R
     let forwarded = receiver
         .recv()
         .await
-        .ok_or_else(|| "runtime event must reach the transport receiver".to_owned())?;
-    match forwarded {
-        Ok(_) => {}
-        Err(never) => match never {},
-    }
+        .ok_or_else(|| "runtime event must reach the transport receiver".to_owned())?
+        .map_err(|never| match never {})?;
+    assert!(forwarded.data.contains(&run.id));
 
     let persisted = cade_store::sqlite::run_events_after(&state.db, &run.id, -1)
         .map_err(|error| error.to_string())?;
