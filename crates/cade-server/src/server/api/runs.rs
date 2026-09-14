@@ -43,6 +43,19 @@ pub async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) 
 /// GET /v1/runs/:run_id/stream?starting_after=<seq_id>
 /// Replays stored events from seq_id+1, then if run is still 'running'
 /// streams a [DONE] to let the client know to poll again.
+/// POST /v1/runs/:run_id/cancel — request durable cancellation for an active run.
+pub async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
+    match sqlite::request_run_cancellation(&state.db, &run_id) {
+        Ok(true) => Json(json!({ "id": run_id, "status": "cancelling" })).into_response(),
+        Ok(false) => match sqlite::get_run(&state.db, &run_id) {
+            Ok(Some(run)) => Json(json!({ "id": run.id, "status": run.status })).into_response(),
+            Ok(None) => err(StatusCode::NOT_FOUND, "run not found"),
+            Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        },
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
+}
+
 pub async fn stream_run(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
@@ -53,7 +66,7 @@ pub async fn stream_run(
         .and_then(|s| s.parse().ok())
         .unwrap_or(-1);
 
-    let run = match sqlite::get_run(&state.db, &run_id) {
+    match sqlite::get_run(&state.db, &run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return err(StatusCode::NOT_FOUND, "run not found"),
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -64,10 +77,8 @@ pub async fn stream_run(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let is_done = run.status == "completed" || run.status == "failed";
-
     // Build the replay stream
-    let mut sse_events: Vec<Value> = events
+    let sse_events: Vec<Value> = events
         .into_iter()
         .map(|(seq, data)| {
             // Re-attach seq_id in case it's missing
@@ -80,9 +91,9 @@ pub async fn stream_run(
         })
         .collect();
 
-    if is_done {
-        sse_events.push(json!({ "message_type": "run_done", "status": run.status }));
-    }
+    // The canonical runtime persists a terminal `run_done` envelope before
+    // completing the transport. Replay that durable record rather than
+    // synthesizing an unsequenced duplicate terminal event here.
 
     let stream = futures::stream::iter(
         sse_events

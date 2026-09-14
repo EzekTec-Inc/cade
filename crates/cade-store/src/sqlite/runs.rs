@@ -49,6 +49,32 @@ pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+/// Request cancellation for an active run without overwriting a terminal outcome.
+///
+/// Returns `true` when a running run was transitioned to `cancelling`.
+pub fn request_run_cancellation(db: &Db, run_id: &str) -> Result<bool> {
+    let conn = db.get()?;
+    let changed = conn.execute(
+        "UPDATE runs SET status = 'cancelling', updated_at = ?1
+         WHERE id = ?2 AND status = 'running'",
+        params![now_ts(), run_id],
+    )?;
+    Ok(changed == 1)
+}
+
+/// Returns whether an active run has a durable cancellation request.
+pub fn is_run_cancellation_requested(db: &Db, run_id: &str) -> Result<bool> {
+    let conn = db.get()?;
+    let status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM runs WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(status.as_deref() == Some("cancelling"))
+}
+
 /// List recent runs for an agent ordered by created_at DESC.
 pub fn list_agent_runs(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<RunRow>> {
     let conn = db.get()?;

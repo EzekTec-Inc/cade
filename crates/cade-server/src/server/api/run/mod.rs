@@ -187,6 +187,25 @@ fn detect_theme_cmd(input: &str) -> Option<String> {
     input.strip_prefix("/theme ").map(|s| s.trim().to_string())
 }
 
+/// Persist an ordered run event before forwarding it to the active transport.
+async fn emit_run_event(db: &sqlite::Db, run_id: &str, tx: &SseTx, mut payload: Value) {
+    let serialized = payload.to_string();
+    let sequence = match sqlite::append_run_event(db, run_id, &serialized) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            tracing::error!(%run_id, %error, "failed to persist run event");
+            return;
+        }
+    };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
+        object.insert("seq_id".to_owned(), Value::from(sequence));
+    }
+    let _ = tx
+        .send(Ok(Event::default().data(payload.to_string())))
+        .await;
+}
+
 /// `POST /v1/agents/:id/run`
 pub async fn run_agent(
     State(state): State<AppState>,
@@ -238,18 +257,24 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         input,
     } = request;
     let send_raw = |json_string: String| {
+        let database = state2.db.clone();
+        let run_id = run_id2.clone();
         let tx = tx.clone();
-        let ev = Event::default().data(json_string);
         async move {
-            let _ = tx.send(Ok(ev)).await;
+            let payload = match serde_json::from_str(&json_string) {
+                Ok(payload) => payload,
+                Err(_) => Value::String(json_string),
+            };
+            emit_run_event(&database, &run_id, &tx, payload).await;
         }
     };
 
     let send = |data: Value| {
+        let database = state2.db.clone();
+        let run_id = run_id2.clone();
         let tx = tx.clone();
-        let ev = Event::default().data(data.to_string());
         async move {
-            let _ = tx.send(Ok(ev)).await;
+            emit_run_event(&database, &run_id, &tx, data).await;
         }
     };
 
@@ -344,6 +369,13 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                 "status": "done",
             }),
         );
+        emit_run_event(
+            &state2.db,
+            &run_id2,
+            &tx,
+            json!({ "message_type": "run_done", "status": "done" }),
+        )
+        .await;
         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
         return;
     }
@@ -373,15 +405,12 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             break;
         }
 
-        // ── Client disconnect check ───────────────────────────────────
-        // If the SSE receiver has been dropped (user pressed Ctrl+C in the
-        // TUI, the cade CLI exited, or the network connection died), bail
-        // out before doing more work. This prevents the server from
-        // continuing to call the LLM and execute tools after the client
-        // has gone away — saving tokens and avoiding unwanted side
-        // effects from in-flight tool calls.
-        if tx.is_closed() {
-            tracing::info!("agentic loop: client disconnected at turn {turns} — cancelling");
+        // ── Durable cancellation check ─────────────────────────────────
+        // Presentation adapters may disconnect and reconnect from an event
+        // cursor. Only the explicit durable cancellation command stops this
+        // server-owned run; a transport receiver is not execution ownership.
+        if sqlite::is_run_cancellation_requested(&state2.db, &run_id2).unwrap_or(false) {
+            tracing::info!("agentic loop: cancellation requested at turn {turns}");
             exit_status = RunExitStatus::Cancelled;
             break;
         }
@@ -577,12 +606,12 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         loop {
             tokio::select! {
                 biased;
-                _ = tx.closed() => {
-                    tracing::info!(
-                        "agentic loop: client disconnected mid-stream at turn {turns} — aborting LLM"
-                    );
-                    stream_cancelled = true;
-                    break;
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                    if sqlite::is_run_cancellation_requested(&state2.db, &run_id2).unwrap_or(false) {
+                        tracing::info!("agentic loop: cancellation requested mid-stream at turn {turns}");
+                        stream_cancelled = true;
+                        break;
+                    }
                 }
                 chunk_opt = llm_stream.next() => {
                     let Some(chunk) = chunk_opt else { break };
@@ -695,6 +724,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             .execute(
                 agent_id2.clone(),
                 conv_id2.clone(),
+                run_id2.clone(),
                 input.clone(),
                 tool_calls,
                 tx.clone(),
@@ -853,7 +883,19 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         }),
     );
 
-    // ── End of stream ─────────────────────────────────────────────────
+    // ── Durable terminal outcome ───────────────────────────────────────
+    emit_run_event(
+        &state2.db,
+        &run_id2,
+        &tx,
+        json!({
+            "message_type": "run_done",
+            "status": exit_status.as_str(),
+        }),
+    )
+    .await;
+
+    // ── End of transport stream ────────────────────────────────────────
     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
 }
 

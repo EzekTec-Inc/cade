@@ -70,6 +70,251 @@ fn run_exit_status_error_renders_as_error() {
     assert_eq!(RunExitStatus::Error.as_str(), "error");
 }
 
+#[tokio::test]
+async fn emit_run_event_persists_cursor_before_forwarding_transport_event() -> Result<(), String> {
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-events".to_owned(),
+        name: "Event agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+    emit_run_event(
+        &state.db,
+        &run.id,
+        &sender,
+        serde_json::json!({ "message_type": "assistant_message", "content": "hello" }),
+    )
+    .await;
+
+    let forwarded = receiver
+        .recv()
+        .await
+        .ok_or_else(|| "runtime event must reach the transport receiver".to_owned())?;
+    match forwarded {
+        Ok(_) => {}
+        Err(never) => match never {},
+    }
+
+    let persisted = cade_store::sqlite::run_events_after(&state.db, &run.id, -1)
+        .map_err(|error| error.to_string())?;
+    if persisted.len() != 1 || persisted[0].0 != 0 {
+        return Err(format!(
+            "expected one persisted event at sequence zero, got {persisted:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancel_run_command_records_durable_cancellation_request() -> Result<(), String> {
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-cancel".to_owned(),
+        name: "Cancellation agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+
+    let response =
+        crate::server::api::runs::cancel_run(State(state.clone()), Path(run.id.clone())).await;
+    if response.status() != axum::http::StatusCode::OK {
+        return Err(format!(
+            "expected cancellation command success, got {}",
+            response.status()
+        ));
+    }
+    let stored = cade_store::sqlite::get_run(&state.db, &run.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "cancelled run must remain queryable".to_owned())?;
+    if stored.status != "cancelling" {
+        return Err(format!(
+            "expected durable cancelling status, got {}",
+            stored.status
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_stream_replays_only_events_after_the_requested_cursor() -> Result<(), String> {
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-replay".to_owned(),
+        name: "Replay agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+    for message_type in ["stream_start", "assistant_message", "run_done"] {
+        cade_store::sqlite::append_run_event(
+            &state.db,
+            &run.id,
+            &serde_json::json!({ "message_type": message_type }).to_string(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    cade_store::sqlite::finish_run(&state.db, &run.id, "done")
+        .map_err(|error| error.to_string())?;
+
+    let response = crate::server::api::runs::stream_run(
+        State(state),
+        Path(run.id.clone()),
+        axum::extract::Query(std::collections::HashMap::from([(
+            "starting_after".to_owned(),
+            "0".to_owned(),
+        )])),
+    )
+    .await;
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = String::from_utf8(body.to_vec()).map_err(|error| error.to_string())?;
+    let payloads: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())?;
+
+    if payloads.len() != 2 {
+        return Err(format!("expected two replayed events, got {payloads:?}"));
+    }
+    let expected = [(1, "assistant_message"), (2, "run_done")];
+    for (payload, (sequence, message_type)) in payloads.iter().zip(expected) {
+        if payload["run_id"] != run.id
+            || payload["seq_id"] != serde_json::json!(sequence)
+            || payload["message_type"] != message_type
+        {
+            return Err(format!("unexpected replay envelope: {payload}"));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_run_persists_a_terminal_cancelled_event() -> Result<(), String> {
+    struct NeverContextBuilder;
+
+    #[async_trait::async_trait]
+    impl runtime::ContextBuilder for NeverContextBuilder {
+        async fn build(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _is_tool_return: bool,
+        ) -> Result<runtime::RunContext, String> {
+            Err("a cancelled run must not build model context".to_owned())
+        }
+    }
+
+    struct NeverCapabilityExecutor;
+
+    #[async_trait::async_trait]
+    impl runtime::CapabilityExecutor for NeverCapabilityExecutor {
+        async fn execute(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _run_id: String,
+            _input: String,
+            _tool_calls: Vec<LlmToolCall>,
+            _events: SseTx,
+        ) -> Vec<(cade_agent::tools::manager::ToolResult, Value)> {
+            Vec::new()
+        }
+    }
+
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-cancel-terminal".to_owned(),
+        name: "Cancellation terminal agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+    if !cade_store::sqlite::request_run_cancellation(&state.db, &run.id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("active run must accept cancellation".to_owned());
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+
+    run_agent_loop_with_dependencies(
+        state.clone(),
+        runtime::LoopRequest {
+            agent_id: agent.id,
+            conversation_id: None,
+            run_id: run.id.clone(),
+            theme_command: None,
+            input: "ignored".to_owned(),
+        },
+        sender,
+        std::sync::Arc::new(NeverContextBuilder),
+        std::sync::Arc::new(NeverCapabilityExecutor),
+    )
+    .await;
+    while receiver.recv().await.is_some() {}
+
+    let stored_run = cade_store::sqlite::get_run(&state.db, &run.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "cancelled run must remain queryable".to_owned())?;
+    if stored_run.status != "cancelled" {
+        return Err(format!(
+            "expected cancelled run status, got {}",
+            stored_run.status
+        ));
+    }
+    let events = cade_store::sqlite::run_events_after(&state.db, &run.id, -1)
+        .map_err(|error| error.to_string())?;
+    let terminal = events
+        .last()
+        .ok_or_else(|| "cancelled run must persist a terminal event".to_owned())?;
+    if terminal.0 != 1 || !terminal.1.contains("\"status\":\"cancelled\"") {
+        return Err(format!(
+            "expected ordered cancelled terminal event, got {terminal:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// A mock LlmProvider that panics if called.  Used to assert that an early
 /// return path (e.g. depth-limit guard) never reaches the LLM at all.
 pub(super) struct PanicOnCallLlm;
@@ -1123,6 +1368,7 @@ mod runtime_contract_tests {
             &self,
             _agent_id: String,
             _conversation_id: Option<String>,
+            _run_id: String,
             _input: String,
             _tool_calls: Vec<LlmToolCall>,
             _events: SseTx,
@@ -1211,6 +1457,7 @@ mod runtime_contract_tests {
             &self,
             _agent_id: String,
             _conversation_id: Option<String>,
+            _run_id: String,
             _input: String,
             tool_calls: Vec<LlmToolCall>,
             _events: SseTx,
@@ -1503,6 +1750,7 @@ mod advanced_execution_tests {
             state,
             "test-agent".to_string(),
             Some("test-conv".to_string()),
+            "run-test-sequence".to_string(),
             "read Cargo.toml and run a sequence".to_string(),
             tool_calls,
             tx,
