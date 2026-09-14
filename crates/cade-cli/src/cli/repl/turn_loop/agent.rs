@@ -569,4 +569,106 @@ mod tests {
             _ => false,
         }));
     }
+
+    #[test]
+    #[ignore = "requires tty"]
+    fn test_tui_adapter_renders_canonical_event_stream() {
+        let app = std::sync::Arc::new(parking_lot::Mutex::new(cade_tui::app::TuiApp::new(
+            cade_core::permissions::PermissionMode::Default,
+            "test_agent".into(),
+            "test_model".into(),
+            None,
+        )));
+
+        // User typed something into editor before stream arrived
+        {
+            let mut a = app.lock();
+            a.editor.set_text("local draft prompt".to_string());
+            assert_eq!(a.editor.text(), "local draft prompt");
+        }
+
+        // Simulate recorded canonical event stream delivery
+        let events = vec![
+            serde_json::json!({
+                "message_type": "stream_start",
+                "conversation_id": "conv-1",
+                "run_id": "run-42",
+                "seq_id": 0
+            }),
+            serde_json::json!({
+                "message_type": "reasoning_message",
+                "content": "Thinking deeply...",
+                "run_id": "run-42",
+                "seq_id": 1
+            }),
+            serde_json::json!({
+                "message_type": "assistant_message",
+                "content": "Here is the plan.",
+                "run_id": "run-42",
+                "seq_id": 2
+            }),
+            serde_json::json!({
+                "message_type": "tool_call_message",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "function": { "name": "bash", "arguments": "{}" }
+                }],
+                "run_id": "run-42",
+                "seq_id": 3
+            }),
+            serde_json::json!({
+                "message_type": "run_done",
+                "status": "done",
+                "run_id": "run-42",
+                "seq_id": 4
+            }),
+        ];
+
+        // Process canonical events through TuiApp
+        for event in events {
+            let msg: cade_agent::agent::client::CadeMessage =
+                serde_json::from_value(serde_json::json!({
+                    "message_type": event["message_type"],
+                    "data": event,
+                }))
+                .unwrap();
+            let mut a = app.lock();
+            match msg.msg_type() {
+                "reasoning_message" => {
+                    if let Some(text) = msg.reasoning_text() {
+                        a.push_reasoning_chunk(text);
+                    }
+                }
+                "assistant_message" => {
+                    if let Some(text) = msg.assistant_text() {
+                        let _ = a.push_streaming_chunk(text);
+                    }
+                }
+                "tool_call_message" => {
+                    a.commit_reasoning_inner();
+                    let _ = a.commit_streaming();
+                    let tool_name = msg.data["tool_calls"][0]["function"]["name"].as_str().unwrap();
+                    a.set_last_status(Some(format!("● {tool_name}…")));
+                }
+                "run_done" => {
+                    let _ = a.commit_reasoning();
+                    let _ = a.commit_streaming();
+                    a.set_last_status(Some("✓ Finished".to_string()));
+                }
+                _ => {}
+            }
+        }
+
+        // Verify TuiApp state
+        let a = app.lock();
+        // 1. Editor local draft state was NOT corrupted by incoming stream
+        assert_eq!(a.editor.text(), "local draft prompt");
+        // 2. Status was updated
+        assert_eq!(a.last_status, Some("✓ Finished".to_string()));
+        // 3. Lines contain the committed streaming content
+        assert!(a.lines.iter().any(|line| match line {
+            RenderLine::AssistantText(s) => s.contains("Here is the plan."),
+            _ => false,
+        }));
+    }
 }
