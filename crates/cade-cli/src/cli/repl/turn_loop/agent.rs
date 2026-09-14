@@ -609,10 +609,11 @@ mod tests {
             }),
             serde_json::json!({
                 "message_type": "tool_call_message",
-                "tool_calls": [{
+                "tool_call": {
                     "id": "call_1",
-                    "function": { "name": "bash", "arguments": "{}" }
-                }],
+                    "name": "bash",
+                    "arguments": {}
+                },
                 "run_id": "run-42",
                 "seq_id": 3
             }),
@@ -627,11 +628,7 @@ mod tests {
         // Process canonical events through TuiApp
         for event in events {
             let msg: cade_agent::agent::client::CadeMessage =
-                serde_json::from_value(serde_json::json!({
-                    "message_type": event["message_type"],
-                    "data": event,
-                }))
-                .unwrap();
+                serde_json::from_value(event).expect("valid test json");
             let mut a = app.lock();
             match msg.msg_type() {
                 "reasoning_message" => {
@@ -647,8 +644,9 @@ mod tests {
                 "tool_call_message" => {
                     a.commit_reasoning_inner();
                     let _ = a.commit_streaming();
-                    let tool_name = msg.data["tool_calls"][0]["function"]["name"].as_str().unwrap();
-                    a.set_last_status(Some(format!("● {tool_name}…")));
+                    if let Some((_, tool_name, _)) = msg.as_tool_call() {
+                        a.set_last_status(Some(format!("● {tool_name}…")));
+                    }
                 }
                 "run_done" => {
                     let _ = a.commit_reasoning();
