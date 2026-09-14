@@ -60,11 +60,6 @@ const BANNER: &str = r#"
  Type /help for commands, /exit to quit
 "#;
 
-/// Injected after an empty post-tool response by the legacy local tool loop.
-pub(crate) const EMPTY_YIELD_REPROMPT: &str = "Tool execution complete. \
-Please provide a text response explaining the result, what you found, \
-or what you are doing next.";
-
 // -- Slash commands
 
 /// Result from the agent TUI picker.
@@ -125,14 +120,6 @@ pub(crate) fn short_mode_label(mode: PermissionMode) -> &'static str {
         PermissionMode::Plan => "plan",
         PermissionMode::BypassPermissions => "yolo",
     }
-}
-
-// -- Tool preflight result
-
-#[derive(Debug)]
-pub(crate) enum ToolPreflightResult {
-    Approved,
-    Blocked(cade_agent::tools::ToolResult),
 }
 
 struct ReplLuaHookRunner {

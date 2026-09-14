@@ -36,7 +36,6 @@ impl Repl {
             .await
             .map_err(|e| crate::error::Error::custom(e.to_string()))
     }
-
 }
 
 #[async_trait::async_trait]
@@ -541,5 +540,4 @@ impl Repl {
             })
         }
     }
-
 }
