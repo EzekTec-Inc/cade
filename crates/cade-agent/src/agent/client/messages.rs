@@ -204,10 +204,6 @@ impl HttpTransport {
     where
         F: Fn(&CadeMessage),
     {
-        let mut body = json!({ "input": input });
-        if let Some(conversation_id) = conversation_id {
-            body["conversation_id"] = conversation_id.into();
-        }
         self.start_run_cancellable(agent_id, input, conversation_id, on_event, None)
             .await
     }
