@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 use super::messages::{err, maybe_set_conv_title, persist, resolve_conversation};
 use crate::server::state::AppState;
 
-pub(crate) mod runtime;
+pub mod runtime;
 pub mod storage_impl;
 /// Maximum agentic turns per request (prevents infinite loops).
 mod subagent;

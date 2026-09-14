@@ -1188,6 +1188,7 @@ dependencies = [
  "cade-ai",
  "cade-api-types",
  "cade-core",
+ "cade-server-lib",
  "cade-store",
  "derive_more",
  "dirs",
