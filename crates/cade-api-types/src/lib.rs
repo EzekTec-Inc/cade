@@ -135,6 +135,16 @@ impl StreamEvent {
         self.data.get("approval_id").and_then(|v| v.as_str())
     }
 
+    /// Extract `run_id` from a canonical run event.
+    pub fn run_id(&self) -> Option<&str> {
+        self.data.get("run_id").and_then(|v| v.as_str())
+    }
+
+    /// Extract `seq_id` from a canonical run event.
+    pub fn seq_id(&self) -> Option<i64> {
+        self.data.get("seq_id").and_then(|v| v.as_i64())
+    }
+
     /// Deserialize the `tool_call` object (id, name, arguments).
     pub fn tool_call(&self) -> Option<ToolCallData> {
         self.data
@@ -382,6 +392,16 @@ mod tests {
         assert_eq!(e.msg_type(), "tool_call_message");
         let tc = e.data.get("tool_call").expect("tool_call present");
         assert_eq!(tc["name"].as_str(), Some("bash"));
+    }
+
+    #[test]
+    fn stream_event_parses_run_envelope() {
+        let wire = r#"{"message_type":"assistant_message","content":"Hello","run_id":"run-xyz","seq_id":42}"#;
+        let e: StreamEvent = serde_json::from_str(wire).expect("parse");
+        assert_eq!(e.msg_type(), "assistant_message");
+        assert_eq!(e.content(), Some("Hello"));
+        assert_eq!(e.run_id(), Some("run-xyz"));
+        assert_eq!(e.seq_id(), Some(42));
     }
 
     #[test]
