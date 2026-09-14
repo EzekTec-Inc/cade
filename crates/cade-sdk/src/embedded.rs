@@ -11,14 +11,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use cade_agent::agent::client::{AgentState, MemoryBlock};
 use cade_agent::backends::storage::StorageBackend;
 use cade_agent::mcp::McpManager;
-use cade_agent::tools::{RuntimeToolResult, ToolRuntime, all_schemas};
-use cade_ai::{
-    AiConfig, CompletionRequest, LlmMessage, LlmProvider, LlmRouter, LlmToolCall, StreamChunk,
-};
+use cade_agent::tools::ToolRuntime;
+use cade_ai::{AiConfig, LlmProvider, LlmRouter};
 use cade_core::permissions::{PermissionManager, PermissionMode};
 use cade_core::skills::Skill;
 use cade_store::Db;
-use cade_store::sqlite::{AgentRow, MessageRow};
+use cade_store::sqlite::AgentRow;
 
 use crate::events::CadeStreamEvent;
 use crate::{Error, Result};
@@ -681,8 +679,8 @@ impl EmbeddedSessionBuilder {
 
         let provider: Arc<dyn LlmProvider> = if let Some(p) = self.llm_provider {
             p
-        } else if let Some(cfg) = self.ai_config {
-            Arc::new(LlmRouter::build(&cfg))
+        } else if let Some(ref cfg) = self.ai_config {
+            Arc::new(LlmRouter::build(cfg))
         } else {
             let env_config = AiConfig {
                 anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
@@ -706,7 +704,23 @@ impl EmbeddedSessionBuilder {
 
         let _permissions = PermissionManager::new(self.permission_mode);
 
-        let router = Arc::new(tokio::sync::RwLock::new(LlmRouter::new(AiConfig::default())));
+        let env_config = AiConfig {
+            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+            openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
+            google_api_key: std::env::var("GEMINI_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("GOOGLE_API_KEY").ok()),
+            deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
+            ollama_base_url: std::env::var("OLLAMA_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            llm_provider: "anthropic".to_string(),
+        };
+        let router_instance = if let Some(cfg) = &self.ai_config {
+            LlmRouter::build(cfg)
+        } else {
+            LlmRouter::build(&env_config)
+        };
+        let router = Arc::new(tokio::sync::RwLock::new(router_instance));
         let config = Arc::new(cade_server_lib::server::config::ServerConfig::default());
         let app_state = cade_server_lib::server::state::AppState::new_in_process(
             db.clone(),
@@ -721,11 +735,11 @@ impl EmbeddedSessionBuilder {
         Ok(EmbeddedSession {
             agent_id,
             model: self.model,
-            system_prompt: self.system_prompt,
+            _system_prompt: self.system_prompt,
             db,
-            provider,
+            _provider: provider,
             runtime: Arc::new(runtime),
-            max_turns: self.max_turns,
+            _max_turns: self.max_turns,
             agent_runtime,
         })
     }
@@ -739,11 +753,11 @@ impl EmbeddedSessionBuilder {
 pub struct EmbeddedSession {
     agent_id: String,
     model: String,
-    system_prompt: Option<String>,
+    _system_prompt: Option<String>,
     db: Db,
-    provider: Arc<dyn LlmProvider>,
+    _provider: Arc<dyn LlmProvider>,
     runtime: Arc<ToolRuntime>,
-    max_turns: usize,
+    _max_turns: usize,
     agent_runtime: cade_server_lib::server::api::run::runtime::ServerAgentRuntime,
 }
 
@@ -808,24 +822,21 @@ impl EmbeddedSession {
         tokio::spawn(async move {
             let mut stream = handle.events;
             while let Some(res) = stream.recv().await {
-                if let Ok(event) = res {
-                    let data = event.data;
-                    let trimmed = data.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if trimmed == "[DONE]" {
-                        break;
-                    }
-                    if let Ok(stream_event) =
-                        serde_json::from_str::<cade_api_types::StreamEvent>(trimmed)
-                    {
-                        if let Some(cade_event) =
-                            CadeStreamEvent::from_stream_event(&stream_event)
-                        {
-                            let _ = tx.send(cade_event).await;
-                        }
-                    }
+                let Ok(env) = res;
+                let data = env.data;
+                let trimmed = data.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed == "[DONE]" {
+                    break;
+                }
+                if let Ok(stream_event) =
+                    serde_json::from_str::<cade_api_types::StreamEvent>(trimmed)
+                    && let Some(cade_event) =
+                        CadeStreamEvent::from_stream_event(&stream_event)
+                {
+                    let _ = tx.send(cade_event).await;
                 }
             }
         });
@@ -895,7 +906,7 @@ impl EmbeddedSession {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use cade_ai::{CompletionRequest, CompletionResponse, StreamChunk};
+    use cade_ai::{CompletionRequest, CompletionResponse, LlmToolCall, StreamChunk};
     use futures::StreamExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
