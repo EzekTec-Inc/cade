@@ -833,8 +833,7 @@ impl EmbeddedSession {
                 }
                 if let Ok(stream_event) =
                     serde_json::from_str::<cade_api_types::StreamEvent>(trimmed)
-                    && let Some(cade_event) =
-                        CadeStreamEvent::from_stream_event(&stream_event)
+                    && let Some(cade_event) = CadeStreamEvent::from_stream_event(&stream_event)
                 {
                     let _ = tx.send(cade_event).await;
                 }

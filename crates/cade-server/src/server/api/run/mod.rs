@@ -907,10 +907,10 @@ pub(crate) async fn run_agent_loop_with_dependencies(
 
     // ── End of transport stream ────────────────────────────────────────
     let _ = tx
-            .send(Ok(runtime::RunEventEnvelope {
-                data: "[DONE]".to_string(),
-            }))
-            .await;
+        .send(Ok(runtime::RunEventEnvelope {
+            data: "[DONE]".to_string(),
+        }))
+        .await;
 }
 
 pub(super) fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str) {

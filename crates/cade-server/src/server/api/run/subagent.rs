@@ -239,9 +239,7 @@ pub trait SubagentEventEmitter: Send + Sync {
         elapsed: u32,
         writeback_facts: usize,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
-    fn raw_sse_tx(
-        &self,
-    ) -> super::SseTx;
+    fn raw_sse_tx(&self) -> super::SseTx;
 }
 
 pub struct SseEventEmitter {
@@ -306,10 +304,7 @@ impl SubagentEventEmitter for SseEventEmitter {
         })
     }
 
-    fn raw_sse_tx(
-        &self,
-    ) -> super::SseTx
-    {
+    fn raw_sse_tx(&self) -> super::SseTx {
         self.tx.clone()
     }
 }
