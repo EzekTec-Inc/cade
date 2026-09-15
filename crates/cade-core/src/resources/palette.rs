@@ -11,6 +11,7 @@ pub enum PaletteCmd {
     Context,
     Stats,
     Copy,
+    Quote,
     Artifacts,
     Checkpoints,
     Skills(String),
@@ -84,6 +85,12 @@ pub const CMD_DEFS: &[CmdDef] = &[
     CmdDef {
         trigger: "clear",
         description: "Clear the timeline (local only)",
+        arg_hint: None,
+        category: CmdCategory::Display,
+    },
+    CmdDef {
+        trigger: "quote",
+        description: "Quote active or retained selection into prompt (> lines)",
         arg_hint: None,
         category: CmdCategory::Display,
     },
@@ -479,6 +486,7 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "context" | "ctx" => PaletteCmd::Context,
         "stats" | "usage" | "cost" => PaletteCmd::Stats,
         "copy" | "cp" => PaletteCmd::Copy,
+        "quote" => PaletteCmd::Quote,
         "artifacts" | "artifact" => PaletteCmd::Artifacts,
         "checkpoints" | "checkpoint" | "undo" | "tree" => PaletteCmd::Checkpoints,
         "skills" | "skill" => PaletteCmd::Skills(arg),

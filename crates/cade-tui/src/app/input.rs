@@ -227,8 +227,13 @@ impl TuiApp {
                     self.selection_active = true;
                     self.selection_start = Some((m.column, m.row));
                     self.selection_current = Some((m.column, m.row));
+                    self.selection_retained = false;
+                    self.retained_selected_text = None;
                     self.draw()?;
                     return Ok(true);
+                } else if self.selection_retained || self.selection_active {
+                    self.clear_selection();
+                    self.draw()?;
                 }
             }
             crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
@@ -453,6 +458,21 @@ impl TuiApp {
                 self.toggle_last_collapsible_item();
             }
 
+            // Ctrl+Shift+C: Quote active/retained selection to prompt (B.3)
+            KeyCode::Char('C') | KeyCode::Char('c')
+                if k.modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                self.quote_selection_to_prompt();
+                return Ok(None);
+            }
+
+            // Esc without overlays: Drop retained selection (B.1)
+            KeyCode::Esc if self.selection_retained || self.selection_active => {
+                self.clear_selection();
+                return Ok(None);
+            }
+
             _ if self.leader_engine.is_active
                 || (k.modifiers.contains(KeyModifiers::CONTROL)
                     && k.code == KeyCode::Char('x')) =>
@@ -462,18 +482,55 @@ impl TuiApp {
                 match outcome {
                     crate::app::leader::LeaderOutcome::Pending => return Ok(None),
                     crate::app::leader::LeaderOutcome::Dismissed => return Ok(None),
-                    crate::app::leader::LeaderOutcome::Action(action) => {
-                        let cmd = match action {
-                            crate::app::leader::LeaderAction::ModelPicker => "/model",
-                            crate::app::leader::LeaderAction::SessionPicker => "/session",
-                            crate::app::leader::LeaderAction::ThemePicker => "/theme",
-                            crate::app::leader::LeaderAction::UndoCheckpoint => "/undo",
-                            crate::app::leader::LeaderAction::RedoCheckpoint => "/redo",
-                            crate::app::leader::LeaderAction::TogglePermissions => "/permissions",
-                            crate::app::leader::LeaderAction::HelpOverlay => "/help",
-                        };
-                        return Ok(Some(Some(cmd.to_string())));
-                    }
+                    crate::app::leader::LeaderOutcome::Action(action) => match action {
+                        crate::app::leader::LeaderAction::QuoteSelection => {
+                            self.quote_selection_to_prompt();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::CopyMessage => {
+                            if !self.copy_selected_text() {
+                                self.copy_last_message();
+                            }
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::SidebarToggle => {
+                            self.toggle_sidebar();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::NewSession => {
+                            return Ok(Some(Some("/session new".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::ListSessions => {
+                            return Ok(Some(Some("/session".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::CompactSession => {
+                            return Ok(Some(Some("/compact".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::SessionTimeline => {
+                            return Ok(Some(Some("/timeline".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::ModelPicker => {
+                            return Ok(Some(Some("/model".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::SessionPicker => {
+                            return Ok(Some(Some("/session".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::ThemePicker => {
+                            return Ok(Some(Some("/theme".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::UndoCheckpoint => {
+                            return Ok(Some(Some("/undo".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::RedoCheckpoint => {
+                            return Ok(Some(Some("/redo".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::TogglePermissions => {
+                            return Ok(Some(Some("/permissions".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::HelpOverlay => {
+                            return Ok(Some(Some("/help".to_string())));
+                        }
+                    },
                 }
             }
 
@@ -696,6 +753,9 @@ impl TuiApp {
                 match action {
                     EditorAction::Consumed => {
                         self.draw_dirty = true;
+                        if self.selection_retained {
+                            self.clear_selection();
+                        }
 
                         if let Some(ac) = self
                             .overlays
@@ -784,7 +844,11 @@ impl TuiApp {
                         self.draw_dirty = true;
                         return Ok(None);
                     }
-                    EditorAction::Unhandled(_) => {}
+                    EditorAction::Unhandled(_) => {
+                        if self.selection_retained {
+                            self.clear_selection();
+                        }
+                    }
                 }
             }
         }
@@ -833,7 +897,10 @@ impl TuiApp {
         let action = match action.downcast::<String>() {
             Ok(string_val) => {
                 let s = *string_val;
-                if s.starts_with('/') {
+                if s == "/quote" || s == "quote" {
+                    self.quote_selection_to_prompt();
+                    return Ok(None);
+                } else if s.starts_with('/') {
                     return Ok(Some(Some(s)));
                 } else {
                     self.editor.handle_paste(&s);

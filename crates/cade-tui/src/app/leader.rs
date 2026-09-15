@@ -31,8 +31,22 @@ pub enum LeaderAction {
     UndoCheckpoint,
     /// Redo the last reverted checkpoint ('r').
     RedoCheckpoint,
-    /// Toggle permission mode ('p').
+    /// Quote active or retained selection into prompt ('p').
+    QuoteSelection,
+    /// Toggle permission mode ('P').
     TogglePermissions,
+    /// Copy message or active selection ('y').
+    CopyMessage,
+    /// Toggle sidebar visibility ('b').
+    SidebarToggle,
+    /// Create new session ('n').
+    NewSession,
+    /// List / resume sessions ('l').
+    ListSessions,
+    /// Compact current session ('c').
+    CompactSession,
+    /// Session timeline view ('g').
+    SessionTimeline,
     /// Show the help overlay ('?').
     HelpOverlay,
 }
@@ -110,6 +124,38 @@ impl LeaderKeyEngine {
                 self.dismiss();
                 LeaderOutcome::Dismissed
             }
+            KeyCode::Char('p') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::QuoteSelection)
+            }
+            KeyCode::Char('P') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::TogglePermissions)
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::CopyMessage)
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::SidebarToggle)
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::NewSession)
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::ListSessions)
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::CompactSession)
+            }
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::SessionTimeline)
+            }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::ModelPicker)
@@ -130,10 +176,6 @@ impl LeaderKeyEngine {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::RedoCheckpoint)
             }
-            KeyCode::Char('p') | KeyCode::Char('P') => {
-                self.dismiss();
-                LeaderOutcome::Action(LeaderAction::TogglePermissions)
-            }
             KeyCode::Char('?') | KeyCode::Char('h') | KeyCode::Char('H') => {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::HelpOverlay)
@@ -145,14 +187,14 @@ impl LeaderKeyEngine {
         }
     }
 
-    /// Render the floating bottom which-key hint bar.
+    /// Render floating leader key hint popup at the bottom center of the terminal.
     pub fn render_hint_bar(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
-        if !self.is_active || area.height < 3 {
+        if !self.is_active {
             return;
         }
 
         let bar_h = 3u16;
-        let bar_w = area.width.saturating_sub(4).min(90);
+        let bar_w = area.width.saturating_sub(4).min(110);
         let bar_x = area.x + (area.width.saturating_sub(bar_w)) / 2;
         let bar_y = area.y + area.height.saturating_sub(bar_h).saturating_sub(2);
 
@@ -161,12 +203,15 @@ impl LeaderKeyEngine {
         frame.render_widget(Clear, render_area);
 
         let shortcuts = [
+            ("p", "Quote"),
+            ("y", "Copy"),
             ("m", "Model"),
             ("s", "Session"),
+            ("b", "Sidebar"),
             ("t", "Theme"),
-            ("p", "Perms"),
             ("u", "Undo"),
             ("r", "Redo"),
+            ("P", "Perms"),
             ("?", "Help"),
             ("Esc", "Close"),
         ];

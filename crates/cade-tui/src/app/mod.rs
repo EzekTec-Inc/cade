@@ -920,7 +920,14 @@ pub struct TuiApp {
     pub selection_start: Option<(u16, u16)>,
     pub selection_current: Option<(u16, u16)>,
     pub selection_active: bool,
+    /// Retained visual selection highlight and cached text after mouse drag release.
+    pub selection_retained: bool,
+    pub retained_selected_text: Option<String>,
     pub(crate) clipboard: Option<arboard::Clipboard>,
+
+    // -- TUI Settings & Configurable Keymap (Phase 1 Parity)
+    pub tui_settings: cade_core::settings::tui::TuiSettings,
+    pub keymap: crate::keys::Keymap,
 
     // -- Layout engine
     pub(crate) layout_engine: crate::app::timeline::TimelineLayoutEngine,
@@ -1129,6 +1136,18 @@ impl TuiApp {
             slots.set(crate::slots::UiSlot::Sidebar, sidebar);
         }
 
+        let mut tui_settings = dirs::home_dir()
+            .map(|h| cade_core::settings::tui::TuiSettings::load_from_dir(&h.join(".cade")))
+            .unwrap_or_default();
+        let cwd_path = std::env::current_dir().unwrap_or_default();
+        let project_settings =
+            cade_core::settings::tui::TuiSettings::load_from_dir(&cwd_path.join(".cade")).merge(
+                cade_core::settings::tui::TuiSettings::load_from_dir(&cwd_path),
+            );
+        tui_settings = tui_settings.merge(project_settings);
+
+        let keymap = crate::keys::Keymap::with_settings(&tui_settings);
+
         Self {
             terminal,
             lines: Vec::new(),
@@ -1169,7 +1188,11 @@ impl TuiApp {
             selection_start: None,
             selection_current: None,
             selection_active: false,
+            selection_retained: false,
+            retained_selected_text: None,
             clipboard: None,
+            tui_settings,
+            keymap,
             layout_engine: crate::app::timeline::TimelineLayoutEngine::new(),
             content_version: 0,
             focused_region: crate::slots::FocusRegion::Input,
@@ -1892,20 +1915,15 @@ impl TuiApp {
             .to_vec()
     }
 
-    /// Extract highlighted character range from active buffer, copy it, and clear state
-    pub fn copy_selected_text(&mut self) -> bool {
+    /// Extract highlighted character range from active buffer without clearing state.
+    pub fn extract_selected_text(&mut self) -> Option<String> {
         if !self.selection_active {
-            return false;
+            return None;
         }
 
-        let Some((x1, y1)) = self.selection_start else {
-            return false;
-        };
-        let Some((x2, y2)) = self.selection_current else {
-            return false;
-        };
+        let (x1, y1) = self.selection_start?;
+        let (x2, y2) = self.selection_current?;
 
-        // Bounding box of message viewport
         use ratatui::layout::Rect;
         let inner = Rect {
             x: self.messages_area.x + 2,
@@ -1915,27 +1933,19 @@ impl TuiApp {
         };
 
         if inner.width == 0 || inner.height == 0 {
-            self.selection_active = false;
-            self.selection_start = None;
-            self.selection_current = None;
-            return false;
+            return None;
         }
 
-        // Clamp coordinates to message viewport boundary to enable robust dragging from outside/borders
+        // Clamp coordinates to message viewport boundary
         let cx1 = x1.clamp(inner.x, inner.x + inner.width.saturating_sub(1));
         let cy1 = y1.clamp(inner.y, inner.y + inner.height.saturating_sub(1));
         let cx2 = x2.clamp(inner.x, inner.x + inner.width.saturating_sub(1));
         let cy2 = y2.clamp(inner.y, inner.y + inner.height.saturating_sub(1));
 
-        // If after clamping it's a single cell (no drag/drag clamped to same cell), don't trigger copy
         if cx1 == cx2 && cy1 == cy2 {
-            self.selection_active = false;
-            self.selection_start = None;
-            self.selection_current = None;
-            return false;
+            return None;
         }
 
-        // Sort coordinates symmetrically
         let (start_col, start_row, end_col, end_row) = if cy1 < cy2 || (cy1 == cy2 && cx1 <= cx2) {
             (cx1, cy1, cx2, cy2)
         } else {
@@ -1967,7 +1977,7 @@ impl TuiApp {
             if entry_end > start_visual_row && entry_start <= end_visual_row {
                 let offset = match entry.card_style {
                     crate::app::timeline::CardStyle::None => 0u16,
-                    _ => 2u16, // 1 for left border, 1 for padding (TUI-Selection Offset Fix)
+                    _ => 2u16,
                 };
 
                 for (i, line) in entry.lines.iter().enumerate() {
@@ -2005,22 +2015,122 @@ impl TuiApp {
             current_row = entry_end;
         }
 
+        if selected_text.is_empty() {
+            None
+        } else {
+            Some(selected_text)
+        }
+    }
+
+    /// Dismiss the active/retained visual selection and highlight.
+    pub fn clear_selection(&mut self) {
         self.selection_active = false;
+        self.selection_retained = false;
         self.selection_start = None;
         self.selection_current = None;
+        self.retained_selected_text = None;
+        self.draw_dirty = true;
+    }
 
-        if !selected_text.is_empty() {
-            self.write_to_clipboard(&selected_text);
+    /// Extract highlighted character range from active buffer, copy it, and retain state (B.1 & B.2)
+    pub fn copy_selected_text(&mut self) -> bool {
+        let extracted = self.extract_selected_text();
+        if let Some(selected_text) = extracted {
+            self.retained_selected_text = Some(selected_text.clone());
+            self.selection_retained = true;
+            self.selection_active = true;
+
+            let ok = self.write_to_clipboard(&selected_text);
             crate::app::clipboard::write_to_file_fallback(&selected_text);
-            self.show_toast(
-                "Copied selection to clipboard",
-                crate::app::ToastLevel::Success,
-            );
+            if ok {
+                self.show_toast(
+                    "Copied selection to clipboard",
+                    crate::app::ToastLevel::Success,
+                );
+            } else {
+                self.show_toast(
+                    "Failed to copy selection to clipboard",
+                    crate::app::ToastLevel::Error,
+                );
+            }
             self.draw_dirty = true;
             true
         } else {
+            self.clear_selection();
             false
         }
+    }
+
+    /// Quote the active or retained selection into the prompt editor as a collapsed quote block (B.3).
+    pub fn quote_selection_to_prompt(&mut self) -> bool {
+        let text = self
+            .retained_selected_text
+            .clone()
+            .or_else(|| self.extract_selected_text())
+            .filter(|t| !t.trim().is_empty());
+
+        let Some(text) = text else {
+            self.clear_selection();
+            self.show_toast(
+                "No active selection to quote",
+                crate::app::ToastLevel::Warning,
+            );
+            return false;
+        };
+
+        let mut quoted = String::new();
+        for (i, line) in text.lines().enumerate() {
+            if i > 0 {
+                quoted.push('\n');
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                quoted.push('>');
+            } else if trimmed.starts_with("> ") || trimmed.starts_with('>') {
+                quoted.push_str(trimmed);
+            } else {
+                quoted.push_str("> ");
+                quoted.push_str(trimmed);
+            }
+        }
+
+        self.editor.handle_paste(&quoted);
+        self.clear_selection();
+        self.show_toast(
+            "Quoted selection added to prompt",
+            crate::app::ToastLevel::Success,
+        );
+        self.draw_dirty = true;
+        true
+    }
+
+    /// Copy the last non-empty message in the conversation transcript to the clipboard (C.3).
+    pub fn copy_last_message(&mut self) -> bool {
+        if self.copy_selected_text() {
+            return true;
+        }
+
+        for line in self.lines.iter().rev() {
+            let text = crate::app::copy_overlay::render_line_plain_text(line);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                let ok = self.write_to_clipboard(trimmed);
+                crate::app::clipboard::write_to_file_fallback(trimmed);
+                if ok {
+                    self.show_toast(
+                        "Copied last message to clipboard",
+                        crate::app::ToastLevel::Success,
+                    );
+                } else {
+                    self.show_toast("Failed to copy last message", crate::app::ToastLevel::Error);
+                }
+                self.draw_dirty = true;
+                return ok;
+            }
+        }
+
+        self.show_toast("No messages to copy", crate::app::ToastLevel::Info);
+        false
     }
 }
 

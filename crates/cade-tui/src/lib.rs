@@ -20,6 +20,7 @@ pub mod component;
 pub mod editor;
 pub mod editor_component;
 pub mod icons;
+pub mod keys;
 pub mod markdown;
 pub mod mcp_picker;
 pub mod menu;
