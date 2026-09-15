@@ -275,9 +275,7 @@ impl KeyChord {
 
         // Compare key code case-insensitively for Char
         let code_matches = match (self.code, event.code) {
-            (KeyCode::Char(a), KeyCode::Char(b)) => {
-                a.to_ascii_lowercase() == b.to_ascii_lowercase()
-            }
+            (KeyCode::Char(a), KeyCode::Char(b)) => a.eq_ignore_ascii_case(&b),
             (a, b) => a == b,
         };
 

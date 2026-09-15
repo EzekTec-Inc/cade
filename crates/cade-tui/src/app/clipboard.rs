@@ -61,10 +61,10 @@ pub(crate) fn read_linux_primary() -> Option<String> {
 pub(crate) fn read_clipboard_text_with_mode(
     mode: cade_core::settings::tui::LinuxClipboardSelection,
 ) -> Option<String> {
-    if mode == cade_core::settings::tui::LinuxClipboardSelection::Primary {
-        if let Some(text) = read_linux_primary() {
-            return Some(text);
-        }
+    if mode == cade_core::settings::tui::LinuxClipboardSelection::Primary
+        && let Some(text) = read_linux_primary()
+    {
+        return Some(text);
     }
     read_clipboard_text()
 }

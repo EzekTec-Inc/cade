@@ -14,18 +14,13 @@ use std::path::Path;
 // region:    --- Types
 
 /// Linux clipboard target buffer selection.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LinuxClipboardSelection {
     Clipboard,
     Primary,
+    #[default]
     Both,
-}
-
-impl Default for LinuxClipboardSelection {
-    fn default() -> Self {
-        Self::Both
-    }
 }
 
 /// Specification for a keybinding in `tui.toml`.
