@@ -211,7 +211,7 @@ pub(crate) fn render_frame(
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
     let hotkey_bar_h: u16 = 1;
-    let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h + hotkey_bar_h;
+    let bottom_rows = FIXED_ROWS + input_rows + 2 + footer_extra_h + hotkey_bar_h;
 
     if main_area.height <= bottom_rows + 1 {
         frame.render_widget(
@@ -234,10 +234,9 @@ pub(crate) fn render_frame(
     let chunks = Layout::vertical([
         Constraint::Fill(1),                                   // [0] content  (fluid)
         Constraint::Length(plan_h),                            // [1] plan panel (0 when hidden)
-        Constraint::Length(1), // [2] bottom status bar (breadcrumb + processing animation)
-        Constraint::Length(1), // [3] input separator
-        Constraint::Length(input_rows), // [4] input or question
-        Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [5] footer
+        Constraint::Length(1),                                 // [2] bottom status bar
+        Constraint::Length(input_rows + 2),                    // [3] floating rounded input box
+        Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [4] footer
     ])
     .split(main_area);
 
@@ -288,15 +287,12 @@ pub(crate) fn render_frame(
         mouse_selection,
     );
 
-    // -- Input separator
-    render_input_separator(frame, chunks[3], &ctx, colors);
-
-    // -- Input area or Question Panel
+    // -- Input area or Question Panel (floating rounded container with embedded status pills)
     let input_cursor_pos =
-        render_input_or_question(frame, chunks[4], textarea, last_input_width, &ctx, colors);
+        render_input_or_question(frame, chunks[3], textarea, last_input_width, &ctx, colors);
 
     // -- Footer bars & Hotkeys
-    render_footer_bars(frame, chunks[5], &ctx, footer_extra_h, colors);
+    render_footer_bars(frame, chunks[4], &ctx, footer_extra_h, colors);
 
     // -- Sidebar
     if let Some(sidebar) = sidebar_area {
@@ -400,6 +396,7 @@ fn render_pinned_header(
     }
 }
 
+#[allow(dead_code)]
 fn render_input_separator(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
@@ -442,8 +439,12 @@ fn render_input_or_question(
 ) -> Option<(u16, u16)> {
     let RenderContext {
         input_mode,
+        model,
+        context_pct,
+        session_cost_usd,
         queued_count,
         top_overlay,
+        nerd,
         ..
     } = ctx;
 
@@ -459,25 +460,89 @@ fn render_input_or_question(
     } else {
         frame.render_widget(ratatui::widgets::Clear, area);
 
+        // 1. Determine mode badge for title_top
         let (badge_text, badge_color) = input_mode_badge(*input_mode, colors);
-        let prefix_w = badge_text.chars().count() as u16 + 3;
-
-        let input_chunks =
-            Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)]).split(area);
-
-        let prefix_spans = vec![
+        let mode_label = format!("● {badge_text}");
+        let title_top = Line::from(vec![
+            Span::raw(" "),
             Span::styled(
-                badge_text.to_string(),
-                colors
-                    .text_primary()
+                format!(" {mode_label} "),
+                Style::default()
+                    .fg(colors.c_bg_base())
                     .bg(badge_color)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled("> ", colors.text_dim()),
-        ];
+        ]);
+
+        // 2. Build bottom status pills: Model, Context %, Cost, Queued
+        let mut bottom_pills: Vec<Span<'static>> = Vec::new();
+        bottom_pills.push(Span::raw(" "));
+
+        // Model pill
+        let model_icon = if *nerd { "⚡ " } else { "" };
+        let model_display = truncate_str(model, 22);
+        bottom_pills.push(Span::styled(
+            format!(" [{model_icon}{model_display}] "),
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        ));
+
+        // Context usage pill
+        if let Some(pct) = context_pct {
+            let ctx_color = crate::app::layout::toast::context_severity_color(Some(*pct), colors);
+            bottom_pills.push(Span::styled(
+                format!(" [↑ {pct}%] "),
+                Style::default().fg(ctx_color),
+            ));
+        }
+
+        // Cost pill
+        if *session_cost_usd > 0.0 && area.width >= 60 {
+            bottom_pills.push(Span::styled(
+                format!(" [${:.3}] ", session_cost_usd),
+                colors.text_dim(),
+            ));
+        }
+
+        // Queued badge
+        if *queued_count > 0 {
+            bottom_pills.push(Span::styled(
+                format!(" [{queued_count} queued] "),
+                Style::default()
+                    .fg(colors.c_warning())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        let title_bottom = Line::from(bottom_pills);
+
+        // 3. Floating rounded block
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_set(ratatui::symbols::border::ROUNDED)
+            .border_style(Style::default().fg(colors.c_border_muted()))
+            .title(title_top)
+            .title_bottom(title_bottom);
+
+        let inner_area = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner_area.width == 0 || inner_area.height == 0 {
+            return None;
+        }
+
+        // 4. Prefix "> " and textarea inside floating rounded container
+        let prefix_w = 2u16;
+        let input_chunks = Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)])
+            .split(inner_area);
+
         frame.render_widget(
-            Paragraph::new(Line::from(prefix_spans)).style(Style::default()),
+            Paragraph::new(Span::styled(
+                "> ",
+                colors.primary().add_modifier(Modifier::BOLD),
+            )),
             input_chunks[0],
         );
 
@@ -486,7 +551,7 @@ fn render_input_or_question(
         } else if *queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
-            "Type a message or paste code…".to_string()
+            "Type a message, @-file, or /command…".to_string()
         };
 
         textarea.set_placeholder_text(input_placeholder);
