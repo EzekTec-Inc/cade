@@ -272,33 +272,62 @@ pub(crate) fn render_tool_call_item(
     colors: &ThemeColors,
     nerd: bool,
 ) {
-    out.push(Line::from(""));
     let display = display_tool_name(name);
     let icon = crate::icons::tool_icon(&display, nerd);
     let name_style = Style::default()
         .add_modifier(Modifier::BOLD)
         .fg(colors.c_primary());
-    let budget = width.saturating_sub(display.len() + icon.len() + 15);
-    let args_span = if preview.is_empty() {
-        Span::styled(")", colors.text_dim())
-    } else if expand_all || preview.len() < budget {
-        Span::styled(format!("{})", preview), colors.text_dim())
-    } else {
-        let truncated = truncate_str(preview, budget.saturating_sub(1));
-        Span::styled(format!("{truncated}…)"), colors.text_dim())
-    };
-    let spans: Vec<Span<'static>> = vec![
+
+    let prompt_glyph = if nerd { "❯ " } else { "> " };
+    let mut left_spans: Vec<Span<'static>> = vec![
         Span::styled(
-            format!("{icon} "),
+            prompt_glyph,
             Style::default()
                 .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(display.to_string(), name_style.add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{icon} "), Style::default().fg(colors.c_primary())),
+        Span::styled(display.to_string(), name_style),
         Span::styled("(", colors.text_dim()),
-        args_span,
     ];
-    out.push(Line::from(spans));
+
+    let pill_text = " [● Running] ";
+    let pill_w = pill_text.chars().count();
+    let min_left_w = display.len() + icon.len() + 8;
+    let budget = width.saturating_sub(min_left_w + pill_w + 4);
+
+    let args_str = if preview.is_empty() {
+        ")".to_string()
+    } else if expand_all || preview.len() < budget {
+        format!("{preview})")
+    } else {
+        let truncated = truncate_str(preview, budget.saturating_sub(1));
+        format!("{truncated}…)")
+    };
+    left_spans.push(Span::styled(args_str, colors.text_dim()));
+
+    let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
+    let right_span = Span::styled(
+        pill_text,
+        Style::default()
+            .fg(colors.c_warning())
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let right_len = pill_w;
+    if left_len + right_len + 3 < width {
+        let dot_count = width.saturating_sub(left_len + right_len + 2);
+        left_spans.push(Span::styled(
+            format!(" {}", ".".repeat(dot_count)),
+            colors.border_muted(),
+        ));
+        left_spans.push(right_span);
+    } else {
+        left_spans.push(Span::raw(" "));
+        left_spans.push(right_span);
+    }
+
+    out.push(Line::from(left_spans));
 }
 
 pub(crate) fn render_tool_result_item(
@@ -321,9 +350,9 @@ pub(crate) fn render_tool_result_item(
         colors.c_tool_success_bg()
     };
     let status_label = if is_error {
-        format!("{} ERR ", crate::icons::error_icon(nerd))
+        format!(" [{} Fail] ", crate::icons::error_icon(nerd))
     } else {
-        format!("{} OK ", crate::icons::success_icon(nerd))
+        format!(" [{} Done] ", crate::icons::success_icon(nerd))
     };
     let inner_w = width.saturating_sub(11);
     let lns: Vec<&str> = content.lines().collect();
