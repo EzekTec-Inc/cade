@@ -55,6 +55,8 @@ pub(crate) enum CardStyle {
     None,
     User,
     Assistant,
+    ToolCall,
+    System,
 }
 
 #[derive(Clone)]
@@ -346,11 +348,13 @@ impl<'a> TimelineEntry<'a> {
             TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
                 CardStyle::Assistant
             }
+            TimelineItemKind::ToolCall | TimelineItemKind::ToolResult => CardStyle::ToolCall,
+            TimelineItemKind::Error => CardStyle::System,
             _ => CardStyle::None,
         };
         let effective_width = match card_style {
             CardStyle::None => content_w,
-            _ => content_w.saturating_sub(2), // 1 for border, 1 for padding
+            _ => content_w.saturating_sub(2), // 1 for gutter rail, 1 for padding
         };
 
         self.item.visual_rows(
@@ -505,11 +509,13 @@ pub(crate) fn prepare_timeline_entries(
                 TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
                     CardStyle::Assistant
                 }
+                TimelineItemKind::ToolCall | TimelineItemKind::ToolResult => CardStyle::ToolCall,
+                TimelineItemKind::Error => CardStyle::System,
                 _ => CardStyle::None,
             };
             let effective_width = match card_style {
                 CardStyle::None => width,
-                _ => width.saturating_sub(2), // 1 for border, 1 for padding
+                _ => width.saturating_sub(2), // 1 for gutter rail, 1 for padding
             };
             let mut lines = Vec::new();
             entry.render_with_state(
@@ -602,6 +608,17 @@ pub(crate) fn render_timeline_viewport(
                 width: inner.width,
                 height: render_height,
             };
+            const GUTTER_BORDER: ratatui::symbols::border::Set = ratatui::symbols::border::Set {
+                vertical_left: "▎",
+                vertical_right: " ",
+                horizontal_top: " ",
+                horizontal_bottom: " ",
+                top_left: "▎",
+                top_right: " ",
+                bottom_left: "▎",
+                bottom_right: " ",
+            };
+
             let mut block = ratatui::widgets::Block::default();
             match item.card_style {
                 CardStyle::User => {
@@ -611,7 +628,8 @@ pub(crate) fn render_timeline_viewport(
                     }
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
-                        .border_style(colors.text_dim())
+                        .border_set(GUTTER_BORDER)
+                        .border_style(colors.border_accent())
                         .style(style)
                         .padding(ratatui::widgets::Padding::left(1));
                 }
@@ -622,7 +640,32 @@ pub(crate) fn render_timeline_viewport(
                     }
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
+                        .border_set(GUTTER_BORDER)
                         .border_style(colors.primary())
+                        .style(style)
+                        .padding(ratatui::widgets::Padding::left(1));
+                }
+                CardStyle::ToolCall => {
+                    let mut style = colors.text_primary();
+                    if is_highlighted {
+                        style = style.bg(colors.c_bg_surface2());
+                    }
+                    block = block
+                        .borders(ratatui::widgets::Borders::LEFT)
+                        .border_set(GUTTER_BORDER)
+                        .border_style(colors.border_muted())
+                        .style(style)
+                        .padding(ratatui::widgets::Padding::left(1));
+                }
+                CardStyle::System => {
+                    let mut style = colors.text_primary();
+                    if is_highlighted {
+                        style = style.bg(colors.c_bg_surface2());
+                    }
+                    block = block
+                        .borders(ratatui::widgets::Borders::LEFT)
+                        .border_set(GUTTER_BORDER)
+                        .border_style(colors.error())
                         .style(style)
                         .padding(ratatui::widgets::Padding::left(1));
                 }
