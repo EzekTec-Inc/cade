@@ -369,9 +369,9 @@ impl OpenAiProvider {
             headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
 
             Client::builder()
-                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .tcp_keepalive(std::time::Duration::from_secs(30))
                 .connect_timeout(std::time::Duration::from_secs(15))
-                .timeout(std::time::Duration::from_secs(120))
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
                 .default_headers(headers)
                 .build()
                 .unwrap_or_else(|_| Client::new())

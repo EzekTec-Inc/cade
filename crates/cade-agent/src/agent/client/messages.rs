@@ -267,7 +267,10 @@ impl HttpTransport {
     {
         let mut messages = Vec::new();
         let mut run_id = None;
+        let mut last_seq_id: i64 = -1;
         let mut cancellation_requested = false;
+        let mut retries = 0usize;
+
         while let Some(event) = events.next().await {
             if !cancellation_requested
                 && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
@@ -277,7 +280,9 @@ impl HttpTransport {
                 cancellation_requested = true;
             }
             match event {
-                Ok(reqwest_eventsource::Event::Open) => {}
+                Ok(reqwest_eventsource::Event::Open) => {
+                    retries = 0;
+                }
                 Ok(reqwest_eventsource::Event::Message(message)) => {
                     let data = message.data.trim();
                     if data.is_empty() {
@@ -293,14 +298,47 @@ impl HttpTransport {
                     if run_id.is_none() {
                         run_id = message.run_id().map(str::to_owned);
                     }
+                    if let Some(seq) = message.seq_id() {
+                        last_seq_id = last_seq_id.max(seq);
+                    }
                     on_event(&message);
                     messages.push(message);
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
                 Err(error) => {
                     events.close();
-                    tracing::debug!("SSE run transport error: {error:?}");
-                    return Err(crate::Error::custom(error.to_string()));
+                    let err_str = error.to_string();
+                    tracing::warn!("SSE run transport error: {error:?}");
+
+                    // If we have an active run_id and the client hasn't explicitly cancelled,
+                    // transparently reconnect and resume the stream from the last sequence ID.
+                    if let Some(ref id) = run_id
+                        && retries < 3
+                        && !cancellation_requested
+                    {
+                        retries += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(300 * retries as u64))
+                            .await;
+                        let url = self.url(&format!("/runs/{id}/stream"));
+                        let request = self
+                            .client
+                            .get(&url)
+                            .header("Authorization", format!("Bearer {}", self.api_key))
+                            .query(&[("starting_after", last_seq_id.to_string())]);
+
+                        if let Ok(new_events) = EventSource::new(request) {
+                            tracing::info!(
+                                run_id = %id,
+                                after_seq = last_seq_id,
+                                retry = retries,
+                                "Resuming interrupted SSE run stream"
+                            );
+                            events = new_events;
+                            continue;
+                        }
+                    }
+
+                    return Err(crate::Error::custom(err_str));
                 }
             }
         }

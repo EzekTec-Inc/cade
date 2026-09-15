@@ -464,9 +464,9 @@ fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
 /// for timeouts, connection pools, and TCP keepalives.
 pub fn build_standard_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(120))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
