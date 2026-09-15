@@ -5,7 +5,7 @@
 
 // region:    --- Imports
 
-use cade_core::settings::tui::{KeybindSpec, TuiSettings};
+use cade_core::settings::tui::TuiSettings;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
 
@@ -456,6 +456,7 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cade_core::settings::tui::KeybindSpec;
 
     #[test]
     fn test_chord_parsing() {
