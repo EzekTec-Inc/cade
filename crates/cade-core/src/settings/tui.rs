@@ -107,6 +107,24 @@ pub struct TuiSettings {
     pub leader_timeout_ms: u64,
     #[serde(default)]
     pub keybinds: HashMap<String, KeybindSpec>,
+
+    // -- Display Toggles (Section H)
+    #[serde(default)]
+    pub show_timestamps: bool,
+    #[serde(default)]
+    pub conceal_secrets: bool,
+    #[serde(default = "default_true")]
+    pub collapse_tools: bool,
+    #[serde(default = "default_thinking_visibility")]
+    pub thinking_visibility: String,
+
+    // -- Attention & Mouse (Section I)
+    #[serde(default = "default_true")]
+    pub attention_notify_on_blur: bool,
+    #[serde(default)]
+    pub attention_sounds: bool,
+    #[serde(default)]
+    pub mouse: Option<bool>,
 }
 
 impl Default for TuiSettings {
@@ -121,8 +139,19 @@ impl Default for TuiSettings {
             leader: default_leader(),
             leader_timeout_ms: default_leader_timeout_ms(),
             keybinds: HashMap::default(),
+            show_timestamps: false,
+            conceal_secrets: false,
+            collapse_tools: true,
+            thinking_visibility: default_thinking_visibility(),
+            attention_notify_on_blur: true,
+            attention_sounds: false,
+            mouse: None,
         }
     }
+}
+
+fn default_thinking_visibility() -> String {
+    "collapse".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -277,7 +306,30 @@ impl TuiSettings {
             self.scrolling.scroll_speed = other.scrolling.scroll_speed;
         }
         self.scrolling.scroll_acceleration = other.scrolling.scroll_acceleration;
+
+        if other.show_timestamps {
+            self.show_timestamps = true;
+        }
+        if other.conceal_secrets {
+            self.conceal_secrets = true;
+        }
+        if !other.collapse_tools {
+            self.collapse_tools = false;
+        }
+        if other.thinking_visibility != default_thinking_visibility() {
+            self.thinking_visibility = other.thinking_visibility;
+        }
+        self.attention_notify_on_blur = other.attention_notify_on_blur;
+        self.attention_sounds = other.attention_sounds;
+        if other.mouse.is_some() {
+            self.mouse = other.mouse;
+        }
         self
+    }
+
+    /// Check whether mouse capture should be enabled based on settings.
+    pub fn effective_mouse_enabled(&self) -> bool {
+        self.mouse.unwrap_or(self.scrolling.enable_mouse)
     }
 }
 

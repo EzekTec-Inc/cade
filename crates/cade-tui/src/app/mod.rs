@@ -930,6 +930,14 @@ pub struct TuiApp {
     pub tui_settings: cade_core::settings::tui::TuiSettings,
     pub keymap: crate::keys::Keymap,
 
+    // -- Display Toggles, Attention, Prompt Stash (Phases 4 & 5)
+    pub show_timestamps: bool,
+    pub conceal_secrets: bool,
+    pub collapse_tools: bool,
+    pub thinking_visibility: String,
+    pub prompt_stash: Vec<String>,
+    pub has_focus: bool,
+
     // -- Layout engine
     pub(crate) layout_engine: crate::app::timeline::TimelineLayoutEngine,
 
@@ -1196,6 +1204,12 @@ impl TuiApp {
             selection_retained: false,
             retained_selected_text: None,
             clipboard: None,
+            show_timestamps: tui_settings.show_timestamps,
+            conceal_secrets: tui_settings.conceal_secrets,
+            collapse_tools: tui_settings.collapse_tools,
+            thinking_visibility: tui_settings.thinking_visibility.clone(),
+            prompt_stash: Vec::new(),
+            has_focus: true,
             tui_settings,
             keymap,
             layout_engine: crate::app::timeline::TimelineLayoutEngine::new(),
@@ -2138,6 +2152,169 @@ impl TuiApp {
 
         self.show_toast("No messages to copy", crate::app::ToastLevel::Info);
         false
+    }
+
+    /// Toggle concealment of tokens, secrets, and sensitive strings (Section H).
+    pub fn toggle_conceal(&mut self) {
+        self.conceal_secrets = !self.conceal_secrets;
+        let status = if self.conceal_secrets { "ON" } else { "OFF" };
+        self.show_toast(
+            format!("Conceal mode: {status}"),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Toggle timestamps display on timeline messages (Section H).
+    pub fn toggle_timestamps(&mut self) {
+        self.show_timestamps = !self.show_timestamps;
+        let status = if self.show_timestamps { "ON" } else { "OFF" };
+        self.show_toast(
+            format!("Timestamps: {status}"),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Toggle default collapse of tool call outputs (Section H).
+    pub fn toggle_tools(&mut self) {
+        self.collapse_tools = !self.collapse_tools;
+        let status = if self.collapse_tools {
+            "collapsed"
+        } else {
+            "expanded"
+        };
+        self.show_toast(
+            format!("Tool outputs: {status}"),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Cycle thinking block visibility: collapse -> full -> hide -> collapse (Section H).
+    pub fn cycle_thinking_visibility(&mut self) {
+        self.thinking_visibility = match self.thinking_visibility.as_str() {
+            "collapse" => "full".to_string(),
+            "full" => "hide".to_string(),
+            _ => "collapse".to_string(),
+        };
+        self.show_toast(
+            format!("Thinking view: {}", self.thinking_visibility),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Stash or pop prompt text buffer into/from prompt stash ring (Section J).
+    pub fn stash_prompt(&mut self) {
+        let current = self.editor.text();
+        if !current.trim().is_empty() {
+            self.prompt_stash.push(current);
+            self.editor.clear();
+            self.show_toast("Prompt stashed", crate::app::ToastLevel::Success);
+        } else if let Some(stashed) = self.prompt_stash.pop() {
+            self.editor.set_text(stashed);
+            self.show_toast(
+                "Prompt restored from stash",
+                crate::app::ToastLevel::Success,
+            );
+        } else {
+            self.show_toast("Prompt stash is empty", crate::app::ToastLevel::Warning);
+        }
+        self.draw_dirty = true;
+    }
+
+    /// Open external editor ($VISUAL or $EDITOR) on the current prompt (Section J).
+    pub fn edit_in_external_editor(&mut self) -> std::result::Result<(), String> {
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| {
+                #[cfg(windows)]
+                {
+                    "notepad".to_string()
+                }
+                #[cfg(not(windows))]
+                {
+                    "nano".to_string()
+                }
+            });
+
+        let mut temp_file = tempfile::Builder::new()
+            .prefix("cade_prompt_")
+            .suffix(".md")
+            .tempfile()
+            .map_err(|e| format!("Failed to create temp file: {e}"))?;
+
+        use std::io::Write;
+        temp_file
+            .write_all(self.editor.text().as_bytes())
+            .map_err(|e| format!("Failed to write to temp file: {e}"))?;
+        let temp_path = temp_file.path().to_path_buf();
+
+        // Suspend raw mode and execute editor
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+
+        let status = std::process::Command::new(&editor).arg(&temp_path).status();
+
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::cursor::Hide
+        );
+        let _ = crossterm::terminal::enable_raw_mode();
+
+        match status {
+            Ok(s) if s.success() => {
+                if let Ok(content) = std::fs::read_to_string(&temp_path) {
+                    self.editor.set_text(content.trim_end().to_string());
+                    self.show_toast(
+                        "Prompt updated from external editor",
+                        crate::app::ToastLevel::Success,
+                    );
+                    self.draw_dirty = true;
+                }
+                Ok(())
+            }
+            Ok(_) => {
+                self.show_toast(
+                    "External editor exited with error",
+                    crate::app::ToastLevel::Error,
+                );
+                Err("External editor exited with non-zero status".to_string())
+            }
+            Err(e) => {
+                self.show_toast(
+                    format!("Failed to launch editor {editor}: {e}"),
+                    crate::app::ToastLevel::Error,
+                );
+                Err(format!("Failed to launch editor: {e}"))
+            }
+        }
+    }
+
+    /// Redact API keys and secret tokens when conceal mode is active.
+    pub fn conceal_if_active<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.conceal_secrets {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        let mut result = text.to_string();
+        for prefix in &["sk-", "ghp_", "gho_", "glpat-", "xoxb-", "xoxp-", "AIza"] {
+            while let Some(start) = result.find(prefix) {
+                let end = result[start..]
+                    .find(|c: char| {
+                        c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ')'
+                    })
+                    .map(|o| start + o)
+                    .unwrap_or(result.len());
+                result.replace_range(start..end, "***REDACTED***");
+            }
+        }
+        std::borrow::Cow::Owned(result)
     }
 }
 

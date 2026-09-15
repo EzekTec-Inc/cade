@@ -167,6 +167,12 @@ impl TuiApp {
                 Event::Mouse(m) => {
                     let _ = self.handle_message_area_mouse_event(m)?;
                 }
+                Event::FocusGained => {
+                    self.has_focus = true;
+                }
+                Event::FocusLost => {
+                    self.has_focus = false;
+                }
                 _ => {}
             }
         }
@@ -530,8 +536,40 @@ impl TuiApp {
                         crate::app::leader::LeaderAction::HelpOverlay => {
                             return Ok(Some(Some("/help".to_string())));
                         }
+                        crate::app::leader::LeaderAction::StashPrompt => {
+                            self.stash_prompt();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::ToggleConceal => {
+                            self.toggle_conceal();
+                            return Ok(None);
+                        }
                     },
                 }
+            }
+
+            // Ctrl+Alt+V: Paste as plain-text (Section J: skips collapse/attachments)
+            KeyCode::Char('v') | KeyCode::Char('V')
+                if k.modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                let text = crate::app::clipboard::read_clipboard_text_with_mode(
+                    self.tui_settings.linux_clipboard_selection,
+                );
+                if let Some(text) = text {
+                    self.editor.insert_str(&text);
+                    self.draw_dirty = true;
+                }
+                return Ok(None);
+            }
+
+            // Ctrl+E: Open prompt in external editor ($VISUAL / $EDITOR) (Section J)
+            KeyCode::Char('e') | KeyCode::Char('E')
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                let _ = self.edit_in_external_editor();
+                return Ok(None);
             }
 
             KeyCode::Char('?')
@@ -899,6 +937,15 @@ impl TuiApp {
                 let s = *string_val;
                 if s == "/quote" || s == "quote" {
                     self.quote_selection_to_prompt();
+                    return Ok(None);
+                } else if s == "/conceal" || s == "conceal" {
+                    self.toggle_conceal();
+                    return Ok(None);
+                } else if s == "/timestamps" || s == "timestamps" {
+                    self.toggle_timestamps();
+                    return Ok(None);
+                } else if s == "/stash" || s == "stash" {
+                    self.stash_prompt();
                     return Ok(None);
                 } else if s.starts_with('/') {
                     return Ok(Some(Some(s)));

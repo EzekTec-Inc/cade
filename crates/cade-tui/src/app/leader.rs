@@ -49,6 +49,10 @@ pub enum LeaderAction {
     SessionTimeline,
     /// Show the help overlay ('?').
     HelpOverlay,
+    /// Stash or pop prompt text buffer ('s').
+    StashPrompt,
+    /// Toggle concealment of secrets ('C').
+    ToggleConceal,
 }
 
 /// Result of processing a key event while in leader chord mode.
@@ -148,7 +152,7 @@ impl LeaderKeyEngine {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::ListSessions)
             }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
+            KeyCode::Char('c') => {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::CompactSession)
             }
@@ -162,7 +166,11 @@ impl LeaderKeyEngine {
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.dismiss();
-                LeaderOutcome::Action(LeaderAction::SessionPicker)
+                LeaderOutcome::Action(LeaderAction::StashPrompt)
+            }
+            KeyCode::Char('C') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::ToggleConceal)
             }
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 self.dismiss();
