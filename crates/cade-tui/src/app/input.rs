@@ -1071,6 +1071,35 @@ pub(crate) fn scroll_page_down(current: usize, viewport_h: u16) -> (usize, bool)
     (new, new == 0)
 }
 
+/// Compute the new scroll position after a half-page up keypress (ctrl+alt+u).
+pub(crate) fn scroll_half_page_up(current: usize, viewport_h: u16) -> usize {
+    let step = ((viewport_h as usize) / 2).max(1);
+    current.saturating_add(step)
+}
+
+/// Compute the new scroll position after a half-page down keypress (ctrl+alt+d).
+/// Returns `(new_scroll, should_follow)`.
+pub(crate) fn scroll_half_page_down(current: usize, viewport_h: u16) -> (usize, bool) {
+    let step = ((viewport_h as usize) / 2).max(1);
+    let new = current.saturating_sub(step);
+    (new, new == 0)
+}
+
+/// Compute accelerated scroll delta (macOS-style scroll ramp).
+pub(crate) fn compute_accelerated_scroll(
+    base_speed: u16,
+    acceleration_enabled: bool,
+    streak: u16,
+) -> usize {
+    let base = (base_speed as usize).max(1);
+    if !acceleration_enabled || streak <= 1 {
+        base
+    } else {
+        let multiplier = 1 + ((streak as usize) / 2).min(4);
+        base * multiplier
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,5 +1181,28 @@ mod tests {
         let (new, follow) = scroll_page_down(5, 0);
         assert_eq!(new, 4);
         assert!(!follow);
+    }
+
+    #[test]
+    fn test_scroll_half_page() {
+        assert_eq!(scroll_half_page_up(0, 40), 20);
+        assert_eq!(scroll_half_page_up(10, 40), 30);
+
+        let (new, follow) = scroll_half_page_down(30, 40);
+        assert_eq!(new, 10);
+        assert!(!follow);
+
+        let (new, follow) = scroll_half_page_down(10, 40);
+        assert_eq!(new, 0);
+        assert!(follow);
+    }
+
+    #[test]
+    fn test_compute_accelerated_scroll() {
+        assert_eq!(compute_accelerated_scroll(3, false, 5), 3);
+        assert_eq!(compute_accelerated_scroll(3, true, 1), 3);
+        assert_eq!(compute_accelerated_scroll(3, true, 2), 6);
+        assert_eq!(compute_accelerated_scroll(3, true, 4), 9);
+        assert_eq!(compute_accelerated_scroll(3, true, 10), 15);
     }
 }

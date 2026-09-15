@@ -168,6 +168,10 @@ impl Default for NotificationSettings {
 pub struct ScrollSettings {
     #[serde(default = "default_speed")]
     pub speed_multiplier: f32,
+    #[serde(default = "default_scroll_speed")]
+    pub scroll_speed: u16,
+    #[serde(default = "default_true")]
+    pub scroll_acceleration: bool,
     #[serde(default = "default_true")]
     pub enable_mouse: bool,
 }
@@ -176,9 +180,15 @@ impl Default for ScrollSettings {
     fn default() -> Self {
         Self {
             speed_multiplier: 1.0,
+            scroll_speed: default_scroll_speed(),
+            scroll_acceleration: true,
             enable_mouse: true,
         }
     }
+}
+
+fn default_scroll_speed() -> u16 {
+    3
 }
 
 fn default_true() -> bool {
@@ -263,6 +273,10 @@ impl TuiSettings {
         self.notifications.enable_osc = other.notifications.enable_osc;
         self.scrolling.speed_multiplier = other.scrolling.speed_multiplier;
         self.scrolling.enable_mouse = other.scrolling.enable_mouse;
+        if other.scrolling.scroll_speed != default_scroll_speed() {
+            self.scrolling.scroll_speed = other.scrolling.scroll_speed;
+        }
+        self.scrolling.scroll_acceleration = other.scrolling.scroll_acceleration;
         self
     }
 }

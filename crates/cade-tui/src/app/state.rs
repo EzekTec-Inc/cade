@@ -545,7 +545,7 @@ impl TuiApp {
                 self.draw_dirty = true;
                 true
             }
-            // Alt+J, Alt+Shift+J, or Ctrl+End — snap to bottom ("Follow" mode)
+            // Alt+J, Alt+Shift+J, End, or Ctrl+Alt+G — snap to bottom ("Follow" mode)
             KeyCode::Char('j') | KeyCode::Char('J') if modifiers.contains(KeyModifiers::ALT) => {
                 if self.scroll > 0 || self.scroll_target > 0 {
                     self.show_toast("Jumped to bottom", ToastLevel::Info);
@@ -557,7 +557,7 @@ impl TuiApp {
                 self.draw_dirty = true;
                 true
             }
-            KeyCode::End if modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::End => {
                 if self.scroll > 0 || self.scroll_target > 0 {
                     self.show_toast("Jumped to bottom", ToastLevel::Info);
                 }
@@ -565,6 +565,49 @@ impl TuiApp {
                 self.scroll = 0;
                 self.follow = true;
                 self.pending_lines = 0;
+                self.draw_dirty = true;
+                true
+            }
+            KeyCode::Char('g') | KeyCode::Char('G')
+                if modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                if self.scroll > 0 || self.scroll_target > 0 {
+                    self.show_toast("Jumped to bottom", ToastLevel::Info);
+                }
+                self.scroll_target = 0;
+                self.scroll = 0;
+                self.follow = true;
+                self.pending_lines = 0;
+                self.draw_dirty = true;
+                true
+            }
+            // Home or Ctrl+G — jump to top of transcript (first message)
+            KeyCode::Home => {
+                self.follow = false;
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+                    .unwrap_or(20) as usize;
+                let prepared = self.build_prepared_entries();
+                let total_visual: usize = prepared.iter().map(|p| p.rows as usize).sum();
+                let max_skip = total_visual.saturating_sub(vh);
+                self.scroll_target = max_skip;
+                self.scroll = max_skip;
+                self.draw_dirty = true;
+                true
+            }
+            KeyCode::Char('g') | KeyCode::Char('G')
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.follow = false;
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+                    .unwrap_or(20) as usize;
+                let prepared = self.build_prepared_entries();
+                let total_visual: usize = prepared.iter().map(|p| p.rows as usize).sum();
+                let max_skip = total_visual.saturating_sub(vh);
+                self.scroll_target = max_skip;
+                self.scroll = max_skip;
                 self.draw_dirty = true;
                 true
             }
@@ -585,6 +628,35 @@ impl TuiApp {
                     .unwrap_or(20);
                 let (new_target, should_follow) =
                     crate::app::input::scroll_page_down(self.scroll_target, vh);
+                self.scroll_target = new_target;
+                if should_follow {
+                    self.follow = true;
+                    self.pending_lines = 0;
+                }
+                self.draw_dirty = true;
+                true
+            }
+            // Half-page up: Ctrl+Alt+U
+            KeyCode::Char('u') | KeyCode::Char('U')
+                if modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.follow = false;
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+                    .unwrap_or(20);
+                self.scroll_target = crate::app::input::scroll_half_page_up(self.scroll_target, vh);
+                self.draw_dirty = true;
+                true
+            }
+            // Half-page down: Ctrl+Alt+D
+            KeyCode::Char('d') | KeyCode::Char('D')
+                if modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+                    .unwrap_or(20);
+                let (new_target, should_follow) =
+                    crate::app::input::scroll_half_page_down(self.scroll_target, vh);
                 self.scroll_target = new_target;
                 if should_follow {
                     self.follow = true;
@@ -617,7 +689,10 @@ impl TuiApp {
                 true
             }
             // Ctrl+u — scroll up 10 lines
-            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u')
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.follow = false;
                 self.scroll_target = self.scroll_target.saturating_add(10);
                 self.draw_dirty = true;
@@ -636,13 +711,29 @@ impl TuiApp {
             return false;
         }
 
-        // Calculate dynamic viewport height and maximum ahead-buffer cap (Option A - Elastic Governor)
-        // We use a highly generous buffer limit ((vh * 4).max(100)) to ensure scrolling remains
-        // incredibly responsive, smooth, and free of artificial "stuck/sticky" boundaries.
         let vh = crossterm::terminal::size()
             .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
             .unwrap_or(20) as usize;
         let max_buffer = (vh * 4).max(100);
+
+        // Calculate velocity acceleration (Section F)
+        let now = std::time::Instant::now();
+        let is_rapid = self
+            .last_scroll_at
+            .map(|t| t.elapsed() < std::time::Duration::from_millis(180))
+            .unwrap_or(false);
+        if is_rapid {
+            self.scroll_streak = (self.scroll_streak + 1).min(10);
+        } else {
+            self.scroll_streak = 0;
+        }
+        self.last_scroll_at = Some(now);
+
+        let delta = crate::app::input::compute_accelerated_scroll(
+            self.tui_settings.scrolling.scroll_speed,
+            self.tui_settings.scrolling.scroll_acceleration,
+            self.scroll_streak,
+        );
 
         match kind {
             MouseEventKind::ScrollUp => {
@@ -650,11 +741,13 @@ impl TuiApp {
 
                 let diff = self.scroll_target.saturating_sub(self.scroll);
                 if diff < max_buffer {
-                    // Elastic scaling: reduce increment from +3 to +1 as we approach the max buffer cap
-                    let increment = if diff < max_buffer / 2 { 3 } else { 1 };
+                    let increment = if diff < max_buffer / 2 {
+                        delta
+                    } else {
+                        (delta / 2).max(1)
+                    };
                     self.scroll_target = self.scroll_target.saturating_add(increment);
 
-                    // Clamp to max buffer boundary
                     if self.scroll_target.saturating_sub(self.scroll) > max_buffer {
                         self.scroll_target = self.scroll.saturating_add(max_buffer);
                     }
@@ -666,11 +759,13 @@ impl TuiApp {
             MouseEventKind::ScrollDown => {
                 let diff = self.scroll.saturating_sub(self.scroll_target);
                 if diff < max_buffer {
-                    // Elastic scaling: reduce decrement from 3 to 1 as we approach the max buffer cap
-                    let increment = if diff < max_buffer / 2 { 3 } else { 1 };
+                    let increment = if diff < max_buffer / 2 {
+                        delta
+                    } else {
+                        (delta / 2).max(1)
+                    };
                     self.scroll_target = self.scroll_target.saturating_sub(increment);
 
-                    // Clamp to max buffer boundary (bugfix: clamp target relative to scroll, not target itself)
                     if self.scroll.saturating_sub(self.scroll_target) > max_buffer {
                         self.scroll_target = self.scroll.saturating_sub(max_buffer);
                     }

@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod command_palette;
 pub mod copy_overlay;
+pub mod frecency;
 pub mod help_overlay;
 pub mod input;
 pub mod layout;
@@ -944,6 +945,10 @@ pub struct TuiApp {
     pub last_keypress: std::time::Instant,
     /// Stored state indicating whether high-velocity simulated pasting is active.
     pub is_pasting: bool,
+    /// Timestamp of the last scroll action for velocity acceleration (Section F).
+    pub last_scroll_at: Option<std::time::Instant>,
+    /// Streak count of consecutive rapid scroll events.
+    pub scroll_streak: u16,
 
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
@@ -1198,6 +1203,8 @@ impl TuiApp {
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
             is_pasting: false,
+            last_scroll_at: None,
+            scroll_streak: 0,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider::new(
                 vec![],
