@@ -1,4 +1,3 @@
-use crate::app::layout::breadcrumb::render_breadcrumb;
 use crate::app::layout::helpers::{
     format_token_count, mode_footer_left, mode_sep_color, truncate_str,
 };
@@ -41,8 +40,7 @@ use super::timeline::{
     TimelineKey, TimelineLayoutEngine, build_timeline_entries, render_timeline_viewport,
 };
 use super::{
-    BRAILLE, DOTS, FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT,
-    SIDEBAR_WIDTH, Toast,
+    FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH, Toast,
 };
 
 // -- Scroll helpers
@@ -233,32 +231,19 @@ pub(crate) fn render_frame(
         0
     };
 
-    let chunks = if plan_h > 0 {
-        Layout::vertical([
-            Constraint::Length(1),          // [0] unified top breadcrumb & status bar
-            Constraint::Fill(1),            // [1] content  (fluid)
-            Constraint::Length(plan_h),     // [2] plan panel
-            Constraint::Length(1),          // [3] input separator
-            Constraint::Length(input_rows), // [4] input or question
-            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [5] footer
-        ])
-        .split(main_area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(1),          // [0] unified top breadcrumb & status bar
-            Constraint::Fill(1),            // [1] content
-            Constraint::Length(0),          // [2] (unused)
-            Constraint::Length(1),          // [3] input separator
-            Constraint::Length(input_rows), // [4] input or question
-            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [5] footer
-        ])
-        .split(main_area)
-    };
+    let chunks = Layout::vertical([
+        Constraint::Fill(1),                                   // [0] content  (fluid)
+        Constraint::Length(plan_h),                            // [1] plan panel (0 when hidden)
+        Constraint::Length(1), // [2] bottom status bar (breadcrumb + processing animation)
+        Constraint::Length(1), // [3] input separator
+        Constraint::Length(input_rows), // [4] input or question
+        Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [5] footer
+    ])
+    .split(main_area);
 
-    // -- Top unified breadcrumb & live status bar
-    let top_bar_ctx = crate::app::layout::breadcrumb::TopBarContext {
+    // -- Bottom status bar (breadcrumb info + live processing animation)
+    let status_ctx = crate::app::layout::breadcrumb::StatusBarContext {
         cwd,
-        git_branch: None,
         model,
         turn_count,
         context_pct,
@@ -273,31 +258,12 @@ pub(crate) fn render_frame(
         pending_lines: ctx.pending_lines,
         nerd: ctx.nerd,
     };
-    crate::app::layout::breadcrumb::render_top_bar(frame, chunks[0], &top_bar_ctx, colors);
+    crate::app::layout::breadcrumb::render_status_bar(frame, chunks[2], &status_ctx, colors);
 
     // -- Pinned header & viewport layout splits
     let (header_area_opt, messages_area) =
-        render_pinned_header(frame, chunks[1], header_lines, w, colors, nerd);
+        render_pinned_header(frame, chunks[0], header_lines, w, colors, nerd);
     let _ = header_area_opt;
-
-    // -- Breadcrumb bar (only on narrow terminals where sidebar is absent)
-    let messages_area = if sidebar_area.is_none() && messages_area.height > 4 {
-        let [breadcrumb_rect, rest] =
-            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(messages_area);
-        render_breadcrumb(
-            frame,
-            breadcrumb_rect,
-            model,
-            turn_count,
-            context_pct,
-            token_history,
-            colors,
-            nerd,
-        );
-        rest
-    } else {
-        messages_area
-    };
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
@@ -366,7 +332,7 @@ pub(crate) fn render_frame(
     if let Some(plan) = active_plan
         && plan.is_visible
     {
-        render_active_plan(frame, chunks[2], plan, colors);
+        render_active_plan(frame, chunks[1], plan, colors);
     }
 
     // -- Subagent Floating Cards
@@ -432,81 +398,6 @@ fn render_pinned_header(
         );
         (Some(split[0]), split[1])
     }
-}
-
-#[allow(dead_code)]
-fn render_status_row(
-    frame: &mut Frame,
-    area: ratatui::layout::Rect,
-    ctx: &RenderContext<'_>,
-    colors: &ThemeColors,
-) {
-    let RenderContext {
-        thinking_text,
-        thinking_elapsed,
-        last_status,
-        queued_count,
-        scroll,
-        streaming,
-        pending_lines,
-        ..
-    } = ctx;
-
-    let (status_text, status_style) = if let Some(t) = thinking_text {
-        let (spinner_text, fg_color) = if let Some(elapsed) = thinking_elapsed {
-            let ms = elapsed.as_millis();
-            let spinner = if (ms / 3000) % 2 == 0 {
-                BRAILLE[(ms / 80) as usize % BRAILLE.len()]
-            } else {
-                DOTS[(ms / 100) as usize % DOTS.len()]
-            };
-            (format!("{} {}", spinner, t), spinner_color(ms, colors))
-        } else {
-            (t.to_string(), colors.c_primary())
-        };
-        (
-            spinner_text,
-            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
-        )
-    } else if let Some(s) = last_status {
-        let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
-            colors.c_error()
-        } else {
-            colors.c_success()
-        };
-        (
-            s.clone(),
-            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
-        )
-    } else {
-        (String::new(), Style::default())
-    };
-
-    let mut status_text = if *queued_count > 0 {
-        format!("{status_text}  · {queued_count} queued")
-    } else {
-        status_text
-    };
-
-    if *scroll > 0 {
-        let hint = if streaming.is_some() {
-            "  ↓ streaming…  (Shift+J to follow)".to_string()
-        } else if *pending_lines > 0 {
-            format!("  ↓ {pending_lines} new  (Shift+J to follow)")
-        } else {
-            String::new()
-        };
-        if !hint.is_empty() {
-            status_text = format!("{status_text}{hint}");
-        }
-    }
-
-    let status_text = truncate_str(&status_text, area.width as usize);
-
-    frame.render_widget(
-        Paragraph::new(Span::styled(status_text, status_style)),
-        area,
-    );
 }
 
 fn render_input_separator(
@@ -654,7 +545,6 @@ fn render_footer_bars(
         agent_name,
         model,
         reasoning_effort,
-        cwd,
         context_pct,
         session_tokens,
         footer_extra,
@@ -681,7 +571,6 @@ fn render_footer_bars(
         let total = session_tokens.0 + session_tokens.1;
         format!(" {}↑", format_token_count(total))
     };
-    let mid_cwd = format!("  {cwd}  ");
 
     let left_base_len: u16 = left_label.chars().count() as u16
         + if left_glyph.is_empty() {
@@ -694,25 +583,7 @@ fn render_footer_bars(
         + right_reasoning.chars().count()
         + right_ctx.chars().count()
         + right_tokens.chars().count()) as u16;
-    let footer_w = area.width as usize;
-    let available_for_cwd = footer_w
-        .saturating_sub(left_base_len as usize)
-        .saturating_sub(right_fixed_len as usize)
-        .saturating_sub(1);
-    let mid_cwd = if mid_cwd.chars().count() > available_for_cwd && available_for_cwd > 4 {
-        truncate_str(&mid_cwd, available_for_cwd)
-    } else if available_for_cwd <= 4 {
-        String::new()
-    } else {
-        mid_cwd
-    };
-    let right_len: u16 = (mid_cwd.chars().count()
-        + right_agent.chars().count()
-        + right_model.chars().count()
-        + right_reasoning.chars().count()
-        + right_ctx.chars().count()
-        + right_tokens.chars().count()) as u16;
-    let pad = area.width.saturating_sub(left_base_len + right_len) as usize;
+    let pad = area.width.saturating_sub(left_base_len + right_fixed_len) as usize;
 
     let mut footer: Vec<Span<'static>> = vec![Span::styled(
         left_label,
@@ -725,7 +596,6 @@ fn render_footer_bars(
         ));
     }
     footer.push(Span::raw(" ".repeat(pad)));
-    footer.push(Span::styled(mid_cwd, colors.text_muted()));
     if !right_agent.is_empty() {
         footer.push(Span::styled(right_agent, colors.thinking_minimal()));
     }
@@ -744,13 +614,6 @@ fn render_footer_bars(
     if !right_tokens.is_empty() {
         footer.push(Span::styled(right_tokens, colors.text_dim()));
     }
-
-    footer.push(Span::styled(
-        "  Server: 14ms 🟢",
-        Style::default()
-            .fg(colors.c_success())
-            .add_modifier(Modifier::DIM),
-    ));
 
     let footer_base_rect = ratatui::layout::Rect {
         x: area.x,
@@ -803,6 +666,9 @@ fn render_footer_bars(
         ]
     } else {
         vec![
+            Span::styled(" ^X ", colors.primary_bold()),
+            Span::styled("Leader", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
             Span::styled(" ^B ", colors.primary_bold()),
             Span::styled("Sidebar", colors.text_muted()),
             Span::styled("  │  ", colors.text_dim()),

@@ -299,6 +299,7 @@ impl HttpTransport {
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
                 Err(error) => {
                     events.close();
+                    tracing::debug!("SSE run transport error: {error:?}");
                     return Err(crate::Error::custom(error.to_string()));
                 }
             }
@@ -494,7 +495,7 @@ impl HttpTransport {
                     // with the same error after another 30 s timeout, only making
                     // the user wait longer for the same failure.  Surface the
                     // real transport error immediately instead.
-                    tracing::debug!("SSE transport error: {e}");
+                    tracing::debug!("SSE transport error: {e:?}");
                     es.close();
                     return Err(crate::Error::custom(e.to_string()));
                 }
@@ -654,7 +655,7 @@ impl HttpTransport {
                     // connection means the next blocking POST will also fail;
                     // surface the real error immediately rather than waiting
                     // for a second 30 s timeout.
-                    tracing::debug!("SSE tool-return transport error: {e}");
+                    tracing::debug!("SSE tool-return transport error: {e:?}");
                     es.close();
                     return Err(crate::Error::custom(e.to_string()));
                 }
