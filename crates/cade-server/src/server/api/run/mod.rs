@@ -312,7 +312,15 @@ pub async fn run_agent(
         tokio_stream::wrappers::ReceiverStream::new(handle.events),
         |res| res.map(Event::from),
     );
-    Sse::new(stream).into_response()
+    // Keep the SSE transport alive during long quiet periods (model thinking,
+    // long tool waits).  Nginx/proxies default to ~60 s read timeouts and will
+    // tear down an idle stream, which the client surfaces as a body-stream
+    // error.  Emit periodic SSE heartbeat comments the client ignores.
+    Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)),
+        )
+        .into_response()
 }
 
 /// Type alias for the SSE sender used by [`run_agent_loop`].

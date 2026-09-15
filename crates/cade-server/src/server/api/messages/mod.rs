@@ -8,7 +8,7 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Response, Sse},
+    response::{IntoResponse, Response, Sse, sse::KeepAlive},
 };
 
 use serde_json::{Value, json};
@@ -525,7 +525,11 @@ pub async fn stream_message(
         tokio_stream::wrappers::ReceiverStream::new(handle.events),
         |res| res.map(Event::from),
     );
-    Sse::new(stream).into_response()
+    // Keep the SSE transport alive during long quiet periods (see the same
+    // keepalive on `/v1/agents/:id/run`).
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
 }
 
 // -- Helpers
