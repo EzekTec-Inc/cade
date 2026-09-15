@@ -235,33 +235,49 @@ pub(crate) fn render_frame(
 
     let chunks = if plan_h > 0 {
         Layout::vertical([
-            Constraint::Fill(1),                                   // [0] content  (fluid)
-            Constraint::Length(0),                                 // [1] unused
-            Constraint::Length(plan_h),                            // [2] plan panel
-            Constraint::Length(1),                                 // [3] status
-            Constraint::Length(1),                                 // [4] top separator
-            Constraint::Length(input_rows),                        // [5] input or question
-            Constraint::Length(1),                                 // [6] bottom separator
-            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
+            Constraint::Length(1),          // [0] unified top breadcrumb & status bar
+            Constraint::Fill(1),            // [1] content  (fluid)
+            Constraint::Length(plan_h),     // [2] plan panel
+            Constraint::Length(1),          // [3] input separator
+            Constraint::Length(input_rows), // [4] input or question
+            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [5] footer
         ])
         .split(main_area)
     } else {
         Layout::vertical([
-            Constraint::Fill(1),                                   // [0] content
-            Constraint::Length(0),                                 // [1] (unused)
-            Constraint::Length(0),                                 // [2] (unused)
-            Constraint::Length(1),                                 // [3] status
-            Constraint::Length(1),                                 // [4] top separator
-            Constraint::Length(input_rows),                        // [5] input or question
-            Constraint::Length(1),                                 // [6] bottom separator
-            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
+            Constraint::Length(1),          // [0] unified top breadcrumb & status bar
+            Constraint::Fill(1),            // [1] content
+            Constraint::Length(0),          // [2] (unused)
+            Constraint::Length(1),          // [3] input separator
+            Constraint::Length(input_rows), // [4] input or question
+            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [5] footer
         ])
         .split(main_area)
     };
 
+    // -- Top unified breadcrumb & live status bar
+    let top_bar_ctx = crate::app::layout::breadcrumb::TopBarContext {
+        cwd,
+        git_branch: None,
+        model,
+        turn_count,
+        context_pct,
+        token_history,
+        session_cost_usd: ctx.session_cost_usd,
+        thinking_text: ctx.thinking_text,
+        thinking_elapsed: ctx.thinking_elapsed,
+        last_status: ctx.last_status.as_deref(),
+        queued_count: ctx.queued_count,
+        is_streaming: ctx.streaming.is_some(),
+        scroll: ctx.scroll,
+        pending_lines: ctx.pending_lines,
+        nerd: ctx.nerd,
+    };
+    crate::app::layout::breadcrumb::render_top_bar(frame, chunks[0], &top_bar_ctx, colors);
+
     // -- Pinned header & viewport layout splits
     let (header_area_opt, messages_area) =
-        render_pinned_header(frame, chunks[0], header_lines, w, colors, nerd);
+        render_pinned_header(frame, chunks[1], header_lines, w, colors, nerd);
     let _ = header_area_opt;
 
     // -- Breadcrumb bar (only on narrow terminals where sidebar is absent)
@@ -306,18 +322,15 @@ pub(crate) fn render_frame(
         mouse_selection,
     );
 
-    // -- Status row
-    render_status_row(frame, chunks[3], &ctx, colors);
-
-    // -- Separators
-    render_separators(frame, main_area, &chunks, &ctx, colors);
+    // -- Input separator
+    render_input_separator(frame, chunks[3], &ctx, colors);
 
     // -- Input area or Question Panel
     let input_cursor_pos =
-        render_input_or_question(frame, chunks[5], textarea, last_input_width, &ctx, colors);
+        render_input_or_question(frame, chunks[4], textarea, last_input_width, &ctx, colors);
 
     // -- Footer bars & Hotkeys
-    render_footer_bars(frame, &chunks, &ctx, footer_extra_h, colors);
+    render_footer_bars(frame, chunks[5], &ctx, footer_extra_h, colors);
 
     // -- Sidebar
     if let Some(sidebar) = sidebar_area {
@@ -421,6 +434,7 @@ fn render_pinned_header(
     }
 }
 
+#[allow(dead_code)]
 fn render_status_row(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
@@ -495,13 +509,15 @@ fn render_status_row(
     );
 }
 
-fn render_separators(
+fn render_input_separator(
     frame: &mut Frame,
-    main_area: ratatui::layout::Rect,
-    chunks: &[ratatui::layout::Rect],
+    area: ratatui::layout::Rect,
     ctx: &RenderContext<'_>,
     colors: &ThemeColors,
 ) {
+    if area.height == 0 {
+        return;
+    }
     let RenderContext {
         mode,
         thinking_elapsed,
@@ -518,17 +534,10 @@ fn render_separators(
     } else {
         mode_color
     };
-    let sep = "─".repeat(main_area.width as usize);
+    let sep = "─".repeat(area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            sep.clone(),
-            Style::default().fg(top_sep_color),
-        )),
-        chunks[4],
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(sep, Style::default().fg(mode_color))),
-        chunks[6],
+        Paragraph::new(Span::styled(sep, Style::default().fg(top_sep_color))),
+        area,
     );
 }
 
@@ -635,7 +644,7 @@ fn render_input_or_question(
 
 fn render_footer_bars(
     frame: &mut Frame,
-    chunks: &[ratatui::layout::Rect],
+    area: ratatui::layout::Rect,
     ctx: &RenderContext<'_>,
     footer_extra_h: u16,
     colors: &ThemeColors,
@@ -685,7 +694,7 @@ fn render_footer_bars(
         + right_reasoning.chars().count()
         + right_ctx.chars().count()
         + right_tokens.chars().count()) as u16;
-    let footer_w = chunks[7].width as usize;
+    let footer_w = area.width as usize;
     let available_for_cwd = footer_w
         .saturating_sub(left_base_len as usize)
         .saturating_sub(right_fixed_len as usize)
@@ -703,7 +712,7 @@ fn render_footer_bars(
         + right_reasoning.chars().count()
         + right_ctx.chars().count()
         + right_tokens.chars().count()) as u16;
-    let pad = chunks[7].width.saturating_sub(left_base_len + right_len) as usize;
+    let pad = area.width.saturating_sub(left_base_len + right_len) as usize;
 
     let mut footer: Vec<Span<'static>> = vec![Span::styled(
         left_label,
@@ -743,13 +752,19 @@ fn render_footer_bars(
             .add_modifier(Modifier::DIM),
     ));
 
-    frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
+    let footer_base_rect = ratatui::layout::Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(Line::from(footer)), footer_base_rect);
 
     if let Some(extra) = footer_extra {
         let extra_rect = ratatui::layout::Rect {
-            x: chunks[7].x,
-            y: chunks[7].y + 1,
-            width: chunks[7].width,
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
             height: 1,
         };
         frame.render_widget(
@@ -762,9 +777,9 @@ fn render_footer_bars(
     }
 
     let hotkey_rect = ratatui::layout::Rect {
-        x: chunks[7].x,
-        y: chunks[7].y + 1 + footer_extra_h,
-        width: chunks[7].width,
+        x: area.x,
+        y: area.y + 1 + footer_extra_h,
+        width: area.width,
         height: 1,
     };
     let hotkey_spans = if top_overlay.is_some() {

@@ -86,7 +86,9 @@ const MAX_INPUT_ROWS: u16 = 6;
 const CONTENT_PAD_TOP: u16 = 1;
 const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
+#[allow(dead_code)]
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+#[allow(dead_code)]
 const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
 
 /// Responsive layout breakpoint for showing the right sidebar.
