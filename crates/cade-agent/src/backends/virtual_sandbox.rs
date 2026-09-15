@@ -28,6 +28,30 @@ impl VirtualSandboxBackend {
         }
     }
 
+    /// Best-effort canonicalization that resolves symlinks for existing paths or for
+    /// the closest existing ancestor directory if the target file does not yet exist.
+    fn canonicalize_best_effort(path: &Path) -> PathBuf {
+        if let Ok(can) = path.canonicalize() {
+            return can;
+        }
+        let mut uncreated = Vec::new();
+        let mut curr = path;
+        while let Some(parent) = curr.parent() {
+            if let Some(file_name) = curr.file_name() {
+                uncreated.push(file_name);
+            }
+            if let Ok(can_parent) = parent.canonicalize() {
+                let mut resolved = can_parent;
+                for component in uncreated.into_iter().rev() {
+                    resolved.push(component);
+                }
+                return resolved;
+            }
+            curr = parent;
+        }
+        path.to_path_buf()
+    }
+
     fn verify_path(&self, path: &Path) -> Result<PathBuf> {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -48,13 +72,10 @@ impl VirtualSandboxBackend {
             }
         }
 
-        // Attempt to canonicalize to resolve symlinks if the path exists
-        let canonical = normalized.canonicalize().unwrap_or(normalized);
+        // Attempt to canonicalize to resolve symlinks (handling non-existent targets via closest existing ancestor)
+        let canonical = Self::canonicalize_best_effort(&normalized);
 
-        let root_canonical = self
-            .workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| self.workspace_root.clone());
+        let root_canonical = Self::canonicalize_best_effort(&self.workspace_root);
 
         let strip_unc = |p: &Path| -> PathBuf {
             #[cfg(windows)]
