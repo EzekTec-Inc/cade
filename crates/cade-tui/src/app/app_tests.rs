@@ -746,7 +746,10 @@ fn test_is_processing_and_toast_suppression() {
     assert!(!app.is_processing());
     app.show_toast("After processing toast", ToastLevel::Success);
     assert!(app.toast.is_some());
-    assert_eq!(app.toast.as_ref().unwrap().message, "After processing toast");
+    assert_eq!(
+        app.toast.as_ref().unwrap().message,
+        "After processing toast"
+    );
 
     // 5. Streaming active: is_processing is true, toast dropped
     app.streaming_active = true;

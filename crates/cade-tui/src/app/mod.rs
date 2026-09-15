@@ -1158,7 +1158,9 @@ impl TuiApp {
             context_pct: None,
             session_tokens: (0, 0),
             session_cost_usd: 0.0,
-            session_cost_cap_usd: resolve_session_cost_cap(&std::env::current_dir().unwrap_or_default()),
+            session_cost_cap_usd: resolve_session_cost_cap(
+                &std::env::current_dir().unwrap_or_default(),
+            ),
             turn_count: 0,
             token_history: Vec::new(),
             mouse_capture_disabled: true,
