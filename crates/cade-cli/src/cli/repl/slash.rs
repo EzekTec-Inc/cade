@@ -70,8 +70,8 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Browse session timeline and checkpoints".into(),
         },
         SlashCommandDef {
-            name: "session".into(),
-            description: "List or resume sessions (/session new for new)".into(),
+            name: "save".into(),
+            description: "Save current TUI display toggles to ~/.cade/tui.toml".into(),
         },
         SlashCommandDef {
             name: "timeline".into(),
@@ -416,6 +416,7 @@ const PARSED_SLASH_TRIGGERS: &[&str] = &[
     "resume",
     "session",
     "timeline",
+    "save",
     "delete",
     "del",
     "rm-agent",
@@ -569,6 +570,8 @@ pub(crate) enum SlashCmd {
     Tree,
     /// Fork a new conversation from a checkpoint.
     Fork(Option<String>),
+    /// Save current running TUI settings back to ~/.cade/tui.toml.
+    Save,
     /// List all stored artifacts for this agent.
     Artifacts,
     /// Trigger reflection to extract memory from conversation history.
@@ -626,6 +629,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
             _ => Some(SlashCmd::Resume),
         },
         "timeline" => Some(SlashCmd::Tree),
+        "save" => Some(SlashCmd::Save),
         "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
         "init" => Some(SlashCmd::Init),
         "remember" => Some(SlashCmd::Remember(arg.unwrap_or_default())),

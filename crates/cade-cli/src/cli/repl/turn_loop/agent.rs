@@ -500,6 +500,11 @@ impl Repl {
         app.show_toast(err_text.clone(), cade_tui::app::ToastLevel::Error);
         let _ = app.push(RenderLine::ErrorMsg(err_text.clone()));
         app.set_last_status(Some(format!("✗ Error: {err_text}")));
+        app.notify_if_unfocused(
+            cade_tui::app::notifier::AttentionCue::TaskError,
+            "Turn Error",
+            &err_text,
+        );
         app.draw_dirty = true;
         let _ = app.draw();
         vec![]

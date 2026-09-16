@@ -9,6 +9,7 @@ pub mod leader;
 pub mod notifier;
 pub mod password;
 pub mod permission_overlay;
+pub mod prompt_stash;
 pub mod questions;
 pub mod reducer;
 pub mod render;
@@ -827,8 +828,8 @@ fn done_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").expect("valid regex"))
 }
 
-/// Snap a byte offset to the nearest valid UTF-8 character boundary (rounding down).
-fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
+#[allow(dead_code)]
+pub(crate) fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
     let mut pos = byte_offset.min(s.len());
     while pos > 0 && !s.is_char_boundary(pos) {
         pos -= 1;
@@ -841,7 +842,8 @@ fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
 /// `reveal_len` advances in byte steps that may land mid-character for
 /// multi-byte output (emoji, CJK, accented Latin), so the offset is always
 /// snapped to a valid UTF-8 boundary before slicing.
-fn streaming_revealed_prefix(full: &str, reveal_len: usize) -> String {
+#[allow(dead_code)]
+pub(crate) fn streaming_revealed_prefix(full: &str, reveal_len: usize) -> String {
     let reveal = reveal_len.min(full.len());
     let end = snap_to_char_boundary(full, reveal);
     full[..end].to_string()
@@ -880,9 +882,9 @@ pub struct TuiApp {
     // -- Streaming state
     streaming_text: String,
     streaming_active: bool,
-    /// Typewriter reveal: number of bytes of `streaming_text` currently visible.
-    /// Advances progressively each tick for smooth character-by-character output.
-    streaming_reveal_len: usize,
+    // Reveal-free streaming: no typewriter pacing.  The full accumulated text
+    // is rendered on every chunk arrival via the identical markdown path used
+    // for committed content, so styling/spacing never drifts while in flight.
     /// Stripped (prompt-free) mirror of `streaming_text`.  Refreshed once per
     /// incoming chunk so draw frames never re-run the strip regex over the
     /// whole accumulated response.
@@ -957,7 +959,8 @@ pub struct TuiApp {
     pub conceal_secrets: bool,
     pub collapse_tools: bool,
     pub thinking_visibility: String,
-    pub prompt_stash: Vec<String>,
+    pub prompt_stash: crate::app::prompt_stash::PromptStashStore,
+    pub notifier: crate::app::notifier::TerminalNotifier,
     pub has_focus: bool,
 
     // -- Layout engine
@@ -1195,7 +1198,6 @@ impl TuiApp {
             sidebar_hidden: false,
             streaming_text: String::new(),
             streaming_active: false,
-            streaming_reveal_len: 0,
             streaming_display: String::new(),
             reasoning_text: String::new(),
             reasoning_active: false,
@@ -1219,7 +1221,7 @@ impl TuiApp {
             ),
             turn_count: 0,
             token_history: Vec::new(),
-            mouse_capture_disabled: true,
+            mouse_capture_disabled: false,
             messages_area: Rect::default(),
             copy_highlight: None,
             selection_start: None,
@@ -1232,7 +1234,12 @@ impl TuiApp {
             conceal_secrets: tui_settings.conceal_secrets,
             collapse_tools: tui_settings.collapse_tools,
             thinking_visibility: tui_settings.thinking_visibility.clone(),
-            prompt_stash: Vec::new(),
+            prompt_stash: crate::app::prompt_stash::PromptStashStore::load_default(),
+            notifier: crate::app::notifier::TerminalNotifier::new(
+                tui_settings.notifications.enable_bell || tui_settings.attention_sounds_enabled(),
+                tui_settings.notifications.enable_osc || tui_settings.attention_enabled(),
+                false,
+            ),
             has_focus: true,
             tui_settings,
             keymap,
@@ -1371,7 +1378,6 @@ impl TuiApp {
         {
             self.toast = None;
         }
-        self.tick_streaming_reveal();
         self.tick_smooth_scroll();
         self.draw_impl()
     }
@@ -1418,72 +1424,17 @@ impl TuiApp {
         self.scroll_target = pos;
     }
 
-    /// Advance the typewriter reveal cursor toward the full streaming text length.
-    /// Called every draw cycle (throttled to ~30 FPS while streaming).
-    ///
-    /// Advances are *quantized* to [`REVEAL_QUANTUM`]–byte steps: the streaming
-    /// entry's cache key changes only when the revealed prefix actually changes,
-    /// so the expensive markdown parse + syntax highlighting runs a handful of
-    /// times per second instead of on every single frame.
-    fn tick_streaming_reveal(&mut self) {
-        if !self.streaming_active {
-            return;
-        }
-        const REVEAL_QUANTUM: usize = 64;
-        let target = self.streaming_display.len();
-        if self.streaming_reveal_len < target {
-            // Reveal rate: adaptive — faster when we're far behind, slower when close.
-            let behind = target - self.streaming_reveal_len;
-            let step = if behind > 500 {
-                // Extremely far behind (backlog spike): snap instantly to catch up and prevent lags (ADR 4/6)
-                behind
-            } else if behind > 150 {
-                // Very far behind: catch up quickly
-                behind / 2
-            } else if behind > 50 {
-                // Moderately behind: reveal ~20 chars per tick
-                20
-            } else {
-                // Close to caught up: smooth typewriter at ~8 chars/tick
-                8
-            };
-            let raw = (self.streaming_reveal_len + step).min(target);
-            let next = if raw >= target {
-                target
-            } else {
-                let q = raw - (raw % REVEAL_QUANTUM);
-                // Never stall on a sub-quantum step: force a final catch-up.
-                if q <= self.streaming_reveal_len {
-                    target
-                } else {
-                    q
-                }
-            };
-            self.streaming_reveal_len = next;
-            // If still not fully revealed, keep dirty so next tick continues.
-            if self.streaming_reveal_len < target {
-                self.draw_dirty = true;
-            }
-        }
-    }
-
     /// Snapshot of the streaming text currently visible in the viewport.
     ///
     /// Uses the prompt-stripped [`TuiApp::streaming_display`] buffer (refreshed
-    /// once per chunk) and applies the typewriter reveal bound.  A full copy is
-    /// only made while the reveal lags the buffer; once caught up the cached
-    /// display string is reused directly.
+    /// once per chunk).  Reveal-free: the full accumulated text is returned on
+    /// every chunk arrival so the rendered markdown never drifts while in
+    /// flight.
     fn streaming_view_snapshot(&self) -> Option<String> {
         if !self.streaming_active {
-            return None;
-        }
-        if self.streaming_reveal_len >= self.streaming_display.len() {
-            Some(self.streaming_display.clone())
+            None
         } else {
-            Some(streaming_revealed_prefix(
-                &self.streaming_display,
-                self.streaming_reveal_len,
-            ))
+            Some(self.streaming_display.clone())
         }
     }
 
@@ -2225,6 +2176,8 @@ impl TuiApp {
     /// Toggle concealment of tokens, secrets, and sensitive strings (Section H).
     pub fn toggle_conceal(&mut self) {
         self.conceal_secrets = !self.conceal_secrets;
+        self.tui_settings.conceal_secrets = self.conceal_secrets;
+        let _ = self.tui_settings.save_default();
         let status = if self.conceal_secrets { "ON" } else { "OFF" };
         self.show_toast(
             format!("Conceal mode: {status}"),
@@ -2236,6 +2189,8 @@ impl TuiApp {
     /// Toggle timestamps display on timeline messages (Section H).
     pub fn toggle_timestamps(&mut self) {
         self.show_timestamps = !self.show_timestamps;
+        self.tui_settings.show_timestamps = self.show_timestamps;
+        let _ = self.tui_settings.save_default();
         let status = if self.show_timestamps { "ON" } else { "OFF" };
         self.show_toast(
             format!("Timestamps: {status}"),
@@ -2247,6 +2202,8 @@ impl TuiApp {
     /// Toggle default collapse of tool call outputs (Section H).
     pub fn toggle_tools(&mut self) {
         self.collapse_tools = !self.collapse_tools;
+        self.tui_settings.collapse_tools = self.collapse_tools;
+        let _ = self.tui_settings.save_default();
         let status = if self.collapse_tools {
             "collapsed"
         } else {
@@ -2266,11 +2223,49 @@ impl TuiApp {
             "full" => "hide".to_string(),
             _ => "collapse".to_string(),
         };
+        self.tui_settings.thinking_visibility = self.thinking_visibility.clone();
+        let _ = self.tui_settings.save_default();
         self.show_toast(
             format!("Thinking view: {}", self.thinking_visibility),
             crate::app::ToastLevel::Info,
         );
         self.draw_dirty = true;
+    }
+
+    /// Explicitly save runtime settings back to ~/.cade/tui.toml (Section H).
+    pub fn save_settings(&mut self) -> bool {
+        self.tui_settings.show_timestamps = self.show_timestamps;
+        self.tui_settings.conceal_secrets = self.conceal_secrets;
+        self.tui_settings.collapse_tools = self.collapse_tools;
+        self.tui_settings.thinking_visibility = self.thinking_visibility.clone();
+        match self.tui_settings.save_default() {
+            Ok(_) => {
+                self.show_toast(
+                    "Saved settings to ~/.cade/tui.toml",
+                    crate::app::ToastLevel::Success,
+                );
+                true
+            }
+            Err(e) => {
+                self.show_toast(
+                    format!("Failed to save settings: {e}"),
+                    crate::app::ToastLevel::Error,
+                );
+                false
+            }
+        }
+    }
+
+    /// Trigger terminal attention notification if the app window currently lacks focus (Section I).
+    pub fn notify_if_unfocused(
+        &self,
+        cue: crate::app::notifier::AttentionCue,
+        title: &str,
+        body: &str,
+    ) {
+        if !self.has_focus && self.tui_settings.attention_enabled() {
+            self.notifier.notify(cue, title, body);
+        }
     }
 
     /// Stash or pop prompt text buffer into/from prompt stash ring (Section J).
@@ -2279,7 +2274,10 @@ impl TuiApp {
         if !current.trim().is_empty() {
             self.prompt_stash.push(current);
             self.editor.clear();
-            self.show_toast("Prompt stashed", crate::app::ToastLevel::Success);
+            self.show_toast(
+                "Prompt stashed to ~/.cade/prompt_stash.json",
+                crate::app::ToastLevel::Success,
+            );
         } else if let Some(stashed) = self.prompt_stash.pop() {
             self.editor.set_text(stashed);
             self.show_toast(

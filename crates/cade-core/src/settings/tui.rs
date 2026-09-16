@@ -114,6 +114,8 @@ pub struct TuiSettings {
     pub thinking_visibility: String,
 
     // -- Attention & Mouse (Section I)
+    #[serde(default)]
+    pub attention: AttentionSettings,
     #[serde(default = "default_true")]
     pub attention_notify_on_blur: bool,
     #[serde(default)]
@@ -138,11 +140,20 @@ impl Default for TuiSettings {
             conceal_secrets: false,
             collapse_tools: true,
             thinking_visibility: default_thinking_visibility(),
+            attention: AttentionSettings::default(),
             attention_notify_on_blur: true,
             attention_sounds: false,
             mouse: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AttentionSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sounds: bool,
 }
 
 fn default_thinking_visibility() -> String {
@@ -248,6 +259,34 @@ impl TuiSettings {
         Self::default()
     }
 
+    /// Save `tui.toml` to a specific directory.
+    pub fn save_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join("tui.toml");
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, content)
+    }
+
+    /// Save settings to default user location ~/.cade/tui.toml.
+    pub fn save_default(&self) -> std::io::Result<()> {
+        if let Some(home) = dirs::home_dir() {
+            self.save_to_dir(&home.join(".cade"))
+        } else {
+            self.save_to_dir(Path::new(".cade"))
+        }
+    }
+
+    /// Check if attention notifications on window blur are enabled.
+    pub fn attention_enabled(&self) -> bool {
+        self.attention.enabled || self.attention_notify_on_blur
+    }
+
+    /// Check if attention sounds/bell are enabled.
+    pub fn attention_sounds_enabled(&self) -> bool {
+        self.attention.sounds || self.attention_sounds
+    }
+
     /// Get the effective leader key string.
     pub fn resolved_leader(&self) -> &str {
         if let Some(ref l) = self.leader_keys.leader_key {
@@ -316,6 +355,12 @@ impl TuiSettings {
         }
         self.attention_notify_on_blur = other.attention_notify_on_blur;
         self.attention_sounds = other.attention_sounds;
+        if other.attention.enabled {
+            self.attention.enabled = true;
+        }
+        if other.attention.sounds {
+            self.attention.sounds = true;
+        }
         if other.mouse.is_some() {
             self.mouse = other.mouse;
         }

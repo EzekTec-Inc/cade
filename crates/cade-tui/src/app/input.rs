@@ -947,6 +947,9 @@ impl TuiApp {
                 } else if s == "/stash" || s == "stash" {
                     self.stash_prompt();
                     return Ok(None);
+                } else if s == "/save" || s == "save" {
+                    self.save_settings();
+                    return Ok(None);
                 } else if s.starts_with('/') {
                     return Ok(Some(Some(s)));
                 } else {

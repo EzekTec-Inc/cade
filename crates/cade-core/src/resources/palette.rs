@@ -15,6 +15,7 @@ pub enum PaletteCmd {
     Conceal,
     Timestamps,
     Stash,
+    Save,
     Artifacts,
     Checkpoints,
     Skills(String),
@@ -112,6 +113,12 @@ pub const CMD_DEFS: &[CmdDef] = &[
     CmdDef {
         trigger: "stash",
         description: "Stash current prompt buffer or pop previous stash",
+        arg_hint: None,
+        category: CmdCategory::Session,
+    },
+    CmdDef {
+        trigger: "save",
+        description: "Save current TUI display toggles to ~/.cade/tui.toml",
         arg_hint: None,
         category: CmdCategory::Session,
     },
@@ -511,6 +518,7 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "conceal" => PaletteCmd::Conceal,
         "timestamps" => PaletteCmd::Timestamps,
         "stash" => PaletteCmd::Stash,
+        "save" => PaletteCmd::Save,
         "artifacts" | "artifact" => PaletteCmd::Artifacts,
         "checkpoints" | "checkpoint" | "undo" | "tree" => PaletteCmd::Checkpoints,
         "skills" | "skill" => PaletteCmd::Skills(arg),

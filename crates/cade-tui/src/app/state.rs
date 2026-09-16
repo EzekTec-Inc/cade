@@ -216,7 +216,6 @@ impl TuiApp {
     pub fn discard_streaming(&mut self) {
         self.streaming_text.clear();
         self.streaming_active = false;
-        self.streaming_reveal_len = 0;
         self.streaming_display.clear();
         self.reasoning_text.clear();
         self.reasoning_active = false;
@@ -260,7 +259,6 @@ impl TuiApp {
                 self.content_version += 1;
             }
             self.streaming_active = false;
-            self.streaming_reveal_len = 0;
         }
     }
 

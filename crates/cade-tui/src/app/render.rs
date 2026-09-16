@@ -462,12 +462,8 @@ fn render_input_or_question(
 ) -> Option<(u16, u16)> {
     let RenderContext {
         input_mode,
-        model,
-        context_pct,
-        session_cost_usd,
         queued_count,
         top_overlay,
-        nerd,
         cwd,
         ..
     } = ctx;
@@ -499,7 +495,7 @@ fn render_input_or_question(
             Span::raw(" "),
         ]);
 
-        // 2. Build bottom status pills: File path, Model, Context %, Cost, Queued
+        // 2. Build bottom status pills: File path, Queued
         let mut bottom_pills: Vec<Span<'static>> = Vec::new();
         bottom_pills.push(Span::raw(" "));
 
@@ -511,33 +507,6 @@ fn render_input_or_question(
                 .fg(colors.c_text_muted())
                 .add_modifier(Modifier::DIM),
         ));
-
-        // Model pill
-        let model_icon = if *nerd { "⚡ " } else { "" };
-        let model_display = truncate_str(model, 22);
-        bottom_pills.push(Span::styled(
-            format!(" [{model_icon}{model_display}] "),
-            Style::default()
-                .fg(colors.c_primary())
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        // Context usage pill
-        if let Some(pct) = context_pct {
-            let ctx_color = crate::app::layout::toast::context_severity_color(Some(*pct), colors);
-            bottom_pills.push(Span::styled(
-                format!(" [↑ {pct}%] "),
-                Style::default().fg(ctx_color),
-            ));
-        }
-
-        // Cost pill
-        if *session_cost_usd > 0.0 && area.width >= 60 {
-            bottom_pills.push(Span::styled(
-                format!(" [${:.3}] ", session_cost_usd),
-                colors.text_dim(),
-            ));
-        }
 
         // Queued badge
         if *queued_count > 0 {

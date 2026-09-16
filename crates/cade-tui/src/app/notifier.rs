@@ -21,6 +21,8 @@ pub enum AttentionCue {
     SubagentComplete,
     /// Unrecoverable task or build failure.
     TaskError,
+    /// Agent prompted a clarifying question to the user.
+    QuestionAsked,
 }
 
 // endregion: --- Types
@@ -87,6 +89,7 @@ impl TerminalNotifier {
                 AttentionCue::PermissionPrompt => {
                     Self::format_osc99(&format!("⚠️ {}", title), body)
                 }
+                AttentionCue::QuestionAsked => Self::format_osc99(&format!("❓ {}", title), body),
                 AttentionCue::SubagentComplete | AttentionCue::TurnFinished => {
                     Self::format_osc99(&format!("✅ {}", title), body)
                 }

@@ -388,7 +388,12 @@ impl Repl {
                         );
                         let mut app = app_arc.lock();
                         app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
-                        let _ = app.push(RenderLine::SystemMsg(text));
+                        let _ = app.push(RenderLine::SystemMsg(text.clone()));
+                        app.notify_if_unfocused(
+                            cade_tui::app::notifier::AttentionCue::PermissionPrompt,
+                            "Permission Required",
+                            &text,
+                        );
                         // Ring terminal bell
                         print!("\x07");
                         use std::io::Write;
@@ -443,6 +448,11 @@ impl Repl {
             let mut app = self.app.lock();
             let _ = app.commit_reasoning();
             let _ = app.commit_streaming();
+            app.notify_if_unfocused(
+                cade_tui::app::notifier::AttentionCue::TurnFinished,
+                "Turn Complete",
+                "CADE finished the task turn",
+            );
         }
 
         // Post-stream diagnostics: finish reason, truncation heuristics, context usage.
