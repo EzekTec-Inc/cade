@@ -125,77 +125,82 @@ impl TuiApp {
     /// Write `text` to the system clipboard and/or Linux PRIMARY selection based on
     /// `tui_settings.linux_clipboard_selection`.
     ///
-    /// Supports native `arboard`, CLI utilities (`wl-copy`, `xclip`), and OSC 52
-    /// with tmux and GNU screen passthrough wrapping.
+    /// Emits OSC 52 directly for instant, non-blocking clipboard synchronization across
+    /// tmux and terminal emulators, and offloads native OS tools (arboard, wl-copy, xclip)
+    /// to a background worker so the main TUI event loop never hangs.
     pub(crate) fn write_to_clipboard(&mut self, text: &str) -> bool {
         use base64::Engine;
-        use cade_core::settings::tui::LinuxClipboardSelection;
         use std::io::Write;
 
         let selection_mode = self.tui_settings.linux_clipboard_selection;
-        let mut regular_ok = false;
-        let mut primary_ok = false;
 
-        let should_write_regular = selection_mode != LinuxClipboardSelection::Primary;
-        let should_write_primary = selection_mode != LinuxClipboardSelection::Clipboard;
+        // 1. Instant OSC 52 universal clipboard write (zero latency, no subprocess blocking)
+        let b64 = base64::prelude::BASE64_STANDARD.encode(text);
+        let sequence = if std::env::var("TMUX").is_ok() {
+            // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
+            format!("\x1bPtmux;\x1b\x1b]52;c;{}\x07\x1b\\", b64)
+        } else if std::env::var("TERM")
+            .map(|t| t.contains("screen"))
+            .unwrap_or(false)
+            || std::env::var("STY").is_ok()
+        {
+            // GNU Screen passthrough wrapping
+            format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
+        } else {
+            // Standard OSC 52 escape sequence
+            format!("\x1b]52;c;{}\x07", b64)
+        };
 
-        if should_write_regular {
-            // 1. Native OS clipboard (arboard)
-            #[cfg(target_os = "linux")]
-            let should_try_native =
-                std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
-            #[cfg(not(target_os = "linux"))]
-            let should_try_native = true;
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(sequence.as_bytes());
+        let _ = stdout.flush();
 
-            if should_try_native {
-                if let Some(ref mut cb) = self.clipboard {
-                    regular_ok = cb.set_text(text).is_ok();
-                } else if let Ok(mut cb) = arboard::Clipboard::new() {
-                    regular_ok = cb.set_text(text).is_ok();
-                    self.clipboard = Some(cb);
-                }
-            }
+        // 2. Offload native OS clipboard (arboard, wl-copy, xclip) to a non-blocking background thread
+        let text_owned = text.to_string();
+        std::thread::spawn(move || {
+            let _ = copy_to_os_clipboard_bg(&text_owned, selection_mode);
+        });
 
-            // 2. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
-            if !regular_ok {
-                regular_ok = copy_via_shell_commands(text);
-            }
+        true
+    }
+}
 
-            // 3. OSC 52 universal fallback (with TMUX / GNU Screen passthrough wrapping)
-            let b64 = base64::prelude::BASE64_STANDARD.encode(text);
-            let sequence = if std::env::var("TMUX").is_ok() {
-                // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
-                format!("\x1bPtmux;\x1b\x1b]52;c;{}\x07\x1b\\", b64)
-            } else if std::env::var("TERM")
-                .map(|t| t.contains("screen"))
-                .unwrap_or(false)
-                || std::env::var("STY").is_ok()
-            {
-                // GNU Screen passthrough wrapping
-                format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
-            } else {
-                // Standard OSC 52 escape sequence
-                format!("\x1b]52;c;{}\x07", b64)
-            };
+fn copy_to_os_clipboard_bg(
+    text: &str,
+    selection_mode: cade_core::settings::tui::LinuxClipboardSelection,
+) -> bool {
+    use cade_core::settings::tui::LinuxClipboardSelection;
 
-            let mut stdout = std::io::stdout().lock();
-            if stdout.write_all(sequence.as_bytes()).is_ok() {
-                let _ = stdout.flush();
-                if !regular_ok {
-                    regular_ok = true;
-                }
-            }
+    let should_write_regular = selection_mode != LinuxClipboardSelection::Primary;
+    let should_write_primary = selection_mode != LinuxClipboardSelection::Clipboard;
+
+    let mut regular_ok = false;
+    let mut primary_ok = false;
+
+    if should_write_regular {
+        #[cfg(target_os = "linux")]
+        let should_try_native =
+            std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let should_try_native = true;
+
+        if should_try_native && let Ok(mut cb) = arboard::Clipboard::new() {
+            regular_ok = cb.set_text(text).is_ok();
         }
 
-        if should_write_primary {
-            primary_ok = copy_to_linux_primary(text);
+        if !regular_ok {
+            regular_ok = copy_via_shell_commands(text);
         }
+    }
 
-        match selection_mode {
-            LinuxClipboardSelection::Clipboard => regular_ok,
-            LinuxClipboardSelection::Primary => primary_ok,
-            LinuxClipboardSelection::Both => regular_ok || primary_ok,
-        }
+    if should_write_primary {
+        primary_ok = copy_to_linux_primary(text);
+    }
+
+    match selection_mode {
+        LinuxClipboardSelection::Clipboard => regular_ok,
+        LinuxClipboardSelection::Primary => primary_ok,
+        LinuxClipboardSelection::Both => regular_ok || primary_ok,
     }
 }
 

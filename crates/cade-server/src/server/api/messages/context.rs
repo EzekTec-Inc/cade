@@ -893,9 +893,19 @@ pub(crate) async fn build_context(
         all_tools
             .into_iter()
             .filter_map(|t| {
-                t.json_schema.map(|s| cade_ai::TaggedToolSchema {
-                    schema: s,
-                    tags: t.tags,
+                t.json_schema.map(|mut s| {
+                    if let Some(obj) = s.as_object_mut() {
+                        if !obj.contains_key("tags") && !t.tags.is_empty() {
+                            obj.insert(
+                                "tags".to_string(),
+                                serde_json::to_value(&t.tags).unwrap_or_default(),
+                            );
+                        }
+                    }
+                    cade_ai::TaggedToolSchema {
+                        schema: s,
+                        tags: t.tags,
+                    }
                 })
             })
             .collect()
@@ -908,9 +918,19 @@ pub(crate) async fn build_context(
                     || t.tags.contains(&"core_mcp".to_string())
             })
             .filter_map(|t| {
-                t.json_schema.map(|s| cade_ai::TaggedToolSchema {
-                    schema: s,
-                    tags: t.tags,
+                t.json_schema.map(|mut s| {
+                    if let Some(obj) = s.as_object_mut() {
+                        if !obj.contains_key("tags") && !t.tags.is_empty() {
+                            obj.insert(
+                                "tags".to_string(),
+                                serde_json::to_value(&t.tags).unwrap_or_default(),
+                            );
+                        }
+                    }
+                    cade_ai::TaggedToolSchema {
+                        schema: s,
+                        tags: t.tags,
+                    }
                 })
             })
             .collect()

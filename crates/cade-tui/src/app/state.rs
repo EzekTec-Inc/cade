@@ -2,23 +2,16 @@ use super::*;
 use crate::colors::ThemeColorsExt;
 
 impl TuiApp {
-    /// Apply a new theme dynamically from the backend and force a redraw.
     /// Commit any in-progress streaming, push a line, and redraw.
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
-        let is_tool_result = matches!(line, RenderLine::ToolResult { .. });
         self.lines.push(line);
         self.content_version += 1;
 
         if self.follow {
             // User is following — auto-scroll to show new content.
-            if is_tool_result {
-                let rows = self.rows_from_last_tool_call();
-                self.scroll_instant(rows);
-            } else {
-                self.scroll_instant(0);
-            }
+            self.scroll_instant(0);
             self.pending_lines = 0;
         } else {
             // User scrolled up — don't steal their position.
@@ -26,30 +19,16 @@ impl TuiApp {
             self.pending_lines += 1;
         }
         self.signals.content_changed.write(true);
-        let scroll_before = self.scroll;
         self.draw()?;
-        if is_tool_result && self.scroll != scroll_before {
-            return self.draw();
-        }
         Ok(())
     }
 
-    /// Count visual rows from the most recent `ToolCall` entry (inclusive) to
-    /// the end of `self.lines`.  The result is used as the scroll offset so
-    /// that the ToolCall header appears at the top of the viewport when the
-    /// corresponding ToolResult is pushed.
-    pub(crate) fn rows_from_last_tool_call(&mut self) -> usize {
-        let prepared = self.build_prepared_entries();
-        let mut total: u16 = 0;
-        for (idx, line) in self.lines.iter().enumerate().rev() {
-            if idx < prepared.len() {
-                total = total.saturating_add(prepared[idx].rows);
-            }
-            if matches!(line, RenderLine::ToolCall { .. }) {
-                return total as usize;
-            }
-        }
-        0 // no ToolCall found — stay at bottom
+    /// Snap scroll position to the bottom of the viewport and re-enable follow mode.
+    pub fn scroll_to_bottom(&mut self) {
+        self.follow = true;
+        self.scroll_instant(0);
+        self.pending_lines = 0;
+        self.draw_dirty = true;
     }
 
     /// Push without redrawing (for bulk initialisation / banner).

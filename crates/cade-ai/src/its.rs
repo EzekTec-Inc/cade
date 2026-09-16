@@ -94,20 +94,45 @@ impl IntelligentToolSelector for AdaptiveToolSelector {
                     recently_used.contains(name)
                 })
                 .map(|tagged| {
-                    let name = tagged.schema["name"].as_str().unwrap_or("").to_string();
+                    let mut schema = tagged.schema;
+                    if let Some(obj) = schema.as_object_mut()
+                        && !obj.contains_key("tags")
+                        && !tagged.tags.is_empty()
+                    {
+                        obj.insert(
+                            "tags".to_string(),
+                            serde_json::to_value(&tagged.tags).unwrap_or_default(),
+                        );
+                    }
+                    let name = schema["name"].as_str().unwrap_or("").to_string();
                     let is_core = tagged.tags.contains(&"core_mcp".to_string())
                         || tagged.tags.contains(&"meta".to_string())
                         || tagged.tags.contains(&"core".to_string());
                     let is_mcp = tagged.tags.contains(&"mcp".to_string());
                     if !is_mcp || is_core || recently_used.contains(&name) {
-                        tagged.schema
+                        schema
                     } else {
-                        self.compress_tool_schema(tagged.schema)
+                        self.compress_tool_schema(schema)
                     }
                 })
                 .collect()
         } else {
-            tools.into_iter().map(|t| t.schema).collect()
+            tools
+                .into_iter()
+                .map(|tagged| {
+                    let mut schema = tagged.schema;
+                    if let Some(obj) = schema.as_object_mut()
+                        && !obj.contains_key("tags")
+                        && !tagged.tags.is_empty()
+                    {
+                        obj.insert(
+                            "tags".to_string(),
+                            serde_json::to_value(&tagged.tags).unwrap_or_default(),
+                        );
+                    }
+                    schema
+                })
+                .collect()
         }
     }
 }

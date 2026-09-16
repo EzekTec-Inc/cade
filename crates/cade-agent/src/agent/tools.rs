@@ -19,14 +19,22 @@ pub async fn register_mcp_tools(
 
     let mut registered = Vec::new();
 
-    for mut schema in schemas {
+    for schema in schemas {
         let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
 
-        let is_core = schema["_is_core"].as_bool().unwrap_or(false);
-        if let Some(obj) = schema.as_object_mut() {
-            obj.remove("_is_core");
-        }
+        let is_core = schema
+            .get("x-cade")
+            .and_then(|metadata| metadata.get("core_server"))
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                schema["_is_core"].as_bool().unwrap_or(false)
+                    || schema
+                        .get("tags")
+                        .and_then(Value::as_array)
+                        .map(|tags| tags.iter().any(|t| t.as_str() == Some("core_mcp")))
+                        .unwrap_or(false)
+            });
 
         if name.is_empty() {
             continue;

@@ -111,10 +111,11 @@ impl Repl {
         }
 
         // -- Thinking animation
-        let bar_text = self
-            .app
-            .lock()
-            .start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)");
+        let bar_text = {
+            let mut app = self.app.lock();
+            app.scroll_to_bottom();
+            app.start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)")
+        };
 
         // Redraw tick task — updates the spinner animation and assessing timer.
         let tick_app = self.app.clone();
@@ -445,6 +446,9 @@ impl Repl {
             let mut app = self.app.lock();
             app.stop_thinking();
             app.set_last_status(None);
+            if app.follow {
+                app.scroll_to_bottom();
+            }
             let _ = app.draw();
         }
 

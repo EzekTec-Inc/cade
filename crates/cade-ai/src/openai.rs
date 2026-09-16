@@ -262,13 +262,30 @@ fn tool_name(schema: &Value) -> Option<&str> {
     schema.get("name").and_then(Value::as_str)
 }
 
+fn schema_bool(schema: &Value, key: &str) -> bool {
+    schema
+        .get("x-cade")
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn has_priority_tag(schema: &Value) -> bool {
+    schema
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .any(|tag| matches!(tag.as_str(), Some("meta") | Some("core") | Some("core_mcp")))
+        })
+        .unwrap_or(false)
+}
+
 fn is_priority_tool(schema: &Value) -> bool {
-    tool_name(schema).is_some_and(|name| {
-        PRIORITY_TOOL_NAMES.contains(&name)
-            || name.starts_with("serena__")
-            || name.starts_with("cade-rag__")
-            || name.starts_with("cade-ide-mcp__")
-    })
+    schema_bool(schema, "core_server")
+        || schema_bool(schema, "is_core")
+        || has_priority_tag(schema)
+        || tool_name(schema).is_some_and(|name| PRIORITY_TOOL_NAMES.contains(&name))
 }
 
 fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
@@ -639,6 +656,24 @@ impl OpenAiProvider {
             .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
         crate::utils::inline_schema_refs(&mut params);
         clean_openai_schema(&mut params);
+
+        // OpenAI strictly requires function schema to have type 'object' and not have
+        // 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level.
+        if let Some(obj) = params.as_object_mut() {
+            obj.remove("oneOf");
+            obj.remove("anyOf");
+            obj.remove("allOf");
+            obj.remove("one_of");
+            obj.remove("any_of");
+            obj.remove("all_of");
+            obj.remove("enum");
+            obj.remove("const");
+            obj.remove("not");
+            obj.insert("type".to_string(), json!("object"));
+            if !obj.contains_key("properties") {
+                obj.insert("properties".to_string(), json!({}));
+            }
+        }
         seal_top_level_additional_properties(&mut params);
 
         let name = tool_name(schema).unwrap_or("unknown_tool").to_string();

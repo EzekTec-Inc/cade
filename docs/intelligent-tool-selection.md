@@ -37,6 +37,7 @@ Tools are first classified by their **DB registration tags**, then filtered by t
 |--------|------|-------------|---------|
 | Meta tools (memory, skills, checkpoints, subagents) | `["cade", "meta"]` | Never | Never |
 | Native tools (bash, read_file, write_file, etc.) | `["cade"]` | Never | Never |
+| Core MCP tools (servers with `core_server: true`) | `["cade", "mcp", "core_mcp"]` | Never | Never |
 | MCP tools (third-party, from MCP servers) | `["cade", "mcp"]` | Yes (if unused) | Yes (if desktop_* and unused) |
 
 This means:
@@ -54,6 +55,15 @@ In addition to schema-level pruning and compression, CADE automatically and dyna
 - **Everything Else**: Defaults to the standard tool results limit (8,192 characters).
 
 No hardcoded prefix lists or server names are used in the budget regulation layer.
+
+### Provider Tool Capping & Priority Retention
+
+Model providers such as OpenAI enforce strict limits on total declared functions (e.g. OpenAI's hard cap of 128 tools). When more tools are registered than the provider's limit, CADE's provider adapter dynamically prioritizes tools:
+1. Meta tools (`load_skill`, `update_memory`, `conversation_search`, etc.).
+2. Core MCP tools carrying `x-cade: { core_server: true }` metadata or `core_mcp` database tags.
+3. Other available MCP and plugin tools up to the provider cap limit.
+
+This prioritization is entirely configuration-driven and tag-based, with zero hardcoded tool names or server prefixes in the provider implementations.
 
 ### Layer 1: Desktop Tool Pruning
 

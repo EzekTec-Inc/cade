@@ -622,7 +622,9 @@ impl McpManager {
 
         let tools: Vec<McpToolSchema> = raw_tools
             .into_iter()
-            .map(|tool| ToolSchemaNormalizer::normalize(key, &tool, &config.write_tools))
+            .map(|tool| {
+                ToolSchemaNormalizer::normalize(key, &tool, &config.write_tools, config.core_server)
+            })
             .collect();
 
         Ok(McpServer {
@@ -693,7 +695,12 @@ impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
             .into_iter()
             .map(|t| {
                 let mut tags = vec!["cade".to_string(), "mcp".to_string()];
-                if t.server_key == "cade-rag-mcp" || t.server_key == "serena" {
+                if t.schema
+                    .get("x-cade")
+                    .and_then(|metadata| metadata.get("core_server"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
                     tags.push("core_mcp".to_string());
                 }
                 cade_core::capabilities::mesh::TaggedCapabilitySchema {

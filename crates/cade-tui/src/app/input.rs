@@ -198,15 +198,28 @@ impl TuiApp {
     }
 
     pub fn paste_from_clipboard(&mut self) -> bool {
+        // 1. Try OS clipboard text first
+        if let Some(text) = crate::app::clipboard::read_clipboard_text()
+            && !text.is_empty()
+        {
+            self.handle_bracketed_paste_text(&text);
+            return true;
+        }
+
+        // 2. Try CADE internal clipboard buffer (from viewport selection / copy)
+        if let Some(ref text) = self.retained_selected_text
+            && !text.is_empty()
+        {
+            let t = text.clone();
+            self.handle_bracketed_paste_text(&t);
+            return true;
+        }
+
+        // 3. Try OS clipboard image
         if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image() {
             self.handle_image_paste(&media_type, b64, w, h);
             self.show_toast("Pasted image from clipboard", ToastLevel::Success);
             self.draw_dirty = true;
-            return true;
-        }
-
-        if let Some(text) = crate::app::clipboard::read_clipboard_text() {
-            self.handle_bracketed_paste_text(&text);
             return true;
         }
 
@@ -244,8 +257,11 @@ impl TuiApp {
             }
             crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
                 if self.selection_active {
-                    self.selection_current = Some((m.column, m.row));
-                    self.draw()?;
+                    let new_pos = Some((m.column, m.row));
+                    if self.selection_current != new_pos {
+                        self.selection_current = new_pos;
+                        self.draw_throttled()?;
+                    }
                     return Ok(true);
                 }
             }
@@ -255,6 +271,7 @@ impl TuiApp {
                     self.selection_current = Some((m.column, m.row));
                     if is_single_click {
                         self.toggle_last_collapsible_item();
+                        self.clear_selection();
                     } else {
                         self.copy_selected_text();
                     }
@@ -461,6 +478,11 @@ impl TuiApp {
                 if k.modifiers.contains(KeyModifiers::CONTROL)
                     || k.modifiers.contains(KeyModifiers::ALT) =>
             {
+                self.paste_from_clipboard();
+                return Ok(None);
+            }
+
+            KeyCode::Insert if k.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.paste_from_clipboard();
                 return Ok(None);
             }

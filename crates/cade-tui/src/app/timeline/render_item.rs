@@ -418,6 +418,21 @@ pub(crate) fn render_tool_result_item(
     colors: &ThemeColors,
     nerd: bool,
 ) {
+    // Check if content represents a unified diff (e.g. from file edit/patch)
+    if !is_error
+        && (content.contains("@@ -") || content.starts_with("--- ") || content.starts_with("diff "))
+        && let Some(diff_card) =
+            crate::app::timeline::DiffViewEngine::parse_unified_diff("edit", "modified", content)
+    {
+        out.extend(crate::app::timeline::DiffViewEngine::render_diff_card(
+            &diff_card,
+            width as u16,
+            expand_all,
+            colors,
+        ));
+        return;
+    }
+
     let color = if is_error {
         colors.c_diff_removed()
     } else {

@@ -948,7 +948,6 @@ pub struct TuiApp {
     /// Retained visual selection highlight and cached text after mouse drag release.
     pub selection_retained: bool,
     pub retained_selected_text: Option<String>,
-    pub(crate) clipboard: Option<arboard::Clipboard>,
 
     // -- TUI Settings & Configurable Keymap (Phase 1 Parity)
     pub tui_settings: cade_core::settings::tui::TuiSettings,
@@ -1233,7 +1232,6 @@ impl TuiApp {
             selection_active: false,
             selection_retained: false,
             retained_selected_text: None,
-            clipboard: None,
             show_timestamps: tui_settings.show_timestamps,
             conceal_secrets: tui_settings.conceal_secrets,
             collapse_tools: tui_settings.collapse_tools,
@@ -2021,7 +2019,7 @@ impl TuiApp {
             if entry_end > start_visual_row && entry_start <= end_visual_row {
                 let offset = match entry.card_style {
                     crate::app::timeline::CardStyle::None => 0u16,
-                    _ => 2u16,
+                    _ => 1u16,
                 };
 
                 for (i, line) in entry.lines.iter().enumerate() {
@@ -2076,13 +2074,13 @@ impl TuiApp {
         self.draw_dirty = true;
     }
 
-    /// Extract highlighted character range from active buffer, copy it, and retain state (B.1 & B.2)
+    /// Extract highlighted character range from active buffer, copy it, and clear dragging state
     pub fn copy_selected_text(&mut self) -> bool {
         let extracted = self.extract_selected_text();
         if let Some(selected_text) = extracted {
             self.retained_selected_text = Some(selected_text.clone());
-            self.selection_retained = true;
-            self.selection_active = true;
+            self.selection_retained = false;
+            self.selection_active = false;
 
             let ok = self.write_to_clipboard(&selected_text);
             crate::app::clipboard::write_to_file_fallback(&selected_text);

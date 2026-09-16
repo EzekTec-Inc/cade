@@ -132,10 +132,11 @@ Units are **USD per 1 million tokens**. Reload with `/pricing sync` (pulls
 from CADE's bundled upstream) or `/pricing edit` (opens in `$EDITOR`).
 
 The OpenAI provider also normalizes newer OpenAI model families: GPT-5-style and
-o-series models use the high output-token budget path, and OpenAI tool payloads
-are capped at 128 tools to match provider limits while keeping priority meta
-tools (including `load_skill` and core memory-writing tools like `update_memory`) 
-as well as essential MCP tools (with `serena__`, `cade-rag__`, and `cade-ide-mcp__` prefixes) available.
+o-series models use the high output-token budget path. OpenAI tool payloads are
+capped at 128 tools to match provider limits, while classification tags preserve
+priority tools: `meta` and `core` tools such as `load_skill`, `update_memory`,
+and `finish_task`, plus `core_mcp` tools from MCP servers configured with
+`core_server: true`.
 
 ### DeepSeek pricing & cache accounting
 
