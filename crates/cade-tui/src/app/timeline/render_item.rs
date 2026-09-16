@@ -313,23 +313,20 @@ pub(crate) fn render_tool_call_item(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(format!("{icon} "), Style::default().fg(colors.c_primary())),
-        Span::styled(display.to_string(), name_style),
-        Span::styled("(", colors.text_dim()),
+        Span::styled(format!("[{display}]"), name_style),
+        Span::styled(" ", colors.text_dim()),
     ];
 
-    // No trailing status pill: the row describes what ran; the live working
-    // state is conveyed solely by the animated status line at the bottom of
-    // the timeline, so committed tool rows stay clean and calm.
     let min_left_w = display.len() + icon.len() + 8;
     let budget = width.saturating_sub(min_left_w + 4);
 
     let args_str = if preview.is_empty() {
-        ")".to_string()
+        String::new()
     } else if expand_all || preview.len() < budget {
-        format!("{preview})")
+        preview.to_string()
     } else {
         let truncated = truncate_str(preview, budget.saturating_sub(1));
-        format!("{truncated}…)")
+        format!("{truncated}…")
     };
     left_spans.push(Span::styled(args_str, colors.text_dim()));
 

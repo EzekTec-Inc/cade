@@ -330,16 +330,27 @@ pub fn parse_markdown_lines_with_theme(
                     } else {
                         33
                     };
-                    let label = if current_lang.is_empty() {
-                        let dashes = "─".repeat(border_w.saturating_sub(1));
-                        format!("{INDENT}┌{dashes}")
+                    if current_lang.is_empty() {
+                        let dashes = "─".repeat(border_w.saturating_sub(2));
+                        lines.push(Line::from(Span::styled(
+                            format!("{INDENT}╭{dashes}╮"),
+                            code_border_style(colors),
+                        )));
                     } else {
-                        let prefix = format!("┌── {} ", current_lang);
+                        let prefix = format!("╭─ [{}] ", current_lang);
                         let prefix_w = UnicodeWidthStr::width(prefix.as_str());
-                        let dashes = "─".repeat(border_w.saturating_sub(prefix_w));
-                        format!("{INDENT}{prefix}{dashes}")
-                    };
-                    lines.push(Line::from(Span::styled(label, code_border_style(colors))));
+                        let dashes = "─".repeat(border_w.saturating_sub(prefix_w + 1));
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("{INDENT}╭─ ["), code_border_style(colors)),
+                            Span::styled(
+                                current_lang.clone(),
+                                Style::default()
+                                    .fg(colors.c_primary())
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(format!("] {dashes}╮"), code_border_style(colors)),
+                        ]));
+                    }
                 }
                 Tag::List(start) => {
                     // Pre-wrap any accumulated parent list item spans before starting nested list
@@ -639,9 +650,9 @@ pub fn parse_markdown_lines_with_theme(
                     } else {
                         33
                     };
-                    let dashes = "─".repeat(border_w.saturating_sub(1));
+                    let dashes = "─".repeat(border_w.saturating_sub(2));
                     lines.push(Line::from(Span::styled(
-                        format!("{INDENT}└{dashes}"),
+                        format!("{INDENT}╰{dashes}╯"),
                         code_border_style(colors),
                     )));
 
