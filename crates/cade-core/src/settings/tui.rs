@@ -6,14 +6,82 @@
 // region:    --- Imports
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 // endregion: --- Imports
 
 // region:    --- Types
 
+/// Linux clipboard target buffer selection.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LinuxClipboardSelection {
+    Clipboard,
+    Primary,
+    #[default]
+    Both,
+}
+
+/// Specification for a keybinding in `tui.toml`.
+///
+/// Supports:
+/// - Single chord: `"ctrl+x p"` or `"none"`
+/// - Disabled: `false`
+/// - Multiple chords: `["ctrl+x p", "ctrl+shift+c"]`
+/// - Detailed mapping object: `{ key = "ctrl+x p", event = "...", prevent_default = true }`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum KeybindSpec {
+    Disabled(bool),
+    Single(String),
+    Multiple(Vec<String>),
+    Detailed {
+        key: String,
+        #[serde(default)]
+        event: Option<String>,
+        #[serde(default)]
+        prevent_default: Option<bool>,
+    },
+}
+
+impl KeybindSpec {
+    pub fn is_disabled(&self) -> bool {
+        match self {
+            KeybindSpec::Disabled(b) => !*b,
+            KeybindSpec::Single(s) => s.trim().eq_ignore_ascii_case("none"),
+            KeybindSpec::Multiple(v) => v.is_empty(),
+            KeybindSpec::Detailed { key, .. } => key.trim().eq_ignore_ascii_case("none"),
+        }
+    }
+
+    pub fn chords(&self) -> Vec<String> {
+        match self {
+            KeybindSpec::Disabled(_) => vec![],
+            KeybindSpec::Single(s) => {
+                if s.trim().eq_ignore_ascii_case("none") {
+                    vec![]
+                } else {
+                    s.split(',')
+                        .map(|x| x.trim().to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect()
+                }
+            }
+            KeybindSpec::Multiple(v) => v.clone(),
+            KeybindSpec::Detailed { key, .. } => {
+                if key.trim().eq_ignore_ascii_case("none") {
+                    vec![]
+                } else {
+                    vec![key.clone()]
+                }
+            }
+        }
+    }
+}
+
 /// Top-level settings loaded from `tui.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TuiSettings {
     #[serde(default)]
     pub theme: ThemeSettings,
@@ -25,6 +93,71 @@ pub struct TuiSettings {
     pub notifications: NotificationSettings,
     #[serde(default)]
     pub scrolling: ScrollSettings,
+
+    #[serde(default)]
+    pub linux_clipboard_selection: LinuxClipboardSelection,
+    #[serde(default = "default_leader")]
+    pub leader: String,
+    #[serde(default = "default_leader_timeout_ms")]
+    pub leader_timeout_ms: u64,
+    #[serde(default)]
+    pub keybinds: HashMap<String, KeybindSpec>,
+
+    // -- Display Toggles (Section H)
+    #[serde(default)]
+    pub show_timestamps: bool,
+    #[serde(default)]
+    pub conceal_secrets: bool,
+    #[serde(default = "default_true")]
+    pub collapse_tools: bool,
+    #[serde(default = "default_thinking_visibility")]
+    pub thinking_visibility: String,
+
+    // -- Attention & Mouse (Section I)
+    #[serde(default)]
+    pub attention: AttentionSettings,
+    #[serde(default = "default_true")]
+    pub attention_notify_on_blur: bool,
+    #[serde(default)]
+    pub attention_sounds: bool,
+    #[serde(default)]
+    pub mouse: Option<bool>,
+}
+
+impl Default for TuiSettings {
+    fn default() -> Self {
+        Self {
+            theme: ThemeSettings::default(),
+            diff: DiffSettings::default(),
+            leader_keys: LeaderKeySettings::default(),
+            notifications: NotificationSettings::default(),
+            scrolling: ScrollSettings::default(),
+            linux_clipboard_selection: LinuxClipboardSelection::default(),
+            leader: default_leader(),
+            leader_timeout_ms: default_leader_timeout_ms(),
+            keybinds: HashMap::default(),
+            show_timestamps: false,
+            conceal_secrets: false,
+            collapse_tools: true,
+            thinking_visibility: default_thinking_visibility(),
+            attention: AttentionSettings::default(),
+            attention_notify_on_blur: true,
+            attention_sounds: false,
+            mouse: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AttentionSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sounds: bool,
+}
+
+fn default_thinking_visibility() -> String {
+    "collapse".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -70,6 +203,10 @@ impl Default for NotificationSettings {
 pub struct ScrollSettings {
     #[serde(default = "default_speed")]
     pub speed_multiplier: f32,
+    #[serde(default = "default_scroll_speed")]
+    pub scroll_speed: u16,
+    #[serde(default = "default_true")]
+    pub scroll_acceleration: bool,
     #[serde(default = "default_true")]
     pub enable_mouse: bool,
 }
@@ -78,9 +215,15 @@ impl Default for ScrollSettings {
     fn default() -> Self {
         Self {
             speed_multiplier: 1.0,
+            scroll_speed: default_scroll_speed(),
+            scroll_acceleration: true,
             enable_mouse: true,
         }
     }
+}
+
+fn default_scroll_speed() -> u16 {
+    3
 }
 
 fn default_true() -> bool {
@@ -89,6 +232,14 @@ fn default_true() -> bool {
 
 fn default_speed() -> f32 {
     1.0
+}
+
+fn default_leader() -> String {
+    "ctrl+x".to_string()
+}
+
+fn default_leader_timeout_ms() -> u64 {
+    2000
 }
 
 // endregion: --- Types
@@ -108,6 +259,50 @@ impl TuiSettings {
         Self::default()
     }
 
+    /// Save `tui.toml` to a specific directory.
+    pub fn save_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join("tui.toml");
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, content)
+    }
+
+    /// Save settings to default user location ~/.cade/tui.toml.
+    pub fn save_default(&self) -> std::io::Result<()> {
+        if let Some(home) = dirs::home_dir() {
+            self.save_to_dir(&home.join(".cade"))
+        } else {
+            self.save_to_dir(Path::new(".cade"))
+        }
+    }
+
+    /// Check if attention notifications on window blur are enabled.
+    pub fn attention_enabled(&self) -> bool {
+        self.attention.enabled || self.attention_notify_on_blur
+    }
+
+    /// Check if attention sounds/bell are enabled.
+    pub fn attention_sounds_enabled(&self) -> bool {
+        self.attention.sounds || self.attention_sounds
+    }
+
+    /// Get the effective leader key string.
+    pub fn resolved_leader(&self) -> &str {
+        if let Some(ref l) = self.leader_keys.leader_key {
+            l.as_str()
+        } else {
+            &self.leader
+        }
+    }
+
+    /// Get the effective leader chord timeout in milliseconds.
+    pub fn resolved_leader_timeout_ms(&self) -> u64 {
+        self.leader_keys
+            .timeout_ms
+            .unwrap_or(self.leader_timeout_ms)
+    }
+
     /// Hierarchically merge another TuiSettings layer onto `self`.
     pub fn merge(mut self, other: TuiSettings) -> Self {
         if other.theme.default_theme.is_some() {
@@ -125,11 +320,56 @@ impl TuiSettings {
         if other.leader_keys.timeout_ms.is_some() {
             self.leader_keys.timeout_ms = other.leader_keys.timeout_ms;
         }
+        if other.leader != default_leader() {
+            self.leader = other.leader;
+        }
+        if other.leader_timeout_ms != default_leader_timeout_ms() {
+            self.leader_timeout_ms = other.leader_timeout_ms;
+        }
+        if other.linux_clipboard_selection != LinuxClipboardSelection::default() {
+            self.linux_clipboard_selection = other.linux_clipboard_selection;
+        }
+        for (k, v) in other.keybinds {
+            self.keybinds.insert(k, v);
+        }
         self.notifications.enable_bell = other.notifications.enable_bell;
         self.notifications.enable_osc = other.notifications.enable_osc;
         self.scrolling.speed_multiplier = other.scrolling.speed_multiplier;
         self.scrolling.enable_mouse = other.scrolling.enable_mouse;
+        if other.scrolling.scroll_speed != default_scroll_speed() {
+            self.scrolling.scroll_speed = other.scrolling.scroll_speed;
+        }
+        self.scrolling.scroll_acceleration = other.scrolling.scroll_acceleration;
+
+        if other.show_timestamps {
+            self.show_timestamps = true;
+        }
+        if other.conceal_secrets {
+            self.conceal_secrets = true;
+        }
+        if !other.collapse_tools {
+            self.collapse_tools = false;
+        }
+        if other.thinking_visibility != default_thinking_visibility() {
+            self.thinking_visibility = other.thinking_visibility;
+        }
+        self.attention_notify_on_blur = other.attention_notify_on_blur;
+        self.attention_sounds = other.attention_sounds;
+        if other.attention.enabled {
+            self.attention.enabled = true;
+        }
+        if other.attention.sounds {
+            self.attention.sounds = true;
+        }
+        if other.mouse.is_some() {
+            self.mouse = other.mouse;
+        }
         self
+    }
+
+    /// Check whether mouse capture should be enabled based on settings.
+    pub fn effective_mouse_enabled(&self) -> bool {
+        self.mouse.unwrap_or(self.scrolling.enable_mouse)
     }
 }
 
@@ -147,6 +387,12 @@ mod tests {
         assert!(settings.notifications.enable_bell);
         assert!(settings.notifications.enable_osc);
         assert_eq!(settings.scrolling.speed_multiplier, 1.0);
+        assert_eq!(
+            settings.linux_clipboard_selection,
+            LinuxClipboardSelection::Both
+        );
+        assert_eq!(settings.resolved_leader(), "ctrl+x");
+        assert_eq!(settings.resolved_leader_timeout_ms(), 2000);
 
         let toml_str = toml::to_string_pretty(&settings).unwrap_or_default();
         assert!(!toml_str.is_empty());
@@ -161,11 +407,68 @@ mod tests {
         let mut override_layer = TuiSettings::default();
         override_layer.theme.default_theme = Some("tokyo-night".to_string());
         override_layer.diff.default_layout = Some("side-by-side".to_string());
+        override_layer.linux_clipboard_selection = LinuxClipboardSelection::Primary;
+        override_layer.leader = "ctrl+a".to_string();
+        override_layer.leader_timeout_ms = 1500;
+        override_layer.keybinds.insert(
+            "quote_selection".to_string(),
+            KeybindSpec::Single("<leader>q".to_string()),
+        );
 
         let merged = base.merge(override_layer);
         assert_eq!(merged.theme.default_theme.as_deref(), Some("tokyo-night"));
         assert_eq!(merged.diff.default_layout.as_deref(), Some("side-by-side"));
+        assert_eq!(
+            merged.linux_clipboard_selection,
+            LinuxClipboardSelection::Primary
+        );
+        assert_eq!(merged.resolved_leader(), "ctrl+a");
+        assert_eq!(merged.resolved_leader_timeout_ms(), 1500);
+        assert_eq!(
+            merged.keybinds.get("quote_selection"),
+            Some(&KeybindSpec::Single("<leader>q".to_string()))
+        );
         assert!(merged.notifications.enable_bell);
+    }
+
+    #[test]
+    fn test_keybind_spec_parsing() {
+        let toml_data = r#"
+            disabled_bool = false
+            single_chord = "ctrl+x p"
+            none_chord = "none"
+            multi_chord = ["ctrl+p", "ctrl+k"]
+
+            [detailed]
+            key = "ctrl+e"
+            event = "external_editor"
+            prevent_default = true
+        "#;
+
+        #[derive(Deserialize)]
+        struct KeybindTest {
+            disabled_bool: KeybindSpec,
+            single_chord: KeybindSpec,
+            none_chord: KeybindSpec,
+            multi_chord: KeybindSpec,
+            detailed: KeybindSpec,
+        }
+
+        let parsed: KeybindTest = toml::from_str(toml_data).expect("parse keybinds");
+        assert!(parsed.disabled_bool.is_disabled());
+        assert_eq!(parsed.disabled_bool.chords(), Vec::<String>::new());
+
+        assert!(!parsed.single_chord.is_disabled());
+        assert_eq!(parsed.single_chord.chords(), vec!["ctrl+x p"]);
+
+        assert!(parsed.none_chord.is_disabled());
+        assert_eq!(parsed.none_chord.chords(), Vec::<String>::new());
+
+        assert!(!parsed.multi_chord.is_disabled());
+        assert_eq!(parsed.multi_chord.chords(), vec!["ctrl+p", "ctrl+k"]);
+
+        assert!(!parsed.detailed.is_disabled());
+        assert_eq!(parsed.detailed.chords(), vec!["ctrl+e"]);
     }
 }
 

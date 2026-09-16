@@ -292,6 +292,11 @@ impl Repl {
                 );
                 return Ok(false);
             }
+            SlashCmd::Save => {
+                let mut app = self.app.lock();
+                app.save_settings();
+                return Ok(false);
+            }
             SlashCmd::Context => {
                 return self.cmd_context(stdout).await;
             }

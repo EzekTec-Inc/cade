@@ -34,6 +34,17 @@ const SKILLS_DIR: &str = ".skills";
 mod bootstrap;
 use bootstrap::*;
 
+fn open_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", url])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
 fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let backtrace = std::backtrace::Backtrace::capture();
@@ -194,6 +205,48 @@ async fn async_main() -> Result<()> {
                     .map_err(|e| Error::custom(format!("package update: {e}")))?;
             }
         }
+        return Ok(());
+    }
+
+    if let Some(PackageSubcommand::Serve { port }) = &args.package {
+        let port = *port;
+        let server_bin_name = if cfg!(windows) {
+            "cade-server.exe"
+        } else {
+            "cade-server"
+        };
+        let server_bin = std::env::current_exe()
+            .ok()
+            .map(|p| p.with_file_name(server_bin_name))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from(server_bin_name));
+
+        println!("Starting CADE server on port {port} in foreground...");
+        let mut cmd = std::process::Command::new(&server_bin);
+        cmd.arg("--port").arg(port.to_string());
+        cade_core::agent_env::apply_agent_env(&mut cmd);
+        let status = cmd
+            .status()
+            .map_err(|e| Error::custom(format!("failed to run {}: {e}", server_bin.display())))?;
+        std::process::exit(status.code().unwrap_or(0));
+    }
+
+    if let Some(PackageSubcommand::Web { port }) = &args.package {
+        let port = *port;
+        let base_url = format!("http://127.0.0.1:{port}");
+        let dashboard_url = format!("{base_url}/dashboard");
+        println!("Checking CADE server at {base_url}...");
+
+        let client = HttpTransport::new(base_url.clone(), "".to_string())
+            .map_err(|e| Error::custom(format!("create HTTP transport: {e}")))?;
+
+        if !client.health().await.unwrap_or(false) {
+            println!("Starting CADE server daemon...");
+            auto_start_server(&base_url).await?;
+        }
+
+        println!("Opening CADE Web Dashboard: {dashboard_url}");
+        open_browser(&dashboard_url);
         return Ok(());
     }
     // Eval subcommand deferred — needs server connection (handled after agent resolution below)
@@ -931,6 +984,14 @@ async fn async_main() -> Result<()> {
         }
     }
 
+    // Clear all spinners so the terminal is clean
+    progress.clear();
+
+    if args.mini {
+        cade::cli::mini::run_mini_interactive(&client, &agent.id, &default_model, &cwd).await?;
+        return Ok(());
+    }
+
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));
     let session_arc = Arc::new(Mutex::new(session));
@@ -969,10 +1030,6 @@ async fn async_main() -> Result<()> {
     if args.continue_last {
         repl.mark_continued();
     }
-
-    // Clear all spinners so the terminal is clean before ratatui enters
-    // the alternate screen inside repl.run().
-    progress.clear();
 
     repl.run().await?;
 

@@ -12,6 +12,7 @@ clipboard-images = ["dep:image"]
 syntax-highlighting = ["dep:syntect"]
 
 [dependencies]
+tempfile = { workspace = true }
 tui-textarea-2 = { version = "0.10", features = ["ratatui", "crossterm"] }
 # -- Workspace crates
 cade-core.path       = "../cade-core"
@@ -44,7 +45,6 @@ opaline = { version = "0.4", features = ["ratatui", "builtin-themes"] }
 mlua = { version = "0.11.6", features = ["lua54", "vendored", "serialize", "send"] }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

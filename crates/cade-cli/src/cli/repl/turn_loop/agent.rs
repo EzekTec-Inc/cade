@@ -111,10 +111,11 @@ impl Repl {
         }
 
         // -- Thinking animation
-        let bar_text = self
-            .app
-            .lock()
-            .start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)");
+        let bar_text = {
+            let mut app = self.app.lock();
+            app.scroll_to_bottom();
+            app.start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)")
+        };
 
         // Redraw tick task — updates the spinner animation and assessing timer.
         let tick_app = self.app.clone();
@@ -415,12 +416,11 @@ impl Repl {
 
         let messages = messages?;
 
-        let is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
+        let _is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
 
         let _ = messages;
-        let turn_stats = TurnStats::default();
 
         // The canonical runtime owns tool execution; the CLI only renders its events.
 
@@ -436,41 +436,21 @@ impl Repl {
             let mut stats = self.session_stats.lock();
             stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
         }
-        let time_str = if secs >= 60 {
+        let _time_str = if secs >= 60 {
             format!("{}m {}s", secs / 60, secs % 60)
         } else {
             format!("{}s", secs)
         };
 
-        let summary = if is_cancelled {
-            format!("⚠ Interrupted after {}", time_str)
-        } else {
-            let mut parts = vec![format!("✓ Finished in {}", time_str)];
-            if turn_stats.reads > 0 {
-                parts.push(format!(
-                    "{} read{}",
-                    turn_stats.reads,
-                    if turn_stats.reads == 1 { "" } else { "s" }
-                ));
+        {
+            let mut app = self.app.lock();
+            app.stop_thinking();
+            app.set_last_status(None);
+            if app.follow {
+                app.scroll_to_bottom();
             }
-            if turn_stats.edits > 0 {
-                parts.push(format!(
-                    "{} edit{}",
-                    turn_stats.edits,
-                    if turn_stats.edits == 1 { "" } else { "s" }
-                ));
-            }
-            if turn_stats.cmds > 0 {
-                parts.push(format!(
-                    "{} cmd{}",
-                    turn_stats.cmds,
-                    if turn_stats.cmds == 1 { "" } else { "s" }
-                ));
-            }
-            parts.join("  ·  ")
-        };
-        self.app.lock().set_last_status(Some(summary));
-        let _ = self.app.lock().draw();
+            let _ = app.draw();
+        }
 
         self.turn_active.store(false, Ordering::SeqCst);
         Ok(())
@@ -500,6 +480,11 @@ impl Repl {
         app.show_toast(err_text.clone(), cade_tui::app::ToastLevel::Error);
         let _ = app.push(RenderLine::ErrorMsg(err_text.clone()));
         app.set_last_status(Some(format!("✗ Error: {err_text}")));
+        app.notify_if_unfocused(
+            cade_tui::app::notifier::AttentionCue::TaskError,
+            "Turn Error",
+            &err_text,
+        );
         app.draw_dirty = true;
         let _ = app.draw();
         vec![]
@@ -666,6 +651,12 @@ mod tests {
         // 3. Lines contain the committed streaming content
         assert!(a.lines.iter().any(|line| match line {
             RenderLine::AssistantText(s) => s.contains("Here is the plan."),
+            _ => false,
+        }));
+        // 4. Reasoning streamed through the viewport is committed as a
+        //    Reasoning block (never hidden in the bottom bar).
+        assert!(a.lines.iter().any(|line| match line {
+            RenderLine::Reasoning { content, .. } => content.contains("Thinking deeply..."),
             _ => false,
         }));
     }

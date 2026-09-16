@@ -1,6 +1,5 @@
-use crate::app::layout::breadcrumb::render_breadcrumb;
 use crate::app::layout::helpers::{
-    format_token_count, mode_footer_left, mode_sep_color, truncate_str,
+    abbreviate_cwd, format_token_count, mode_footer_left, mode_sep_color, truncate_str,
 };
 use crate::colors::ThemeColorsExt;
 
@@ -14,6 +13,37 @@ fn spinner_color(ms: u128, colors: &ThemeColors) -> RC {
         colors.c_spinner_3(),
     ];
     palette[(ms / 400) as usize % palette.len()]
+}
+
+// Spinner frames for the inline working/thinking status line.  Reuses the
+// braille/blocksy cycles the removed bottom status bar used so the live
+// state indicator animates visibly instead of freezing on one glyph.
+const STATUS_BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const STATUS_DOTS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// Animate the ephemeral working/thinking status line rendered inline at the
+/// bottom of the timeline.  A rotating spinner glyph (driven by the wall
+/// clock) is prepended on every frame so the status visibly moves while the
+/// agent is busy; terminal states (`✓`, `✗`, `⚠`) keep their own static
+/// glyphs.  The `● ` bullet used by tool-running statuses is replaced by the
+/// spinner so the whole line animates rather than freezing.
+fn animate_live_status(text: &str, elapsed: Option<std::time::Duration>) -> String {
+    if text.starts_with('✓') || text.starts_with('✗') || text.starts_with('⚠') {
+        return text.to_string();
+    }
+    let frame = match elapsed {
+        Some(e) => {
+            let ms = e.as_millis();
+            if (ms / 3000) % 2 == 0 {
+                STATUS_BRAILLE[(ms / 80) as usize % STATUS_BRAILLE.len()]
+            } else {
+                STATUS_DOTS[(ms / 100) as usize % STATUS_DOTS.len()]
+            }
+        }
+        None => "●",
+    };
+    let body = text.strip_prefix("● ").unwrap_or(text);
+    format!("{frame} {body}")
 }
 
 // Rendering helpers for the TuiApp full-screen layout.
@@ -41,8 +71,7 @@ use super::timeline::{
     TimelineKey, TimelineLayoutEngine, build_timeline_entries, render_timeline_viewport,
 };
 use super::{
-    BRAILLE, DOTS, FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT,
-    SIDEBAR_WIDTH, Toast,
+    FIXED_ROWS, MAX_INPUT_ROWS, PlanState, RenderLine, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH, Toast,
 };
 
 // -- Scroll helpers
@@ -107,6 +136,7 @@ pub(crate) fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
 pub(crate) struct RenderContext<'a> {
     pub(crate) lines: &'a [RenderLine],
     pub(crate) streaming: Option<&'a str>,
+    pub(crate) reasoning: Option<&'a str>,
     pub(crate) scroll: usize,
     pub(crate) expand_all: bool,
     pub(crate) input_mode: InputMode,
@@ -117,7 +147,6 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) thinking_text: Option<&'a str>,
     pub(crate) thinking_elapsed: Option<std::time::Duration>,
     pub(crate) top_overlay: Option<&'a dyn crate::overlay_component::OverlayComponent>,
-    pub(crate) pending_lines: usize,
     pub(crate) queued_count: usize,
     pub(crate) cwd: &'a str,
     pub(crate) context_pct: Option<u8>,
@@ -153,6 +182,7 @@ pub(crate) fn render_frame(
     let RenderContext {
         lines,
         streaming,
+        reasoning,
         scroll,
         expand_all,
         mode,
@@ -213,7 +243,7 @@ pub(crate) fn render_frame(
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
     let hotkey_bar_h: u16 = 1;
-    let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h + hotkey_bar_h;
+    let bottom_rows = FIXED_ROWS + input_rows + 2 + footer_extra_h + hotkey_bar_h;
 
     if main_area.height <= bottom_rows + 1 {
         frame.render_widget(
@@ -233,59 +263,33 @@ pub(crate) fn render_frame(
         0
     };
 
-    let chunks = if plan_h > 0 {
-        Layout::vertical([
-            Constraint::Fill(1),                                   // [0] content  (fluid)
-            Constraint::Length(0),                                 // [1] unused
-            Constraint::Length(plan_h),                            // [2] plan panel
-            Constraint::Length(1),                                 // [3] status
-            Constraint::Length(1),                                 // [4] top separator
-            Constraint::Length(input_rows),                        // [5] input or question
-            Constraint::Length(1),                                 // [6] bottom separator
-            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
-        ])
-        .split(main_area)
-    } else {
-        Layout::vertical([
-            Constraint::Fill(1),                                   // [0] content
-            Constraint::Length(0),                                 // [1] (unused)
-            Constraint::Length(0),                                 // [2] (unused)
-            Constraint::Length(1),                                 // [3] status
-            Constraint::Length(1),                                 // [4] top separator
-            Constraint::Length(input_rows),                        // [5] input or question
-            Constraint::Length(1),                                 // [6] bottom separator
-            Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [7] footer
-        ])
-        .split(main_area)
-    };
+    let chunks = Layout::vertical([
+        Constraint::Fill(1),                                   // [0] content  (fluid)
+        Constraint::Length(plan_h),                            // [1] plan panel (0 when hidden)
+        Constraint::Length(input_rows + 2),                    // [2] floating rounded input box
+        Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [3] footer
+    ])
+    .split(main_area);
 
     // -- Pinned header & viewport layout splits
     let (header_area_opt, messages_area) =
         render_pinned_header(frame, chunks[0], header_lines, w, colors, nerd);
     let _ = header_area_opt;
 
-    // -- Breadcrumb bar (only on narrow terminals where sidebar is absent)
-    let messages_area = if sidebar_area.is_none() && messages_area.height > 4 {
-        let [breadcrumb_rect, rest] =
-            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(messages_area);
-        render_breadcrumb(
-            frame,
-            breadcrumb_rect,
-            model,
-            turn_count,
-            context_pct,
-            token_history,
-            colors,
-            nerd,
-        );
-        rest
-    } else {
-        messages_area
-    };
-
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
+    // Live thinking/working status is rendered as the bottom-most timeline
+    // entry (replacing the removed bottom status bar), always pinned below
+    // whatever content is currently streaming.  The spinner glyph is animated
+    // per frame so the working state visibly moves while the agent is busy.
+    let live_status: Option<String> = if let Some(t) = ctx.thinking_text {
+        Some(animate_live_status(t, ctx.thinking_elapsed))
+    } else {
+        ctx.last_status.as_deref().map(str::to_string)
+    };
     layout_engine.set_active_stream(streaming);
+    layout_engine.set_active_reasoning(reasoning);
+    layout_engine.set_active_status(live_status.as_deref());
     let prepared = layout_engine.layout_items(
         lines,
         timeline_w,
@@ -306,18 +310,12 @@ pub(crate) fn render_frame(
         mouse_selection,
     );
 
-    // -- Status row
-    render_status_row(frame, chunks[3], &ctx, colors);
-
-    // -- Separators
-    render_separators(frame, main_area, &chunks, &ctx, colors);
-
-    // -- Input area or Question Panel
+    // -- Input area or Question Panel (floating rounded container with embedded status pills)
     let input_cursor_pos =
-        render_input_or_question(frame, chunks[5], textarea, last_input_width, &ctx, colors);
+        render_input_or_question(frame, chunks[2], textarea, last_input_width, &ctx, colors);
 
     // -- Footer bars & Hotkeys
-    render_footer_bars(frame, &chunks, &ctx, footer_extra_h, colors);
+    render_footer_bars(frame, chunks[3], &ctx, footer_extra_h, colors);
 
     // -- Sidebar
     if let Some(sidebar) = sidebar_area {
@@ -353,7 +351,7 @@ pub(crate) fn render_frame(
     if let Some(plan) = active_plan
         && plan.is_visible
     {
-        render_active_plan(frame, chunks[2], plan, colors);
+        render_active_plan(frame, chunks[1], plan, colors);
     }
 
     // -- Subagent Floating Cards
@@ -421,87 +419,16 @@ fn render_pinned_header(
     }
 }
 
-fn render_status_row(
+#[allow(dead_code)]
+fn render_input_separator(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
     ctx: &RenderContext<'_>,
     colors: &ThemeColors,
 ) {
-    let RenderContext {
-        thinking_text,
-        thinking_elapsed,
-        last_status,
-        queued_count,
-        scroll,
-        streaming,
-        pending_lines,
-        ..
-    } = ctx;
-
-    let (status_text, status_style) = if let Some(t) = thinking_text {
-        let (spinner_text, fg_color) = if let Some(elapsed) = thinking_elapsed {
-            let ms = elapsed.as_millis();
-            let spinner = if (ms / 3000) % 2 == 0 {
-                BRAILLE[(ms / 80) as usize % BRAILLE.len()]
-            } else {
-                DOTS[(ms / 100) as usize % DOTS.len()]
-            };
-            (format!("{} {}", spinner, t), spinner_color(ms, colors))
-        } else {
-            (t.to_string(), colors.c_primary())
-        };
-        (
-            spinner_text,
-            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
-        )
-    } else if let Some(s) = last_status {
-        let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
-            colors.c_error()
-        } else {
-            colors.c_success()
-        };
-        (
-            s.clone(),
-            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
-        )
-    } else {
-        (String::new(), Style::default())
-    };
-
-    let mut status_text = if *queued_count > 0 {
-        format!("{status_text}  · {queued_count} queued")
-    } else {
-        status_text
-    };
-
-    if *scroll > 0 {
-        let hint = if streaming.is_some() {
-            "  ↓ streaming…  (Shift+J to follow)".to_string()
-        } else if *pending_lines > 0 {
-            format!("  ↓ {pending_lines} new  (Shift+J to follow)")
-        } else {
-            String::new()
-        };
-        if !hint.is_empty() {
-            status_text = format!("{status_text}{hint}");
-        }
+    if area.height == 0 {
+        return;
     }
-
-    let status_text = truncate_str(&status_text, area.width as usize);
-
-    frame.render_widget(
-        Paragraph::new(Span::styled(status_text, status_style)),
-        area,
-    );
-}
-
-fn render_separators(
-    frame: &mut Frame,
-    main_area: ratatui::layout::Rect,
-    chunks: &[ratatui::layout::Rect],
-    ctx: &RenderContext<'_>,
-    colors: &ThemeColors,
-) {
     let RenderContext {
         mode,
         thinking_elapsed,
@@ -518,17 +445,10 @@ fn render_separators(
     } else {
         mode_color
     };
-    let sep = "─".repeat(main_area.width as usize);
+    let sep = "─".repeat(area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            sep.clone(),
-            Style::default().fg(top_sep_color),
-        )),
-        chunks[4],
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(sep, Style::default().fg(mode_color))),
-        chunks[6],
+        Paragraph::new(Span::styled(sep, Style::default().fg(top_sep_color))),
+        area,
     );
 }
 
@@ -544,6 +464,7 @@ fn render_input_or_question(
         input_mode,
         queued_count,
         top_overlay,
+        cwd,
         ..
     } = ctx;
 
@@ -559,25 +480,71 @@ fn render_input_or_question(
     } else {
         frame.render_widget(ratatui::widgets::Clear, area);
 
+        // 1. Determine mode badge for title_top
         let (badge_text, badge_color) = input_mode_badge(*input_mode, colors);
-        let prefix_w = badge_text.chars().count() as u16 + 3;
-
-        let input_chunks =
-            Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)]).split(area);
-
-        let prefix_spans = vec![
+        let mode_label = format!("● {badge_text}");
+        let title_top = Line::from(vec![
+            Span::raw(" "),
             Span::styled(
-                badge_text.to_string(),
-                colors
-                    .text_primary()
+                format!(" {mode_label} "),
+                Style::default()
+                    .fg(colors.c_bg_base())
                     .bg(badge_color)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled("> ", colors.text_dim()),
-        ];
+        ]);
+
+        // 2. Build bottom status pills: File path, Queued
+        let mut bottom_pills: Vec<Span<'static>> = Vec::new();
+        bottom_pills.push(Span::raw(" "));
+
+        // File path pill (abbreviated to the last 2 path components).
+        let path_display = truncate_str(&abbreviate_cwd(std::path::Path::new(cwd)), 26);
+        bottom_pills.push(Span::styled(
+            format!(" [{path_display}] "),
+            Style::default()
+                .fg(colors.c_text_muted())
+                .add_modifier(Modifier::DIM),
+        ));
+
+        // Queued badge
+        if *queued_count > 0 {
+            bottom_pills.push(Span::styled(
+                format!(" [{queued_count} queued] "),
+                Style::default()
+                    .fg(colors.c_warning())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        let title_bottom = Line::from(bottom_pills);
+
+        // 3. Floating rounded block
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_set(ratatui::symbols::border::ROUNDED)
+            .border_style(Style::default().fg(colors.c_border_muted()))
+            .title(title_top)
+            .title_bottom(title_bottom);
+
+        let inner_area = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner_area.width == 0 || inner_area.height == 0 {
+            return None;
+        }
+
+        // 4. Prefix "> " and textarea inside floating rounded container
+        let prefix_w = 2u16;
+        let input_chunks = Layout::horizontal([Constraint::Length(prefix_w), Constraint::Fill(1)])
+            .split(inner_area);
+
         frame.render_widget(
-            Paragraph::new(Line::from(prefix_spans)).style(Style::default()),
+            Paragraph::new(Span::styled(
+                "> ",
+                colors.primary().add_modifier(Modifier::BOLD),
+            )),
             input_chunks[0],
         );
 
@@ -586,7 +553,7 @@ fn render_input_or_question(
         } else if *queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
-            "Type a message or paste code…".to_string()
+            "Type a message, @-file, or /command…".to_string()
         };
 
         textarea.set_placeholder_text(input_placeholder);
@@ -635,7 +602,7 @@ fn render_input_or_question(
 
 fn render_footer_bars(
     frame: &mut Frame,
-    chunks: &[ratatui::layout::Rect],
+    area: ratatui::layout::Rect,
     ctx: &RenderContext<'_>,
     footer_extra_h: u16,
     colors: &ThemeColors,
@@ -645,7 +612,6 @@ fn render_footer_bars(
         agent_name,
         model,
         reasoning_effort,
-        cwd,
         context_pct,
         session_tokens,
         footer_extra,
@@ -672,7 +638,6 @@ fn render_footer_bars(
         let total = session_tokens.0 + session_tokens.1;
         format!(" {}↑", format_token_count(total))
     };
-    let mid_cwd = format!("  {cwd}  ");
 
     let left_base_len: u16 = left_label.chars().count() as u16
         + if left_glyph.is_empty() {
@@ -685,25 +650,7 @@ fn render_footer_bars(
         + right_reasoning.chars().count()
         + right_ctx.chars().count()
         + right_tokens.chars().count()) as u16;
-    let footer_w = chunks[7].width as usize;
-    let available_for_cwd = footer_w
-        .saturating_sub(left_base_len as usize)
-        .saturating_sub(right_fixed_len as usize)
-        .saturating_sub(1);
-    let mid_cwd = if mid_cwd.chars().count() > available_for_cwd && available_for_cwd > 4 {
-        truncate_str(&mid_cwd, available_for_cwd)
-    } else if available_for_cwd <= 4 {
-        String::new()
-    } else {
-        mid_cwd
-    };
-    let right_len: u16 = (mid_cwd.chars().count()
-        + right_agent.chars().count()
-        + right_model.chars().count()
-        + right_reasoning.chars().count()
-        + right_ctx.chars().count()
-        + right_tokens.chars().count()) as u16;
-    let pad = chunks[7].width.saturating_sub(left_base_len + right_len) as usize;
+    let pad = area.width.saturating_sub(left_base_len + right_fixed_len) as usize;
 
     let mut footer: Vec<Span<'static>> = vec![Span::styled(
         left_label,
@@ -716,7 +663,6 @@ fn render_footer_bars(
         ));
     }
     footer.push(Span::raw(" ".repeat(pad)));
-    footer.push(Span::styled(mid_cwd, colors.text_muted()));
     if !right_agent.is_empty() {
         footer.push(Span::styled(right_agent, colors.thinking_minimal()));
     }
@@ -736,20 +682,19 @@ fn render_footer_bars(
         footer.push(Span::styled(right_tokens, colors.text_dim()));
     }
 
-    footer.push(Span::styled(
-        "  Server: 14ms 🟢",
-        Style::default()
-            .fg(colors.c_success())
-            .add_modifier(Modifier::DIM),
-    ));
-
-    frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
+    let footer_base_rect = ratatui::layout::Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(Line::from(footer)), footer_base_rect);
 
     if let Some(extra) = footer_extra {
         let extra_rect = ratatui::layout::Rect {
-            x: chunks[7].x,
-            y: chunks[7].y + 1,
-            width: chunks[7].width,
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
             height: 1,
         };
         frame.render_widget(
@@ -762,9 +707,9 @@ fn render_footer_bars(
     }
 
     let hotkey_rect = ratatui::layout::Rect {
-        x: chunks[7].x,
-        y: chunks[7].y + 1 + footer_extra_h,
-        width: chunks[7].width,
+        x: area.x,
+        y: area.y + 1 + footer_extra_h,
+        width: area.width,
         height: 1,
     };
     let hotkey_spans = if top_overlay.is_some() {
@@ -788,6 +733,9 @@ fn render_footer_bars(
         ]
     } else {
         vec![
+            Span::styled(" ^X ", colors.primary_bold()),
+            Span::styled("Leader", colors.text_muted()),
+            Span::styled("  │  ", colors.text_dim()),
             Span::styled(" ^B ", colors.primary_bold()),
             Span::styled("Sidebar", colors.text_muted()),
             Span::styled("  │  ", colors.text_dim()),
@@ -943,5 +891,50 @@ fn render_subagent_trackers(
         frame.render_widget(p, rect);
 
         y_offset += height + 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animate_live_status_rotates_spinner_over_time() {
+        let t0 = std::time::Duration::from_millis(0);
+        let a = animate_live_status("● assessing…", Some(t0));
+        let b = animate_live_status(
+            "● assessing…",
+            Some(t0 + std::time::Duration::from_millis(160)),
+        );
+        assert!(
+            a.starts_with("⠋ "),
+            "first frame should use braille spinner, got {a:?}"
+        );
+        assert_ne!(a, b, "spinner glyph must move with elapsed time");
+        assert!(
+            a.ends_with("assessing…"),
+            "status body must be preserved, got {a:?}"
+        );
+        assert!(
+            !a.contains('●'),
+            "bullet must be replaced by the spinner, got {a:?}"
+        );
+    }
+
+    #[test]
+    fn animate_live_status_keeps_terminal_glyphs_static() {
+        assert_eq!(
+            animate_live_status("✓ done", Some(std::time::Duration::from_secs(5))),
+            "✓ done"
+        );
+        assert_eq!(
+            animate_live_status("✗ Error: boom", Some(std::time::Duration::from_secs(5))),
+            "✗ Error: boom"
+        );
+    }
+
+    #[test]
+    fn animate_live_status_defaults_bullet_when_no_elapsed() {
+        assert_eq!(animate_live_status("● working…", None), "● working…");
     }
 }

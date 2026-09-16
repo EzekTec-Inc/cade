@@ -705,8 +705,9 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
             .min(area.height.saturating_sub(4));
         let card_w = 65u16.min(area.width.saturating_sub(4));
 
+        let offset_x = (self.word_start as u16 + 2).min(area.width.saturating_sub(card_w));
         let card_area = Rect::new(
-            area.x + 2,
+            area.x + offset_x,
             area.y + area.height.saturating_sub(card_h).saturating_sub(2),
             card_w,
             card_h,

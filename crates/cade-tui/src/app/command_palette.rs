@@ -23,6 +23,8 @@ pub struct CommandPaletteState {
     pub filtered: Vec<usize>,
     /// Currently highlighted entry in `filtered`.
     pub cursor: usize,
+    /// Frecency tracking store for recently and frequently invoked commands.
+    pub frecency: crate::app::frecency::FrecencyStore,
     /// Result to be returned to the host on dismiss (e.g. `"/help"`).
     result: Option<String>,
 }
@@ -34,23 +36,36 @@ impl Default for CommandPaletteState {
 }
 
 impl CommandPaletteState {
-    /// Create a new palette with all commands and an empty query.
+    /// Create a new palette with all commands and an empty query, ordered by frecency.
     pub fn new() -> Self {
-        let filtered: Vec<usize> = (0..CMD_DEFS.len()).collect();
+        let frecency = crate::app::frecency::FrecencyStore::load_default();
+        let mut filtered: Vec<usize> = (0..CMD_DEFS.len()).collect();
+        filtered.sort_by_key(|&idx| {
+            let cmd = &CMD_DEFS[idx];
+            std::cmp::Reverse(frecency.frecency_bonus(cmd.trigger))
+        });
         Self {
             query: String::new(),
             filtered,
             cursor: 0,
+            frecency,
             result: None,
         }
     }
 
-    /// Update the filtered list based on the current query.
+    /// Update the filtered list based on the current query and frecency bonus.
     pub fn update_filter(&mut self) {
         if self.query.is_empty() {
-            self.filtered = (0..CMD_DEFS.len()).collect();
+            let mut filtered: Vec<usize> = (0..CMD_DEFS.len()).collect();
+            let frecency = &self.frecency;
+            filtered.sort_by_key(|&idx| {
+                let cmd = &CMD_DEFS[idx];
+                std::cmp::Reverse(frecency.frecency_bonus(cmd.trigger))
+            });
+            self.filtered = filtered;
         } else {
             let q = self.query.to_lowercase();
+            let frecency = &self.frecency;
             let mut scored: Vec<(usize, i32)> = CMD_DEFS
                 .iter()
                 .enumerate()
@@ -62,7 +77,9 @@ impl CommandPaletteState {
                         cade_core::resources::palette::CmdCategory::Session => "Session",
                         cade_core::resources::palette::CmdCategory::Display => "Display",
                     };
-                    fuzzy_score(&q, cmd.trigger, cmd.description, section).map(|score| (i, score))
+                    let bonus = frecency.frecency_bonus(cmd.trigger);
+                    fuzzy_score(&q, cmd.trigger, cmd.description, section)
+                        .map(|score| (i, score + bonus))
                 })
                 .collect();
             scored.sort_by_key(|a| std::cmp::Reverse(a.1));
@@ -109,8 +126,6 @@ impl CommandPaletteState {
     }
 }
 
-// -- OverlayComponent impl
-
 impl OverlayComponent for CommandPaletteState {
     fn id(&self) -> &'static str {
         "command_palette"
@@ -140,6 +155,7 @@ impl OverlayComponent for CommandPaletteState {
             }
             (KeyCode::Enter, _) => {
                 if let Some(cmd) = self.selected_command() {
+                    self.frecency.record_use(cmd);
                     self.result = Some(format!("/{}", cmd));
                     OverlayInputResult::Dismiss
                 } else {
@@ -243,5 +259,18 @@ mod tests {
         use crate::overlay_component::OverlayComponent;
         let cp = CommandPaletteState::new();
         assert_eq!(cp.id(), "command_palette");
+    }
+
+    #[test]
+    fn test_frecency_ranking_in_palette() {
+        let mut cp = CommandPaletteState::new();
+        // Record frequent use of a specific command, e.g. "quote"
+        for _ in 0..10 {
+            cp.frecency.record_use("quote");
+        }
+        cp.update_filter();
+
+        // The frequently used command should now be ranked #1
+        assert_eq!(cp.selected_command(), Some("quote"));
     }
 }

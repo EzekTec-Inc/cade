@@ -233,6 +233,9 @@ impl HttpTransport {
                     .json(&body),
             )
             .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
+            agent_id,
+            conversation_id,
+            Vec::new(),
             on_event,
             cancel,
         )
@@ -256,18 +259,215 @@ impl HttpTransport {
         Ok(response.json().await?)
     }
 
+    // -- Resilient run streaming
+
+    /// Max seconds to keep retrying a dropped run stream before giving up.
+    /// Long-running tasks are expected to legitimately run for hours; a 12 hour
+    /// accounting window is effectively "don't give up during a workday".
+    const RUN_STREAM_RETRY_WINDOW_SECS: u64 = 12 * 60 * 60;
+    /// Upper bound on the exponential reconnect backoff (open-ended retries).
+    const RUN_STREAM_MAX_BACKOFF_MS: u64 = 10_000;
+
+    /// Poll `GET /v1/runs/{run_id}/stream?starting_after=` and return the data
+    /// payloads.  Used by the resume path (plain reqwest — no auto-reconnect,
+    /// no SSE event-source state to leak across retries).
+    async fn poll_run_events(&self, run_id: &str, after_seq: i64) -> Result<Vec<String>> {
+        let url = self.url(&format!("/runs/{run_id}/stream"));
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .query(&[("starting_after", after_seq.to_string())])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "run stream replay failed: {}",
+                resp.status()
+            )));
+        }
+        let body = resp.text().await?;
+        Ok(parse_sse_data(&body))
+    }
+
+    /// Fetch the current status of a run (`GET /v1/runs/{id}`).  `None` when
+    /// the run no longer exists or the status endpoint is unreachable (treated
+    /// as "still busy — keep polling" by the resume loop).
+    async fn run_status(&self, run_id: &str) -> Option<String> {
+        let url = self.url(&format!("/runs/{run_id}"));
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: serde_json::Value = resp.json().await.ok()?;
+        body["status"].as_str().map(str::to_owned)
+    }
+
+    /// If the SSE handshake dropped before any event delivered a `run_id`,
+    /// the server may still have accepted the run (it processes independently
+    /// of the client connection).  Recover the run id from the agent's recent
+    /// runs rather than erroring out or — worse — re-POSTing a duplicate run.
+    async fn discover_latest_run_id(
+        &self,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Option<String> {
+        let url = self.url(&format!("/agents/{agent_id}/runs"));
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .ok()?;
+        let body: serde_json::Value = resp.json().await.ok()?;
+        body["runs"]
+            .as_array()?
+            .iter()
+            .filter(|r| {
+                conversation_id.is_none_or(|cid| r["conversation_id"].as_str() == Some(cid))
+            })
+            .filter(|r| {
+                let status = r["status"].as_str().unwrap_or("");
+                matches!(status, "running" | "cancelling")
+            })
+            .max_by(|a, b| {
+                let ka = a["created_at"].as_str().unwrap_or("");
+                let kb = b["created_at"].as_str().unwrap_or("");
+                ka.cmp(kb)
+            })
+            .and_then(|r| r["id"].as_str().map(String::from))
+    }
+
+    /// Resume an interrupted run by backfilling the durable event log.  The
+    /// server persists every event, so a dropped transport connection loses no
+    /// data: we replay `seq > after_seq` (deduped), then follow the run to
+    /// completion (polling the durable log until a `run_done` envelope or a
+    /// terminal status appears).  Retries with capped exponential backoff.
+    async fn backfill_follow_run<F>(
+        &self,
+        run_id: &str,
+        mut after_seq: i64,
+        mut messages: Vec<CadeMessage>,
+        on_event: &F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(Self::RUN_STREAM_RETRY_WINDOW_SECS);
+        let mut attempt: u64 = 0;
+
+        loop {
+            // Honour a user cancellation request while offline: fire the
+            // durable cancel endpoint so the server stops work, then surface
+            // cancellation like the live path does.
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
+                let _ = self.cancel_run(run_id).await;
+                return Err(crate::Error::custom("__cancelled__"));
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::Error::custom(format!(
+                    "run {run_id} is still running but unreachable after {} min — reconnect and resume with the same prompt to pick it up",
+                    Self::RUN_STREAM_RETRY_WINDOW_SECS / 60,
+                )));
+            }
+
+            match self.poll_run_events(run_id, after_seq).await {
+                Ok(payloads) => {
+                    let mut completed = false;
+                    let mut saw_any = false;
+                    for payload in payloads {
+                        if payload == "[DONE]" {
+                            // Replay snapshot exhausted — keep following.
+                            continue;
+                        }
+                        let Ok(message) = serde_json::from_str::<CadeMessage>(&payload) else {
+                            continue;
+                        };
+                        if let Some(seq) = message.seq_id() {
+                            if seq <= after_seq {
+                                // Defensive dedup: replayed/duplicated event.
+                                continue;
+                            }
+                            after_seq = seq;
+                            saw_any = true;
+                        }
+                        if message.msg_type() == "run_done" {
+                            completed = true;
+                        }
+                        on_event(&message);
+                        messages.push(message);
+                    }
+
+                    if completed {
+                        return Ok(messages);
+                    }
+
+                    // If the log is quiescent, confirm terminal state via the
+                    // run resource (covers the ordering race where the run
+                    // status flips before the run_done event is persisted).
+                    if !saw_any
+                        && let Some(status) = self.run_status(run_id).await
+                        && matches!(status.as_str(), "done" | "error" | "cancelled")
+                    {
+                        return Ok(messages);
+                    }
+                    attempt = 0;
+                }
+                Err(error) => {
+                    // Transient network/HTTP failure — back off and retry.
+                    // Keep the previous last_seq; the durable log has it all.
+                    tracing::debug!(run_id = %run_id, %error, "run stream replay failed, retrying");
+                }
+            }
+
+            let delay_ms = Self::RUN_STREAM_MAX_BACKOFF_MS
+                .min(250u64.saturating_mul(2_u64.saturating_pow(attempt.min(5) as u32)));
+            attempt += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+    }
+
     async fn consume_run_stream<F>(
         &self,
         mut events: EventSource,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+        mut messages: Vec<CadeMessage>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
     where
         F: Fn(&CadeMessage),
     {
-        let mut messages = Vec::new();
         let mut run_id = None;
+        let mut last_seq_id: i64 = -1;
         let mut cancellation_requested = false;
+
+        let deliver = |message: &CadeMessage,
+                       messages: &mut Vec<CadeMessage>,
+                       run_id: &mut Option<String>,
+                       last_seq_id: &mut i64| {
+            if run_id.is_none() {
+                *run_id = message.run_id().map(str::to_owned);
+            }
+            if let Some(seq) = message.seq_id() {
+                let current = *last_seq_id;
+                *last_seq_id = current.max(seq);
+            }
+            on_event(message);
+            messages.push(message.clone());
+        };
+
         while let Some(event) = events.next().await {
             if !cancellation_requested
                 && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
@@ -290,15 +490,32 @@ impl HttpTransport {
                     let message: CadeMessage = serde_json::from_str(data).map_err(|error| {
                         crate::Error::custom(format!("invalid run event: {error}"))
                     })?;
-                    if run_id.is_none() {
-                        run_id = message.run_id().map(str::to_owned);
-                    }
-                    on_event(&message);
-                    messages.push(message);
+                    deliver(&message, &mut messages, &mut run_id, &mut last_seq_id);
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
                 Err(error) => {
                     events.close();
+                    tracing::warn!("SSE run transport error: {error:?}");
+
+                    // Transparent connection recovery (opencode-style): the
+                    // server persists every event durably and keeps running
+                    // independently of the client connection, so a dropped SSE
+                    // body loses nothing.  Resume from the last observed
+                    // sequence id by backfilling the durable log and following
+                    // the run to completion.  If the handshake died before any
+                    // event carried a run_id, the run may still have been
+                    // accepted — recover it from the agent's recent runs rather
+                    // than erroring out or re-POSTing a duplicate.
+                    let id = match run_id.clone() {
+                        Some(id) => Some(id),
+                        None => self.discover_latest_run_id(agent_id, conversation_id).await,
+                    };
+                    if !cancellation_requested && let Some(id) = id {
+                        return self
+                            .backfill_follow_run(&id, last_seq_id, messages, &on_event, cancel)
+                            .await;
+                    }
+
                     return Err(crate::Error::custom(error.to_string()));
                 }
             }
@@ -306,8 +523,8 @@ impl HttpTransport {
         Ok(messages)
     }
 
-    /// Resume a background run from a given seq_id, streaming events via SSE.
-    /// Calls `on_event` for each replayed event, returns full list.
+    /// Resume a run that is still active from a given seq_id.
+    /// Backfills the durable event log and follows the run to completion.
     pub async fn resume_run<F>(
         &self,
         run_id: &str,
@@ -317,20 +534,8 @@ impl HttpTransport {
     where
         F: Fn(&CadeMessage),
     {
-        let url = self.url(&format!("/runs/{run_id}/stream"));
-        let request = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&[("starting_after", after_seq.to_string())]);
-
-        self.consume_run_stream(
-            EventSource::new(request)
-                .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
-            on_event,
-            None,
-        )
-        .await
+        self.backfill_follow_run(run_id, after_seq, Vec::new(), &on_event, None)
+            .await
     }
 
     // -- Messages
@@ -494,7 +699,7 @@ impl HttpTransport {
                     // with the same error after another 30 s timeout, only making
                     // the user wait longer for the same failure.  Surface the
                     // real transport error immediately instead.
-                    tracing::debug!("SSE transport error: {e}");
+                    tracing::debug!("SSE transport error: {e:?}");
                     es.close();
                     return Err(crate::Error::custom(e.to_string()));
                 }
@@ -654,7 +859,7 @@ impl HttpTransport {
                     // connection means the next blocking POST will also fail;
                     // surface the real error immediately rather than waiting
                     // for a second 30 s timeout.
-                    tracing::debug!("SSE tool-return transport error: {e}");
+                    tracing::debug!("SSE tool-return transport error: {e:?}");
                     es.close();
                     return Err(crate::Error::custom(e.to_string()));
                 }
@@ -734,6 +939,73 @@ fn format_status_error(status: reqwest::StatusCode, body: &str) -> String {
         detail.push('…');
     }
     format!("Server returned HTTP {status}: {detail}")
+}
+
+/// Pure SSE frame parser: extract the `data:` payload from raw SSE text.
+/// Returns the list of data payloads in order (including `"[DONE]"`).
+fn parse_sse_data(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("data: ") {
+            buf.push_str(rest);
+        } else if line.starts_with(':') || line.starts_with("event:") || line.starts_with("retry:")
+        {
+            // SSE comments and non-data fields — ignore.
+        } else if line.trim().is_empty() && !buf.is_empty() {
+            out.push(std::mem::take(&mut buf));
+        }
+        // Any other line (e.g. continuation) is also ignored per spec.
+    }
+    // Flush trailing data (no final blank line).
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
+}
+
+#[cfg(test)]
+mod parse_sse_tests {
+    use super::*;
+
+    #[test]
+    fn single_event() {
+        assert_eq!(parse_sse_data("data: {\"seq\":1}\n\n"), vec!["{\"seq\":1}"]);
+    }
+
+    #[test]
+    fn done_marker() {
+        assert_eq!(
+            parse_sse_data("data: {\"seq\":1}\n\ndata: [DONE]\n\n"),
+            vec!["{\"seq\":1}", "[DONE]"]
+        );
+    }
+
+    #[test]
+    fn multiline_data() {
+        assert_eq!(
+            parse_sse_data("data: line1\ndata: line2\n\n"),
+            vec!["line1line2"]
+        );
+    }
+
+    #[test]
+    fn trailing_data_no_final_blank() {
+        assert_eq!(parse_sse_data("data: only\n"), vec!["only"]);
+    }
+
+    #[test]
+    fn comments_and_retry_ignored() {
+        assert_eq!(
+            parse_sse_data(": keepalive\nretry: 5000\ndata: x\n\n"),
+            vec!["x"]
+        );
+    }
+
+    #[test]
+    fn empty_body() {
+        assert!(parse_sse_data("").is_empty());
+    }
 }
 
 #[cfg(test)]

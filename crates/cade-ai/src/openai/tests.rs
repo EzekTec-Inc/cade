@@ -520,7 +520,7 @@ fn build_tools_preserves_memory_writing_tools_when_truncating() -> Result<()> {
 }
 
 #[test]
-fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> Result<()> {
+fn build_tools_preserves_mixed_priority_and_core_mcp_tools_when_truncating() -> Result<()> {
     let mut tools = Vec::new();
     for i in 0..160 {
         tools.push(json!({
@@ -534,7 +534,6 @@ fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> 
         }));
     }
 
-    // Add a priority memory tool (flat schema)
     tools.push(json!({
         "name": "update_memory",
         "description": "Core memory tool",
@@ -545,14 +544,18 @@ fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> 
         }
     }));
 
-    // Add a priority prefix tool (flat schema)
     tools.push(json!({
         "name": "serena__find_symbol",
-        "description": "Priority prefix tool",
+        "description": "Configured core MCP tool",
         "parameters": {
             "type": "object",
             "properties": {},
             "required": []
+        },
+        "x-cade": {
+            "kind": "mcp",
+            "server_key": "serena",
+            "core_server": true
         }
     }));
 
@@ -568,7 +571,6 @@ fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> 
     let arr = tools_val.as_array().ok_or("Should be an array")?;
     assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
 
-    // Both "update_memory" and "serena__find_symbol" should be preserved!
     assert!(
         arr.iter().any(|tool| tool
             .get("function")
@@ -583,10 +585,272 @@ fn build_tools_preserves_mixed_priority_and_prefixed_tools_when_truncating() -> 
             .and_then(|f| f.get("name"))
             .and_then(|name| name.as_str())
             == Some("serena__find_symbol")),
-        "should preserve serena__find_symbol"
+        "should preserve metadata-marked serena__find_symbol"
     );
 
     Ok(())
+}
+
+#[test]
+fn build_tools_preserves_configured_core_mcp_tools_when_truncating() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+
+    for name in [
+        "any-core-server__compress",
+        "any-core-server__retrieve",
+        "any-core-server__stats",
+    ] {
+        tools.push(json!({
+            "name": name,
+            "description": "Core MCP tool",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            },
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": "any-core-server",
+                "core_server": true
+            }
+        }));
+    }
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
+    for name in [
+        "any-core-server__compress",
+        "any-core-server__retrieve",
+        "any-core-server__stats",
+    ] {
+        assert!(
+            arr.iter().any(|tool| tool
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|name| name.as_str())
+                == Some(name)),
+            "build_tools should preserve {name} inside the 128-tool cap"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn build_tools_preserves_tagged_and_metadata_tools_when_truncating() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+
+    tools.push(json!({
+        "name": "dynamic_metadata_tool",
+        "description": "Tool with dynamic x-cade core_server metadata",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        },
+        "x-cade": {
+            "kind": "mcp",
+            "core_server": true
+        }
+    }));
+
+    tools.push(json!({
+        "name": "legacy_db_tool",
+        "description": "Legacy tool with DB core_mcp tag",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        },
+        "tags": ["cade", "mcp", "core_mcp"]
+    }));
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
+
+    assert!(
+        arr.iter().any(|tool| tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|name| name.as_str())
+            == Some("dynamic_metadata_tool")),
+        "should preserve dynamic_metadata_tool via x-cade.core_server"
+    );
+
+    assert!(
+        arr.iter().any(|tool| tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|name| name.as_str())
+            == Some("legacy_db_tool")),
+        "should preserve legacy tool with core_mcp tag"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_tools_preserves_finish_task_meta_tool_when_truncating() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("tool_{}", i),
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }));
+    }
+
+    tools.push(json!({
+        "name": "finish_task",
+        "description": "Call this tool when you have completed a task.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "summary": { "type": "string" },
+                "reason": { "type": "string" }
+            },
+            "required": ["summary", "reason"]
+        },
+        "tags": ["cade", "meta"]
+    }));
+
+    let req = CompletionRequest {
+        model: "gpt-5".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "build_tools should still cap at 128");
+
+    assert!(
+        arr.iter().any(|tool| tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|name| name.as_str())
+            == Some("finish_task")),
+        "build_tools should preserve finish_task because it is tagged as a meta tool"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_github_create_issue_openai_tool() {
+    let raw_tool = json!({
+        "description": "Create an issue",
+        "name": "github-mcp-server__create_issue",
+        "parameters": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+                "assignees": {
+                    "items": { "type": "string" },
+                    "nullable": true,
+                    "type": "array"
+                },
+                "body": {
+                    "nullable": true,
+                    "type": "string"
+                },
+                "labels": {
+                    "items": { "type": "string" },
+                    "nullable": true,
+                    "type": "array"
+                },
+                "owner": { "type": "string" },
+                "repo": { "type": "string" },
+                "title": { "type": "string" }
+            },
+            "required": [ "owner", "repo", "title" ],
+            "title": "CreateIssueParams",
+            "type": "object"
+        }
+    });
+
+    let tool = OpenAiProvider::openai_tool_from_schema(&raw_tool);
+    let params = &tool["function"]["parameters"];
+
+    // 1. Top-level type MUST be "object"
+    assert_eq!(params["type"], "object");
+
+    // 2. Top-level MUST NOT have oneOf, anyOf, allOf, enum, const, not
+    for key in ["oneOf", "anyOf", "allOf", "enum", "const", "not"] {
+        assert!(params.get(key).is_none(), "top-level should not have {key}");
+    }
+
+    // 3. Property named "title" MUST be preserved
+    assert!(
+        params["properties"]["title"].is_object(),
+        "title property must not be deleted"
+    );
+    assert_eq!(params["properties"]["title"]["type"], "string");
+
+    // 4. Schema-level title "CreateIssueParams" MUST be stripped
+    assert!(
+        params.get("title").is_none(),
+        "schema-level title must be stripped"
+    );
+
+    // 5. All required fields must exist in properties
+    let props = params["properties"].as_object().unwrap();
+    let req = params["required"].as_array().unwrap();
+    for r in req {
+        let name = r.as_str().unwrap();
+        assert!(
+            props.contains_key(name),
+            "required field {name} must exist in properties"
+        );
+    }
+
+    // 6. additionalProperties must be false
+    assert_eq!(params["additionalProperties"], false);
 }
 
 // ── Responses API & Preview Gateway Routing Tests ─────────────────────────
