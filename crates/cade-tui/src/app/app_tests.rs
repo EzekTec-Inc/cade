@@ -156,6 +156,22 @@ fn test_snap_to_char_boundary_emoji() {
     assert_eq!(snap_to_char_boundary(s, 4), 1); // still inside emoji
     assert_eq!(snap_to_char_boundary(s, 5), 5); // after emoji — valid
 }
+
+#[test]
+fn test_streaming_revealed_prefix_snaps_multibyte() {
+    // The typewriter reveal offset is byte-based; mid-character offsets must
+    // snap back instead of panicking (regression: `build_prepared_entries` and
+    // `draw_impl` slice the streaming text on this byte offset).
+    // 'é' is 2 bytes; "héllo" = h(1) é(2) l(1) l(1) o(1) = 6 bytes.
+    assert_eq!(streaming_revealed_prefix("héllo", 2), "h"); // mid-'é' → after 'h'
+    assert_eq!(streaming_revealed_prefix("héllo", 3), "hé"); // after 'é'
+    // '🙂' is 4 bytes; "a🙂b" = a(1) 🙂(4) b(1) = 6 bytes.
+    assert_eq!(streaming_revealed_prefix("a🙂b", 2), "a"); // inside emoji → after 'a'
+    assert_eq!(streaming_revealed_prefix("a🙂b", 5), "a🙂"); // after emoji
+    assert_eq!(streaming_revealed_prefix("ab", 100), "ab"); // clamp to end
+    assert_eq!(streaming_revealed_prefix("", 5), ""); // empty
+    assert_eq!(streaming_revealed_prefix("plain", 0), ""); // zero reveal
+}
 #[test]
 fn test_toast_expires_after_ttl() {
     let toast = Toast {
@@ -710,6 +726,7 @@ fn test_shift_j_and_k_delivered_to_editor_and_not_swallowed() {
 }
 
 #[test]
+#[ignore = "requires tty"]
 fn test_is_processing_and_toast_suppression() {
     use crate::app::{ToastLevel, TuiApp};
 

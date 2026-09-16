@@ -829,6 +829,17 @@ fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
     pos
 }
 
+/// Compute the typewriter-revealed prefix of the streaming text.
+///
+/// `reveal_len` advances in byte steps that may land mid-character for
+/// multi-byte output (emoji, CJK, accented Latin), so the offset is always
+/// snapped to a valid UTF-8 boundary before slicing.
+fn streaming_revealed_prefix(full: &str, reveal_len: usize) -> String {
+    let reveal = reveal_len.min(full.len());
+    let end = snap_to_char_boundary(full, reveal);
+    full[..end].to_string()
+}
+
 // -- TuiApp
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1428,14 +1439,7 @@ impl TuiApp {
         let streaming = if self.streaming_active {
             let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
             // Typewriter effect: only reveal up to streaming_reveal_len bytes.
-            let reveal = self.streaming_reveal_len.min(full.len());
-            // Snap to a valid char boundary.
-            let end = snap_to_char_boundary(&full, reveal);
-            if end > 0 {
-                Some(full[..end].to_string())
-            } else {
-                Some(String::new())
-            }
+            Some(streaming_revealed_prefix(&full, self.streaming_reveal_len))
         } else {
             None
         };
@@ -1913,8 +1917,9 @@ impl TuiApp {
 
         let streaming = if self.streaming_active {
             let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
-            let reveal = self.streaming_reveal_len.min(full.len());
-            Some(full[..reveal].to_string())
+            // Snap to a valid char boundary — `streaming_reveal_len` advances in
+            // byte steps that may land mid-character for multi-byte output.
+            Some(streaming_revealed_prefix(&full, self.streaming_reveal_len))
         } else {
             None
         };
