@@ -228,8 +228,10 @@ impl<'a> TimelineItem<'a> {
                 pct,
                 category_tokens,
             } => render_context_bar_item(model, *window, *pct, category_tokens, width, out, colors),
-            Self::User(text) => render_user_message_item(text, width, out, colors),
-            Self::Assistant(text) => render_assistant_item(text, width, expand_all, out, colors),
+            Self::User(text) => render_user_message_item(text, width, out, colors, nerd),
+            Self::Assistant(text) => {
+                render_assistant_item(text, width, expand_all, out, colors, nerd)
+            }
             Self::ToolCall { name, preview } => {
                 render_tool_call_item(name, preview, width, expand_all, out, colors, nerd)
             }
@@ -262,10 +264,10 @@ impl<'a> TimelineItem<'a> {
                 directives,
             } => render_heuristic_summary_item(intent, safety, directives, width, out, colors),
             Self::StreamingAssistant(text) => {
-                render_streaming_assistant_item(text, width, expand_all, out, colors)
+                render_streaming_assistant_item(text, width, expand_all, out, colors, nerd)
             }
             Self::LiveReasoning(text) => render_live_reasoning_item(text, width, out, colors),
-            Self::LiveStatus(text) => render_live_status_item(text, width, out, colors),
+            Self::LiveStatus(text) => render_live_status_item(text, width, out, colors, nerd),
         }
     }
 

@@ -355,7 +355,7 @@ impl Repl {
                                 if status == "started" {
                                     *bar.lock() = format!("● {}…", tool_name);
                                 } else if status == "completed" {
-                                    *bar.lock() = format!("✓ {} completed", tool_name);
+                                    *bar.lock() = "● processing…".to_string();
                                 }
                             }
                             if !message.is_empty() {

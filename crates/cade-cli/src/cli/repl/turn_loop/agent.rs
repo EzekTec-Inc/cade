@@ -415,12 +415,11 @@ impl Repl {
 
         let messages = messages?;
 
-        let is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
+        let _is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
 
         let _ = messages;
-        let turn_stats = TurnStats::default();
 
         // The canonical runtime owns tool execution; the CLI only renders its events.
 
@@ -436,41 +435,18 @@ impl Repl {
             let mut stats = self.session_stats.lock();
             stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
         }
-        let time_str = if secs >= 60 {
+        let _time_str = if secs >= 60 {
             format!("{}m {}s", secs / 60, secs % 60)
         } else {
             format!("{}s", secs)
         };
 
-        let summary = if is_cancelled {
-            format!("⚠ Interrupted after {}", time_str)
-        } else {
-            let mut parts = vec![format!("✓ Finished in {}", time_str)];
-            if turn_stats.reads > 0 {
-                parts.push(format!(
-                    "{} read{}",
-                    turn_stats.reads,
-                    if turn_stats.reads == 1 { "" } else { "s" }
-                ));
-            }
-            if turn_stats.edits > 0 {
-                parts.push(format!(
-                    "{} edit{}",
-                    turn_stats.edits,
-                    if turn_stats.edits == 1 { "" } else { "s" }
-                ));
-            }
-            if turn_stats.cmds > 0 {
-                parts.push(format!(
-                    "{} cmd{}",
-                    turn_stats.cmds,
-                    if turn_stats.cmds == 1 { "" } else { "s" }
-                ));
-            }
-            parts.join("  ·  ")
-        };
-        self.app.lock().set_last_status(Some(summary));
-        let _ = self.app.lock().draw();
+        {
+            let mut app = self.app.lock();
+            app.stop_thinking();
+            app.set_last_status(None);
+            let _ = app.draw();
+        }
 
         self.turn_active.store(false, Ordering::SeqCst);
         Ok(())

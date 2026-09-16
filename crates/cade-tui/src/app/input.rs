@@ -251,8 +251,13 @@ impl TuiApp {
             }
             crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
                 if self.selection_active {
+                    let is_single_click = self.selection_start == Some((m.column, m.row));
                     self.selection_current = Some((m.column, m.row));
-                    self.copy_selected_text();
+                    if is_single_click {
+                        self.toggle_last_collapsible_item();
+                    } else {
+                        self.copy_selected_text();
+                    }
                     self.draw()?;
                     return Ok(true);
                 }

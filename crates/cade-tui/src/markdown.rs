@@ -45,12 +45,12 @@ pub(crate) fn syntect_to_tui_style(style: SyntectStyle) -> Style {
 }
 
 /// Left margin applied to all body content (paragraphs, headings, lists, etc.).
-/// Keeps text visually inset from the viewport edge and from tool-call/tool-result
-/// gutters, creating a clear content hierarchy.
-const INDENT: &str = "  ";
+/// Set to empty string so the Block container's left gutter rail and padding
+/// are the sole source of truth for viewport margin alignment.
+const INDENT: &str = "";
 
-/// Extra indent inside code blocks (on top of INDENT).
-const CODE_INDENT: &str = "    ";
+/// Extra indent inside code blocks.
+const CODE_INDENT: &str = "  ";
 
 /// Style for the dim code-block border lines (┌── / └──).
 fn code_border_style(colors: &ThemeColors) -> Style {

@@ -1152,9 +1152,13 @@ impl TuiApp {
         colors: ThemeColors,
     ) -> Self {
         let terminal = ratatui::init();
-        // Leave mouse capture disabled by default so native terminal text selection
-        // works immediately. Users can opt into TUI-owned mouse gestures with /mouse.
-        let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange);
+        // Enable mouse capture so mouse wheel scrolling and click gestures work immediately.
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            EnableBracketedPaste,
+            EnableFocusChange,
+            EnableMouseCapture
+        );
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
         // swallows the query. Unrecognized escape codes are safely ignored by VT100

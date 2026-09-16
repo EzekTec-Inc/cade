@@ -1,6 +1,7 @@
 use super::Repl;
 use super::{fmt_tok_short, fmt_window_tokens_short, short_mode_label};
 
+#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct TurnStats {
     pub reads: u32,

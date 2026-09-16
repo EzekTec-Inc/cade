@@ -168,13 +168,24 @@ pub(crate) fn render_user_message_item(
     width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
+    nerd: bool,
 ) {
-    out.push(Line::from(vec![Span::styled(
-        "You",
-        Style::default()
-            .fg(colors.c_text_primary())
-            .add_modifier(Modifier::BOLD),
-    )]));
+    let icon = crate::icons::user_icon(nerd);
+    out.push(Line::from(vec![
+        Span::styled(
+            format!("{icon} "),
+            Style::default()
+                .fg(colors.c_border_accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "You",
+            Style::default()
+                .fg(colors.c_text_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    out.push(Line::from(""));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
         text, colors, width, true,
     ));
@@ -186,13 +197,24 @@ pub(crate) fn render_assistant_item(
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
+    nerd: bool,
 ) {
-    out.push(Line::from(vec![Span::styled(
-        "▍ CADE",
-        Style::default()
-            .fg(colors.c_primary())
-            .add_modifier(Modifier::BOLD),
-    )]));
+    let icon = crate::icons::assistant_icon(nerd);
+    out.push(Line::from(vec![
+        Span::styled(
+            format!("{icon} "),
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "CADE",
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    out.push(Line::from(""));
 
     // Strip any historical-scratchpad (internal processing state) emitted by
     // the model without rendering it — it is never shown in the viewport.
@@ -219,8 +241,9 @@ pub(crate) fn render_streaming_assistant_item(
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
+    nerd: bool,
 ) {
-    render_assistant_item(text, width, expand_all, out, colors);
+    render_assistant_item(text, width, expand_all, out, colors, nerd);
 }
 
 /// Live "thinking" block shown while the model is reasoning.  Only the most
@@ -273,20 +296,73 @@ pub(crate) fn render_live_status_item(
     width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
+    nerd: bool,
 ) {
-    let fg = if text.starts_with('✗') || text.starts_with("⚠") {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let fg = if trimmed.starts_with('✗') || trimmed.starts_with('⚠') {
         colors.c_error()
-    } else if text.starts_with('✓') {
+    } else if trimmed.starts_with('✓') {
         colors.c_success()
     } else {
         colors.c_primary()
     };
-    let budget = width.saturating_sub(4);
-    let body = truncate_str(text, budget);
-    out.push(Line::from(vec![
-        Span::styled("▕ ", colors.border_muted()),
-        Span::styled(body, Style::default().fg(fg).add_modifier(Modifier::BOLD)),
-    ]));
+    let budget = width.saturating_sub(12);
+    let body = truncate_str(trimmed, budget);
+
+    let (left_cap, right_cap, cap_len) = if nerd {
+        ("\u{e0b6}", "\u{e0b4}", 2) //  and  rounded bubble caps
+    } else {
+        (" [ ", " ] ", 6)
+    };
+
+    let pill_text = format!(" {body} ");
+    let pill_w = UnicodeWidthStr::width(pill_text.as_str()) + cap_len;
+    let pad_total = width.saturating_sub(pill_w);
+    let left_dashes = pad_total / 2;
+    let right_dashes = pad_total.saturating_sub(left_dashes);
+
+    if nerd {
+        out.push(Line::from(vec![
+            Span::styled("─".repeat(left_dashes), colors.border_muted()),
+            Span::styled(left_cap, Style::default().fg(colors.c_bg_surface1())),
+            Span::styled(
+                pill_text,
+                Style::default()
+                    .fg(fg)
+                    .bg(colors.c_bg_surface1())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(right_cap, Style::default().fg(colors.c_bg_surface1())),
+            Span::styled("─".repeat(right_dashes), colors.border_muted()),
+        ]));
+    } else {
+        out.push(Line::from(vec![
+            Span::styled("─".repeat(left_dashes), colors.border_muted()),
+            Span::styled(
+                left_cap,
+                Style::default()
+                    .fg(colors.c_border_accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                pill_text,
+                Style::default()
+                    .fg(fg)
+                    .bg(colors.c_bg_surface1())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                right_cap,
+                Style::default()
+                    .fg(colors.c_border_accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("─".repeat(right_dashes), colors.border_muted()),
+        ]));
+    }
 }
 
 pub(crate) fn render_tool_call_item(
@@ -423,17 +499,17 @@ pub(crate) fn render_tool_result_item(
         let remaining = lns.len().saturating_sub(show);
         if remaining > 0 {
             let hint = if expand_all {
-                format!("… +{remaining} lines")
+                format!("+{remaining} lines")
             } else {
-                format!("… +{remaining} lines (ctrl+o to expand)")
+                format!("+{remaining} lines hidden · ctrl+o to expand")
             };
             out.push(Line::from(vec![
                 Span::styled("│   ", colors.border_muted()),
                 Span::styled(
-                    hint,
+                    format!("[{hint}]"),
                     Style::default()
-                        .fg(colors.c_text_dim())
-                        .add_modifier(Modifier::ITALIC),
+                        .fg(colors.c_primary())
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
         }
