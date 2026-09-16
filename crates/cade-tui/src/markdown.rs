@@ -232,11 +232,11 @@ impl CalloutKind {
         colors: &ThemeColors,
     ) -> (&'static str, ratatui::style::Color) {
         match self {
-            Self::Note => ("ℹ Note", colors.c_border_accent()),
-            Self::Tip => ("💡 Tip", colors.c_success()),
-            Self::Important => ("⚡ Important", colors.c_primary()),
-            Self::Warning => ("⚠ Warning", colors.c_warning()),
-            Self::Caution => ("🚨 Caution", colors.c_error()),
+            Self::Note => (concat!("\u{f05a}", " Note"), colors.c_border_accent()),
+            Self::Tip => (concat!("\u{f0eb}", " Tip"), colors.c_success()),
+            Self::Important => (concat!("\u{f0e7}", " Important"), colors.c_primary()),
+            Self::Warning => (concat!("\u{f071}", " Warning"), colors.c_warning()),
+            Self::Caution => (concat!("\u{f06d}", " Caution"), colors.c_error()),
         }
     }
 }
@@ -885,14 +885,14 @@ pub fn parse_markdown_lines_with_theme(
                 }
                 if checked {
                     current_spans.push(Span::styled(
-                        "☑ ",
+                        format!("{} ", crate::icons::task_checked_glyph()),
                         Style::default()
                             .fg(colors.c_success())
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else {
                     current_spans.push(Span::styled(
-                        "☐ ",
+                        format!("{} ", crate::icons::task_unchecked_glyph()),
                         colors.border_muted().add_modifier(Modifier::BOLD),
                     ));
                 }
@@ -955,7 +955,7 @@ pub fn parse_markdown_lines_with_theme(
                             if current_spans.last().map(|s| s.content.as_ref()) == Some("• ") {
                                 current_spans.pop();
                                 current_spans.push(Span::styled(
-                                    "☐ ",
+                                    format!("{} ", crate::icons::task_unchecked_glyph()),
                                     colors.border_muted().add_modifier(Modifier::BOLD),
                                 ));
                                 current_spans.push(Span::styled(stripped.to_string(), style));
@@ -970,7 +970,7 @@ pub fn parse_markdown_lines_with_theme(
                                 .unwrap_or("");
                             current_spans.pop();
                             current_spans.push(Span::styled(
-                                "☑ ",
+                                format!("{} ", crate::icons::task_checked_glyph()),
                                 Style::default()
                                     .fg(colors.c_success())
                                     .add_modifier(Modifier::BOLD),
@@ -1347,20 +1347,29 @@ mod tests {
         let md = "> [!NOTE] This is a critical informational note.\n> Second line of note.";
         let lines = parse_markdown_lines_with_theme(md, &colors, 80, true);
 
-        // Find the line containing the callout badge
-        let badge_line = lines
-            .iter()
-            .find(|l| l.spans.iter().any(|s| s.content.contains("[ℹ Note]")));
-        assert!(badge_line.is_some(), "should render [ℹ Note] callout badge");
+        // Find the line containing the callout badge with Nerd Font glyph
+        let note_glyph = crate::icons::callout_note_glyph();
+        let badge_line = lines.iter().find(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.content.contains(note_glyph) && s.content.contains("Note"))
+        });
+        assert!(
+            badge_line.is_some(),
+            "should render note callout badge with Nerd Font glyph"
+        );
 
         let warn_md = "> [!WARNING] Dangerous operationahead!";
         let warn_lines = parse_markdown_lines_with_theme(warn_md, &colors, 80, true);
-        let warn_badge = warn_lines
-            .iter()
-            .find(|l| l.spans.iter().any(|s| s.content.contains("[⚠ Warning]")));
+        let warn_glyph = crate::icons::callout_warning_glyph();
+        let warn_badge = warn_lines.iter().find(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.content.contains(warn_glyph) && s.content.contains("Warning"))
+        });
         assert!(
             warn_badge.is_some(),
-            "should render [⚠ Warning] callout badge"
+            "should render warning callout badge with Nerd Font glyph"
         );
     }
 
@@ -1370,15 +1379,23 @@ mod tests {
         let md = "- [ ] Pending task step\n- [x] Completed task step";
         let lines = parse_markdown_lines_with_theme(md, &colors, 80, true);
 
+        let uncheck_glyph = crate::icons::task_unchecked_glyph();
         let unchecked = lines
             .iter()
-            .find(|l| l.spans.iter().any(|s| s.content.contains("☐ ")));
-        assert!(unchecked.is_some(), "should render unchecked task box ☐");
+            .find(|l| l.spans.iter().any(|s| s.content.contains(uncheck_glyph)));
+        assert!(
+            unchecked.is_some(),
+            "should render unchecked task box with Nerd Font glyph"
+        );
 
+        let check_glyph = crate::icons::task_checked_glyph();
         let checked = lines
             .iter()
-            .find(|l| l.spans.iter().any(|s| s.content.contains("☑ ")));
-        assert!(checked.is_some(), "should render checked task box ☑");
+            .find(|l| l.spans.iter().any(|s| s.content.contains(check_glyph)));
+        assert!(
+            checked.is_some(),
+            "should render checked task box with Nerd Font glyph"
+        );
     }
 
     #[test]

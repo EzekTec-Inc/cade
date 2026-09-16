@@ -148,6 +148,45 @@ pub fn thinking_icon(nerd: bool) -> &'static str {
 
 // endregion: --- Status icons
 
+// region:    --- Callout & Task icons
+
+/// Glyph for callout note / info.
+pub fn callout_note_glyph() -> &'static str {
+    "\u{f05a}" // 
+}
+
+/// Glyph for callout tip / idea.
+pub fn callout_tip_glyph() -> &'static str {
+    "\u{f0eb}" // 
+}
+
+/// Glyph for callout important.
+pub fn callout_important_glyph() -> &'static str {
+    "\u{f0e7}" // 
+}
+
+/// Glyph for callout warning.
+pub fn callout_warning_glyph() -> &'static str {
+    "\u{f071}" // 
+}
+
+/// Glyph for callout caution.
+pub fn callout_caution_glyph() -> &'static str {
+    "\u{f06d}" // 
+}
+
+/// Glyph for unchecked task box.
+pub fn task_unchecked_glyph() -> &'static str {
+    "\u{f096}" // 
+}
+
+/// Glyph for checked task box.
+pub fn task_checked_glyph() -> &'static str {
+    "\u{f046}" // 
+}
+
+// endregion: --- Callout & Task icons
+
 #[cfg(test)]
 mod tests {
     use super::*;
