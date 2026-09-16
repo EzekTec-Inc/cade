@@ -6,6 +6,46 @@ use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
 
+/// Build a compact one-line argument preview for a tool call header row.
+fn tool_args_preview(args: &serde_json::Value) -> String {
+    fn short(s: &str, n: usize) -> String {
+        let s = s.trim();
+        if s.chars().count() <= n {
+            s.to_string()
+        } else {
+            format!("{}…", s.chars().take(n).collect::<String>())
+        }
+    }
+    if let Some(cmd) = args["command"].as_str() {
+        short(cmd, 80)
+    } else if let Some(fp) = args["file_path"].as_str().or(args["path"].as_str()) {
+        let extra = if let Some(old) = args["old_string"].as_str() {
+            format!("  \"{}\"", short(old, 40))
+        } else if let Some(content) = args["content"].as_str() {
+            format!("  ({} chars)", content.len())
+        } else {
+            String::new()
+        };
+        format!("{fp}{extra}")
+    } else if let Some(pat) = args["pattern"].as_str() {
+        let in_path = args["path"].as_str().unwrap_or("");
+        if in_path.is_empty() {
+            format!("\"{}\"", short(pat, 60))
+        } else {
+            format!("\"{}\" in {in_path}", short(pat, 40))
+        }
+    } else if let Some(label) = args["label"].as_str() {
+        let op = args["operation"].as_str().unwrap_or("set");
+        format!("[{label}] ({op})")
+    } else if let Some(patch) = args["patch"].as_str() {
+        short(patch, 60)
+    } else {
+        args.as_object()
+            .and_then(|m| m.values().find_map(|v| v.as_str()).map(|s| short(s, 60)))
+            .unwrap_or_default()
+    }
+}
+
 impl Repl {
     /// Stream one turn (user message or tool return) and render live.
     /// Returns the complete collected message list.
@@ -153,22 +193,38 @@ impl Repl {
                     }
                     "tool_call_message" => {
                         in_reasoning = false;
+                        let (_tool_id, tool_name, args) = match msg.as_tool_call() {
+                            Some(t) => t,
+                            None => continue,
+                        };
+                        let preview = tool_args_preview(&args);
                         {
                             let mut app = app_arc.lock();
-                            app.commit_reasoning_inner();
-                            let _ = app.commit_streaming();
+                            let _ = app.push(RenderLine::ToolCall {
+                                name: tool_name.clone(),
+                                preview,
+                            });
                         }
                         if let Some(bar) = &bar_text_arc {
-                            let tool_name = msg.data["tool_calls"][0]["function"]["name"]
-                                .as_str()
-                                .unwrap_or("tool");
                             let display = if let Some(pos) = tool_name.rfind("__") {
                                 &tool_name[pos + 2..]
                             } else {
-                                tool_name
+                                &tool_name
                             };
                             *bar.lock() = format!("● {}…", display);
                         }
+                    }
+                    "tool_result_message" => {
+                        let content = msg.data["tool_result"]["output"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        let is_error = msg.data["tool_result"]["is_error"]
+                            .as_bool()
+                            .unwrap_or(false);
+                        let _ = app_arc
+                            .lock()
+                            .push(RenderLine::ToolResult { is_error, content });
                     }
                     "usage_statistics" => {
                         use std::sync::atomic::Ordering;

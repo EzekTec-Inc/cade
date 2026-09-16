@@ -173,6 +173,62 @@ fn test_streaming_revealed_prefix_snaps_multibyte() {
     assert_eq!(streaming_revealed_prefix("plain", 0), ""); // zero reveal
 }
 #[test]
+fn test_layout_engine_streaming_entry_grows_and_replaces() {
+    use super::timeline::TimelineLayoutEngine;
+
+    let colors = ThemeColors::default();
+    let mut engine = TimelineLayoutEngine::new();
+    let lines = vec![RenderLine::UserMessage("hello".to_string())];
+    let expanded: std::collections::HashSet<TimelineKey> = std::collections::HashSet::new();
+
+    // First streaming chunk
+    engine.set_active_stream(Some("Hello world, this is the agent's streaming reply."));
+    let prepared = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    // history (1 user line) + streaming entry
+    assert_eq!(
+        prepared.len(),
+        2,
+        "streaming entry must be appended to history"
+    );
+    assert!(prepared[1].rows > 0, "streaming entry must occupy rows");
+    let before = prepared[1].rows;
+
+    // Same chunk redrawn (no content change) — cache hit, no size change
+    let prepared2 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared2.len(), 2);
+    assert_eq!(prepared2[1].rows, before);
+
+    // New chunk arrives → text changes → entry re-prepared and replaced
+    engine.set_active_stream(Some(
+        "Hello world, this is the agent's streaming reply. It continues with more.",
+    ));
+    let prepared3 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared3.len(), 2, "no duplicate streaming entries");
+    assert!(prepared3[1].rows >= before);
+
+    // Stream ends → streaming text removed → entry dropped
+    engine.set_active_stream(None);
+    let prepared4 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared4.len(), 1, "streaming entry must be dropped on end");
+
+    // Multi-byte streaming text must layout without panicking
+    engine.set_active_stream(Some("你好，我是CADE助手。🚀 正在处理你的请求。"));
+    let prepared5 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared5.len(), 2);
+    assert!(prepared5[1].rows > 0);
+}
+
+#[test]
 fn test_toast_expires_after_ttl() {
     let toast = Toast {
         message: "hello".to_string(),
