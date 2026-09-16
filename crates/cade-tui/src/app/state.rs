@@ -79,6 +79,10 @@ impl TuiApp {
         // if the user scrolled up mid-stream to read history, leave them there.
         self.streaming_active = true;
         self.streaming_text.push_str(text);
+        // Refresh the prompt-stripped display copy once per chunk — draw frames
+        // reuse it instead of re-running the strip regex over the whole stream.
+        self.streaming_display =
+            crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
         self.update_plan_state();
         self.draw_throttled()
     }
@@ -176,10 +180,15 @@ impl TuiApp {
         }
     }
 
-    /// Append a reasoning chunk (accumulated; committed as header on done).
+    /// Append a reasoning chunk.  The thinking text is streamed live into the
+    /// viewport (via `reasoning_active` + the layout engine's active-reasoning
+    /// entry) and collapsed into a `RenderLine::Reasoning` header on commit.
     pub fn push_reasoning_chunk(&mut self, text: &str) {
         self.reasoning_active = true;
         self.reasoning_text.push_str(text);
+        self.reasoning_display =
+            crate::app::strip_orchestrator_prompts(&self.reasoning_text).into_owned();
+        self.draw_dirty = true;
     }
 
     /// Commit any in-progress assistant streaming to `lines`.
@@ -208,8 +217,10 @@ impl TuiApp {
         self.streaming_text.clear();
         self.streaming_active = false;
         self.streaming_reveal_len = 0;
+        self.streaming_display.clear();
         self.reasoning_text.clear();
         self.reasoning_active = false;
+        self.reasoning_display.clear();
     }
 
     pub fn has_streaming(&self) -> bool {
@@ -242,6 +253,7 @@ impl TuiApp {
         if self.streaming_active {
             let text = std::mem::take(&mut self.streaming_text);
             let clean = crate::app::strip_orchestrator_prompts(&text);
+            self.streaming_display.clear();
             if !clean.trim().is_empty() {
                 self.lines
                     .push(RenderLine::AssistantText(clean.into_owned()));
@@ -259,6 +271,7 @@ impl TuiApp {
         if self.reasoning_active {
             let text = std::mem::take(&mut self.reasoning_text);
             let clean = crate::app::strip_orchestrator_prompts(&text);
+            self.reasoning_display.clear();
             let words = clean.split_whitespace().count();
             if words > 0 {
                 self.lines.push(RenderLine::Reasoning {

@@ -229,6 +229,166 @@ fn test_layout_engine_streaming_entry_grows_and_replaces() {
 }
 
 #[test]
+fn test_layout_engine_live_reasoning_streams_inline() {
+    use super::timeline::TimelineLayoutEngine;
+
+    let colors = ThemeColors::default();
+    let mut engine = TimelineLayoutEngine::new();
+    let lines = vec![RenderLine::UserMessage("hello".to_string())];
+    let expanded: std::collections::HashSet<TimelineKey> = std::collections::HashSet::new();
+
+    // Thinking starts → live reasoning entry appears after history
+    engine.set_active_reasoning(Some("Analyzing the request."));
+    let prepared = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared.len(), 2, "live reasoning appended to history");
+    let reasoning_rows = prepared[1].rows;
+    assert!(reasoning_rows > 0);
+    let joined = prepared[1]
+        .lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<String>();
+    assert!(joined.contains("THINKING"), "live thinking header shown");
+
+    // Thinking grows → entry re-prepared, still after history
+    engine.set_active_reasoning(Some(
+        "Analyzing the request.\nSearching for relevant files.",
+    ));
+    let prepared2 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared2.len(), 2);
+    assert!(
+        prepared2[1].rows > reasoning_rows,
+        "longer thinking → more rows"
+    );
+
+    // Reasoning stays BEFORE the streaming assistant entry
+    engine.set_active_stream(Some("Here is my answer."));
+    let prepared3 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared3.len(), 3, "history + reasoning + streaming");
+    let reasoning_joined = prepared3[1]
+        .lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<String>();
+    let stream_joined = prepared3[2]
+        .lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<String>();
+    assert!(reasoning_joined.contains("THINKING"));
+    assert!(
+        stream_joined.contains("CADE"),
+        "streaming assistant entry follows reasoning"
+    );
+
+    // Thinking commits → reasoning entry dropped, streaming remains
+    engine.set_active_reasoning(None);
+    let prepared4 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(
+        prepared4.len(),
+        2,
+        "history + streaming after reasoning commit"
+    );
+
+    // Streaming ends too → history only
+    engine.set_active_stream(None);
+    let prepared5 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared5.len(), 1, "history only when nothing streams");
+
+    // Very long thinking is windowed to the most recent lines (never a full
+    // re-wrap of the entire reasoning transcript each frame).
+    let long = (0..20)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    engine.set_active_reasoning(Some(&long));
+    let prepared6 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared6.len(), 2);
+    assert!(
+        prepared6[1].rows <= 13,
+        "live thinking is windowed, not full transcript height"
+    );
+}
+
+#[test]
+fn test_layout_engine_live_status_streams_inline() {
+    use super::timeline::TimelineLayoutEngine;
+
+    let colors = ThemeColors::default();
+    let mut engine = TimelineLayoutEngine::new();
+    let lines = vec![RenderLine::UserMessage("hello".to_string())];
+    let expanded: std::collections::HashSet<TimelineKey> = std::collections::HashSet::new();
+
+    // Working status appears as the bottom-most entry
+    engine.set_active_status(Some("assessing… (Ctrl+c to interrupt · 2s · 0↑)"));
+    let prepared = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared.len(), 2, "history + live status");
+    let joined = prepared[1]
+        .lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<String>();
+    assert!(
+        joined.contains("assessing"),
+        "working status rendered inline: {joined}"
+    );
+
+    // Status text updates → entry re-prepared (no duplicates)
+    engine.set_active_status(Some("● running tests…"));
+    let prepared2 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared2.len(), 2);
+    let joined2 = prepared2[1]
+        .lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<String>();
+    assert!(joined2.contains("running tests"));
+    assert!(!joined2.contains("assessing"), "old status cleared");
+
+    // Ordering: history + reasoning + streaming + status
+    engine.set_active_reasoning(Some("Analyzing."));
+    engine.set_active_stream(Some("Here is the reply."));
+    let prepared3 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(
+        prepared3.len(),
+        4,
+        "history + reasoning + streaming + status"
+    );
+    let tails = prepared3[1..]
+        .iter()
+        .map(|e| e.lines.iter().map(|l| l.to_string()).collect::<String>())
+        .collect::<Vec<_>>();
+    assert!(tails[0].contains("THINKING"));
+    assert!(tails[1].contains("reply"));
+    assert!(tails[2].contains("running tests"), "status is bottom-most");
+
+    // Status ends → status entry dropped, dynamic tail collapses
+    engine.set_active_status(None);
+    let prepared4 = engine
+        .layout_items(&lines, 80, false, &expanded, &colors, true, 1)
+        .to_vec();
+    assert_eq!(prepared4.len(), 3, "history + reasoning + streaming");
+}
+
+#[test]
 fn test_toast_expires_after_ttl() {
     let toast = Toast {
         message: "hello".to_string(),

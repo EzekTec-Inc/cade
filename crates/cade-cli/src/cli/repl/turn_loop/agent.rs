@@ -668,5 +668,11 @@ mod tests {
             RenderLine::AssistantText(s) => s.contains("Here is the plan."),
             _ => false,
         }));
+        // 4. Reasoning streamed through the viewport is committed as a
+        //    Reasoning block (never hidden in the bottom bar).
+        assert!(a.lines.iter().any(|line| match line {
+            RenderLine::Reasoning { content, .. } => content.contains("Thinking deeply..."),
+            _ => false,
+        }));
     }
 }

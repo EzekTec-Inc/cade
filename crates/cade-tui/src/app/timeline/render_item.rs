@@ -194,63 +194,23 @@ pub(crate) fn render_assistant_item(
             .add_modifier(Modifier::BOLD),
     )]));
 
-    // Extract historical scratchpad
-    let (body, scratchpad) = if let Some(start) = text.find("<historical_scratchpad>") {
-        if let Some(end) = text.find("</historical_scratchpad>") {
-            let body = format!(
-                "{}{}",
-                &text[..start],
-                &text[end + "</historical_scratchpad>".len()..]
-            );
-            let scratchpad = &text[start + "<historical_scratchpad>".len()..end];
-            (body, Some(scratchpad))
-        } else {
-            (text.to_string(), None)
+    // Strip any historical-scratchpad (internal processing state) emitted by
+    // the model without rendering it — it is never shown in the viewport.
+    let body = {
+        let mut body = text.to_string();
+        if let Some(start) = body.find("<historical_scratchpad>") {
+            let end = body
+                .find("</historical_scratchpad>")
+                .map(|e| e + "</historical_scratchpad>".len())
+                .unwrap_or(body.len());
+            body.replace_range(start..end, "");
         }
-    } else {
-        (text.to_string(), None)
+        body
     };
 
     let md_lines =
         crate::markdown::parse_markdown_lines_with_theme(&body, colors, width, expand_all);
     out.extend(md_lines);
-
-    if let Some(sp) = scratchpad {
-        out.push(Line::from(""));
-        out.push(Line::from(vec![
-            Span::styled("╭ ", colors.border_muted()),
-            Span::styled(
-                " HISTORICAL SCRATCHPAD ",
-                Style::default()
-                    .fg(colors.c_text_primary())
-                    .bg(colors.c_bg_surface1())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                if expand_all {
-                    "· expanded"
-                } else {
-                    "· ctrl+o to expand"
-                },
-                colors.text_dim(),
-            ),
-        ]));
-        if expand_all {
-            let inner_w = width.saturating_sub(4);
-            for ln in sp.trim().lines() {
-                out.push(Line::from(vec![
-                    Span::styled("│ ", colors.border_muted()),
-                    Span::styled(
-                        truncate_str(ln, inner_w),
-                        Style::default()
-                            .fg(colors.c_text_muted())
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ]));
-            }
-        }
-    }
 }
 
 pub(crate) fn render_streaming_assistant_item(
@@ -261,6 +221,72 @@ pub(crate) fn render_streaming_assistant_item(
     colors: &ThemeColors,
 ) {
     render_assistant_item(text, width, expand_all, out, colors);
+}
+
+/// Live "thinking" block shown while the model is reasoning.  Only the most
+/// recent lines are displayed so the viewport keeps flowing; the full text
+/// becomes a collapsed `RenderLine::Reasoning` entry once committed.
+pub(crate) fn render_live_reasoning_item(
+    text: &str,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    const MAX_LINES: usize = 10;
+    out.push(Line::from(""));
+    out.push(Line::from(vec![
+        Span::styled("╭ ", colors.border_muted()),
+        Span::styled(
+            " THINKING ",
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · streaming", colors.text_dim()),
+    ]));
+
+    let all_lines: Vec<&str> = text.lines().collect();
+    let skip = all_lines.len().saturating_sub(MAX_LINES);
+    let inner_w = width.saturating_sub(4);
+    for (i, ln) in all_lines.iter().skip(skip).take(MAX_LINES).enumerate() {
+        out.push(Line::from(vec![
+            Span::styled("│ ", colors.border_muted()),
+            Span::styled(
+                truncate_str(ln, inner_w),
+                Style::default()
+                    .fg(colors.c_text_muted())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+        if i == MAX_LINES - 1 && all_lines.len() > MAX_LINES {
+            out.push(Line::from(vec![Span::styled("│ ⋯", colors.border_muted())]));
+        }
+    }
+}
+
+/// Ephemeral working/thinking status line (assessing…, tool progress, final
+/// status) rendered at the bottom of the live timeline, replacing the removed
+/// bottom status bar.  A signature glyph/colour is derived from the status
+/// text so each state reads at a glance.
+pub(crate) fn render_live_status_item(
+    text: &str,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    let fg = if text.starts_with('✗') || text.starts_with("⚠") {
+        colors.c_error()
+    } else if text.starts_with('✓') {
+        colors.c_success()
+    } else {
+        colors.c_primary()
+    };
+    let budget = width.saturating_sub(4);
+    let body = truncate_str(text, budget);
+    out.push(Line::from(vec![
+        Span::styled("▕ ", colors.border_muted()),
+        Span::styled(body, Style::default().fg(fg).add_modifier(Modifier::BOLD)),
+    ]));
 }
 
 pub(crate) fn render_tool_call_item(
@@ -291,10 +317,11 @@ pub(crate) fn render_tool_call_item(
         Span::styled("(", colors.text_dim()),
     ];
 
-    let pill_text = " [● Running] ";
-    let pill_w = pill_text.chars().count();
+    // No trailing status pill: the row describes what ran; the live working
+    // state is conveyed solely by the animated status line at the bottom of
+    // the timeline, so committed tool rows stay clean and calm.
     let min_left_w = display.len() + icon.len() + 8;
-    let budget = width.saturating_sub(min_left_w + pill_w + 4);
+    let budget = width.saturating_sub(min_left_w + 4);
 
     let args_str = if preview.is_empty() {
         ")".to_string()
@@ -305,27 +332,6 @@ pub(crate) fn render_tool_call_item(
         format!("{truncated}…)")
     };
     left_spans.push(Span::styled(args_str, colors.text_dim()));
-
-    let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
-    let right_span = Span::styled(
-        pill_text,
-        Style::default()
-            .fg(colors.c_warning())
-            .add_modifier(Modifier::BOLD),
-    );
-
-    let right_len = pill_w;
-    if left_len + right_len + 3 < width {
-        let dot_count = width.saturating_sub(left_len + right_len + 2);
-        left_spans.push(Span::styled(
-            format!(" {}", ".".repeat(dot_count)),
-            colors.border_muted(),
-        ));
-        left_spans.push(right_span);
-    } else {
-        left_spans.push(Span::raw(" "));
-        left_spans.push(right_span);
-    }
 
     out.push(Line::from(left_spans));
 }
@@ -344,15 +350,12 @@ pub(crate) fn render_tool_result_item(
     } else {
         colors.c_diff_added()
     };
-    let status_bg = if is_error {
-        colors.c_tool_error_bg()
+    // Streamed-style output, inline and indented under the tool that ran it
+    // (like the rest of the timeline) instead of a boxed `[Done]/[Fail]` tag.
+    let marker = if is_error {
+        format!("{} ", crate::icons::error_icon(nerd))
     } else {
-        colors.c_tool_success_bg()
-    };
-    let status_label = if is_error {
-        format!(" [{} Fail] ", crate::icons::error_icon(nerd))
-    } else {
-        format!(" [{} Done] ", crate::icons::success_icon(nerd))
+        format!("{} ", crate::icons::success_icon(nerd))
     };
     let inner_w = width.saturating_sub(11);
     let lns: Vec<&str> = content.lines().collect();
@@ -360,13 +363,9 @@ pub(crate) fn render_tool_result_item(
         out.push(Line::from(vec![
             Span::styled("│ ", colors.border_muted()),
             Span::styled(
-                status_label,
-                Style::default()
-                    .fg(color)
-                    .bg(status_bg)
-                    .add_modifier(Modifier::BOLD),
+                marker,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" "),
             Span::styled(
                 "(no output)",
                 Style::default().fg(color).add_modifier(Modifier::ITALIC),
@@ -382,15 +381,11 @@ pub(crate) fn render_tool_result_item(
             if i == 0 {
                 spans.push(Span::styled("│ ", colors.border_muted()));
                 spans.push(Span::styled(
-                    status_label.clone(),
-                    Style::default()
-                        .fg(color)
-                        .bg(status_bg)
-                        .add_modifier(Modifier::BOLD),
+                    marker.clone(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ));
-                spans.push(Span::raw(" "));
             } else {
-                spans.push(Span::styled("│      ", colors.border_muted()));
+                spans.push(Span::styled("│   ", colors.border_muted()));
             }
 
             let parsed_text = ln
@@ -407,10 +402,7 @@ pub(crate) fn render_tool_result_item(
                     .into_iter()
                     .map(|s| s.content)
                     .collect::<String>();
-                let mut style = Style::default().fg(color);
-                if i == 0 {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
+                let style = Style::default().fg(color);
                 spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
             } else {
                 let mut remaining = inner_w;
@@ -439,7 +431,7 @@ pub(crate) fn render_tool_result_item(
                 format!("… +{remaining} lines (ctrl+o to expand)")
             };
             out.push(Line::from(vec![
-                Span::styled("       ", colors.border_muted()),
+                Span::styled("│   ", colors.border_muted()),
                 Span::styled(
                     hint,
                     Style::default()

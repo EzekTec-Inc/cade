@@ -78,7 +78,7 @@ use render::{RenderContext, count_wrapped_rows, render_frame};
 
 // -- Constants
 
-/// Fixed non-input rows at the bottom: status + top_sep + bot_sep + footer.
+/// Fixed non-input rows at the bottom: input borders + footer + hotkey bar.
 const FIXED_ROWS: u16 = 4;
 /// Maximum rows the input area may grow to.
 const MAX_INPUT_ROWS: u16 = 6;
@@ -90,6 +90,13 @@ const CONTENT_PAD_BOT: u16 = 1;
 const SIDEBAR_BREAKPOINT: u16 = 110;
 /// Target width for the informational sidebar on wide terminals.
 const SIDEBAR_WIDTH: u16 = 40;
+
+/// Minimum interval between full redraws while live output is streaming or
+/// thinking is being streamed.  Caps the render loop at ~30 FPS so the heavy
+/// per-frame work (markdown parse, syntax highlighting, wrap) never runs at
+/// the full 60 Hz tick; commit/finalize paths run with `streaming_active`
+/// cleared and therefore always draw immediately.
+const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 // -- Skills overlay
 
@@ -876,8 +883,15 @@ pub struct TuiApp {
     /// Typewriter reveal: number of bytes of `streaming_text` currently visible.
     /// Advances progressively each tick for smooth character-by-character output.
     streaming_reveal_len: usize,
+    /// Stripped (prompt-free) mirror of `streaming_text`.  Refreshed once per
+    /// incoming chunk so draw frames never re-run the strip regex over the
+    /// whole accumulated response.
+    streaming_display: String,
     reasoning_text: String,
     reasoning_active: bool,
+    /// Stripped (prompt-free) mirror of `reasoning_text`, served to the live
+    /// thinking block in the viewport while the model is reasoning.
+    reasoning_display: String,
 
     // -- Input state
     pub editor: Box<dyn crate::editor_component::EditorComponent>,
@@ -1182,8 +1196,10 @@ impl TuiApp {
             streaming_text: String::new(),
             streaming_active: false,
             streaming_reveal_len: 0,
+            streaming_display: String::new(),
             reasoning_text: String::new(),
             reasoning_active: false,
+            reasoning_display: String::new(),
             editor: Box::new(Editor::new()),
             image_counter: 0,
             pending_paste_images: Vec::new(),
@@ -1337,6 +1353,16 @@ impl TuiApp {
 
     /// Redraw the full screen (unconditional — always redraws).
     pub fn draw(&mut self) -> Result<()> {
+        // R-01/Perf: while live output is streaming (assistant chunks or
+        // thinking), cap redraws at ~30 FPS.  The 16 ms tick task keeps
+        // `draw_dirty` set so we retry; content still animates smoothly,
+        // but the heavy per-frame layout work runs half as often.
+        if (self.streaming_active || self.reasoning_active)
+            && self.last_draw_at.elapsed() < DRAW_MIN_INTERVAL
+        {
+            self.draw_dirty = true;
+            return Ok(());
+        }
         self.draw_dirty = false;
         self.last_draw_at = Instant::now();
         // Auto-dismiss expired toasts
@@ -1393,13 +1419,18 @@ impl TuiApp {
     }
 
     /// Advance the typewriter reveal cursor toward the full streaming text length.
-    /// Called every draw cycle (~50ms). Reveals ~8 chars per tick (~160 chars/sec)
-    /// which feels smooth without lagging behind fast model output.
+    /// Called every draw cycle (throttled to ~30 FPS while streaming).
+    ///
+    /// Advances are *quantized* to [`REVEAL_QUANTUM`]–byte steps: the streaming
+    /// entry's cache key changes only when the revealed prefix actually changes,
+    /// so the expensive markdown parse + syntax highlighting runs a handful of
+    /// times per second instead of on every single frame.
     fn tick_streaming_reveal(&mut self) {
         if !self.streaming_active {
             return;
         }
-        let target = self.streaming_text.len();
+        const REVEAL_QUANTUM: usize = 64;
+        let target = self.streaming_display.len();
         if self.streaming_reveal_len < target {
             // Reveal rate: adaptive — faster when we're far behind, slower when close.
             let behind = target - self.streaming_reveal_len;
@@ -1416,11 +1447,43 @@ impl TuiApp {
                 // Close to caught up: smooth typewriter at ~8 chars/tick
                 8
             };
-            self.streaming_reveal_len = (self.streaming_reveal_len + step).min(target);
+            let raw = (self.streaming_reveal_len + step).min(target);
+            let next = if raw >= target {
+                target
+            } else {
+                let q = raw - (raw % REVEAL_QUANTUM);
+                // Never stall on a sub-quantum step: force a final catch-up.
+                if q <= self.streaming_reveal_len {
+                    target
+                } else {
+                    q
+                }
+            };
+            self.streaming_reveal_len = next;
             // If still not fully revealed, keep dirty so next tick continues.
             if self.streaming_reveal_len < target {
                 self.draw_dirty = true;
             }
+        }
+    }
+
+    /// Snapshot of the streaming text currently visible in the viewport.
+    ///
+    /// Uses the prompt-stripped [`TuiApp::streaming_display`] buffer (refreshed
+    /// once per chunk) and applies the typewriter reveal bound.  A full copy is
+    /// only made while the reveal lags the buffer; once caught up the cached
+    /// display string is reused directly.
+    fn streaming_view_snapshot(&self) -> Option<String> {
+        if !self.streaming_active {
+            return None;
+        }
+        if self.streaming_reveal_len >= self.streaming_display.len() {
+            Some(self.streaming_display.clone())
+        } else {
+            Some(streaming_revealed_prefix(
+                &self.streaming_display,
+                self.streaming_reveal_len,
+            ))
         }
     }
 
@@ -1436,10 +1499,14 @@ impl TuiApp {
     pub fn draw_impl(&mut self) -> Result<()> {
         // Borrow rendering data by reference (avoids cloning entire data per frame).
         let lines: &[RenderLine] = &self.lines;
-        let streaming = if self.streaming_active {
-            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
-            // Typewriter effect: only reveal up to streaming_reveal_len bytes.
-            Some(streaming_revealed_prefix(&full, self.streaming_reveal_len))
+        // Live assistant text: reveal-limited typewriter view of the cached
+        // prompt-stripped buffer (never re-runs the strip regex per frame).
+        let streaming = self.streaming_view_snapshot();
+        // Live thinking block: full prompt-stripped reasoning streamed inline
+        // while the model reasons; collapsed into a RenderLine::Reasoning row
+        // on commit.
+        let reasoning = if self.reasoning_active {
+            Some(self.reasoning_display.clone())
         } else {
             None
         };
@@ -1477,7 +1544,6 @@ impl TuiApp {
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
         let expanded_items = &self.expanded_items;
-        let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
         let cwd: &str = &self.cwd;
         let context_pct = self.context_pct;
@@ -1555,6 +1621,7 @@ impl TuiApp {
             let render_ctx = RenderContext {
                 lines,
                 streaming: streaming.as_deref(),
+                reasoning: reasoning.as_deref(),
                 scroll,
                 expand_all,
                 input_mode,
@@ -1567,7 +1634,6 @@ impl TuiApp {
                 top_overlay: overlay_stack
                     .last()
                     .map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
-                pending_lines,
                 queued_count,
                 cwd,
                 context_pct,
@@ -1915,16 +1981,16 @@ impl TuiApp {
     ) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
         let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
 
-        let streaming = if self.streaming_active {
-            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
-            // Snap to a valid char boundary — `streaming_reveal_len` advances in
-            // byte steps that may land mid-character for multi-byte output.
-            Some(streaming_revealed_prefix(&full, self.streaming_reveal_len))
+        let streaming = self.streaming_view_snapshot();
+        let reasoning = if self.reasoning_active {
+            Some(self.reasoning_display.clone())
         } else {
             None
         };
 
         self.layout_engine.set_active_stream(streaming.as_deref());
+        self.layout_engine
+            .set_active_reasoning(reasoning.as_deref());
         self.layout_engine
             .layout_items(
                 &self.lines,

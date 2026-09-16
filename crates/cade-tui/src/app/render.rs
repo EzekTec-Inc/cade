@@ -1,5 +1,5 @@
 use crate::app::layout::helpers::{
-    format_token_count, mode_footer_left, mode_sep_color, truncate_str,
+    abbreviate_cwd, format_token_count, mode_footer_left, mode_sep_color, truncate_str,
 };
 use crate::colors::ThemeColorsExt;
 
@@ -13,6 +13,37 @@ fn spinner_color(ms: u128, colors: &ThemeColors) -> RC {
         colors.c_spinner_3(),
     ];
     palette[(ms / 400) as usize % palette.len()]
+}
+
+// Spinner frames for the inline working/thinking status line.  Reuses the
+// braille/blocksy cycles the removed bottom status bar used so the live
+// state indicator animates visibly instead of freezing on one glyph.
+const STATUS_BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const STATUS_DOTS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// Animate the ephemeral working/thinking status line rendered inline at the
+/// bottom of the timeline.  A rotating spinner glyph (driven by the wall
+/// clock) is prepended on every frame so the status visibly moves while the
+/// agent is busy; terminal states (`✓`, `✗`, `⚠`) keep their own static
+/// glyphs.  The `● ` bullet used by tool-running statuses is replaced by the
+/// spinner so the whole line animates rather than freezing.
+fn animate_live_status(text: &str, elapsed: Option<std::time::Duration>) -> String {
+    if text.starts_with('✓') || text.starts_with('✗') || text.starts_with('⚠') {
+        return text.to_string();
+    }
+    let frame = match elapsed {
+        Some(e) => {
+            let ms = e.as_millis();
+            if (ms / 3000) % 2 == 0 {
+                STATUS_BRAILLE[(ms / 80) as usize % STATUS_BRAILLE.len()]
+            } else {
+                STATUS_DOTS[(ms / 100) as usize % STATUS_DOTS.len()]
+            }
+        }
+        None => "●",
+    };
+    let body = text.strip_prefix("● ").unwrap_or(text);
+    format!("{frame} {body}")
 }
 
 // Rendering helpers for the TuiApp full-screen layout.
@@ -105,6 +136,7 @@ pub(crate) fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
 pub(crate) struct RenderContext<'a> {
     pub(crate) lines: &'a [RenderLine],
     pub(crate) streaming: Option<&'a str>,
+    pub(crate) reasoning: Option<&'a str>,
     pub(crate) scroll: usize,
     pub(crate) expand_all: bool,
     pub(crate) input_mode: InputMode,
@@ -115,7 +147,6 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) thinking_text: Option<&'a str>,
     pub(crate) thinking_elapsed: Option<std::time::Duration>,
     pub(crate) top_overlay: Option<&'a dyn crate::overlay_component::OverlayComponent>,
-    pub(crate) pending_lines: usize,
     pub(crate) queued_count: usize,
     pub(crate) cwd: &'a str,
     pub(crate) context_pct: Option<u8>,
@@ -151,6 +182,7 @@ pub(crate) fn render_frame(
     let RenderContext {
         lines,
         streaming,
+        reasoning,
         scroll,
         expand_all,
         mode,
@@ -234,30 +266,10 @@ pub(crate) fn render_frame(
     let chunks = Layout::vertical([
         Constraint::Fill(1),                                   // [0] content  (fluid)
         Constraint::Length(plan_h),                            // [1] plan panel (0 when hidden)
-        Constraint::Length(1),                                 // [2] bottom status bar
-        Constraint::Length(input_rows + 2),                    // [3] floating rounded input box
-        Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [4] footer
+        Constraint::Length(input_rows + 2),                    // [2] floating rounded input box
+        Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [3] footer
     ])
     .split(main_area);
-
-    // -- Bottom status bar (breadcrumb info + live processing animation)
-    let status_ctx = crate::app::layout::breadcrumb::StatusBarContext {
-        cwd,
-        model,
-        turn_count,
-        context_pct,
-        token_history,
-        session_cost_usd: ctx.session_cost_usd,
-        thinking_text: ctx.thinking_text,
-        thinking_elapsed: ctx.thinking_elapsed,
-        last_status: ctx.last_status.as_deref(),
-        queued_count: ctx.queued_count,
-        is_streaming: ctx.streaming.is_some(),
-        scroll: ctx.scroll,
-        pending_lines: ctx.pending_lines,
-        nerd: ctx.nerd,
-    };
-    crate::app::layout::breadcrumb::render_status_bar(frame, chunks[2], &status_ctx, colors);
 
     // -- Pinned header & viewport layout splits
     let (header_area_opt, messages_area) =
@@ -266,7 +278,18 @@ pub(crate) fn render_frame(
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
+    // Live thinking/working status is rendered as the bottom-most timeline
+    // entry (replacing the removed bottom status bar), always pinned below
+    // whatever content is currently streaming.  The spinner glyph is animated
+    // per frame so the working state visibly moves while the agent is busy.
+    let live_status: Option<String> = if let Some(t) = ctx.thinking_text {
+        Some(animate_live_status(t, ctx.thinking_elapsed))
+    } else {
+        ctx.last_status.as_deref().map(str::to_string)
+    };
     layout_engine.set_active_stream(streaming);
+    layout_engine.set_active_reasoning(reasoning);
+    layout_engine.set_active_status(live_status.as_deref());
     let prepared = layout_engine.layout_items(
         lines,
         timeline_w,
@@ -289,10 +312,10 @@ pub(crate) fn render_frame(
 
     // -- Input area or Question Panel (floating rounded container with embedded status pills)
     let input_cursor_pos =
-        render_input_or_question(frame, chunks[3], textarea, last_input_width, &ctx, colors);
+        render_input_or_question(frame, chunks[2], textarea, last_input_width, &ctx, colors);
 
     // -- Footer bars & Hotkeys
-    render_footer_bars(frame, chunks[4], &ctx, footer_extra_h, colors);
+    render_footer_bars(frame, chunks[3], &ctx, footer_extra_h, colors);
 
     // -- Sidebar
     if let Some(sidebar) = sidebar_area {
@@ -445,6 +468,7 @@ fn render_input_or_question(
         queued_count,
         top_overlay,
         nerd,
+        cwd,
         ..
     } = ctx;
 
@@ -475,9 +499,18 @@ fn render_input_or_question(
             Span::raw(" "),
         ]);
 
-        // 2. Build bottom status pills: Model, Context %, Cost, Queued
+        // 2. Build bottom status pills: File path, Model, Context %, Cost, Queued
         let mut bottom_pills: Vec<Span<'static>> = Vec::new();
         bottom_pills.push(Span::raw(" "));
+
+        // File path pill (abbreviated to the last 2 path components).
+        let path_display = truncate_str(&abbreviate_cwd(std::path::Path::new(cwd)), 26);
+        bottom_pills.push(Span::styled(
+            format!(" [{path_display}] "),
+            Style::default()
+                .fg(colors.c_text_muted())
+                .add_modifier(Modifier::DIM),
+        ));
 
         // Model pill
         let model_icon = if *nerd { "⚡ " } else { "" };
@@ -889,5 +922,50 @@ fn render_subagent_trackers(
         frame.render_widget(p, rect);
 
         y_offset += height + 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animate_live_status_rotates_spinner_over_time() {
+        let t0 = std::time::Duration::from_millis(0);
+        let a = animate_live_status("● assessing…", Some(t0));
+        let b = animate_live_status(
+            "● assessing…",
+            Some(t0 + std::time::Duration::from_millis(160)),
+        );
+        assert!(
+            a.starts_with("⠋ "),
+            "first frame should use braille spinner, got {a:?}"
+        );
+        assert_ne!(a, b, "spinner glyph must move with elapsed time");
+        assert!(
+            a.ends_with("assessing…"),
+            "status body must be preserved, got {a:?}"
+        );
+        assert!(
+            !a.contains('●'),
+            "bullet must be replaced by the spinner, got {a:?}"
+        );
+    }
+
+    #[test]
+    fn animate_live_status_keeps_terminal_glyphs_static() {
+        assert_eq!(
+            animate_live_status("✓ done", Some(std::time::Duration::from_secs(5))),
+            "✓ done"
+        );
+        assert_eq!(
+            animate_live_status("✗ Error: boom", Some(std::time::Duration::from_secs(5))),
+            "✗ Error: boom"
+        );
+    }
+
+    #[test]
+    fn animate_live_status_defaults_bullet_when_no_elapsed() {
+        assert_eq!(animate_live_status("● working…", None), "● working…");
     }
 }
