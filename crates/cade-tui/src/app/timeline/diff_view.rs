@@ -247,7 +247,7 @@ impl DiffViewEngine {
         })
     }
 
-    /// Render an interactive, styled Code Diff Card matching the Opencode design.
+    /// Render an interactive, styled Code Diff Card.
     pub fn render_diff_card(
         card: &DiffCardData,
         width: u16,

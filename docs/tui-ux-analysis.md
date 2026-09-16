@@ -1,8 +1,8 @@
-# OpenCode TUI vs CADE TUI — Analysis & Recommendations
+# Terminal UI Architecture vs CADE TUI — Analysis & Recommendations
 
-> Status: research/advisory. Companion implementation spec: `docs/opencode-tui-replication.md`.
+> Status: research/advisory. Companion implementation spec: `docs/tui-ux-spec.md`.
 
-## 1. How the OpenCode TUI works (precise summary)
+## 1. How the Reference Terminal UI works (precise summary)
 
 ### 1.1 Technology & threading
 
@@ -53,7 +53,7 @@
 See `crates/cade-tui` and `crates/cade-cli/src/cli/repl/turn_loop/stream.rs` for the authoritative shape.
 
 - **Stack**: Rust + ratatui. Single full-screen repaint driven by `content_version`-invalidated, pre-wrapped timeline cache (`TimelineLayoutEngine`). All output goes through `TuiApp` (alternate screen, raw mode); no partial-viewport hacks.
-- **Threading analogue**: SSE I/O is decoupled from rendering by an unbounded `mpsc` channel + a dedicated UI consumer task (`stream.rs`), so the SSE loop never blocks on draw/lock. (Conceptually similar to opencode’s thread split.)
+- **Threading analogue**: SSE I/O is decoupled from rendering by an unbounded `mpsc` channel + a dedicated UI consumer task (`stream.rs`), so the SSE loop never blocks on draw/lock. (Decouples I/O from rendering cleanly.)
 - **State**: `TuiApp` owns lines (`RenderLine`), streaming, thinking, scroll/follow, budget/cost, toasts, overlays, clipboard. Mutations funnel through `push` (`state.rs`).
 - **Layout**: 8-slot vertical layout; left content + optional right **sidebar** (agent/model/cwd, cost gauge, status, plan, modified files) at width ≥ breakpoint, else breadcrumb bar. Header pinned top, status row, input area with mode badge, separator lines, footer + hotkey bar. Plan panel overlays content.
 - **Interaction**: `read_input`/`handle_key_input`; `OverlayComponent` stack (permission, questions, palette, copy overlay, pickers, help); autocomplete towers for `/`, `@`, agents, MCPs; input modes (`!`, `!!`, `/`); mouse drag-select → copy, click-to-copy highlight; V-04 scroll clamping; `Shift+J` follow; toasts with decay.
@@ -63,7 +63,7 @@ See `crates/cade-tui` and `crates/cade-cli/src/cli/repl/turn_loop/stream.rs` for
 
 ## 3. Quantitative comparison
 
-| Dimension | OpenCode | CADE |
+| Dimension | Reference Reactive TUI | CADE |
 |---|---|---|
 | Renderer | SolidJS + @opentui (reactive component tree) | ratatui retained-timeline, full-redraw cache |
 | Backend split | UI thread ⇄ business thread (RPC or HTTP) | SSE channel + UI consumer task |
@@ -87,7 +87,7 @@ See `crates/cade-tui` and `crates/cade-cli/src/cli/repl/turn_loop/stream.rs` for
 
 ## 4. Recommendations to make CADE best-in-class
 
-Ranked by (impact × effort), all detailed in `docs/opencode-tui-replication.md`.
+Ranked by (impact × effort), all detailed in `docs/tui-ux-spec.md`.
 
 1. **Selection & clipboard parity** (highest user-visible value): retained selection highlight, copy to clipboard **+ Linux PRIMARY**, copy-toast w/ real failure, and *“add selection to prompt as `>` quoted context”* command.
 2. **Leader-key system (`ctrl+x`) + configurable keybinds** (tui.toml/tui.json merge incl. `"none"`, arrays) + which-key-style hint popup. This unblocks deep keyboard workflows without colliding with terminal shortcuts.

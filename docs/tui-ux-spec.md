@@ -1,7 +1,7 @@
-# CADE TUI — Replicate OpenCode TUI UX (Implementation Spec)
+# CADE TUI — Advanced Terminal UX Implementation Spec
 
 > Audience: an implementing LLM/engineer working in this repo.
-> Context/analysis: `docs/opencode-tui-analysis.md`.
+> Context/analysis: `docs/tui-ux-analysis.md`.
 > Do not regress existing behavior. Each section lists: scope, files to touch, exact behavior, acceptance criteria.
 
 Working tree: `/home/engrubanese/Downloads/02 Rust-project/cade`
@@ -32,11 +32,11 @@ The cap is read from `.cade/settings.json` key `max_session_cost_usd`, merged pr
 
 ---
 
-## B. Selection & clipboard parity (opencode behavior) — P0
+## B. Selection & clipboard parity — P0
 
 ### B.1 Retained drag-selection
 **Scope:** `app/input.rs` (`handle_message_area_mouse_event`, `copy_selected_text`), `app/mod.rs` (`mouse_selection`, `copy_highlight`), `app/rendering` of selection highlight (`timeline/render_item.rs`).
-**Behavior (mirrors opencode Selection.copy `{retain:true}`):**
+**Behavior (selection copy with retention):**
 - On mouse release, copy the selected text (B.2) and **keep** the highlight painted.
 - Dismiss the highlight when: the next key is **struck and unconsumed** by any binding/overlay, **or** a mouse-down occurs on non-selectable content, **or** the user explicitly runs the “drop selection” action.
 - While a dialog/overlay is open, typing to filter it must NOT clear the selection.
@@ -54,7 +54,7 @@ The cap is read from `.cade/settings.json` key `max_session_cost_usd`, merged pr
 
 ### B.3 Add selection to prompt as quoted context
 **Scope:** `app/editor.rs`, `app/input.rs`, `app/reducer.rs` (`TuiAction`), `app/overlay_component.rs`.
-**Behavior (mirrors `prompt.add_selection`, warm-key `<leader>p`, `ctrl+shift+c`):**
+**Behavior (`prompt.add_selection`, warm-key `<leader>p`, `ctrl+shift+c`):**
 - New action binds `selection` → for each selected line prefix `> ` (skip empty lines; do not double-prefix lines already starting `> `), then insert into the editor **as a marker** reusing the paste-collapse machinery (`[paste #N: …]`) so it stashes/restores/expands on submit exactly like a pasted block.
 - Runs from a command in the palette and from the leader chord `<leader>p`.
 - Read the **live** retained selection at invocation time; clear retention after a successful insert (marker path), and also after failure (with a toast).
@@ -74,7 +74,7 @@ The cap is read from `.cade/settings.json` key `max_session_cost_usd`, merged pr
 - Leader state machine: on leader press, set `pending_leader=true` + deadline; if second chord arrives in time, execute; on timeout, consume leader with no-op (or show hint per D). While `pending_leader`, raw typing is buffered (do not insert into editor).
 - Must coexist with `KeyEventKind::{Press,Repeat,Release}` filtering already in place.
 
-### C.3 Default bindings (mirror opencode; leader = ctrl+x)
+### C.3 Default bindings (leader = ctrl+x)
 - Session: `<leader>n` new, `<leader>l` list/resume, `<leader>c` compact, `<leader>g` timeline, `ctrl+r` rename session.
 - Palette/help: `ctrl+p` command list, `<leader>h` help, `<leader>b` sidebar toggle.
 - Copy/edit: `<leader>y` copy last/current message, `<leader>u` undo, `<leader>r` redo.
@@ -99,7 +99,7 @@ The cap is read from `.cade/settings.json` key `max_session_cost_usd`, merged pr
 **Scope:** `app/mod.rs` (scroll/follow fields, `draw_impl`), `app/input.rs`, `TuiSettings`.
 - Add `scroll_speed` (default 3) and `scroll_acceleration { enabled }` (macOS-style: speed ramps with rapid wheel/scroll input).
 - Bind half-page (`ctrl+alt+u`/`d`), page (`pageup`/`pagedown`), first/last (`ctrl+g`/`ctrl+alt+g`, `home`/`end`).
-- Confirm opencode rule: auto-follow pauses when user scrolls away from bottom and resumes only when back at bottom (existing `follow`/`pending_lines` logic — keep, extend keys).
+- Confirm auto-follow rule: auto-follow pauses when user scrolls away from bottom and resumes only when back at bottom (existing `follow`/`pending_lines` logic — keep, extend keys).
 **Acceptance:** scrolled-up review stops auto-follow; reaching bottom resumes; page/home/end operations clamp within timeline (respect V-04 `max_skip`).
 
 ## G. Session timeline & list — P1
@@ -140,7 +140,7 @@ The following MUST hold end-to-end (Linux + macOS nominal, Windows best-effort):
 
 ## L. Non-goals / explicitly out
 - Rewriting the ratatui renderer or adopting a reactive JSX terminal framework.
-- Implementing opencode’s plugin runtime or Home-page routing as a separate process.
+- Implementing an external plugin runtime or Home-page routing as a separate process.
 - Changing the server/SSE protocol; all parity is client-side.
 
 ---

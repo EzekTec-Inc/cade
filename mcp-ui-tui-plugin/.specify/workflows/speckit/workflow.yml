@@ -23,7 +23,7 @@ requires:
       - "claude"
       - "copilot"
       - "gemini"
-      - "opencode"
+      - "cade"
 
 inputs:
   spec:

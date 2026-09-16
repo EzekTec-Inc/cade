@@ -954,6 +954,76 @@ fn gpt56_sol_with_tools_and_reasoning_uses_responses_api_shape() -> Result<()> {
 }
 
 #[test]
+fn gpt56_terra_with_tools_and_no_explicit_reasoning_uses_responses_api_shape() -> Result<()> {
+    let provider = OpenAiProvider::new("test-key".into(), None);
+    let req = CompletionRequest {
+        model: "openai/gpt-5.6-terra".into(),
+        messages: vec![crate::LlmMessage {
+            role: "user".into(),
+            content: "Use the tool".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![json!({
+            "name": "sample_tool",
+            "description": "Sample tool",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }
+        })],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    assert!(requires_responses_api_for_tools_with_reasoning(&req));
+    assert_eq!(
+        provider.resolve_endpoint_for_request(&req),
+        "https://api.openai.com/v1/responses"
+    );
+
+    let body = provider.build_body(&req, true);
+    assert_eq!(body["model"], "gpt-5.6-terra");
+    assert!(
+        body.get("messages").is_none(),
+        "Responses API should use input, not messages"
+    );
+    assert!(
+        body.get("max_completion_tokens").is_none(),
+        "Responses API should use max_output_tokens"
+    );
+    assert_eq!(
+        body["input"]
+            .as_array()
+            .ok_or("input should be an array")?
+            .len(),
+        1
+    );
+    assert_eq!(body["max_output_tokens"], 4096);
+    assert!(
+        body.get("reasoning").is_none(),
+        "Responses API should omit reasoning when reasoning_effort is None"
+    );
+    assert!(
+        body.get("reasoning_effort").is_none(),
+        "Responses API should not send chat-completions reasoning_effort"
+    );
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["name"], "sample_tool");
+    assert!(
+        body["tools"][0].get("function").is_none(),
+        "Responses API uses flat function tools"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn format_upstream_error_provides_diagnostic_guidance_for_preview_models() {
     let err_404 = OpenAiProvider::format_upstream_error(
         "OpenAI",

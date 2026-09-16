@@ -1,4 +1,4 @@
-//! Keymap and Key Chord System for CADE TUI (OpenCode TUI Parity).
+//! Keymap and Key Chord System for CADE TUI.
 //!
 //! Provides normalized chord parsing, configurable keybindings via `tui.toml`,
 //! and leader key (`<leader>`) chord routing.
@@ -314,7 +314,7 @@ impl KeyChord {
 
 // region:    --- Keymap
 
-/// Bidirectional map between chords and actions, populated with OpenCode defaults
+/// Bidirectional map between chords and actions, populated with standard defaults
 /// and customizable via `tui.toml`.
 #[derive(Debug, Clone)]
 pub struct Keymap {
@@ -350,7 +350,7 @@ impl Keymap {
         km
     }
 
-    /// Load default OpenCode keybindings.
+    /// Load default keybindings.
     fn load_defaults(&mut self) {
         // Session
         self.bind("<leader>n", TuiActionId::SessionNew);

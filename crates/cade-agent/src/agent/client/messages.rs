@@ -497,7 +497,7 @@ impl HttpTransport {
                     events.close();
                     tracing::warn!("SSE run transport error: {error:?}");
 
-                    // Transparent connection recovery (opencode-style): the
+                    // Transparent connection recovery: the
                     // server persists every event durably and keeps running
                     // independently of the client connection, so a dropped SSE
                     // body loses nothing.  Resume from the last observed

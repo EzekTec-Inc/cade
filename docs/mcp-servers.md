@@ -173,6 +173,38 @@ Instead, when running alongside the centralized background daemon (`cade-server`
 2. **Tool Sharing**: The background daemon registers and exposes all MCP-derived tools through its central API gateway.
 3. **Session Auto-Discovery**: When a CLI or REPL session connects to the server (`bg_server_connected`), it bypasses local `McpManager::start` execution to prevent port/process conflicts. It then automatically queries the server's central tool registry, conventions-maps, and attaches the active MCP tools dynamically to the active session.
 
+## Headroom (Context Optimization & Compression)
+
+CADE integrates with Headroom for context compression, token conservation, and prompt/response optimization.
+
+### 1. On-Demand MCP Tools
+Configure Headroom as an MCP server in `~/.cade/settings.json` or `.cade/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "headroom": {
+      "command": "headroom",
+      "args": ["mcp", "serve"],
+      "core_server": true,
+      "disabled": false
+    }
+  }
+}
+```
+
+This exposes native tools:
+- `headroom__headroom_compress`: Offloads verbose tool outputs, logs, or file content out-of-context and returns a hash reference.
+- `headroom__headroom_retrieve`: Restores original uncompressed text on demand using the hash key.
+- `headroom__headroom_stats`: Returns real-time compression metrics, tokens saved, and proxy status.
+
+### 2. Transparent Full Coverage Proxy (`cade-headroom`)
+For transparent network-level compression on all LLM requests (OpenAI/Anthropic):
+- Use the launcher script at `scripts/cade-headroom` (or install to `~/.local/bin/cade-headroom`).
+- It checks proxy health (`/readyz`), automatically launches `headroom proxy --port 8787` if not already running, updates the SQLite provider `base_url` to `http://127.0.0.1:8787/v1`, sets proxy environment variables, and launches CADE.
+- When CADE exits, the launcher automatically resets the database provider `base_url` and shuts down the proxy (unless `HEADROOM_PERSIST=1` is set).
+- Usage: `cade-headroom [args...]`
+
 This centralized model eliminates process starvation, port collisions, and cold-start latency across concurrent terminals and editor buffers.
 
 4. **Live Hot-Reload Settings Watcher**: To keep the centralized processes strictly synchronized with user actions, `cade-server` runs its own background file-system watcher. When a user toggles a server (via `Space` inside the `/mcp` overlay modal) or manually edits `.cade/settings.json`, the background daemon instantly detects the write, hot-reloads the settings, and starts or stops the running MCP subprocesses centrally. This ensures the central daemon always reflects your active settings without requiring any server or session restarts.

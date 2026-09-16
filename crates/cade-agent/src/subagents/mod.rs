@@ -776,8 +776,8 @@ fn description_terms(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Pick the best subagent for a task by description overlap, mirroring
-/// OpenCode's "the task tool routes by description" behaviour.
+/// Pick the best subagent for a task by description overlap, using
+/// description-based task routing behaviour.
 ///
 /// Scoring: for every non-hidden definition, count how many of its
 /// description terms also appear in the task prompt, normalised by the

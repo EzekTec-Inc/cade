@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# cade-headroom: Wrapper script to launch CADE with transparent Headroom proxy optimization
+set -euo pipefail
+
+PROXY_PORT="${HEADROOM_PORT:-8787}"
+PROXY_URL="http://127.0.0.1:${PROXY_PORT}"
+DB_FILE="$HOME/.cade/cade.db"
+
+# 1. Locate cade binary
+if [ -n "${CADE_BIN:-}" ] && [ -x "$CADE_BIN" ]; then
+    CADE_EXEC="$CADE_BIN"
+elif command -v cade >/dev/null 2>&1; then
+    CADE_EXEC="$(command -v cade)"
+elif [ -x "/home/engrubanese/Downloads/02 Rust-project/cade/target/release/cade" ]; then
+    CADE_EXEC="/home/engrubanese/Downloads/02 Rust-project/cade/target/release/cade"
+elif [ -x "$HOME/.cargo/bin/cade" ]; then
+    CADE_EXEC="$HOME/.cargo/bin/cade"
+else
+    echo "Error: Could not locate cade binary. Build with 'cargo build --release' or set CADE_BIN." >&2
+    exit 1
+fi
+
+# 2. Locate headroom binary
+if [ -n "${HEADROOM_BIN:-}" ] && [ -x "$HEADROOM_BIN" ]; then
+    HEADROOM_EXEC="$HEADROOM_BIN"
+elif command -v headroom >/dev/null 2>&1; then
+    HEADROOM_EXEC="$(command -v headroom)"
+elif [ -x "$HOME/.local/bin/headroom" ]; then
+    HEADROOM_EXEC="$HOME/.local/bin/headroom"
+else
+    echo "Error: Could not locate headroom binary." >&2
+    exit 1
+fi
+
+is_proxy_ready() {
+    curl -sf -m 1 "${PROXY_URL}/readyz" >/dev/null 2>&1 || curl -sf -m 1 "${PROXY_URL}/livez" >/dev/null 2>&1
+}
+
+STARTED_PROXY="false"
+PROXY_PID=""
+
+# 3. Start proxy if not already running
+if ! is_proxy_ready; then
+    echo "Starting Headroom optimization proxy on port ${PROXY_PORT}..."
+    "$HEADROOM_EXEC" proxy --port "${PROXY_PORT}" > /tmp/headroom-proxy.log 2>&1 &
+    PROXY_PID=$!
+    STARTED_PROXY="true"
+
+    # Wait up to 6 seconds for proxy to become ready
+    MAX_WAIT=60
+    WAIT_COUNT=0
+    until is_proxy_ready; do
+        if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+            echo "Warning: Headroom proxy exited unexpectedly. See /tmp/headroom-proxy.log" >&2
+            STARTED_PROXY="false"
+            break
+        fi
+        sleep 0.1
+        WAIT_COUNT=$((WAIT_COUNT + 1))
+        if [ "$WAIT_COUNT" -ge "$MAX_WAIT" ]; then
+            echo "Warning: Headroom proxy readiness check timed out (6s). Proceeding with direct routing." >&2
+            break
+        fi
+    done
+fi
+
+ORIG_OPENAI_BASE=""
+
+# 4. Route traffic through Headroom if proxy is ready
+if is_proxy_ready; then
+    echo "Headroom proxy active at ${PROXY_URL}"
+    export OPENAI_BASE_URL="${PROXY_URL}/v1"
+    export ANTHROPIC_BASE_URL="${PROXY_URL}"
+
+    if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
+        ORIG_OPENAI_BASE="$(sqlite3 "$DB_FILE" "SELECT base_url FROM providers WHERE name = 'openai' LIMIT 1;" 2>/dev/null || true)"
+        sqlite3 "$DB_FILE" "UPDATE providers SET base_url = '${PROXY_URL}/v1' WHERE name = 'openai';" 2>/dev/null || true
+    fi
+fi
+
+# 5. Cleanup on exit
+cleanup() {
+    local exit_status=$?
+
+    # Restore provider base_url in database if modified
+    if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
+        if [ -n "$ORIG_OPENAI_BASE" ]; then
+            sqlite3 "$DB_FILE" "UPDATE providers SET base_url = '$ORIG_OPENAI_BASE' WHERE name = 'openai';" 2>/dev/null || true
+        else
+            sqlite3 "$DB_FILE" "UPDATE providers SET base_url = NULL WHERE name = 'openai' AND base_url = '${PROXY_URL}/v1';" 2>/dev/null || true
+        fi
+    fi
+
+    # Terminate proxy if we started it and persistence is not requested
+    if [ "$STARTED_PROXY" = "true" ] && [ -n "$PROXY_PID" ] && [ -z "${HEADROOM_PERSIST:-}" ]; then
+        kill "$PROXY_PID" 2>/dev/null || true
+        wait "$PROXY_PID" 2>/dev/null || true
+    fi
+
+    exit "$exit_status"
+}
+
+trap cleanup EXIT INT TERM
+
+# 6. Execute CADE with all user arguments
+"$CADE_EXEC" "$@"

@@ -42,7 +42,7 @@ fn is_o_series(model: &str) -> bool {
 }
 
 fn requires_responses_api_for_tools_with_reasoning(req: &CompletionRequest) -> bool {
-    is_frontier_preview_model(&req.model) && !req.tools.is_empty() && req.reasoning_effort.is_some()
+    is_frontier_preview_model(&req.model) && !req.tools.is_empty()
 }
 
 fn map_reasoning_effort(effort: &str) -> Option<&'static str> {
@@ -51,6 +51,7 @@ fn map_reasoning_effort(effort: &str) -> Option<&'static str> {
         "low" => Some("low"),
         "medium" => Some("medium"),
         "high" => Some("high"),
+        "none" => Some("none"),
         _ => None,
     }
 }
