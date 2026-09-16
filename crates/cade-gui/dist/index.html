@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CADE Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: #0f1115;
+    color: #e5e7eb;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+</style>
+<!-- Add Tailwind CSS for pixel-perfect design matching CADE -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          cadeDark: '#0f1115',
+          cadeCard: '#16171d',
+          cadeBorder: '#272833',
+          cadeAccent: '#ff7c5c',
+        }
+      }
+    }
+  }
+</script>
+
+<script type="module">
+import init, * as bindings from '/dashboard/cade-gui-b5833e65d6aeabf8.js';
+const wasm = await init({ module_or_path: '/dashboard/cade-gui-b5833e65d6aeabf8_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+<link rel="modulepreload" href="/dashboard/cade-gui-b5833e65d6aeabf8.js" crossorigin="anonymous" integrity="sha384-32JejbhqwRoE2P2IfNQ/Xae6lc13bV0q2CgsT4LuTyRbw1Rn+hk03get4EnYQbow"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-zrqmRcH2bSaSQeAh5viWi4OCyQQsdCkjSkXz/rkaZrOhi5zvf/JJJE0eYb8ulX7q"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-80f311471938c35d/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="preload" href="/dashboard/cade-gui-b5833e65d6aeabf8_bg.wasm" crossorigin="anonymous" integrity="sha384-OgcOfnWCww1XWbF1Ya77JCedgWiCFZV1k4AAOme4vZyi2Mh8xTNPszzicXHBw2z2" as="fetch" type="application/wasm"></head>
+<body class="bg-[#0f1115] text-[#e5e7eb]">
+<div id="cade_gui_canvas" class="h-screen w-screen flex"></div>
+</body>
+</html>

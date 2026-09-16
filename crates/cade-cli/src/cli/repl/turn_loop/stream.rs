@@ -6,6 +6,46 @@ use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
 
+/// Build a compact one-line argument preview for a tool call header row.
+fn tool_args_preview(args: &serde_json::Value) -> String {
+    fn short(s: &str, n: usize) -> String {
+        let s = s.trim();
+        if s.chars().count() <= n {
+            s.to_string()
+        } else {
+            format!("{}…", s.chars().take(n).collect::<String>())
+        }
+    }
+    if let Some(cmd) = args["command"].as_str() {
+        short(cmd, 80)
+    } else if let Some(fp) = args["file_path"].as_str().or(args["path"].as_str()) {
+        let extra = if let Some(old) = args["old_string"].as_str() {
+            format!("  \"{}\"", short(old, 40))
+        } else if let Some(content) = args["content"].as_str() {
+            format!("  ({} chars)", content.len())
+        } else {
+            String::new()
+        };
+        format!("{fp}{extra}")
+    } else if let Some(pat) = args["pattern"].as_str() {
+        let in_path = args["path"].as_str().unwrap_or("");
+        if in_path.is_empty() {
+            format!("\"{}\"", short(pat, 60))
+        } else {
+            format!("\"{}\" in {in_path}", short(pat, 40))
+        }
+    } else if let Some(label) = args["label"].as_str() {
+        let op = args["operation"].as_str().unwrap_or("set");
+        format!("[{label}] ({op})")
+    } else if let Some(patch) = args["patch"].as_str() {
+        short(patch, 60)
+    } else {
+        args.as_object()
+            .and_then(|m| m.values().find_map(|v| v.as_str()).map(|s| short(s, 60)))
+            .unwrap_or_default()
+    }
+}
+
 impl Repl {
     /// Stream one turn (user message or tool return) and render live.
     /// Returns the complete collected message list.
@@ -20,9 +60,6 @@ impl Repl {
         tool_call_id: &str,
         tool_name: &str,
         tool_output: &str,
-        // When true, user message is sent to LLM but NOT persisted to DB.
-        // Used for system-injected re-prompts (EMPTY_YIELD_REPROMPT) so they
-        // don't pollute conversation history or consume future context window.
         ephemeral: bool,
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<parking_lot::Mutex<String>>>,
@@ -156,22 +193,38 @@ impl Repl {
                     }
                     "tool_call_message" => {
                         in_reasoning = false;
+                        let (_tool_id, tool_name, args) = match msg.as_tool_call() {
+                            Some(t) => t,
+                            None => continue,
+                        };
+                        let preview = tool_args_preview(&args);
                         {
                             let mut app = app_arc.lock();
-                            app.commit_reasoning_inner();
-                            let _ = app.commit_streaming();
+                            let _ = app.push(RenderLine::ToolCall {
+                                name: tool_name.clone(),
+                                preview,
+                            });
                         }
                         if let Some(bar) = &bar_text_arc {
-                            let tool_name = msg.data["tool_calls"][0]["function"]["name"]
-                                .as_str()
-                                .unwrap_or("tool");
                             let display = if let Some(pos) = tool_name.rfind("__") {
                                 &tool_name[pos + 2..]
                             } else {
-                                tool_name
+                                &tool_name
                             };
                             *bar.lock() = format!("● {}…", display);
                         }
+                    }
+                    "tool_result_message" => {
+                        let content = msg.data["tool_result"]["output"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        let is_error = msg.data["tool_result"]["is_error"]
+                            .as_bool()
+                            .unwrap_or(false);
+                        let _ = app_arc
+                            .lock()
+                            .push(RenderLine::ToolResult { is_error, content });
                     }
                     "usage_statistics" => {
                         use std::sync::atomic::Ordering;
@@ -302,7 +355,7 @@ impl Repl {
                                 if status == "started" {
                                     *bar.lock() = format!("● {}…", tool_name);
                                 } else if status == "completed" {
-                                    *bar.lock() = format!("✓ {} completed", tool_name);
+                                    *bar.lock() = "● processing…".to_string();
                                 }
                             }
                             if !message.is_empty() {
@@ -335,7 +388,12 @@ impl Repl {
                         );
                         let mut app = app_arc.lock();
                         app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
-                        let _ = app.push(RenderLine::SystemMsg(text));
+                        let _ = app.push(RenderLine::SystemMsg(text.clone()));
+                        app.notify_if_unfocused(
+                            cade_tui::app::notifier::AttentionCue::PermissionPrompt,
+                            "Permission Required",
+                            &text,
+                        );
                         // Ring terminal bell
                         print!("\x07");
                         use std::io::Write;
@@ -354,105 +412,25 @@ impl Repl {
         let agent_id = self.agent_id();
         let cancel = &self.cancel_turn;
 
-        fn is_cancel(e: &cade_agent::Error) -> bool {
-            matches!(e, cade_agent::Error::Custom(s) if s == "__cancelled__")
-        }
-
         let conv_id = self.conversation_id();
         let conv_ref = conv_id.as_deref();
 
-        let messages = if is_tool_return {
-            let reasoning_effort = self.reasoning_effort.lock().clone();
-            match self
-                .client
-                .stream_tool_return_cancellable(
-                    &agent_id,
-                    tool_call_id,
-                    tool_name,
-                    tool_output,
-                    false,
-                    conv_ref,
-                    reasoning_effort.as_deref(),
-                    on_event,
-                    Some(cancel),
-                )
-                .await
-            {
-                Ok(m) => m,
-                Err(e) if is_cancel(&e) => {
-                    ui_task.abort();
-                    return Ok(self.abort_stream_ui("Turn interrupted"));
-                }
-                Err(e) => {
-                    ui_task.abort();
-                    return Ok(self.abort_stream_ui(e.to_string()));
-                }
-            }
-        } else {
-            use std::sync::atomic::Ordering;
-            let streaming = self.streaming_enabled.load(Ordering::SeqCst);
-            if streaming {
-                // Consume any pasted images on the first (non-tool-return) turn.
-                // Subsequent turns (tool returns, follow-ups) carry no images.
-                let turn_images = if !is_tool_return {
-                    std::mem::take(&mut self.pending_turn_images)
-                } else {
-                    vec![]
-                };
-                let reasoning_effort = self.reasoning_effort.lock().clone();
-                match self
-                    .client
-                    .stream_message_cancellable_with_images(
-                        &agent_id,
-                        input,
-                        conv_ref,
-                        ephemeral,
-                        turn_images,
-                        reasoning_effort.as_deref(),
-                        on_event,
-                        Some(cancel),
-                    )
-                    .await
-                {
-                    Ok(m) => m,
-                    Err(e) if is_cancel(&e) => {
-                        ui_task.abort();
-                        return Ok(self.abort_stream_ui("Turn interrupted"));
-                    }
-                    Err(e) => {
-                        ui_task.abort();
-                        return Ok(self.abort_stream_ui(e.to_string()));
-                    }
-                }
-            } else {
-                // Non-streaming path — single HTTP request, print result at end.
-                // UI task is unused; abort it immediately.
+        let _ = (
+            is_tool_return,
+            tool_call_id,
+            tool_name,
+            tool_output,
+            ephemeral,
+        );
+        let messages = match self
+            .client
+            .start_run_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel))
+            .await
+        {
+            Ok(messages) => messages,
+            Err(error) => {
                 ui_task.abort();
-                let turn_images_ns = if !is_tool_return {
-                    std::mem::take(&mut self.pending_turn_images)
-                } else {
-                    vec![]
-                };
-                match self
-                    .client
-                    .send_message_with_images(&agent_id, input, turn_images_ns, ephemeral)
-                    .await
-                {
-                    Ok(msgs) => {
-                        for msg in &msgs {
-                            if let Some(text) = msg.assistant_text()
-                                && !text.is_empty()
-                            {
-                                let _ = self.app.lock().push_streaming_chunk(text);
-                            }
-                        }
-                        let _ = self.app.lock().commit_streaming();
-                        msgs
-                    }
-                    Err(e) => {
-                        return Ok(self.abort_stream_ui(e.to_string()));
-                    }
-                }
+                return Ok(self.abort_stream_ui(error.to_string()));
             }
         };
 
@@ -470,6 +448,11 @@ impl Repl {
             let mut app = self.app.lock();
             let _ = app.commit_reasoning();
             let _ = app.commit_streaming();
+            app.notify_if_unfocused(
+                cade_tui::app::notifier::AttentionCue::TurnFinished,
+                "Turn Complete",
+                "CADE finished the task turn",
+            );
         }
 
         // Post-stream diagnostics: finish reason, truncation heuristics, context usage.

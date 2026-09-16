@@ -28,6 +28,30 @@ impl VirtualSandboxBackend {
         }
     }
 
+    /// Best-effort canonicalization that resolves symlinks for existing paths or for
+    /// the closest existing ancestor directory if the target file does not yet exist.
+    fn canonicalize_best_effort(path: &Path) -> PathBuf {
+        if let Ok(can) = path.canonicalize() {
+            return can;
+        }
+        let mut uncreated = Vec::new();
+        let mut curr = path;
+        while let Some(parent) = curr.parent() {
+            if let Some(file_name) = curr.file_name() {
+                uncreated.push(file_name);
+            }
+            if let Ok(can_parent) = parent.canonicalize() {
+                let mut resolved = can_parent;
+                for component in uncreated.into_iter().rev() {
+                    resolved.push(component);
+                }
+                return resolved;
+            }
+            curr = parent;
+        }
+        path.to_path_buf()
+    }
+
     fn verify_path(&self, path: &Path) -> Result<PathBuf> {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -48,10 +72,31 @@ impl VirtualSandboxBackend {
             }
         }
 
-        // Attempt to canonicalize to resolve symlinks if the path exists
-        let canonical = normalized.canonicalize().unwrap_or(normalized);
+        // Attempt to canonicalize to resolve symlinks (handling non-existent targets via closest existing ancestor)
+        let canonical = Self::canonicalize_best_effort(&normalized);
 
-        if !canonical.starts_with(&self.workspace_root) {
+        let root_canonical = Self::canonicalize_best_effort(&self.workspace_root);
+
+        let strip_unc = |p: &Path| -> PathBuf {
+            #[cfg(windows)]
+            {
+                let s = p.to_string_lossy();
+                if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                    return PathBuf::from(stripped);
+                }
+            }
+            p.to_path_buf()
+        };
+
+        let canon_stripped = strip_unc(&canonical);
+        let root_stripped = strip_unc(&root_canonical);
+        let ws_stripped = strip_unc(&self.workspace_root);
+
+        if !canonical.starts_with(&self.workspace_root)
+            && !canonical.starts_with(&root_canonical)
+            && !canon_stripped.starts_with(&root_stripped)
+            && !canon_stripped.starts_with(&ws_stripped)
+        {
             return Err(crate::Error::custom(format!(
                 "Security Exception: Access denied to path '{:?}' outside sandbox boundary '{:?}'",
                 path, self.workspace_root
@@ -205,8 +250,8 @@ mod tests {
         assert_eq!(read_res.unwrap(), "hello");
 
         // Breakout attempt outside sandbox
-        let unsafe_file = Path::new("/etc/passwd");
-        let break_res = backend.read_file(unsafe_file).await;
+        let unsafe_file = temp_dir.path().parent().unwrap().join("breakout.txt");
+        let break_res = backend.read_file(&unsafe_file).await;
         assert!(break_res.is_err());
         assert!(
             break_res

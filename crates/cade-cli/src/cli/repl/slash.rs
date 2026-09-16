@@ -62,6 +62,22 @@ pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
             description: "Pick a conversation to resume".into(),
         },
         SlashCommandDef {
+            name: "session".into(),
+            description: "List or resume sessions (/session new for new)".into(),
+        },
+        SlashCommandDef {
+            name: "timeline".into(),
+            description: "Browse session timeline and checkpoints".into(),
+        },
+        SlashCommandDef {
+            name: "save".into(),
+            description: "Save current TUI display toggles to ~/.cade/tui.toml".into(),
+        },
+        SlashCommandDef {
+            name: "timeline".into(),
+            description: "Browse session timeline and checkpoints".into(),
+        },
+        SlashCommandDef {
             name: "init".into(),
             description: "Analyse project + populate memory".into(),
         },
@@ -398,6 +414,9 @@ const PARSED_SLASH_TRIGGERS: &[&str] = &[
     "pin",
     "agents",
     "resume",
+    "session",
+    "timeline",
+    "save",
     "delete",
     "del",
     "rm-agent",
@@ -551,6 +570,8 @@ pub(crate) enum SlashCmd {
     Tree,
     /// Fork a new conversation from a checkpoint.
     Fork(Option<String>),
+    /// Save current running TUI settings back to ~/.cade/tui.toml.
+    Save,
     /// List all stored artifacts for this agent.
     Artifacts,
     /// Trigger reflection to extract memory from conversation history.
@@ -603,6 +624,12 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "pin" => Some(SlashCmd::Pin),
         "agents" => Some(SlashCmd::Agents),
         "resume" => Some(SlashCmd::Resume),
+        "session" => match arg.as_deref() {
+            Some("new") => Some(SlashCmd::New),
+            _ => Some(SlashCmd::Resume),
+        },
+        "timeline" => Some(SlashCmd::Tree),
+        "save" => Some(SlashCmd::Save),
         "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
         "init" => Some(SlashCmd::Init),
         "remember" => Some(SlashCmd::Remember(arg.unwrap_or_default())),

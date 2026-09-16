@@ -41,20 +41,34 @@ four lanes:
 sums. Unknown models get a zeros pricing → guardrails won't trigger
 spuriously.
 
-## Cost guardrails (env vars)
+## Cost guardrails
 
-All disabled by default — set the env var to opt in.
+The session cost cap can be set in `.cade/settings.json` (committable),
+via the `max_session_cost_usd` key, or with the `CADE_MAX_SESSION_COST_USD`
+env var. Resolution order: **env var > project settings > global settings >
+built-in default**. When nothing is configured the loop defaults to a
+`$120.00` cap so runaway sessions can't silently rack up unbounded spend.
 
-| Variable | Effect | Default |
+```json
+{
+  "max_session_cost_usd": 2.00,
+  "max_tokens_per_turn": 4096
+}
+```
+
+| Variable / key | Effect | Default |
 |---|---|---|
-| `CADE_MAX_SESSION_COST_USD` | Hard $-cap on the agentic loop. The loop aborts as soon as the cumulative cost crosses this value. | unset |
+| `max_session_cost_usd` (`.cade/settings.json` or `~/.cade/settings.json`) | Hard $-cap on the agentic loop. The loop aborts as soon as the cumulative cost crosses this value. | `120.00` |
+| `CADE_MAX_SESSION_COST_USD` | Env-var override for the session cost cap. Takes precedence over settings files. | unset |
 | `CADE_TOOL_TURN_MAX_TOKENS` | Output-token cap on tool-dispatch turns (turn index > 1). Saves spend on verbose models. | unset |
+| `CADE_MAX_TURNS` | Base turn budget for the agentic loop. The loop starts here and **escalates automatically** with genuinely distinct tool work (`+2` turns per new tool fingerprint), so long productive tasks aren't cut short. | `20` |
+| `CADE_MAX_TURNS_CEILING` | Absolute upper bound on the adaptive turn budget. | `5 × CADE_MAX_TURNS` |
 | `CADE_GEMINI_CACHE_TTL_SECS` | Adaptive Gemini cache TTL (60–86400 s). Tune to session shape. | 3600 |
 
 Examples:
 
 ```bash
-# Cap a session at $2 cumulative spend
+# Cap a session at $2 cumulative spend via env var
 export CADE_MAX_SESSION_COST_USD=2.00
 
 # Force tool-dispatch turns to be terse
@@ -62,7 +76,14 @@ export CADE_TOOL_TURN_MAX_TOKENS=1024
 
 # Long sessions → longer Gemini cache TTL
 export CADE_GEMINI_CACHE_TTL_SECS=7200
+
+# Long-running tasks get headroom automatically: base 20, ceiling 200
+export CADE_MAX_TURNS=20
+export CADE_MAX_TURNS_CEILING=200
 ```
+
+Prefer the settings files for anything you want to commit and share
+(project-wide), and env vars for one-off overrides.
 
 ## Optimisations baked in
 
@@ -111,10 +132,11 @@ Units are **USD per 1 million tokens**. Reload with `/pricing sync` (pulls
 from CADE's bundled upstream) or `/pricing edit` (opens in `$EDITOR`).
 
 The OpenAI provider also normalizes newer OpenAI model families: GPT-5-style and
-o-series models use the high output-token budget path, and OpenAI tool payloads
-are capped at 128 tools to match provider limits while keeping priority meta
-tools (including `load_skill` and core memory-writing tools like `update_memory`) 
-as well as essential MCP tools (with `serena__`, `cade-rag__`, and `cade-ide-mcp__` prefixes) available.
+o-series models use the high output-token budget path. OpenAI tool payloads are
+capped at 128 tools to match provider limits, while classification tags preserve
+priority tools: `meta` and `core` tools such as `load_skill`, `update_memory`,
+and `finish_task`, plus `core_mcp` tools from MCP servers configured with
+`core_server: true`.
 
 ### DeepSeek pricing & cache accounting
 

@@ -22,6 +22,7 @@ pub(crate) struct SidebarState<'a> {
     pub thinking_elapsed: Option<std::time::Duration>,
     pub active_plan: Option<&'a PlanState>,
     pub session_cost_usd: f64,
+    pub session_cost_cap_usd: f64,
     pub modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
 }
 
@@ -99,10 +100,7 @@ pub(crate) fn render_sidebar(
 
     // Calculate cost and budget gauge
     let cost = state.session_cost_usd;
-    let cost_limit: f64 = std::env::var("CADE_MAX_SESSION_COST_USD")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(120.00); // default $120.00
+    let cost_limit = state.session_cost_cap_usd.max(0.0);
     let cost_pct = if cost_limit > 0.0 {
         ((cost / cost_limit) * 100.0).clamp(0.0, 100.0)
     } else {
@@ -335,6 +333,7 @@ mod tests {
             thinking_elapsed: None,
             active_plan: None,
             session_cost_usd: 0.14,
+            session_cost_cap_usd: 120.0,
             modified_files: &[],
         }
     }

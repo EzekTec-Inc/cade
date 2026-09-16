@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod command_palette;
 pub mod copy_overlay;
+pub mod frecency;
 pub mod help_overlay;
 pub mod input;
 pub mod layout;
@@ -8,6 +9,7 @@ pub mod leader;
 pub mod notifier;
 pub mod password;
 pub mod permission_overlay;
+pub mod prompt_stash;
 pub mod questions;
 pub mod reducer;
 pub mod render;
@@ -24,6 +26,23 @@ pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
         Regex::new(r"(?is)[\w\d]*>thought\s*CRITICAL INSTRUCTION 1:.*?CRITICAL INSTRUCTION 2:.*?(?:task at hand\.)(?:[^\n]*?task at hand\.)?\s*").unwrap()
     });
     re.replace_all(text, "")
+}
+
+/// Resolve the session cost cap (in USD) for the sidebar budget gauge.
+///
+/// Precedence: `CADE_MAX_SESSION_COST_USD` env var > `.cade/settings.json`
+/// (`max_session_cost_usd`, project wins over global) > `$120.00` default.
+fn resolve_session_cost_cap(cwd: &std::path::Path) -> f64 {
+    std::env::var("CADE_MAX_SESSION_COST_USD")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+        .or_else(|| {
+            cade_core::settings::SettingsManager::new(cwd)
+                .ok()
+                .and_then(|s| s.max_session_cost_usd())
+        })
+        .unwrap_or(120.00)
 }
 
 use parking_lot::Mutex;
@@ -60,21 +79,25 @@ use render::{RenderContext, count_wrapped_rows, render_frame};
 
 // -- Constants
 
-/// Fixed non-input rows at the bottom: status + top_sep + bot_sep + footer.
+/// Fixed non-input rows at the bottom: input borders + footer + hotkey bar.
 const FIXED_ROWS: u16 = 4;
 /// Maximum rows the input area may grow to.
 const MAX_INPUT_ROWS: u16 = 6;
 /// Vertical padding (rows) inside the scrollable content area.
 const CONTENT_PAD_TOP: u16 = 1;
 const CONTENT_PAD_BOT: u16 = 1;
-/// Braille spinner frames for thinking animation.
-const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
 
 /// Responsive layout breakpoint for showing the right sidebar.
 const SIDEBAR_BREAKPOINT: u16 = 110;
 /// Target width for the informational sidebar on wide terminals.
 const SIDEBAR_WIDTH: u16 = 40;
+
+/// Minimum interval between full redraws while live output is streaming or
+/// thinking is being streamed.  Caps the render loop at ~30 FPS so the heavy
+/// per-frame work (markdown parse, syntax highlighting, wrap) never runs at
+/// the full 60 Hz tick; commit/finalize paths run with `streaming_active`
+/// cleared and therefore always draw immediately.
+const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 // -- Skills overlay
 
@@ -805,13 +828,25 @@ fn done_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").expect("valid regex"))
 }
 
-/// Snap a byte offset to the nearest valid UTF-8 character boundary (rounding down).
-fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
+#[allow(dead_code)]
+pub(crate) fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
     let mut pos = byte_offset.min(s.len());
     while pos > 0 && !s.is_char_boundary(pos) {
         pos -= 1;
     }
     pos
+}
+
+/// Compute the typewriter-revealed prefix of the streaming text.
+///
+/// `reveal_len` advances in byte steps that may land mid-character for
+/// multi-byte output (emoji, CJK, accented Latin), so the offset is always
+/// snapped to a valid UTF-8 boundary before slicing.
+#[allow(dead_code)]
+pub(crate) fn streaming_revealed_prefix(full: &str, reveal_len: usize) -> String {
+    let reveal = reveal_len.min(full.len());
+    let end = snap_to_char_boundary(full, reveal);
+    full[..end].to_string()
 }
 
 // -- TuiApp
@@ -847,11 +882,18 @@ pub struct TuiApp {
     // -- Streaming state
     streaming_text: String,
     streaming_active: bool,
-    /// Typewriter reveal: number of bytes of `streaming_text` currently visible.
-    /// Advances progressively each tick for smooth character-by-character output.
-    streaming_reveal_len: usize,
+    // Reveal-free streaming: no typewriter pacing.  The full accumulated text
+    // is rendered on every chunk arrival via the identical markdown path used
+    // for committed content, so styling/spacing never drifts while in flight.
+    /// Stripped (prompt-free) mirror of `streaming_text`.  Refreshed once per
+    /// incoming chunk so draw frames never re-run the strip regex over the
+    /// whole accumulated response.
+    streaming_display: String,
     reasoning_text: String,
     reasoning_active: bool,
+    /// Stripped (prompt-free) mirror of `reasoning_text`, served to the live
+    /// thinking block in the viewport while the model is reasoning.
+    reasoning_display: String,
 
     // -- Input state
     pub editor: Box<dyn crate::editor_component::EditorComponent>,
@@ -880,6 +922,8 @@ pub struct TuiApp {
     pub session_tokens: (u64, u64),
     /// Cumulative session cost in USD for sidebar budget gauge.
     pub session_cost_usd: f64,
+    /// Session cost cap in USD (from .cade/settings.json, env var, or default).
+    pub session_cost_cap_usd: f64,
     /// Number of completed user→assistant turn pairs.
     pub turn_count: u32,
     /// Rolling history of context-window percentages (one per turn).
@@ -901,7 +945,22 @@ pub struct TuiApp {
     pub selection_start: Option<(u16, u16)>,
     pub selection_current: Option<(u16, u16)>,
     pub selection_active: bool,
-    pub(crate) clipboard: Option<arboard::Clipboard>,
+    /// Retained visual selection highlight and cached text after mouse drag release.
+    pub selection_retained: bool,
+    pub retained_selected_text: Option<String>,
+
+    // -- TUI Settings & Configurable Keymap (Phase 1 Parity)
+    pub tui_settings: cade_core::settings::tui::TuiSettings,
+    pub keymap: crate::keys::Keymap,
+
+    // -- Display Toggles, Attention, Prompt Stash (Phases 4 & 5)
+    pub show_timestamps: bool,
+    pub conceal_secrets: bool,
+    pub collapse_tools: bool,
+    pub thinking_visibility: String,
+    pub prompt_stash: crate::app::prompt_stash::PromptStashStore,
+    pub notifier: crate::app::notifier::TerminalNotifier,
+    pub has_focus: bool,
 
     // -- Layout engine
     pub(crate) layout_engine: crate::app::timeline::TimelineLayoutEngine,
@@ -918,6 +977,10 @@ pub struct TuiApp {
     pub last_keypress: std::time::Instant,
     /// Stored state indicating whether high-velocity simulated pasting is active.
     pub is_pasting: bool,
+    /// Timestamp of the last scroll action for velocity acceleration (Section F).
+    pub last_scroll_at: Option<std::time::Instant>,
+    /// Streak count of consecutive rapid scroll events.
+    pub scroll_streak: u16,
 
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
@@ -1088,9 +1151,13 @@ impl TuiApp {
         colors: ThemeColors,
     ) -> Self {
         let terminal = ratatui::init();
-        // Leave mouse capture disabled by default so native terminal text selection
-        // works immediately. Users can opt into TUI-owned mouse gestures with /mouse.
-        let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange);
+        // Enable mouse capture so mouse wheel scrolling and click gestures work immediately.
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            EnableBracketedPaste,
+            EnableFocusChange,
+            EnableMouseCapture
+        );
         // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
         // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
         // swallows the query. Unrecognized escape codes are safely ignored by VT100
@@ -1110,6 +1177,18 @@ impl TuiApp {
             slots.set(crate::slots::UiSlot::Sidebar, sidebar);
         }
 
+        let mut tui_settings = dirs::home_dir()
+            .map(|h| cade_core::settings::tui::TuiSettings::load_from_dir(&h.join(".cade")))
+            .unwrap_or_default();
+        let cwd_path = std::env::current_dir().unwrap_or_default();
+        let project_settings =
+            cade_core::settings::tui::TuiSettings::load_from_dir(&cwd_path.join(".cade")).merge(
+                cade_core::settings::tui::TuiSettings::load_from_dir(&cwd_path),
+            );
+        tui_settings = tui_settings.merge(project_settings);
+
+        let keymap = crate::keys::Keymap::with_settings(&tui_settings);
+
         Self {
             terminal,
             lines: Vec::new(),
@@ -1122,9 +1201,10 @@ impl TuiApp {
             sidebar_hidden: false,
             streaming_text: String::new(),
             streaming_active: false,
-            streaming_reveal_len: 0,
+            streaming_display: String::new(),
             reasoning_text: String::new(),
             reasoning_active: false,
+            reasoning_display: String::new(),
             editor: Box::new(Editor::new()),
             image_counter: 0,
             pending_paste_images: Vec::new(),
@@ -1139,20 +1219,39 @@ impl TuiApp {
             context_pct: None,
             session_tokens: (0, 0),
             session_cost_usd: 0.0,
+            session_cost_cap_usd: resolve_session_cost_cap(
+                &std::env::current_dir().unwrap_or_default(),
+            ),
             turn_count: 0,
             token_history: Vec::new(),
-            mouse_capture_disabled: true,
+            mouse_capture_disabled: false,
             messages_area: Rect::default(),
             copy_highlight: None,
             selection_start: None,
             selection_current: None,
             selection_active: false,
-            clipboard: None,
+            selection_retained: false,
+            retained_selected_text: None,
+            show_timestamps: tui_settings.show_timestamps,
+            conceal_secrets: tui_settings.conceal_secrets,
+            collapse_tools: tui_settings.collapse_tools,
+            thinking_visibility: tui_settings.thinking_visibility.clone(),
+            prompt_stash: crate::app::prompt_stash::PromptStashStore::load_default(),
+            notifier: crate::app::notifier::TerminalNotifier::new(
+                tui_settings.notifications.enable_bell || tui_settings.attention_sounds_enabled(),
+                tui_settings.notifications.enable_osc || tui_settings.attention_enabled(),
+                false,
+            ),
+            has_focus: true,
+            tui_settings,
+            keymap,
             layout_engine: crate::app::timeline::TimelineLayoutEngine::new(),
             content_version: 0,
             focused_region: crate::slots::FocusRegion::Input,
             last_keypress: std::time::Instant::now(),
             is_pasting: false,
+            last_scroll_at: None,
+            scroll_streak: 0,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             agent_model_ac: crate::autocomplete::AgentModelAutocompleteProvider::new(
                 vec![],
@@ -1263,6 +1362,16 @@ impl TuiApp {
 
     /// Redraw the full screen (unconditional — always redraws).
     pub fn draw(&mut self) -> Result<()> {
+        // R-01/Perf: while live output is streaming (assistant chunks or
+        // thinking), cap redraws at ~30 FPS.  The 16 ms tick task keeps
+        // `draw_dirty` set so we retry; content still animates smoothly,
+        // but the heavy per-frame layout work runs half as often.
+        if (self.streaming_active || self.reasoning_active)
+            && self.last_draw_at.elapsed() < DRAW_MIN_INTERVAL
+        {
+            self.draw_dirty = true;
+            return Ok(());
+        }
         self.draw_dirty = false;
         self.last_draw_at = Instant::now();
         // Auto-dismiss expired toasts
@@ -1271,7 +1380,6 @@ impl TuiApp {
         {
             self.toast = None;
         }
-        self.tick_streaming_reveal();
         self.tick_smooth_scroll();
         self.draw_impl()
     }
@@ -1318,35 +1426,17 @@ impl TuiApp {
         self.scroll_target = pos;
     }
 
-    /// Advance the typewriter reveal cursor toward the full streaming text length.
-    /// Called every draw cycle (~50ms). Reveals ~8 chars per tick (~160 chars/sec)
-    /// which feels smooth without lagging behind fast model output.
-    fn tick_streaming_reveal(&mut self) {
+    /// Snapshot of the streaming text currently visible in the viewport.
+    ///
+    /// Uses the prompt-stripped [`TuiApp::streaming_display`] buffer (refreshed
+    /// once per chunk).  Reveal-free: the full accumulated text is returned on
+    /// every chunk arrival so the rendered markdown never drifts while in
+    /// flight.
+    fn streaming_view_snapshot(&self) -> Option<String> {
         if !self.streaming_active {
-            return;
-        }
-        let target = self.streaming_text.len();
-        if self.streaming_reveal_len < target {
-            // Reveal rate: adaptive — faster when we're far behind, slower when close.
-            let behind = target - self.streaming_reveal_len;
-            let step = if behind > 500 {
-                // Extremely far behind (backlog spike): snap instantly to catch up and prevent lags (ADR 4/6)
-                behind
-            } else if behind > 150 {
-                // Very far behind: catch up quickly
-                behind / 2
-            } else if behind > 50 {
-                // Moderately behind: reveal ~20 chars per tick
-                20
-            } else {
-                // Close to caught up: smooth typewriter at ~8 chars/tick
-                8
-            };
-            self.streaming_reveal_len = (self.streaming_reveal_len + step).min(target);
-            // If still not fully revealed, keep dirty so next tick continues.
-            if self.streaming_reveal_len < target {
-                self.draw_dirty = true;
-            }
+            None
+        } else {
+            Some(self.streaming_display.clone())
         }
     }
 
@@ -1362,17 +1452,14 @@ impl TuiApp {
     pub fn draw_impl(&mut self) -> Result<()> {
         // Borrow rendering data by reference (avoids cloning entire data per frame).
         let lines: &[RenderLine] = &self.lines;
-        let streaming = if self.streaming_active {
-            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
-            // Typewriter effect: only reveal up to streaming_reveal_len bytes.
-            let reveal = self.streaming_reveal_len.min(full.len());
-            // Snap to a valid char boundary.
-            let end = snap_to_char_boundary(&full, reveal);
-            if end > 0 {
-                Some(full[..end].to_string())
-            } else {
-                Some(String::new())
-            }
+        // Live assistant text: reveal-limited typewriter view of the cached
+        // prompt-stripped buffer (never re-runs the strip regex per frame).
+        let streaming = self.streaming_view_snapshot();
+        // Live thinking block: full prompt-stripped reasoning streamed inline
+        // while the model reasons; collapsed into a RenderLine::Reasoning row
+        // on commit.
+        let reasoning = if self.reasoning_active {
+            Some(self.reasoning_display.clone())
         } else {
             None
         };
@@ -1410,7 +1497,6 @@ impl TuiApp {
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
         let expanded_items = &self.expanded_items;
-        let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
         let cwd: &str = &self.cwd;
         let context_pct = self.context_pct;
@@ -1449,7 +1535,12 @@ impl TuiApp {
         {
             self.toast = None;
         }
-        let toast: Option<&Toast> = self.toast.as_ref();
+        let is_processing = self.is_processing();
+        let toast: Option<&Toast> = if is_processing {
+            None
+        } else {
+            self.toast.as_ref()
+        };
         let colors: &ThemeColors = &self.colors;
         let nerd = self.use_nerd_fonts;
 
@@ -1483,6 +1574,7 @@ impl TuiApp {
             let render_ctx = RenderContext {
                 lines,
                 streaming: streaming.as_deref(),
+                reasoning: reasoning.as_deref(),
                 scroll,
                 expand_all,
                 input_mode,
@@ -1495,12 +1587,12 @@ impl TuiApp {
                 top_overlay: overlay_stack
                     .last()
                     .map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
-                pending_lines,
                 queued_count,
                 cwd,
                 context_pct,
                 session_tokens: self.session_tokens,
                 session_cost_usd: self.session_cost_usd,
+                session_cost_cap_usd: self.session_cost_cap_usd,
                 turn_count,
                 token_history,
                 header_lines,
@@ -1509,6 +1601,7 @@ impl TuiApp {
                 active_plan: active_plan_snap.as_ref(),
                 sidebar_hidden: self.sidebar_hidden,
                 toast,
+                is_processing,
                 copy_highlight: self.copy_highlight,
                 mouse_selection: None,
                 expanded_items,
@@ -1571,8 +1664,9 @@ impl TuiApp {
                 }
             }
 
-            // Render MCP boot status card floating in the top right
-            if let Some(ref progress) = self.mcp_boot_status
+            // Render MCP boot status card floating in the top right (suppressed while processing)
+            if !is_processing
+                && let Some(ref progress) = self.mcp_boot_status
                 && !self.mcp_closed
             {
                 let boot_map = progress.lock().clone();
@@ -1840,15 +1934,16 @@ impl TuiApp {
     ) -> Vec<crate::app::timeline::PreparedTimelineEntry> {
         let timeline_w = self.messages_area.width.saturating_sub(4).max(1) as usize;
 
-        let streaming = if self.streaming_active {
-            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
-            let reveal = self.streaming_reveal_len.min(full.len());
-            Some(full[..reveal].to_string())
+        let streaming = self.streaming_view_snapshot();
+        let reasoning = if self.reasoning_active {
+            Some(self.reasoning_display.clone())
         } else {
             None
         };
 
         self.layout_engine.set_active_stream(streaming.as_deref());
+        self.layout_engine
+            .set_active_reasoning(reasoning.as_deref());
         self.layout_engine
             .layout_items(
                 &self.lines,
@@ -1862,20 +1957,15 @@ impl TuiApp {
             .to_vec()
     }
 
-    /// Extract highlighted character range from active buffer, copy it, and clear state
-    pub fn copy_selected_text(&mut self) -> bool {
+    /// Extract highlighted character range from active buffer without clearing state.
+    pub fn extract_selected_text(&mut self) -> Option<String> {
         if !self.selection_active {
-            return false;
+            return None;
         }
 
-        let Some((x1, y1)) = self.selection_start else {
-            return false;
-        };
-        let Some((x2, y2)) = self.selection_current else {
-            return false;
-        };
+        let (x1, y1) = self.selection_start?;
+        let (x2, y2) = self.selection_current?;
 
-        // Bounding box of message viewport
         use ratatui::layout::Rect;
         let inner = Rect {
             x: self.messages_area.x + 2,
@@ -1885,27 +1975,19 @@ impl TuiApp {
         };
 
         if inner.width == 0 || inner.height == 0 {
-            self.selection_active = false;
-            self.selection_start = None;
-            self.selection_current = None;
-            return false;
+            return None;
         }
 
-        // Clamp coordinates to message viewport boundary to enable robust dragging from outside/borders
+        // Clamp coordinates to message viewport boundary
         let cx1 = x1.clamp(inner.x, inner.x + inner.width.saturating_sub(1));
         let cy1 = y1.clamp(inner.y, inner.y + inner.height.saturating_sub(1));
         let cx2 = x2.clamp(inner.x, inner.x + inner.width.saturating_sub(1));
         let cy2 = y2.clamp(inner.y, inner.y + inner.height.saturating_sub(1));
 
-        // If after clamping it's a single cell (no drag/drag clamped to same cell), don't trigger copy
         if cx1 == cx2 && cy1 == cy2 {
-            self.selection_active = false;
-            self.selection_start = None;
-            self.selection_current = None;
-            return false;
+            return None;
         }
 
-        // Sort coordinates symmetrically
         let (start_col, start_row, end_col, end_row) = if cy1 < cy2 || (cy1 == cy2 && cx1 <= cx2) {
             (cx1, cy1, cx2, cy2)
         } else {
@@ -1937,7 +2019,7 @@ impl TuiApp {
             if entry_end > start_visual_row && entry_start <= end_visual_row {
                 let offset = match entry.card_style {
                     crate::app::timeline::CardStyle::None => 0u16,
-                    _ => 2u16, // 1 for left border, 1 for padding (TUI-Selection Offset Fix)
+                    _ => 1u16,
                 };
 
                 for (i, line) in entry.lines.iter().enumerate() {
@@ -1975,22 +2057,332 @@ impl TuiApp {
             current_row = entry_end;
         }
 
+        if selected_text.is_empty() {
+            None
+        } else {
+            Some(selected_text)
+        }
+    }
+
+    /// Dismiss the active/retained visual selection and highlight.
+    pub fn clear_selection(&mut self) {
         self.selection_active = false;
+        self.selection_retained = false;
         self.selection_start = None;
         self.selection_current = None;
+        self.retained_selected_text = None;
+        self.draw_dirty = true;
+    }
 
-        if !selected_text.is_empty() {
-            self.write_to_clipboard(&selected_text);
+    /// Extract highlighted character range from active buffer, copy it, and clear dragging state
+    pub fn copy_selected_text(&mut self) -> bool {
+        let extracted = self.extract_selected_text();
+        if let Some(selected_text) = extracted {
+            self.retained_selected_text = Some(selected_text.clone());
+            self.selection_retained = false;
+            self.selection_active = false;
+
+            let ok = self.write_to_clipboard(&selected_text);
             crate::app::clipboard::write_to_file_fallback(&selected_text);
-            self.show_toast(
-                "Copied selection to clipboard",
-                crate::app::ToastLevel::Success,
-            );
+            if ok {
+                self.show_toast(
+                    "Copied selection to clipboard",
+                    crate::app::ToastLevel::Success,
+                );
+            } else {
+                self.show_toast(
+                    "Failed to copy selection to clipboard",
+                    crate::app::ToastLevel::Error,
+                );
+            }
             self.draw_dirty = true;
             true
         } else {
+            self.clear_selection();
             false
         }
+    }
+
+    /// Quote the active or retained selection into the prompt editor as a collapsed quote block (B.3).
+    pub fn quote_selection_to_prompt(&mut self) -> bool {
+        let text = self
+            .retained_selected_text
+            .clone()
+            .or_else(|| self.extract_selected_text())
+            .filter(|t| !t.trim().is_empty());
+
+        let Some(text) = text else {
+            self.clear_selection();
+            self.show_toast(
+                "No active selection to quote",
+                crate::app::ToastLevel::Warning,
+            );
+            return false;
+        };
+
+        let mut quoted = String::new();
+        for (i, line) in text.lines().enumerate() {
+            if i > 0 {
+                quoted.push('\n');
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                quoted.push('>');
+            } else if trimmed.starts_with("> ") || trimmed.starts_with('>') {
+                quoted.push_str(trimmed);
+            } else {
+                quoted.push_str("> ");
+                quoted.push_str(trimmed);
+            }
+        }
+
+        self.editor.handle_paste(&quoted);
+        self.clear_selection();
+        self.show_toast(
+            "Quoted selection added to prompt",
+            crate::app::ToastLevel::Success,
+        );
+        self.draw_dirty = true;
+        true
+    }
+
+    /// Copy the last non-empty message in the conversation transcript to the clipboard (C.3).
+    pub fn copy_last_message(&mut self) -> bool {
+        if self.copy_selected_text() {
+            return true;
+        }
+
+        for line in self.lines.iter().rev() {
+            let text = crate::app::copy_overlay::render_line_plain_text(line);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                let ok = self.write_to_clipboard(trimmed);
+                crate::app::clipboard::write_to_file_fallback(trimmed);
+                if ok {
+                    self.show_toast(
+                        "Copied last message to clipboard",
+                        crate::app::ToastLevel::Success,
+                    );
+                } else {
+                    self.show_toast("Failed to copy last message", crate::app::ToastLevel::Error);
+                }
+                self.draw_dirty = true;
+                return ok;
+            }
+        }
+
+        self.show_toast("No messages to copy", crate::app::ToastLevel::Info);
+        false
+    }
+
+    /// Toggle concealment of tokens, secrets, and sensitive strings (Section H).
+    pub fn toggle_conceal(&mut self) {
+        self.conceal_secrets = !self.conceal_secrets;
+        self.tui_settings.conceal_secrets = self.conceal_secrets;
+        let _ = self.tui_settings.save_default();
+        let status = if self.conceal_secrets { "ON" } else { "OFF" };
+        self.show_toast(
+            format!("Conceal mode: {status}"),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Toggle timestamps display on timeline messages (Section H).
+    pub fn toggle_timestamps(&mut self) {
+        self.show_timestamps = !self.show_timestamps;
+        self.tui_settings.show_timestamps = self.show_timestamps;
+        let _ = self.tui_settings.save_default();
+        let status = if self.show_timestamps { "ON" } else { "OFF" };
+        self.show_toast(
+            format!("Timestamps: {status}"),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Toggle default collapse of tool call outputs (Section H).
+    pub fn toggle_tools(&mut self) {
+        self.collapse_tools = !self.collapse_tools;
+        self.tui_settings.collapse_tools = self.collapse_tools;
+        let _ = self.tui_settings.save_default();
+        let status = if self.collapse_tools {
+            "collapsed"
+        } else {
+            "expanded"
+        };
+        self.show_toast(
+            format!("Tool outputs: {status}"),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Cycle thinking block visibility: collapse -> full -> hide -> collapse (Section H).
+    pub fn cycle_thinking_visibility(&mut self) {
+        self.thinking_visibility = match self.thinking_visibility.as_str() {
+            "collapse" => "full".to_string(),
+            "full" => "hide".to_string(),
+            _ => "collapse".to_string(),
+        };
+        self.tui_settings.thinking_visibility = self.thinking_visibility.clone();
+        let _ = self.tui_settings.save_default();
+        self.show_toast(
+            format!("Thinking view: {}", self.thinking_visibility),
+            crate::app::ToastLevel::Info,
+        );
+        self.draw_dirty = true;
+    }
+
+    /// Explicitly save runtime settings back to ~/.cade/tui.toml (Section H).
+    pub fn save_settings(&mut self) -> bool {
+        self.tui_settings.show_timestamps = self.show_timestamps;
+        self.tui_settings.conceal_secrets = self.conceal_secrets;
+        self.tui_settings.collapse_tools = self.collapse_tools;
+        self.tui_settings.thinking_visibility = self.thinking_visibility.clone();
+        match self.tui_settings.save_default() {
+            Ok(_) => {
+                self.show_toast(
+                    "Saved settings to ~/.cade/tui.toml",
+                    crate::app::ToastLevel::Success,
+                );
+                true
+            }
+            Err(e) => {
+                self.show_toast(
+                    format!("Failed to save settings: {e}"),
+                    crate::app::ToastLevel::Error,
+                );
+                false
+            }
+        }
+    }
+
+    /// Trigger terminal attention notification if the app window currently lacks focus (Section I).
+    pub fn notify_if_unfocused(
+        &self,
+        cue: crate::app::notifier::AttentionCue,
+        title: &str,
+        body: &str,
+    ) {
+        if !self.has_focus && self.tui_settings.attention_enabled() {
+            self.notifier.notify(cue, title, body);
+        }
+    }
+
+    /// Stash or pop prompt text buffer into/from prompt stash ring (Section J).
+    pub fn stash_prompt(&mut self) {
+        let current = self.editor.text();
+        if !current.trim().is_empty() {
+            self.prompt_stash.push(current);
+            self.editor.clear();
+            self.show_toast(
+                "Prompt stashed to ~/.cade/prompt_stash.json",
+                crate::app::ToastLevel::Success,
+            );
+        } else if let Some(stashed) = self.prompt_stash.pop() {
+            self.editor.set_text(stashed);
+            self.show_toast(
+                "Prompt restored from stash",
+                crate::app::ToastLevel::Success,
+            );
+        } else {
+            self.show_toast("Prompt stash is empty", crate::app::ToastLevel::Warning);
+        }
+        self.draw_dirty = true;
+    }
+
+    /// Open external editor ($VISUAL or $EDITOR) on the current prompt (Section J).
+    pub fn edit_in_external_editor(&mut self) -> std::result::Result<(), String> {
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| {
+                #[cfg(windows)]
+                {
+                    "notepad".to_string()
+                }
+                #[cfg(not(windows))]
+                {
+                    "nano".to_string()
+                }
+            });
+
+        let mut temp_file = tempfile::Builder::new()
+            .prefix("cade_prompt_")
+            .suffix(".md")
+            .tempfile()
+            .map_err(|e| format!("Failed to create temp file: {e}"))?;
+
+        use std::io::Write;
+        temp_file
+            .write_all(self.editor.text().as_bytes())
+            .map_err(|e| format!("Failed to write to temp file: {e}"))?;
+        let temp_path = temp_file.path().to_path_buf();
+
+        // Suspend raw mode and execute editor
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+
+        let status = std::process::Command::new(&editor).arg(&temp_path).status();
+
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::cursor::Hide
+        );
+        let _ = crossterm::terminal::enable_raw_mode();
+
+        match status {
+            Ok(s) if s.success() => {
+                if let Ok(content) = std::fs::read_to_string(&temp_path) {
+                    self.editor.set_text(content.trim_end().to_string());
+                    self.show_toast(
+                        "Prompt updated from external editor",
+                        crate::app::ToastLevel::Success,
+                    );
+                    self.draw_dirty = true;
+                }
+                Ok(())
+            }
+            Ok(_) => {
+                self.show_toast(
+                    "External editor exited with error",
+                    crate::app::ToastLevel::Error,
+                );
+                Err("External editor exited with non-zero status".to_string())
+            }
+            Err(e) => {
+                self.show_toast(
+                    format!("Failed to launch editor {editor}: {e}"),
+                    crate::app::ToastLevel::Error,
+                );
+                Err(format!("Failed to launch editor: {e}"))
+            }
+        }
+    }
+
+    /// Redact API keys and secret tokens when conceal mode is active.
+    pub fn conceal_if_active<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.conceal_secrets {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        let mut result = text.to_string();
+        for prefix in &["sk-", "ghp_", "gho_", "glpat-", "xoxb-", "xoxp-", "AIza"] {
+            while let Some(start) = result.find(prefix) {
+                let end = result[start..]
+                    .find(|c: char| {
+                        c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ')'
+                    })
+                    .map(|o| start + o)
+                    .unwrap_or(result.len());
+                result.replace_range(start..end, "***REDACTED***");
+            }
+        }
+        std::borrow::Cow::Owned(result)
     }
 }
 

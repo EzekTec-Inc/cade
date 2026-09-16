@@ -33,7 +33,7 @@ impl DesktopControl {
         #[cfg(target_os = "windows")]
         {
             let ps_script = format!(
-                "(New-Object -ComObject WScript.Shell).AppActivate('{}')",
+                "if (-not (New-Object -ComObject WScript.Shell).AppActivate('{}')) {{ exit 1 }}",
                 title.replace('\'', "''")
             );
             let status = std::process::Command::new("powershell")

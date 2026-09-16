@@ -163,8 +163,9 @@ impl HttpTransport {
         // 10 s — that only covers TCP handshake to a local server.
         let client = Client::builder()
             .user_agent("cade/0.1.0")
-            .timeout(std::time::Duration::from_secs(300))
             .connect_timeout(std::time::Duration::from_secs(10))
+            .tcp_keepalive(std::time::Duration::from_secs(30))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()
             .map_err(|e| crate::Error::custom(format!("build HTTP client: {e}")))?;
         Ok(Self {

@@ -33,7 +33,12 @@ pub struct ToolSchemaNormalizer;
 
 impl ToolSchemaNormalizer {
     /// Normalize a single MCP tool definition.
-    pub fn normalize(server_key: &str, tool: &Tool, write_tools: &[String]) -> McpToolSchema {
+    pub fn normalize(
+        server_key: &str,
+        tool: &Tool,
+        write_tools: &[String],
+        core_server: bool,
+    ) -> McpToolSchema {
         let original = tool.name.to_string();
         let prefixed = format!("{server_key}__{original}");
         let description = tool.description.as_deref().unwrap_or("").to_string();
@@ -70,6 +75,11 @@ impl ToolSchemaNormalizer {
             "name": prefixed,
             "description": description,
             "parameters": parameters,
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": server_key,
+                "core_server": core_server,
+            },
         });
 
         McpToolSchema {
@@ -98,10 +108,16 @@ mod tests {
 
         let tool = Tool::new("test_tool", "A test tool", input_schema);
 
-        let normalized = ToolSchemaNormalizer::normalize("my_server", &tool, &["test_tool".into()]);
+        let normalized =
+            ToolSchemaNormalizer::normalize("my_server", &tool, &["test_tool".into()], true);
         assert_eq!(normalized.prefixed_name, "my_server__test_tool");
         assert_eq!(normalized.original_name, "test_tool");
         assert!(normalized.is_write);
+        assert_eq!(
+            normalized.schema["x-cade"]["server_key"],
+            json!("my_server")
+        );
+        assert_eq!(normalized.schema["x-cade"]["core_server"], json!(true));
 
         let params = normalized
             .schema
@@ -118,7 +134,8 @@ mod tests {
     fn test_whitelist_non_write_tool() {
         let tool = Tool::new("read_query", "Reads data", JsonObject::new());
 
-        let normalized = ToolSchemaNormalizer::normalize("db", &tool, &["write_data".into()]);
+        let normalized =
+            ToolSchemaNormalizer::normalize("db", &tool, &["write_data".into()], false);
         assert!(!normalized.is_write);
     }
 }

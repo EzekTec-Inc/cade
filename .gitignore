@@ -25,7 +25,8 @@ crates/cade-server/.cade-db.key
 .cade-db.key
 .cade-todo.md
 ARCHITECTURE.md
-crates/cade-gui/dist/
+crates/cade-gui/dist/*
+!crates/cade-gui/dist/index.html
 crates/cade-gui/pkg/
 Digital-Architecture-Required-Diagrams.pdf
 

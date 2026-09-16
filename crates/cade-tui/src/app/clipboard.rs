@@ -38,42 +38,103 @@ pub(crate) fn read_clipboard_text() -> Option<String> {
         .or_else(read_text_via_shell_commands)
 }
 
+/// Read text from Linux PRIMARY selection buffer (middle-click buffer).
+#[allow(dead_code)]
+pub(crate) fn read_linux_primary() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(text) = command_stdout("wl-paste", &["--primary", "--no-newline"]) {
+            return Some(text);
+        }
+        if let Some(text) = command_stdout("xclip", &["-selection", "primary", "-out"]) {
+            return Some(text);
+        }
+        if let Some(text) = command_stdout("xsel", &["--primary", "--output"]) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// Read text from the configured clipboard target buffer.
+#[allow(dead_code)]
+pub(crate) fn read_clipboard_text_with_mode(
+    mode: cade_core::settings::tui::LinuxClipboardSelection,
+) -> Option<String> {
+    if mode == cade_core::settings::tui::LinuxClipboardSelection::Primary
+        && let Some(text) = read_linux_primary()
+    {
+        return Some(text);
+    }
+    read_clipboard_text()
+}
+
+/// Try to copy text to Linux PRIMARY selection (middle-click buffer).
+pub(crate) fn copy_to_linux_primary(text: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        // 1. Wayland PRIMARY (wl-copy --primary)
+        if let Ok(mut child) = Command::new("wl-copy")
+            .arg("--primary")
+            .stdin(Stdio::piped())
+            .spawn()
+            && let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
+
+        // 2. X11 PRIMARY (xclip -selection primary)
+        if let Ok(mut child) = Command::new("xclip")
+            .arg("-selection")
+            .arg("primary")
+            .stdin(Stdio::piped())
+            .spawn()
+            && let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
+
+        // 3. X11 PRIMARY (xsel --primary --input)
+        if let Ok(mut child) = Command::new("xsel")
+            .arg("--primary")
+            .arg("--input")
+            .stdin(Stdio::piped())
+            .spawn()
+            && let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(text.as_bytes()).is_ok()
+            && child.wait().map(|s| s.success()).unwrap_or(false)
+        {
+            return true;
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = text;
+
+    false
+}
+
 impl TuiApp {
-    /// Write `text` to the system clipboard via OSC 52 escape sequence, falling
-    /// back to `arboard` for native access.  Returns `true` if at least one
-    /// mechanism succeeded.
+    /// Write `text` to the system clipboard and/or Linux PRIMARY selection based on
+    /// `tui_settings.linux_clipboard_selection`.
+    ///
+    /// Emits OSC 52 directly for instant, non-blocking clipboard synchronization across
+    /// tmux and terminal emulators, and offloads native OS tools (arboard, wl-copy, xclip)
+    /// to a background worker so the main TUI event loop never hangs.
     pub(crate) fn write_to_clipboard(&mut self, text: &str) -> bool {
         use base64::Engine;
         use std::io::Write;
 
-        let mut ok = false;
+        let selection_mode = self.tui_settings.linux_clipboard_selection;
 
-        // 1. Native OS clipboard (arboard)
-        // Headless safety: on Linux, skip arboard if no display server is running
-        // to prevent it from throwing stderr warnings/failures that corrupt the Ratatui alternate screen.
-        #[cfg(target_os = "linux")]
-        let should_try_native =
-            std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
-        #[cfg(not(target_os = "linux"))]
-        let should_try_native = true;
-
-        if should_try_native {
-            if let Some(ref mut cb) = self.clipboard {
-                ok = cb.set_text(text).is_ok();
-            } else if let Ok(mut cb) = arboard::Clipboard::new() {
-                ok = cb.set_text(text).is_ok();
-                self.clipboard = Some(cb);
-            }
-        }
-
-        // 2. Command Line Utilities Fallback (pbcopy, wl-copy, xclip, clip.exe)
-        if !ok {
-            ok = copy_via_shell_commands(text);
-        }
-
-        // 3. OSC 52 universal fallback (with TMUX / Screen passthrough wrapping)
-        // Treated as a best-effort, non-blocking side effect so we don't assume writing bytes
-        // to stdout guarantees successful OS clipboard synchronization (TUI-Selection Sync Fix).
+        // 1. Instant OSC 52 universal clipboard write (zero latency, no subprocess blocking)
         let b64 = base64::prelude::BASE64_STANDARD.encode(text);
         let sequence = if std::env::var("TMUX").is_ok() {
             // Tmux passthrough wrapping: escapes raw escape sequences directly to the host terminal emulator
@@ -81,6 +142,7 @@ impl TuiApp {
         } else if std::env::var("TERM")
             .map(|t| t.contains("screen"))
             .unwrap_or(false)
+            || std::env::var("STY").is_ok()
         {
             // GNU Screen passthrough wrapping
             format!("\x1bP\x1b]52;c;{}\x07\x1b\\", b64)
@@ -90,11 +152,55 @@ impl TuiApp {
         };
 
         let mut stdout = std::io::stdout().lock();
-        if stdout.write_all(sequence.as_bytes()).is_ok() {
-            let _ = stdout.flush();
+        let _ = stdout.write_all(sequence.as_bytes());
+        let _ = stdout.flush();
+
+        // 2. Offload native OS clipboard (arboard, wl-copy, xclip) to a non-blocking background thread
+        let text_owned = text.to_string();
+        std::thread::spawn(move || {
+            let _ = copy_to_os_clipboard_bg(&text_owned, selection_mode);
+        });
+
+        true
+    }
+}
+
+fn copy_to_os_clipboard_bg(
+    text: &str,
+    selection_mode: cade_core::settings::tui::LinuxClipboardSelection,
+) -> bool {
+    use cade_core::settings::tui::LinuxClipboardSelection;
+
+    let should_write_regular = selection_mode != LinuxClipboardSelection::Primary;
+    let should_write_primary = selection_mode != LinuxClipboardSelection::Clipboard;
+
+    let mut regular_ok = false;
+    let mut primary_ok = false;
+
+    if should_write_regular {
+        #[cfg(target_os = "linux")]
+        let should_try_native =
+            std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let should_try_native = true;
+
+        if should_try_native && let Ok(mut cb) = arboard::Clipboard::new() {
+            regular_ok = cb.set_text(text).is_ok();
         }
 
-        ok
+        if !regular_ok {
+            regular_ok = copy_via_shell_commands(text);
+        }
+    }
+
+    if should_write_primary {
+        primary_ok = copy_to_linux_primary(text);
+    }
+
+    match selection_mode {
+        LinuxClipboardSelection::Clipboard => regular_ok,
+        LinuxClipboardSelection::Primary => primary_ok,
+        LinuxClipboardSelection::Both => regular_ok || primary_ok,
     }
 }
 
@@ -246,25 +352,6 @@ fn read_text_via_shell_commands() -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn command_stdout_returns_none_for_missing_program() {
-        assert!(super::command_stdout("cade-command-that-does-not-exist", &[]).is_none());
-    }
-
-    #[test]
-    fn command_stdout_returns_none_for_failed_program() {
-        #[cfg(target_os = "windows")]
-        let result = super::command_stdout("cmd", &["/C", "exit 1"]);
-
-        #[cfg(not(target_os = "windows"))]
-        let result = super::command_stdout("false", &[]);
-
-        assert!(result.is_none());
-    }
-}
-
 impl TuiApp {
     #[cfg(not(feature = "clipboard-images"))]
     pub(crate) fn try_paste_image_file_path(&mut self, _text: &str) -> bool {
@@ -376,5 +463,24 @@ impl TuiApp {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn command_stdout_returns_none_for_missing_program() {
+        assert!(super::command_stdout("cade-command-that-does-not-exist", &[]).is_none());
+    }
+
+    #[test]
+    fn command_stdout_returns_none_for_failed_program() {
+        #[cfg(target_os = "windows")]
+        let result = super::command_stdout("cmd", &["/C", "exit 1"]);
+
+        #[cfg(not(target_os = "windows"))]
+        let result = super::command_stdout("false", &[]);
+
+        assert!(result.is_none());
     }
 }

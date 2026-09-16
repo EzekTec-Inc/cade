@@ -111,10 +111,11 @@ impl Repl {
         }
 
         // -- Thinking animation
-        let bar_text = self
-            .app
-            .lock()
-            .start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)");
+        let bar_text = {
+            let mut app = self.app.lock();
+            app.scroll_to_bottom();
+            app.start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)")
+        };
 
         // Redraw tick task — updates the spinner animation and assessing timer.
         let tick_app = self.app.clone();
@@ -415,26 +416,13 @@ impl Repl {
 
         let messages = messages?;
 
-        let is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
+        let _is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
 
-        let mut turn_stats = TurnStats::default();
-        if is_cancelled {
-            // Skip tool execution so we don't trigger auto-reprompts on empty responses
-        } else {
-            self.dispatch_tool_calls(
-                stdout,
-                messages,
-                input,
-                Some(bar_text),
-                false,
-                &mut turn_stats,
-            )
-            .await?;
-        }
+        let _ = messages;
 
-        // (The ephemeral active_goal reminder was removed in favor of a hard block in dispatch_tool_calls)
+        // The canonical runtime owns tool execution; the CLI only renders its events.
 
         // Blank line after every agent turn for visual block separation.
         let _ = self.app.lock().push(RenderLine::Blank);
@@ -448,41 +436,21 @@ impl Repl {
             let mut stats = self.session_stats.lock();
             stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
         }
-        let time_str = if secs >= 60 {
+        let _time_str = if secs >= 60 {
             format!("{}m {}s", secs / 60, secs % 60)
         } else {
             format!("{}s", secs)
         };
 
-        let summary = if is_cancelled {
-            format!("⚠ Interrupted after {}", time_str)
-        } else {
-            let mut parts = vec![format!("✓ Finished in {}", time_str)];
-            if turn_stats.reads > 0 {
-                parts.push(format!(
-                    "{} read{}",
-                    turn_stats.reads,
-                    if turn_stats.reads == 1 { "" } else { "s" }
-                ));
+        {
+            let mut app = self.app.lock();
+            app.stop_thinking();
+            app.set_last_status(None);
+            if app.follow {
+                app.scroll_to_bottom();
             }
-            if turn_stats.edits > 0 {
-                parts.push(format!(
-                    "{} edit{}",
-                    turn_stats.edits,
-                    if turn_stats.edits == 1 { "" } else { "s" }
-                ));
-            }
-            if turn_stats.cmds > 0 {
-                parts.push(format!(
-                    "{} cmd{}",
-                    turn_stats.cmds,
-                    if turn_stats.cmds == 1 { "" } else { "s" }
-                ));
-            }
-            parts.join("  ·  ")
-        };
-        self.app.lock().set_last_status(Some(summary));
-        let _ = self.app.lock().draw();
+            let _ = app.draw();
+        }
 
         self.turn_active.store(false, Ordering::SeqCst);
         Ok(())
@@ -512,6 +480,11 @@ impl Repl {
         app.show_toast(err_text.clone(), cade_tui::app::ToastLevel::Error);
         let _ = app.push(RenderLine::ErrorMsg(err_text.clone()));
         app.set_last_status(Some(format!("✗ Error: {err_text}")));
+        app.notify_if_unfocused(
+            cade_tui::app::notifier::AttentionCue::TaskError,
+            "Turn Error",
+            &err_text,
+        );
         app.draw_dirty = true;
         let _ = app.draw();
         vec![]
@@ -578,6 +551,112 @@ mod tests {
         assert_eq!(a.last_status, Some(format!("✗ Error: {err_msg}")));
         assert!(a.lines.iter().any(|line| match line {
             RenderLine::ErrorMsg(s) => s.contains("Upstream model rejected"),
+            _ => false,
+        }));
+    }
+
+    #[test]
+    #[ignore = "requires tty"]
+    fn test_tui_adapter_renders_canonical_event_stream() {
+        let app = std::sync::Arc::new(parking_lot::Mutex::new(cade_tui::app::TuiApp::new(
+            cade_core::permissions::PermissionMode::Default,
+            "test_agent".into(),
+            "test_model".into(),
+            None,
+        )));
+
+        // User typed something into editor before stream arrived
+        {
+            let mut a = app.lock();
+            a.editor.set_text("local draft prompt".to_string());
+            assert_eq!(a.editor.text(), "local draft prompt");
+        }
+
+        // Simulate recorded canonical event stream delivery
+        let events = vec![
+            serde_json::json!({
+                "message_type": "stream_start",
+                "conversation_id": "conv-1",
+                "run_id": "run-42",
+                "seq_id": 0
+            }),
+            serde_json::json!({
+                "message_type": "reasoning_message",
+                "content": "Thinking deeply...",
+                "run_id": "run-42",
+                "seq_id": 1
+            }),
+            serde_json::json!({
+                "message_type": "assistant_message",
+                "content": "Here is the plan.",
+                "run_id": "run-42",
+                "seq_id": 2
+            }),
+            serde_json::json!({
+                "message_type": "tool_call_message",
+                "tool_call": {
+                    "id": "call_1",
+                    "name": "bash",
+                    "arguments": {}
+                },
+                "run_id": "run-42",
+                "seq_id": 3
+            }),
+            serde_json::json!({
+                "message_type": "run_done",
+                "status": "done",
+                "run_id": "run-42",
+                "seq_id": 4
+            }),
+        ];
+
+        // Process canonical events through TuiApp
+        for event in events {
+            let msg: cade_agent::agent::client::CadeMessage =
+                serde_json::from_value(event).expect("valid test json");
+            let mut a = app.lock();
+            match msg.msg_type() {
+                "reasoning_message" => {
+                    if let Some(text) = msg.reasoning_text() {
+                        a.push_reasoning_chunk(text);
+                    }
+                }
+                "assistant_message" => {
+                    if let Some(text) = msg.assistant_text() {
+                        let _ = a.push_streaming_chunk(text);
+                    }
+                }
+                "tool_call_message" => {
+                    a.commit_reasoning_inner();
+                    let _ = a.commit_streaming();
+                    if let Some((_, tool_name, _)) = msg.as_tool_call() {
+                        a.set_last_status(Some(format!("● {tool_name}…")));
+                    }
+                }
+                "run_done" => {
+                    let _ = a.commit_reasoning();
+                    let _ = a.commit_streaming();
+                    a.set_last_status(Some("✓ Finished".to_string()));
+                }
+                _ => {}
+            }
+        }
+
+        // Verify TuiApp state
+        let a = app.lock();
+        // 1. Editor local draft state was NOT corrupted by incoming stream
+        assert_eq!(a.editor.text(), "local draft prompt");
+        // 2. Status was updated
+        assert_eq!(a.last_status, Some("✓ Finished".to_string()));
+        // 3. Lines contain the committed streaming content
+        assert!(a.lines.iter().any(|line| match line {
+            RenderLine::AssistantText(s) => s.contains("Here is the plan."),
+            _ => false,
+        }));
+        // 4. Reasoning streamed through the viewport is committed as a
+        //    Reasoning block (never hidden in the bottom bar).
+        assert!(a.lines.iter().any(|line| match line {
+            RenderLine::Reasoning { content, .. } => content.contains("Thinking deeply..."),
             _ => false,
         }));
     }

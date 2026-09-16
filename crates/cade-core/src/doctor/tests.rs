@@ -85,9 +85,11 @@ bind-key  -T root WheelUpPane               select-pane -t =
         .collect();
     assert_eq!(keys, vec!["H", "J", "K", "L"]);
 
-    assert!(report.key_passthrough_issues[0]
-        .remediation
-        .contains("In ~/.tmux.conf"));
+    assert!(
+        report.key_passthrough_issues[0]
+            .remediation
+            .contains("In ~/.tmux.conf")
+    );
 }
 
 #[test]

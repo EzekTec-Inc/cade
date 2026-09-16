@@ -224,6 +224,7 @@ pub fn router(state: AppState) -> Router {
         // Runs (background mode)
         .route("/v1/runs/{run_id}", get(runs::get_run))
         .route("/v1/runs/{run_id}/stream", get(runs::stream_run))
+        .route("/v1/runs/{run_id}/cancel", post(runs::cancel_run))
         // Skills
         .route("/v1/skills", get(skills::list_all_skills))
         .route("/v1/agents/{id}/skills", get(skills::list_agent_skills))

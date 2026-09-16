@@ -96,54 +96,80 @@ pub fn bare_model(model: &str) -> &str {
 }
 
 pub fn clean_openai_schema(v: &mut Value) {
+    clean_openai_schema_inner(v, false);
+}
+
+fn clean_openai_schema_inner(v: &mut Value, is_properties_map: bool) {
     match v {
         Value::Object(map) => {
-            // Retain type arrays like ["string", "null"] for OpenAI structured outputs
-            if let Some(type_val) = map.get_mut("type") {
-                if let Some(arr) = type_val.as_array() {
-                    let has_null = arr.iter().any(|i| i.as_str() == Some("null"));
-                    let non_null_type = arr
-                        .iter()
-                        .filter_map(|item| item.as_str())
-                        .find(|&t| t != "null")
-                        .unwrap_or("string");
-                    if has_null {
-                        *type_val = json!([non_null_type, "null"]);
-                    } else {
-                        *type_val = json!(non_null_type);
+            if !is_properties_map {
+                // Retain type arrays like ["string", "null"] for OpenAI structured outputs
+                if let Some(type_val) = map.get_mut("type") {
+                    if let Some(arr) = type_val.as_array() {
+                        let has_null = arr.iter().any(|i| i.as_str() == Some("null"));
+                        let non_null_type = arr
+                            .iter()
+                            .filter_map(|item| item.as_str())
+                            .find(|&t| t != "null")
+                            .unwrap_or("string");
+                        if has_null {
+                            *type_val = json!([non_null_type, "null"]);
+                        } else {
+                            *type_val = json!(non_null_type);
+                        }
+                    } else if type_val.as_str() == Some("null") {
+                        *type_val = json!("string");
                     }
-                } else if type_val.as_str() == Some("null") {
-                    *type_val = json!("string");
+                }
+
+                // Convert OpenAPI 3.0 `nullable: true` to JSON Schema `type: [type, "null"]`
+                if map.remove("nullable") == Some(Value::Bool(true))
+                    && let Some(type_val) = map.get_mut("type")
+                {
+                    if let Some(s) = type_val.as_str() {
+                        if s != "null" {
+                            *type_val = json!([s, "null"]);
+                        }
+                    } else if let Some(arr) = type_val.as_array_mut()
+                        && !arr.iter().any(|item| item.as_str() == Some("null"))
+                    {
+                        arr.push(json!("null"));
+                    }
+                }
+
+                if map.get("type").and_then(|t| t.as_str()) == Some("object")
+                    && !map.contains_key("properties")
+                {
+                    map.insert("properties".to_string(), json!({}));
+                }
+
+                // Strip keys OpenAI doesn't support in tool schemas (do NOT strip when in properties map!)
+                map.remove("$schema");
+                map.remove("title");
+                map.remove("x-google-enum-descriptions");
+                map.remove("x-google-enum-deprecated");
+                map.remove("x-google-identifier");
+
+                // Strip JSON schema references and definitions (inline_schema_refs should be called first)
+                map.remove("$ref");
+                map.remove("$defs");
+
+                // Clean/simplify JSON Schema combinators for OpenAI tool schemas.
+                simplify_schema_combinators(map, false);
+
+                // Prune required array to only existing properties if object
+                if map.contains_key("properties") {
+                    prune_required_to_existing_properties(map);
                 }
             }
 
-            if map.get("type").and_then(|t| t.as_str()) == Some("object")
-                && !map.contains_key("properties")
-            {
-                map.insert("properties".to_string(), json!({}));
-            }
-
-            // Strip keys OpenAI doesn't support in tool schemas
-            map.remove("$schema");
-            map.remove("title");
-            map.remove("x-google-enum-descriptions");
-            map.remove("x-google-enum-deprecated");
-            map.remove("x-google-identifier");
-
-            // Strip JSON schema references and definitions (inline_schema_refs should be called first)
-            map.remove("$ref");
-            map.remove("$defs");
-
-            // Clean/simplify JSON Schema combinators for OpenAI tool schemas.
-            simplify_schema_combinators(map, false);
-
-            for val in map.values_mut() {
-                clean_openai_schema(val);
+            for (key, val) in map.iter_mut() {
+                clean_openai_schema_inner(val, key == "properties");
             }
         }
         Value::Array(arr) => {
             for val in arr.iter_mut() {
-                clean_openai_schema(val);
+                clean_openai_schema_inner(val, false);
             }
         }
         _ => {}
@@ -464,9 +490,9 @@ fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
 /// for timeouts, connection pools, and TCP keepalives.
 pub fn build_standard_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(120))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }

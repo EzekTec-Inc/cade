@@ -36,6 +36,7 @@ pub(crate) enum TimelineItemKind {
     Table,
     HeuristicSummary,
     StreamingAssistant,
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -55,6 +56,8 @@ pub(crate) enum CardStyle {
     None,
     User,
     Assistant,
+    ToolCall,
+    System,
 }
 
 #[derive(Clone)]
@@ -116,6 +119,12 @@ pub(crate) enum TimelineItem<'a> {
         directives: &'a str,
     },
     StreamingAssistant(&'a str),
+    /// Live thinking block shown while the model is reasoning (not yet
+    /// committed as a `Reasoning` item).
+    LiveReasoning(&'a str),
+    /// Ephemeral working/thinking status line (assessing, tool progress,
+    /// final status) rendered at the bottom of the live timeline.
+    LiveStatus(&'a str),
 }
 
 impl<'a> TimelineItem<'a> {
@@ -140,6 +149,8 @@ impl<'a> TimelineItem<'a> {
             Self::Table { .. } => TimelineItemKind::Table,
             Self::HeuristicSummary { .. } => TimelineItemKind::HeuristicSummary,
             Self::StreamingAssistant(_) => TimelineItemKind::StreamingAssistant,
+            Self::LiveReasoning(_) => TimelineItemKind::Reasoning,
+            Self::LiveStatus(_) => TimelineItemKind::Status,
         }
     }
 
@@ -217,8 +228,10 @@ impl<'a> TimelineItem<'a> {
                 pct,
                 category_tokens,
             } => render_context_bar_item(model, *window, *pct, category_tokens, width, out, colors),
-            Self::User(text) => render_user_message_item(text, width, out, colors),
-            Self::Assistant(text) => render_assistant_item(text, width, expand_all, out, colors),
+            Self::User(text) => render_user_message_item(text, width, out, colors, nerd),
+            Self::Assistant(text) => {
+                render_assistant_item(text, width, expand_all, out, colors, nerd)
+            }
             Self::ToolCall { name, preview } => {
                 render_tool_call_item(name, preview, width, expand_all, out, colors, nerd)
             }
@@ -251,8 +264,10 @@ impl<'a> TimelineItem<'a> {
                 directives,
             } => render_heuristic_summary_item(intent, safety, directives, width, out, colors),
             Self::StreamingAssistant(text) => {
-                render_streaming_assistant_item(text, width, expand_all, out, colors)
+                render_streaming_assistant_item(text, width, expand_all, out, colors, nerd)
             }
+            Self::LiveReasoning(text) => render_live_reasoning_item(text, width, out, colors),
+            Self::LiveStatus(text) => render_live_status_item(text, width, out, colors, nerd),
         }
     }
 
@@ -285,6 +300,30 @@ impl<'a> TimelineEntry<'a> {
 
     pub(crate) fn streaming(index: usize, text: &'a str) -> Self {
         let item = TimelineItem::StreamingAssistant(text);
+        Self {
+            key: TimelineKey {
+                index,
+                kind: item.kind(),
+                streaming: true,
+            },
+            item,
+        }
+    }
+
+    pub(crate) fn reasoning(index: usize, text: &'a str) -> Self {
+        let item = TimelineItem::LiveReasoning(text);
+        Self {
+            key: TimelineKey {
+                index,
+                kind: item.kind(),
+                streaming: true,
+            },
+            item,
+        }
+    }
+
+    pub(crate) fn status(index: usize, text: &'a str) -> Self {
+        let item = TimelineItem::LiveStatus(text);
         Self {
             key: TimelineKey {
                 index,
@@ -346,11 +385,13 @@ impl<'a> TimelineEntry<'a> {
             TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
                 CardStyle::Assistant
             }
+            TimelineItemKind::ToolCall | TimelineItemKind::ToolResult => CardStyle::ToolCall,
+            TimelineItemKind::Error => CardStyle::System,
             _ => CardStyle::None,
         };
         let effective_width = match card_style {
             CardStyle::None => content_w,
-            _ => content_w.saturating_sub(2), // 1 for border, 1 for padding
+            _ => content_w.saturating_sub(2), // 1 for gutter rail, 1 for padding
         };
 
         self.item.visual_rows(
@@ -505,11 +546,13 @@ pub(crate) fn prepare_timeline_entries(
                 TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
                     CardStyle::Assistant
                 }
+                TimelineItemKind::ToolCall | TimelineItemKind::ToolResult => CardStyle::ToolCall,
+                TimelineItemKind::Error => CardStyle::System,
                 _ => CardStyle::None,
             };
             let effective_width = match card_style {
                 CardStyle::None => width,
-                _ => width.saturating_sub(2), // 1 for border, 1 for padding
+                _ => width.saturating_sub(2), // 1 for gutter rail, 1 for padding
             };
             let mut lines = Vec::new();
             entry.render_with_state(
@@ -602,6 +645,17 @@ pub(crate) fn render_timeline_viewport(
                 width: inner.width,
                 height: render_height,
             };
+            const GUTTER_BORDER: ratatui::symbols::border::Set = ratatui::symbols::border::Set {
+                vertical_left: "▎",
+                vertical_right: " ",
+                horizontal_top: " ",
+                horizontal_bottom: " ",
+                top_left: "▎",
+                top_right: " ",
+                bottom_left: "▎",
+                bottom_right: " ",
+            };
+
             let mut block = ratatui::widgets::Block::default();
             match item.card_style {
                 CardStyle::User => {
@@ -611,7 +665,8 @@ pub(crate) fn render_timeline_viewport(
                     }
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
-                        .border_style(colors.text_dim())
+                        .border_set(GUTTER_BORDER)
+                        .border_style(colors.border_accent())
                         .style(style)
                         .padding(ratatui::widgets::Padding::left(1));
                 }
@@ -622,7 +677,32 @@ pub(crate) fn render_timeline_viewport(
                     }
                     block = block
                         .borders(ratatui::widgets::Borders::LEFT)
+                        .border_set(GUTTER_BORDER)
                         .border_style(colors.primary())
+                        .style(style)
+                        .padding(ratatui::widgets::Padding::left(1));
+                }
+                CardStyle::ToolCall => {
+                    let mut style = colors.text_primary();
+                    if is_highlighted {
+                        style = style.bg(colors.c_bg_surface2());
+                    }
+                    block = block
+                        .borders(ratatui::widgets::Borders::LEFT)
+                        .border_set(GUTTER_BORDER)
+                        .border_style(colors.border_muted())
+                        .style(style)
+                        .padding(ratatui::widgets::Padding::left(1));
+                }
+                CardStyle::System => {
+                    let mut style = colors.text_primary();
+                    if is_highlighted {
+                        style = style.bg(colors.c_bg_surface2());
+                    }
+                    block = block
+                        .borders(ratatui::widgets::Borders::LEFT)
+                        .border_set(GUTTER_BORDER)
+                        .border_style(colors.error())
                         .style(style)
                         .padding(ratatui::widgets::Padding::left(1));
                 }
@@ -726,6 +806,14 @@ pub(crate) struct TimelineLayoutEngine {
     pub(crate) expanded_hash: u64,
     pub(crate) streaming_text: Option<String>,
     pub(crate) streaming_entry: Option<PreparedTimelineEntry>,
+    pub(crate) reasoning_text: Option<String>,
+    pub(crate) reasoning_entry: Option<PreparedTimelineEntry>,
+    pub(crate) status_text: Option<String>,
+    pub(crate) status_entry: Option<PreparedTimelineEntry>,
+    /// Set whenever a dynamic (reasoning/streaming) entry is invalidated or
+    /// freshly prepared, forcing the next `layout_items` call to rewrite the
+    /// tail of `entries` even when the entry *count* is unchanged.
+    tail_dirty: bool,
 }
 
 impl TimelineLayoutEngine {
@@ -739,6 +827,11 @@ impl TimelineLayoutEngine {
             expanded_hash: 0,
             streaming_text: None,
             streaming_entry: None,
+            reasoning_text: None,
+            reasoning_entry: None,
+            status_text: None,
+            status_entry: None,
+            tail_dirty: false,
         }
     }
 
@@ -752,6 +845,11 @@ impl TimelineLayoutEngine {
         self.expanded_hash = 0;
         self.streaming_text = None;
         self.streaming_entry = None;
+        self.reasoning_text = None;
+        self.reasoning_entry = None;
+        self.status_text = None;
+        self.status_entry = None;
+        self.tail_dirty = false;
     }
 
     pub fn prepare_entries(
@@ -778,6 +876,59 @@ impl TimelineLayoutEngine {
         if self.streaming_text.as_deref() != streaming {
             self.streaming_text = streaming.map(String::from);
             self.streaming_entry = None; // Invalidate the single-entry streaming cache
+            self.tail_dirty = true;
+        }
+    }
+
+    pub fn set_active_reasoning(&mut self, reasoning: Option<&str>) {
+        if self.reasoning_text.as_deref() != reasoning {
+            self.reasoning_text = reasoning.map(String::from);
+            self.reasoning_entry = None; // Invalidate the single-entry reasoning cache
+            self.tail_dirty = true;
+        }
+    }
+
+    pub fn set_active_status(&mut self, status: Option<&str>) {
+        if self.status_text.as_deref() != status {
+            self.status_text = status.map(String::from);
+            // The status entry is rebuilt every frame (its spinner text is
+            // animated by the caller), so only the text cache is updated here.
+            // Appearing/disappearing is detected by the count check in
+            // `reconcile_dynamic_tail`; setting `tail_dirty` would force the
+            // cached streaming/reasoning entries to be re-cloned each frame.
+            self.status_entry = None; // Invalidate the single-entry status cache
+        }
+    }
+
+    fn prepare_reasoning_entry(&mut self, next_index: usize, colors: &ThemeColors, nerd: bool) {
+        if self.reasoning_entry.is_some() {
+            return;
+        }
+
+        if let Some(ref s) = self.reasoning_text {
+            let reasoning_entry = TimelineEntry::reasoning(next_index, s);
+            let mut lines = Vec::new();
+            let effective_w = self.timeline_w.saturating_sub(2);
+            reasoning_entry.render_with_state(
+                effective_w,
+                self.expand_all,
+                &Default::default(), // Live reasoning is never collapsed
+                &mut lines,
+                colors,
+                nerd,
+            );
+
+            let mut pre_wrapped_lines = Vec::new();
+            for l in lines {
+                pre_wrapped_lines.extend(wrap_line(l, effective_w as u16));
+            }
+            let rows = pre_wrapped_lines.len() as u16;
+            self.reasoning_entry = Some(PreparedTimelineEntry {
+                lines: pre_wrapped_lines,
+                rows,
+                card_style: CardStyle::Assistant,
+            });
+            self.tail_dirty = true;
         }
     }
 
@@ -808,6 +959,34 @@ impl TimelineLayoutEngine {
                 lines: pre_wrapped_lines,
                 rows,
                 card_style: CardStyle::Assistant,
+            });
+            self.tail_dirty = true;
+        }
+    }
+
+    fn prepare_status_entry(&mut self, next_index: usize, colors: &ThemeColors, nerd: bool) {
+        if let Some(ref s) = self.status_text {
+            let status_entry = TimelineEntry::status(next_index, s);
+            let mut lines = Vec::new();
+            let effective_w = self.timeline_w.saturating_sub(2);
+            status_entry.render_with_state(
+                effective_w,
+                self.expand_all,
+                &Default::default(), // Live status is never collapsed
+                &mut lines,
+                colors,
+                nerd,
+            );
+
+            let mut pre_wrapped_lines = Vec::new();
+            for l in lines {
+                pre_wrapped_lines.extend(wrap_line(l, effective_w as u16));
+            }
+            let rows = pre_wrapped_lines.len() as u16;
+            self.status_entry = Some(PreparedTimelineEntry {
+                lines: pre_wrapped_lines,
+                rows,
+                card_style: CardStyle::None,
             });
         }
     }
@@ -846,31 +1025,19 @@ impl TimelineLayoutEngine {
             && self.expanded_hash == expanded_hash;
 
         if history_clean {
-            // Check if the streaming entry has also been prepared
-            let next_index = lines.len();
-            if self.streaming_entry.is_none() && self.streaming_text.is_some() {
-                self.prepare_streaming_entry(next_index, colors, nerd);
-
-                // If we now have a new streaming entry, we need to reconstruct self.entries!
-                // Since the historical portion was clean, we can simply truncate any previous streaming entry,
-                // and append the new one.
-                if let Some(ref entry) = self.streaming_entry {
-                    self.entries.truncate(next_index);
-                    self.entries.push(entry.clone());
-                }
-            } else if self.streaming_text.is_none() {
-                // No active stream, ensure we truncated any old stream
-                self.entries.truncate(next_index);
-            }
+            self.reconcile_dynamic_tail(lines.len(), colors, nerd);
             &self.entries
         } else {
             // Cache miss for history — rebuild everything
             if self.timeline_w != timeline_w {
                 self.item_cache.clear();
                 self.streaming_entry = None; // clear streaming cache as width changed
+                self.reasoning_entry = None; // clear reasoning cache as width changed
+                self.status_entry = None; // clear status cache as width changed
+                self.tail_dirty = true;
             }
             let entries = build_timeline_entries(lines);
-            let mut p = prepare_timeline_entries(
+            let p = prepare_timeline_entries(
                 &entries,
                 timeline_w,
                 expand_all,
@@ -885,15 +1052,44 @@ impl TimelineLayoutEngine {
             self.expand_all = expand_all;
             self.expanded_hash = expanded_hash;
 
-            // Prepare and append the streaming entry if present
-            let next_index = lines.len();
-            self.prepare_streaming_entry(next_index, colors, nerd);
-            if let Some(ref entry) = self.streaming_entry {
-                p.push(entry.clone());
-            }
-
             self.entries = p;
+            self.reconcile_dynamic_tail(lines.len(), colors, nerd);
             &self.entries
+        }
+    }
+
+    /// Ensure `self.entries` ends with exactly the live dynamic tail: the
+    /// active-reasoning entry (while thinking), the active-stream entry (while
+    /// assistant text is streaming), and the live status line — in that order.
+    /// The historical portion is untouched — each dynamic entry is cached
+    /// independently and only re-rendered when its content actually changes.
+    fn reconcile_dynamic_tail(&mut self, next_index: usize, colors: &ThemeColors, nerd: bool) {
+        self.prepare_reasoning_entry(next_index, colors, nerd);
+        self.prepare_streaming_entry(next_index, colors, nerd);
+        self.prepare_status_entry(next_index, colors, nerd);
+
+        let dynamic_count = usize::from(self.reasoning_entry.is_some())
+            + usize::from(self.streaming_entry.is_some())
+            + usize::from(self.status_entry.is_some());
+        if self.tail_dirty || self.entries.len() != next_index + dynamic_count {
+            self.entries.truncate(next_index);
+            if let Some(ref entry) = self.reasoning_entry {
+                self.entries.push(entry.clone());
+            }
+            if let Some(ref entry) = self.streaming_entry {
+                self.entries.push(entry.clone());
+            }
+            if let Some(ref entry) = self.status_entry {
+                self.entries.push(entry.clone());
+            }
+            self.tail_dirty = false;
+        } else if let Some(ref entry) = self.status_entry {
+            // Only the animated status changed between frames.  Refresh its
+            // cell in place so the cached streaming/reasoning entries aren't
+            // re-cloned on every draw.  The status entry is rebuilt fresh each
+            // frame, so it can never be stale here.
+            let status_pos = self.entries.len() - 1;
+            self.entries[status_pos] = entry.clone();
         }
     }
 }

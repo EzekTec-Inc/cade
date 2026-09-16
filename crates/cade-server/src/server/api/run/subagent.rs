@@ -239,13 +239,11 @@ pub trait SubagentEventEmitter: Send + Sync {
         elapsed: u32,
         writeback_facts: usize,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
-    fn raw_sse_tx(
-        &self,
-    ) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>;
+    fn raw_sse_tx(&self) -> super::SseTx;
 }
 
 pub struct SseEventEmitter {
-    pub tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    pub tx: super::SseTx,
 }
 
 impl SubagentEventEmitter for SseEventEmitter {
@@ -270,9 +268,9 @@ impl SubagentEventEmitter for SseEventEmitter {
                 "model": model,
             });
             let _ = tx
-                .send(Ok(
-                    axum::response::sse::Event::default().data(ev.to_string())
-                ))
+                .send(Ok(super::runtime::RunEventEnvelope {
+                    data: ev.to_string(),
+                }))
                 .await;
         })
     }
@@ -299,17 +297,14 @@ impl SubagentEventEmitter for SseEventEmitter {
                 "writeback_facts": writeback_facts,
             });
             let _ = tx
-                .send(Ok(
-                    axum::response::sse::Event::default().data(ev.to_string())
-                ))
+                .send(Ok(super::runtime::RunEventEnvelope {
+                    data: ev.to_string(),
+                }))
                 .await;
         })
     }
 
-    fn raw_sse_tx(
-        &self,
-    ) -> tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>
-    {
+    fn raw_sse_tx(&self) -> super::SseTx {
         self.tx.clone()
     }
 }
@@ -367,7 +362,7 @@ impl SubagentExecutor for CadeSubagentExecutor {
 struct ServerSubagentRunner {
     state: AppState,
     parent_agent_id: String,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    sse_tx: super::SseTx,
 }
 
 #[async_trait]
@@ -425,7 +420,7 @@ pub(super) async fn handle_subagent_tool(
     tool_name: String,
     tool_call_id: String,
     args: serde_json::Value,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    sse_tx: super::SseTx,
 ) -> cade_agent::tools::manager::ToolResult {
     if tool_name == "wait" {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -541,7 +536,7 @@ pub(super) async fn handle_subagent_single_inner_tool(
     parent_agent_id: &str,
     tool_call_id: &str,
     args: &serde_json::Value,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    sse_tx: super::SseTx,
 ) -> cade_agent::tools::manager::ToolResult {
     let executor: Box<dyn SubagentExecutor> = Box::new(CadeSubagentExecutor::new(
         state.clone(),
@@ -557,7 +552,7 @@ pub(super) async fn handle_run_subagent_tool(
     parent_agent_id: &str,
     tool_call_id: &str,
     args: &serde_json::Value,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    sse_tx: super::SseTx,
 ) -> cade_agent::tools::manager::ToolResult {
     let executor: Box<dyn SubagentExecutor> = Box::new(CadeSubagentExecutor::new(
         state.clone(),
@@ -1162,7 +1157,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     "status": status,
                 });
                 let _ = emitter.raw_sse_tx()
-                    .send(Ok(axum::response::sse::Event::default().data(iter_ev.to_string())))
+                    .send(Ok(super::runtime::RunEventEnvelope { data: iter_ev.to_string() }))
                     .await;
 
                 break;
@@ -1187,7 +1182,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     "args_hash": format!("{fp:x}"),
                 });
                 let _ = emitter.raw_sse_tx()
-                    .send(Ok(axum::response::sse::Event::default().data(iter_ev.to_string())))
+                    .send(Ok(super::runtime::RunEventEnvelope { data: iter_ev.to_string() }))
                     .await;
 
                 // G5: Per-call dedup — warn if same fingerprint seen before.
@@ -1461,7 +1456,7 @@ ui_resource_uri: None,
 struct CadeSubagentRunner {
     state: AppState,
     parent_agent_id: String,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    sse_tx: super::SseTx,
 }
 
 #[async_trait::async_trait]
@@ -1540,7 +1535,7 @@ pub(super) async fn handle_run_team_tool(
     parent_agent_id: String,
     tool_call_id: String,
     args: serde_json::Value,
-    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    sse_tx: super::SseTx,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::team::{TeamConfig, TeamExecutor};
     use cade_agent::tools::manager::ToolResult;

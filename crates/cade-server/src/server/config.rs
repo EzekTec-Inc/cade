@@ -137,6 +137,26 @@ pub fn detect_provider() -> (LlmProviderKind, String) {
     (LlmProviderKind::Ollama, model)
 }
 
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            addr: "127.0.0.1:8284".parse().expect("valid socket addr"),
+            db_path: ":memory:".to_string(),
+            llm_provider: LlmProviderKind::Ollama,
+            default_model: "llama3.2".to_string(),
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            deepseek_api_key: None,
+            ollama_base_url: "http://localhost:11434".to_string(),
+            api_key: None,
+            allowed_origin: None,
+            max_context_budget: None,
+            max_tokens_per_turn: None,
+        }
+    }
+}
+
 impl ServerConfig {
     pub fn from_env() -> crate::server::Result<Self> {
         Self::from_env_with_port(None)

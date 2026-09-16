@@ -323,6 +323,38 @@ pub struct AppState {
     pub embedder: Option<Arc<dyn cade_store::sqlite::embedding::Embedder>>,
 }
 
+impl AppState {
+    pub fn new_in_process(
+        db: Db,
+        llm: Arc<dyn LlmProvider>,
+        llm_router: Arc<RwLock<LlmRouter>>,
+        config: Arc<ServerConfig>,
+        mcp: Arc<McpManager>,
+    ) -> Self {
+        Self {
+            db,
+            llm,
+            llm_router,
+            config,
+            mcp,
+            rate_limiter: RateLimiter::from_env(),
+            memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            agent_metrics: Arc::new(dashmap::DashMap::new()),
+            agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            context_cache: Arc::new(parking_lot::Mutex::new(SafeLruCache::new(
+                CONTEXT_CACHE_CAPACITY,
+            ))),
+            all_skills: Arc::new(RwLock::new(Vec::new())),
+            agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            subagent_cancellations: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            embedder: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -203,16 +203,26 @@ async fn async_main() -> Result<()> {
 
                     // Sync reloaded MCP schemas into SQLite
                     let mcp_schemas = mcp_clone.all_tool_schemas().await;
-                    for mut schema in mcp_schemas {
+                    for schema in mcp_schemas {
                         let name = schema["name"].as_str().unwrap_or("").to_string();
                         if name.is_empty() {
                             continue;
                         }
                         let description = schema["description"].as_str().map(String::from);
-                        let is_core = schema["_is_core"].as_bool().unwrap_or(false);
-                        if let Some(obj) = schema.as_object_mut() {
-                            obj.remove("_is_core");
-                        }
+                        let is_core = schema
+                            .get("x-cade")
+                            .and_then(|metadata| metadata.get("core_server"))
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or_else(|| {
+                                schema["_is_core"].as_bool().unwrap_or(false)
+                                    || schema
+                                        .get("tags")
+                                        .and_then(serde_json::Value::as_array)
+                                        .map(|tags| {
+                                            tags.iter().any(|t| t.as_str() == Some("core_mcp"))
+                                        })
+                                        .unwrap_or(false)
+                            });
 
                         let mut tags = vec!["cade".to_string(), "mcp".to_string()];
                         if is_core {
@@ -305,13 +315,21 @@ async fn async_main() -> Result<()> {
         }
 
         let mcp_schemas = mcp.all_tool_schemas().await;
-        for mut schema in mcp_schemas {
+        for schema in mcp_schemas {
             let name = schema["name"].as_str().unwrap_or("").to_string();
             let description = schema["description"].as_str().map(String::from);
-            let is_core = schema["_is_core"].as_bool().unwrap_or(false);
-            if let Some(obj) = schema.as_object_mut() {
-                obj.remove("_is_core");
-            }
+            let is_core = schema
+                .get("x-cade")
+                .and_then(|metadata| metadata.get("core_server"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or_else(|| {
+                    schema["_is_core"].as_bool().unwrap_or(false)
+                        || schema
+                            .get("tags")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|tags| tags.iter().any(|t| t.as_str() == Some("core_mcp")))
+                            .unwrap_or(false)
+                });
 
             let mut tags = vec!["cade".to_string(), "mcp".to_string()];
             if is_core {

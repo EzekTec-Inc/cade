@@ -167,6 +167,12 @@ impl TuiApp {
                 Event::Mouse(m) => {
                     let _ = self.handle_message_area_mouse_event(m)?;
                 }
+                Event::FocusGained => {
+                    self.has_focus = true;
+                }
+                Event::FocusLost => {
+                    self.has_focus = false;
+                }
                 _ => {}
             }
         }
@@ -192,15 +198,28 @@ impl TuiApp {
     }
 
     pub fn paste_from_clipboard(&mut self) -> bool {
+        // 1. Try OS clipboard text first
+        if let Some(text) = crate::app::clipboard::read_clipboard_text()
+            && !text.is_empty()
+        {
+            self.handle_bracketed_paste_text(&text);
+            return true;
+        }
+
+        // 2. Try CADE internal clipboard buffer (from viewport selection / copy)
+        if let Some(ref text) = self.retained_selected_text
+            && !text.is_empty()
+        {
+            let t = text.clone();
+            self.handle_bracketed_paste_text(&t);
+            return true;
+        }
+
+        // 3. Try OS clipboard image
         if let Some((media_type, w, h, b64)) = crate::app::clipboard::read_clipboard_image() {
             self.handle_image_paste(&media_type, b64, w, h);
             self.show_toast("Pasted image from clipboard", ToastLevel::Success);
             self.draw_dirty = true;
-            return true;
-        }
-
-        if let Some(text) = crate::app::clipboard::read_clipboard_text() {
-            self.handle_bracketed_paste_text(&text);
             return true;
         }
 
@@ -227,21 +246,35 @@ impl TuiApp {
                     self.selection_active = true;
                     self.selection_start = Some((m.column, m.row));
                     self.selection_current = Some((m.column, m.row));
+                    self.selection_retained = false;
+                    self.retained_selected_text = None;
                     self.draw()?;
                     return Ok(true);
+                } else if self.selection_retained || self.selection_active {
+                    self.clear_selection();
+                    self.draw()?;
                 }
             }
             crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
                 if self.selection_active {
-                    self.selection_current = Some((m.column, m.row));
-                    self.draw()?;
+                    let new_pos = Some((m.column, m.row));
+                    if self.selection_current != new_pos {
+                        self.selection_current = new_pos;
+                        self.draw_throttled()?;
+                    }
                     return Ok(true);
                 }
             }
             crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
                 if self.selection_active {
+                    let is_single_click = self.selection_start == Some((m.column, m.row));
                     self.selection_current = Some((m.column, m.row));
-                    self.copy_selected_text();
+                    if is_single_click {
+                        self.toggle_last_collapsible_item();
+                        self.clear_selection();
+                    } else {
+                        self.copy_selected_text();
+                    }
                     self.draw()?;
                     return Ok(true);
                 }
@@ -449,8 +482,28 @@ impl TuiApp {
                 return Ok(None);
             }
 
+            KeyCode::Insert if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.paste_from_clipboard();
+                return Ok(None);
+            }
+
             KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_last_collapsible_item();
+            }
+
+            // Ctrl+Shift+C: Quote active/retained selection to prompt (B.3)
+            KeyCode::Char('C') | KeyCode::Char('c')
+                if k.modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                self.quote_selection_to_prompt();
+                return Ok(None);
+            }
+
+            // Esc without overlays: Drop retained selection (B.1)
+            KeyCode::Esc if self.selection_retained || self.selection_active => {
+                self.clear_selection();
+                return Ok(None);
             }
 
             _ if self.leader_engine.is_active
@@ -462,19 +515,88 @@ impl TuiApp {
                 match outcome {
                     crate::app::leader::LeaderOutcome::Pending => return Ok(None),
                     crate::app::leader::LeaderOutcome::Dismissed => return Ok(None),
-                    crate::app::leader::LeaderOutcome::Action(action) => {
-                        let cmd = match action {
-                            crate::app::leader::LeaderAction::ModelPicker => "/model",
-                            crate::app::leader::LeaderAction::SessionPicker => "/session",
-                            crate::app::leader::LeaderAction::ThemePicker => "/theme",
-                            crate::app::leader::LeaderAction::UndoCheckpoint => "/undo",
-                            crate::app::leader::LeaderAction::RedoCheckpoint => "/redo",
-                            crate::app::leader::LeaderAction::TogglePermissions => "/permissions",
-                            crate::app::leader::LeaderAction::HelpOverlay => "/help",
-                        };
-                        return Ok(Some(Some(cmd.to_string())));
-                    }
+                    crate::app::leader::LeaderOutcome::Action(action) => match action {
+                        crate::app::leader::LeaderAction::QuoteSelection => {
+                            self.quote_selection_to_prompt();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::CopyMessage => {
+                            if !self.copy_selected_text() {
+                                self.copy_last_message();
+                            }
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::SidebarToggle => {
+                            self.toggle_sidebar();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::NewSession => {
+                            return Ok(Some(Some("/session new".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::ListSessions => {
+                            return Ok(Some(Some("/session".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::CompactSession => {
+                            return Ok(Some(Some("/compact".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::SessionTimeline => {
+                            return Ok(Some(Some("/timeline".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::ModelPicker => {
+                            return Ok(Some(Some("/model".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::SessionPicker => {
+                            return Ok(Some(Some("/session".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::ThemePicker => {
+                            return Ok(Some(Some("/theme".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::UndoCheckpoint => {
+                            return Ok(Some(Some("/undo".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::RedoCheckpoint => {
+                            return Ok(Some(Some("/redo".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::TogglePermissions => {
+                            return Ok(Some(Some("/permissions".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::HelpOverlay => {
+                            return Ok(Some(Some("/help".to_string())));
+                        }
+                        crate::app::leader::LeaderAction::StashPrompt => {
+                            self.stash_prompt();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::ToggleConceal => {
+                            self.toggle_conceal();
+                            return Ok(None);
+                        }
+                    },
                 }
+            }
+
+            // Ctrl+Alt+V: Paste as plain-text (Section J: skips collapse/attachments)
+            KeyCode::Char('v') | KeyCode::Char('V')
+                if k.modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                let text = crate::app::clipboard::read_clipboard_text_with_mode(
+                    self.tui_settings.linux_clipboard_selection,
+                );
+                if let Some(text) = text {
+                    self.editor.insert_str(&text);
+                    self.draw_dirty = true;
+                }
+                return Ok(None);
+            }
+
+            // Ctrl+E: Open prompt in external editor ($VISUAL / $EDITOR) (Section J)
+            KeyCode::Char('e') | KeyCode::Char('E')
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                let _ = self.edit_in_external_editor();
+                return Ok(None);
             }
 
             KeyCode::Char('?')
@@ -696,6 +818,9 @@ impl TuiApp {
                 match action {
                     EditorAction::Consumed => {
                         self.draw_dirty = true;
+                        if self.selection_retained {
+                            self.clear_selection();
+                        }
 
                         if let Some(ac) = self
                             .overlays
@@ -784,7 +909,11 @@ impl TuiApp {
                         self.draw_dirty = true;
                         return Ok(None);
                     }
-                    EditorAction::Unhandled(_) => {}
+                    EditorAction::Unhandled(_) => {
+                        if self.selection_retained {
+                            self.clear_selection();
+                        }
+                    }
                 }
             }
         }
@@ -833,7 +962,22 @@ impl TuiApp {
         let action = match action.downcast::<String>() {
             Ok(string_val) => {
                 let s = *string_val;
-                if s.starts_with('/') {
+                if s == "/quote" || s == "quote" {
+                    self.quote_selection_to_prompt();
+                    return Ok(None);
+                } else if s == "/conceal" || s == "conceal" {
+                    self.toggle_conceal();
+                    return Ok(None);
+                } else if s == "/timestamps" || s == "timestamps" {
+                    self.toggle_timestamps();
+                    return Ok(None);
+                } else if s == "/stash" || s == "stash" {
+                    self.stash_prompt();
+                    return Ok(None);
+                } else if s == "/save" || s == "save" {
+                    self.save_settings();
+                    return Ok(None);
+                } else if s.starts_with('/') {
                     return Ok(Some(Some(s)));
                 } else {
                     self.editor.handle_paste(&s);
@@ -1004,6 +1148,35 @@ pub(crate) fn scroll_page_down(current: usize, viewport_h: u16) -> (usize, bool)
     (new, new == 0)
 }
 
+/// Compute the new scroll position after a half-page up keypress (ctrl+alt+u).
+pub(crate) fn scroll_half_page_up(current: usize, viewport_h: u16) -> usize {
+    let step = ((viewport_h as usize) / 2).max(1);
+    current.saturating_add(step)
+}
+
+/// Compute the new scroll position after a half-page down keypress (ctrl+alt+d).
+/// Returns `(new_scroll, should_follow)`.
+pub(crate) fn scroll_half_page_down(current: usize, viewport_h: u16) -> (usize, bool) {
+    let step = ((viewport_h as usize) / 2).max(1);
+    let new = current.saturating_sub(step);
+    (new, new == 0)
+}
+
+/// Compute accelerated scroll delta (macOS-style scroll ramp).
+pub(crate) fn compute_accelerated_scroll(
+    base_speed: u16,
+    acceleration_enabled: bool,
+    streak: u16,
+) -> usize {
+    let base = (base_speed as usize).max(1);
+    if !acceleration_enabled || streak <= 1 {
+        base
+    } else {
+        let multiplier = 1 + ((streak as usize) / 2).min(4);
+        base * multiplier
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1085,5 +1258,28 @@ mod tests {
         let (new, follow) = scroll_page_down(5, 0);
         assert_eq!(new, 4);
         assert!(!follow);
+    }
+
+    #[test]
+    fn test_scroll_half_page() {
+        assert_eq!(scroll_half_page_up(0, 40), 20);
+        assert_eq!(scroll_half_page_up(10, 40), 30);
+
+        let (new, follow) = scroll_half_page_down(30, 40);
+        assert_eq!(new, 10);
+        assert!(!follow);
+
+        let (new, follow) = scroll_half_page_down(10, 40);
+        assert_eq!(new, 0);
+        assert!(follow);
+    }
+
+    #[test]
+    fn test_compute_accelerated_scroll() {
+        assert_eq!(compute_accelerated_scroll(3, false, 5), 3);
+        assert_eq!(compute_accelerated_scroll(3, true, 1), 3);
+        assert_eq!(compute_accelerated_scroll(3, true, 2), 6);
+        assert_eq!(compute_accelerated_scroll(3, true, 4), 9);
+        assert_eq!(compute_accelerated_scroll(3, true, 10), 15);
     }
 }

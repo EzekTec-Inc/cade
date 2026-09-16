@@ -36,6 +36,7 @@ dirs.workspace       = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { workspace = true, features = ["json"] }
 reqwest-eventsource = "0.6"
+cade-server-lib = { path = "../cade-server" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen         = "0.2"

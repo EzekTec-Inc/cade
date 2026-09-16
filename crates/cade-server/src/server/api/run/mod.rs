@@ -9,7 +9,9 @@
 //!   3. If the LLM emits tool calls, execute them (native + MCP) and persist
 //!      the results.
 //!   4. Rebuild context → call LLM again → stream — repeat until
-//!      `finish_reason` is not `"tool_use"` or the turn cap is reached.
+//!      `finish_reason` is not `"tool_use"` or the adaptive turn budget is
+//!      exhausted (base `MAX_TURNS`, escalated by distinct tool work, see
+//!      [`adaptive_turn_budget`]).
 //!
 //! The client receives a single continuous SSE stream.  All tool_call and
 //! tool_result events are included so the GUI can render them inline.
@@ -41,9 +43,10 @@ use cade_store::sqlite;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve_conversation};
+use super::messages::{err, maybe_set_conv_title, persist, resolve_conversation};
 use crate::server::state::AppState;
 
+pub mod runtime;
 pub mod storage_impl;
 /// Maximum agentic turns per request (prevents infinite loops).
 mod subagent;
@@ -51,7 +54,22 @@ mod subagent;
 #[path = "tests.rs"]
 mod tests;
 
+/// Default maximum agentic turns per request (prevents infinite loops).
+/// Overridable via the `CADE_MAX_TURNS` env var (see [`max_turns`]).
 const MAX_TURNS: usize = 20;
+
+/// Maximum consecutive identical tool invocations (same tool + same
+/// arguments) before the agentic loop is classified as degenerate and
+/// aborted.  A model that keeps retrying the exact same call instead of
+/// converging would otherwise burn turns and tokens all the way to
+/// [`MAX_TURNS`].
+const MAX_IDENTICAL_REPEAT_TOOL_CALLS: usize = 3;
+
+/// Default cap on the *adaptive* turn budget, expressed as a multiple of
+/// [`MAX_TURNS`].  The per-run budget starts at the base cap and grows with
+/// genuinely distinct tool work (see [`adaptive_turn_budget`]); this bound
+/// prevents a productive-but-unbounded loop from running away.
+const TURN_CEILING_MULTIPLIER: usize = 5;
 
 /// Maximum bytes of a tool's `output` to send over SSE before truncation.
 mod execution;
@@ -110,15 +128,73 @@ pub(super) fn parse_max_session_cost(raw: Option<&str>) -> Option<f64> {
         .filter(|v| *v > 0.0)
 }
 
-/// P4: read `CADE_MAX_SESSION_COST_USD` env var.
+/// Resolve the session cost cap (in USD).
 ///
-/// When set to a positive number, the agentic loop aborts as soon as the
-/// agent's cumulative cost (across the server's lifetime, computed via
-/// `AgentMetrics::compute_cost_usd`) exceeds this value.  Unset, empty, or
-/// non-positive values disable the guardrail entirely.
-fn max_session_cost_usd() -> Option<f64> {
-    // Default to a safe limit of $5.00 to prevent runaway loops if unset.
-    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref()).or(Some(5.0))
+/// Precedence: `CADE_MAX_SESSION_COST_USD` env var > `.cade/settings.json`
+/// (`max_session_cost_usd`, project wins over global) > built-in default.
+/// When no cap is configured anywhere, the guardrail defaults to `$120.00`.
+fn max_session_cost_usd(settings_cap: Option<f64>) -> Option<f64> {
+    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref())
+        .or(settings_cap)
+        .or(Some(120.0))
+}
+
+/// Parse a `CADE_MAX_TURNS`-style env value into an optional cap.
+/// Pure function for testability.
+///
+/// `None`, empty, zero, or non-numeric input → `None` (= fall back to the
+/// built-in [`MAX_TURNS`] default).  Positive values clamp the agentic
+/// loop to that many LLM turns.
+pub(super) fn parse_max_turns(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+}
+
+/// Read `CADE_MAX_TURNS` env var.
+///
+/// Sets the *base* agentic turn budget: the loop can always run at least
+/// this many turns, and the adaptive mechanism ([`adaptive_turn_budget`])
+/// extends it further while the run keeps making genuinely new tool calls.
+/// Unset, empty, zero, or non-numeric values keep the [`MAX_TURNS`] default
+/// of 20.
+fn max_turns() -> usize {
+    parse_max_turns(std::env::var("CADE_MAX_TURNS").ok().as_deref()).unwrap_or(MAX_TURNS)
+}
+
+/// Parse a `CADE_MAX_TURNS_CEILING`-style env value into an optional cap.
+/// Pure function for testability.  Positive values clamp the adaptive turn
+/// budget; anything else falls back to [`TURN_CEILING_MULTIPLIER`] × base.
+pub(super) fn parse_max_turns_ceiling(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+}
+
+/// Resolve the absolute ceiling for the adaptive turn budget.
+///
+/// `CADE_MAX_TURNS_CEILING` overrides the default of
+/// [`TURN_CEILING_MULTIPLIER`] × the base budget, so a run can never exceed
+/// this many LLM turns.
+fn turns_ceiling(base: usize) -> usize {
+    parse_max_turns_ceiling(std::env::var("CADE_MAX_TURNS_CEILING").ok().as_deref())
+        .unwrap_or_else(|| base.saturating_mul(TURN_CEILING_MULTIPLIER))
+}
+
+/// Compute the adaptive turn budget from the number of *distinct* tool
+/// calls performed so far.  Pure function for testability.
+///
+/// Each genuinely new tool fingerprint (tool + arguments) earns 2 extra
+/// turns of headroom so legitimate long tasks aren't cut at the base cap,
+/// but the budget is clamped to `[base, ceiling]`.  A model that stops
+/// producing new work stops earning headroom — repeated or cycling calls
+/// are handled by the degenerate-loop detector instead of extending the run.
+pub(super) fn adaptive_turn_budget(
+    base: usize,
+    ceiling: usize,
+    distinct_tool_calls: usize,
+) -> usize {
+    base.saturating_add(distinct_tool_calls.saturating_mul(2))
+        .min(ceiling)
+        .max(base)
 }
 
 /// P4: shared `ModelRegistry` used to price token totals against the
@@ -170,24 +246,7 @@ fn tool_turn_max_tokens() -> Option<u32> {
         .or(Some(4096))
 }
 
-// ── Pre-spawn helpers ─────────────────────────────────────────────────────
-
-/// Record that the agent is active and update its conversation pointer.
-async fn update_activity(state: &AppState, agent_id: &str, conv_id: Option<String>) {
-    let mut activity = state.agent_activity.write().await;
-    let entry =
-        activity
-            .entry(agent_id.to_owned())
-            .or_insert(crate::server::state::AgentActivity {
-                last_active_ts: 0,
-                needs_consolidation: false,
-                conversation_id: conv_id.clone(),
-                last_consolidation_turn: 0,
-                last_omitted_turns: 0,
-            });
-    entry.last_active_ts = chrono::Utc::now().timestamp();
-    entry.conversation_id = conv_id;
-}
+// ── Request helpers ───────────────────────────────────────────────────────
 
 /// Extract and validate the `input` field from the request body.
 fn parse_input(body: &Value) -> Result<String, Response> {
@@ -203,12 +262,25 @@ fn detect_theme_cmd(input: &str) -> Option<String> {
     input.strip_prefix("/theme ").map(|s| s.trim().to_string())
 }
 
-/// Create a run record in the DB, falling back to a timestamp-based local ID
-/// if the DB write fails.
-fn make_run_id(state: &AppState, agent_id: &str, conv_str: Option<&str>) -> String {
-    sqlite::create_run(&state.db, agent_id, conv_str)
-        .map(|r| r.id)
-        .unwrap_or_else(|_| format!("run-local-{}", chrono::Utc::now().timestamp()))
+/// Persist an ordered run event before forwarding it to the active transport.
+async fn emit_run_event(db: &sqlite::Db, run_id: &str, tx: &SseTx, mut payload: Value) {
+    let serialized = payload.to_string();
+    let sequence = match sqlite::append_run_event(db, run_id, &serialized) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            tracing::error!(%run_id, %error, "failed to persist run event");
+            return;
+        }
+    };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
+        object.insert("seq_id".to_owned(), Value::from(sequence));
+    }
+    let _ = tx
+        .send(Ok(runtime::RunEventEnvelope {
+            data: payload.to_string(),
+        }))
+        .await;
 }
 
 /// `POST /v1/agents/:id/run`
@@ -217,102 +289,81 @@ pub async fn run_agent(
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    // ── Resolve / create conversation ─────────────────────────────────────
-    let conv_id: Option<String> = match resolve_conversation(&state, &agent_id, &body) {
-        Ok(c) => c,
-        Err(r) => return r,
+    let conversation_id = match resolve_conversation(&state, &agent_id, &body) {
+        Ok(conversation_id) => conversation_id,
+        Err(response) => return response,
     };
-    let conv_str = conv_id.clone();
-
-    // ── Update activity ───────────────────────────────────────────────────
-    update_activity(&state, &agent_id, conv_id.clone()).await;
-
-    // ── Parse & persist user message ──────────────────────────────────────
     let input = match parse_input(&body) {
-        Ok(s) => s,
-        Err(r) => return r,
+        Ok(input) => input,
+        Err(response) => return response,
     };
-    let theme_cmd = detect_theme_cmd(&input);
-    if theme_cmd.is_none() {
-        if let Some(cid) = conv_str.as_deref() {
-            maybe_set_conv_title(&state, cid, &input);
-        }
-        persist(
-            &state,
-            &agent_id,
-            conv_str.as_deref(),
-            "user",
-            json!({ "content": input }),
-        );
-    }
 
-    // ── Create run record ─────────────────────────────────────────────────
-    let run_id = make_run_id(&state, &agent_id, conv_str.as_deref());
+    let runtime = runtime::ServerAgentRuntime::new(state);
+    let handle = runtime
+        .start(runtime::RunRequest {
+            agent_id,
+            conversation_id,
+            input,
+        })
+        .await;
 
-    crate::server::api::agents::publish_global_event(
-        Some(&state.db),
-        "run_started",
-        json!({
-            "run_id": run_id,
-            "agent_id": agent_id,
-            "conversation_id": conv_str,
-        }),
+    tracing::debug!(run_id = %handle.run_id, "agent run accepted by server runtime");
+    let stream = tokio_stream::StreamExt::map(
+        tokio_stream::wrappers::ReceiverStream::new(handle.events),
+        |res| res.map(Event::from),
     );
-
-    // Snapshot for the async stream task
-    let state2 = state.clone();
-    let agent_id2 = agent_id.clone();
-    let conv_id2 = conv_str.clone();
-    let run_id2 = run_id.clone();
-
-    // ── Build SSE stream ──────────────────────────────────────────────────
-    // We use an mpsc channel to bridge the async loop into an SSE stream.
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
-
-    let input_clone = input.clone();
-    tokio::spawn(run_agent_loop(
-        state2,
-        agent_id2,
-        conv_id2,
-        run_id2,
-        theme_cmd,
-        tx,
-        input_clone,
-    ));
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Sse::new(stream).into_response()
+    // Keep the SSE transport alive during long quiet periods (model thinking,
+    // long tool waits).  Nginx/proxies default to ~60 s read timeouts and will
+    // tear down an idle stream, which the client surfaces as a body-stream
+    // error.  Emit periodic SSE heartbeat comments the client ignores.
+    Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)),
+        )
+        .into_response()
 }
 
 /// Type alias for the SSE sender used by [`run_agent_loop`].
-pub(super) type SseTx = tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>;
+pub(super) type SseTx =
+    tokio::sync::mpsc::Sender<Result<runtime::RunEventEnvelope, std::convert::Infallible>>;
 
 /// Async body of [`run_agent`], extracted for readability.
 ///
 /// Handles `/theme <name>` commands and the full multi-turn agentic loop.
 /// All SSE events are sent via `tx`; the caller owns the receiver side.
-pub(crate) async fn run_agent_loop(
+pub(crate) async fn run_agent_loop_with_dependencies(
     state2: AppState,
-    agent_id2: String,
-    conv_id2: Option<String>,
-    run_id2: String,
-    theme_cmd: Option<String>,
+    request: runtime::LoopRequest,
     tx: SseTx,
-    input: String,
+    context_builder: std::sync::Arc<dyn runtime::ContextBuilder>,
+    capability_executor: std::sync::Arc<dyn runtime::CapabilityExecutor>,
 ) {
+    let runtime::LoopRequest {
+        agent_id: agent_id2,
+        conversation_id: conv_id2,
+        run_id: run_id2,
+        theme_command: theme_cmd,
+        input,
+    } = request;
     let send_raw = |json_string: String| {
+        let database = state2.db.clone();
+        let run_id = run_id2.clone();
         let tx = tx.clone();
-        let ev = Event::default().data(json_string);
         async move {
-            let _ = tx.send(Ok(ev)).await;
+            let payload = match serde_json::from_str(&json_string) {
+                Ok(payload) => payload,
+                Err(_) => Value::String(json_string),
+            };
+            emit_run_event(&database, &run_id, &tx, payload).await;
         }
     };
 
     let send = |data: Value| {
+        let database = state2.db.clone();
+        let run_id = run_id2.clone();
         let tx = tx.clone();
-        let ev = Event::default().data(data.to_string());
         async move {
-            let _ = tx.send(Ok(ev)).await;
+            emit_run_event(&database, &run_id, &tx, data).await;
         }
     };
 
@@ -407,11 +458,32 @@ pub(crate) async fn run_agent_loop(
                 "status": "done",
             }),
         );
-        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        emit_run_event(
+            &state2.db,
+            &run_id2,
+            &tx,
+            json!({ "message_type": "run_done", "status": "done" }),
+        )
+        .await;
+        let _ = tx
+            .send(Ok(runtime::RunEventEnvelope {
+                data: "[DONE]".to_string(),
+            }))
+            .await;
         return;
     }
 
     let mut turns = 0usize;
+    let max_turns = max_turns();
+    let turns_ceiling = turns_ceiling(max_turns);
+    // P4: resolve the session cost cap from `.cade/settings.json`
+    // (`max_session_cost_usd`, project wins over global).  The env var
+    // override and the built-in default are applied inside
+    // [`max_session_cost_usd`].
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let session_cost_cap = cade_core::settings::SettingsManager::new(&cwd)
+        .ok()
+        .and_then(|s| s.max_session_cost_usd());
     // M9r: track the loop exit reason so `finish_run` records the right
     // status.  Any break preceded by an `"message_type": "error"` SSE
     // event flips this to `Error`; the natural "no more tool calls"
@@ -424,37 +496,56 @@ pub(crate) async fn run_agent_loop(
     const ACTIVE_GOAL_NUDGE_INTERVAL: usize = 5;
     let mut tool_calls_since_goal_update: usize = 0;
 
+    // ── Adaptive turn budget ─────────────────────────────────────────
+    // The loop starts with `max_turns` and grows its budget as the model
+    // performs genuinely *new* tool work (fresh fingerprints), so long but
+    // productive tasks are not cut at the base cap while idle or repeating
+    // runs are.  Bounded by `turns_ceiling`.
+    let mut distinct_fingerprints: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut distinct_tool_calls: usize = 0;
+
+    // ── Degenerate-loop detection ─────────────────────────────────────
+    // Watch for the same tool being invoked repeatedly with identical
+    // arguments.  When that happens `MAX_IDENTICAL_REPEAT_TOOL_CALLS`
+    // times in a row, the model is stuck retrying rather than converging —
+    // abort early instead of silently burning turns and tokens.
+    let mut prev_tool_fingerprint: Option<String> = None;
+    let mut identical_repeat_run: usize = 0;
+    // Set while iterating tool results; surfaced as an SSE error before
+    // the next LLM turn.
+    let mut loop_degenerate: Option<String> = None;
+
     loop {
         turns += 1;
-        if turns > MAX_TURNS {
+        let budget = adaptive_turn_budget(max_turns, turns_ceiling, distinct_tool_calls);
+        if turns > budget {
             send(json!({
                 "message_type": "error",
-                "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
+                "error": format!("Agentic loop exceeded {budget} turns (base {max_turns}) — stopping"),
             }))
             .await;
             exit_status = RunExitStatus::Error;
             break;
         }
 
-        // ── Client disconnect check ───────────────────────────────────
-        // If the SSE receiver has been dropped (user pressed Ctrl+C in the
-        // TUI, the cade CLI exited, or the network connection died), bail
-        // out before doing more work. This prevents the server from
-        // continuing to call the LLM and execute tools after the client
-        // has gone away — saving tokens and avoiding unwanted side
-        // effects from in-flight tool calls.
-        if tx.is_closed() {
-            tracing::info!("agentic loop: client disconnected at turn {turns} — cancelling");
+        // ── Durable cancellation check ─────────────────────────────────
+        // Presentation adapters may disconnect and reconnect from an event
+        // cursor. Only the explicit durable cancellation command stops this
+        // server-owned run; a transport receiver is not execution ownership.
+        if sqlite::is_run_cancellation_requested(&state2.db, &run_id2).unwrap_or(false) {
+            tracing::info!("agentic loop: cancellation requested at turn {turns}");
             exit_status = RunExitStatus::Cancelled;
             break;
         }
 
         // ── P4: cost guardrail ────────────────────────────────────────
         // Abort when cumulative session cost (across the server's lifetime
-        // for this agent) exceeds the configured cap.  Disabled by default
-        // (unset env var → no cap).  Pricing comes from ~/.cade/pricing.json
-        // or the bundled fallback table.
-        if let Some(cap) = max_session_cost_usd() {
+        // for this agent) exceeds the configured cap.  The cap comes from
+        // `.cade/settings.json`, the CADE_MAX_SESSION_COST_USD env var, or
+        // the built-in $120.00 default (see [`max_session_cost_usd`]).
+        // Pricing comes from ~/.cade/pricing.json or the bundled fallback table.
+        if let Some(cap) = max_session_cost_usd(session_cost_cap) {
             let map = state2.agent_metrics.clone();
             if let Some(m) = map.get(&agent_id2) {
                 let pricing = pricing_registry()
@@ -464,7 +555,7 @@ pub(crate) async fn run_agent_loop(
                     send(json!({
                         "message_type": "error",
                         "error": format!(
-                            "Session cost cap reached (${:.4} ≥ ${:.4}); set CADE_MAX_SESSION_COST_USD to a higher value to continue.",
+                            "Session cost cap reached (${:.4} ≥ ${:.4}); raise `max_session_cost_usd` in .cade/settings.json (or CADE_MAX_SESSION_COST_USD) to continue.",
                             cost, cap
                         ),
                     })).await;
@@ -485,8 +576,7 @@ pub(crate) async fn run_agent_loop(
         // embedded in run_agent_loop's Future, which combined with the
         // consolidation + LLM streaming futures overflows the tokio worker
         // thread stack when processing large archival/historic queries.
-        let (model, messages, tools) = match Box::pin(build_context(
-            state2.clone(),
+        let (model, messages, tools) = match Box::pin(context_builder.build(
             agent_id2.clone(),
             conv_id2.clone(),
             is_tool_return,
@@ -568,8 +658,7 @@ pub(crate) async fn run_agent_loop(
                 // multiple HashMaps, etc. Boxing moves them to the heap
                 // and prevents the overflow recovery path from doubling
                 // the stack pressure of the main build_context call.
-                let (model2, mut messages2, tools2) = match Box::pin(build_context(
-                    state2.clone(),
+                let (model2, mut messages2, tools2) = match Box::pin(context_builder.build(
                     agent_id2.clone(),
                     conv_id2.clone(),
                     is_tool_return, // reuse — never double-increment on retry
@@ -642,12 +731,12 @@ pub(crate) async fn run_agent_loop(
         loop {
             tokio::select! {
                 biased;
-                _ = tx.closed() => {
-                    tracing::info!(
-                        "agentic loop: client disconnected mid-stream at turn {turns} — aborting LLM"
-                    );
-                    stream_cancelled = true;
-                    break;
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                    if sqlite::is_run_cancellation_requested(&state2.db, &run_id2).unwrap_or(false) {
+                        tracing::info!("agentic loop: cancellation requested mid-stream at turn {turns}");
+                        stream_cancelled = true;
+                        break;
+                    }
                 }
                 chunk_opt = llm_stream.next() => {
                     let Some(chunk) = chunk_opt else { break };
@@ -756,15 +845,16 @@ pub(crate) async fn run_agent_loop(
         // RC5-FIX: Hoist ToolRuntime creation outside per-tool-call loop.
         // One runtime instance is reused across all tool calls in this turn,
         // avoiding redundant Arc::new + AppState clones per tool call.
-        let turn_results = execution::execute_turn_tools(
-            state2.clone(),
-            agent_id2.clone(),
-            conv_id2.clone(),
-            input.clone(),
-            tool_calls,
-            tx.clone(),
-        )
-        .await;
+        let turn_results = capability_executor
+            .execute(
+                agent_id2.clone(),
+                conv_id2.clone(),
+                run_id2.clone(),
+                input.clone(),
+                tool_calls,
+                tx.clone(),
+            )
+            .await;
 
         for (result, arguments) in turn_results {
             // H3: persist the FULL output to the DB so future build_context
@@ -837,6 +927,45 @@ pub(crate) async fn run_agent_loop(
                     tool_calls_since_goal_update = 0;
                 }
             }
+
+            // ── Degenerate-loop fingerprint tracking ────────────────────
+            // Fingerprint = tool name + normalized arguments (truncated so
+            // large payloads don't bloat memory).  Identical consecutive
+            // fingerprints mean the model is retrying the exact same call.
+            let fingerprint = {
+                let args = serde_json::to_string(&arguments).unwrap_or_default();
+                format!(
+                    "{}|{}",
+                    result.tool_name,
+                    truncate_at_char_boundary(&args, 256)
+                )
+            };
+            // Adaptive budget: genuinely new fingerprints extend headroom.
+            if distinct_fingerprints.insert(fingerprint.clone()) {
+                distinct_tool_calls += 1;
+            }
+            if prev_tool_fingerprint.as_deref() == Some(fingerprint.as_str()) {
+                identical_repeat_run += 1;
+            } else {
+                prev_tool_fingerprint = Some(fingerprint);
+                identical_repeat_run = 1;
+            }
+            if identical_repeat_run >= MAX_IDENTICAL_REPEAT_TOOL_CALLS {
+                loop_degenerate = Some(result.tool_name.clone());
+            }
+        }
+
+        // ── Abort on a degenerate repeated-tool loop ────────────────────
+        if let Some(tool_name) = loop_degenerate.take() {
+            let msg = format!(
+                "Agentic loop detected: `{tool_name}` invoked \
+                 {MAX_IDENTICAL_REPEAT_TOOL_CALLS} times in a row with identical arguments \
+                 — stopping instead of repeating"
+            );
+            tracing::warn!(agent_id = %agent_id2, run_id = %run_id2, "{msg}");
+            send(json!({ "message_type": "error", "error": msg })).await;
+            exit_status = RunExitStatus::Error;
+            break;
         }
 
         // ── A5: Inject freshness nudge if active_goal hasn't been updated ──
@@ -918,8 +1047,24 @@ pub(crate) async fn run_agent_loop(
         }),
     );
 
-    // ── End of stream ─────────────────────────────────────────────────
-    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+    // ── Durable terminal outcome ───────────────────────────────────────
+    emit_run_event(
+        &state2.db,
+        &run_id2,
+        &tx,
+        json!({
+            "message_type": "run_done",
+            "status": exit_status.as_str(),
+        }),
+    )
+    .await;
+
+    // ── End of transport stream ────────────────────────────────────────
+    let _ = tx
+        .send(Ok(runtime::RunEventEnvelope {
+            data: "[DONE]".to_string(),
+        }))
+        .await;
 }
 
 pub(super) fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str) {

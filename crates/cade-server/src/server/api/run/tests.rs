@@ -70,6 +70,252 @@ fn run_exit_status_error_renders_as_error() {
     assert_eq!(RunExitStatus::Error.as_str(), "error");
 }
 
+#[tokio::test]
+async fn emit_run_event_persists_cursor_before_forwarding_transport_event() -> Result<(), String> {
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-events".to_owned(),
+        name: "Event agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+    emit_run_event(
+        &state.db,
+        &run.id,
+        &sender,
+        serde_json::json!({ "message_type": "assistant_message", "content": "hello" }),
+    )
+    .await;
+
+    let res = receiver
+        .recv()
+        .await
+        .ok_or_else(|| "runtime event must reach the transport receiver".to_owned())?;
+    let forwarded = match res {
+        Ok(f) => f,
+        Err(never) => match never {},
+    };
+    assert!(forwarded.data.contains(&run.id));
+
+    let persisted = cade_store::sqlite::run_events_after(&state.db, &run.id, -1)
+        .map_err(|error| error.to_string())?;
+    if persisted.len() != 1 || persisted[0].0 != 0 {
+        return Err(format!(
+            "expected one persisted event at sequence zero, got {persisted:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancel_run_command_records_durable_cancellation_request() -> Result<(), String> {
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-cancel".to_owned(),
+        name: "Cancellation agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+
+    let response =
+        crate::server::api::runs::cancel_run(State(state.clone()), Path(run.id.clone())).await;
+    if response.status() != axum::http::StatusCode::OK {
+        return Err(format!(
+            "expected cancellation command success, got {}",
+            response.status()
+        ));
+    }
+    let stored = cade_store::sqlite::get_run(&state.db, &run.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "cancelled run must remain queryable".to_owned())?;
+    if stored.status != "cancelling" {
+        return Err(format!(
+            "expected durable cancelling status, got {}",
+            stored.status
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_stream_replays_only_events_after_the_requested_cursor() -> Result<(), String> {
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-replay".to_owned(),
+        name: "Replay agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+    for message_type in ["stream_start", "assistant_message", "run_done"] {
+        cade_store::sqlite::append_run_event(
+            &state.db,
+            &run.id,
+            &serde_json::json!({ "message_type": message_type }).to_string(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    cade_store::sqlite::finish_run(&state.db, &run.id, "done")
+        .map_err(|error| error.to_string())?;
+
+    let response = crate::server::api::runs::stream_run(
+        State(state),
+        Path(run.id.clone()),
+        axum::extract::Query(std::collections::HashMap::from([(
+            "starting_after".to_owned(),
+            "0".to_owned(),
+        )])),
+    )
+    .await;
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = String::from_utf8(body.to_vec()).map_err(|error| error.to_string())?;
+    let payloads: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())?;
+
+    if payloads.len() != 2 {
+        return Err(format!("expected two replayed events, got {payloads:?}"));
+    }
+    let expected = [(1, "assistant_message"), (2, "run_done")];
+    for (payload, (sequence, message_type)) in payloads.iter().zip(expected) {
+        if payload["run_id"] != run.id
+            || payload["seq_id"] != serde_json::json!(sequence)
+            || payload["message_type"] != message_type
+        {
+            return Err(format!("unexpected replay envelope: {payload}"));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_run_persists_a_terminal_cancelled_event() -> Result<(), String> {
+    struct NeverContextBuilder;
+
+    #[async_trait::async_trait]
+    impl runtime::ContextBuilder for NeverContextBuilder {
+        async fn build(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _is_tool_return: bool,
+        ) -> Result<runtime::RunContext, String> {
+            Err("a cancelled run must not build model context".to_owned())
+        }
+    }
+
+    struct NeverCapabilityExecutor;
+
+    #[async_trait::async_trait]
+    impl runtime::CapabilityExecutor for NeverCapabilityExecutor {
+        async fn execute(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _run_id: String,
+            _input: String,
+            _tool_calls: Vec<LlmToolCall>,
+            _events: SseTx,
+        ) -> Vec<(cade_agent::tools::manager::ToolResult, Value)> {
+            Vec::new()
+        }
+    }
+
+    let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+    let agent = cade_store::sqlite::AgentRow {
+        id: "agent-cancel-terminal".to_owned(),
+        name: "Cancellation terminal agent".to_owned(),
+        description: None,
+        model: "test".to_owned(),
+        system_prompt: None,
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+        active_plan_json: None,
+        parent_id: None,
+    };
+    cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+    let run = cade_store::sqlite::create_run(&state.db, &agent.id, None)
+        .map_err(|error| error.to_string())?;
+    if !cade_store::sqlite::request_run_cancellation(&state.db, &run.id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("active run must accept cancellation".to_owned());
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+
+    run_agent_loop_with_dependencies(
+        state.clone(),
+        runtime::LoopRequest {
+            agent_id: agent.id,
+            conversation_id: None,
+            run_id: run.id.clone(),
+            theme_command: None,
+            input: "ignored".to_owned(),
+        },
+        sender,
+        std::sync::Arc::new(NeverContextBuilder),
+        std::sync::Arc::new(NeverCapabilityExecutor),
+    )
+    .await;
+    while receiver.recv().await.is_some() {}
+
+    let stored_run = cade_store::sqlite::get_run(&state.db, &run.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "cancelled run must remain queryable".to_owned())?;
+    if stored_run.status != "cancelled" {
+        return Err(format!(
+            "expected cancelled run status, got {}",
+            stored_run.status
+        ));
+    }
+    let events = cade_store::sqlite::run_events_after(&state.db, &run.id, -1)
+        .map_err(|error| error.to_string())?;
+    let terminal = events
+        .last()
+        .ok_or_else(|| "cancelled run must persist a terminal event".to_owned())?;
+    if terminal.0 != 1 || !terminal.1.contains("\"status\":\"cancelled\"") {
+        return Err(format!(
+            "expected ordered cancelled terminal event, got {terminal:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// A mock LlmProvider that panics if called.  Used to assert that an early
 /// return path (e.g. depth-limit guard) never reaches the LLM at all.
 pub(super) struct PanicOnCallLlm;
@@ -953,6 +1199,53 @@ mod p4_guardrail_tests {
         assert_eq!(parse_tool_turn_max_tokens(Some("4096")), Some(4096));
         assert_eq!(parse_tool_turn_max_tokens(Some(" 512 ")), Some(512));
     }
+
+    // ── CADE_MAX_TURNS cap ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_max_turns_unset_and_invalid_keep_default() {
+        assert_eq!(parse_max_turns(None), None);
+        assert_eq!(parse_max_turns(Some("")), None);
+        assert_eq!(parse_max_turns(Some("   ")), None);
+        assert_eq!(parse_max_turns(Some("0")), None);
+        assert_eq!(parse_max_turns(Some("-3")), None);
+        assert_eq!(parse_max_turns(Some("abc")), None);
+    }
+
+    #[test]
+    fn parse_max_turns_positive_returns_cap() {
+        assert_eq!(parse_max_turns(Some("30")), Some(30));
+        assert_eq!(parse_max_turns(Some(" 100 ")), Some(100));
+    }
+
+    #[test]
+    fn parse_max_turns_ceiling_unset_and_invalid_keep_multiplier_default() {
+        assert_eq!(parse_max_turns_ceiling(None), None);
+        assert_eq!(parse_max_turns_ceiling(Some("")), None);
+        assert_eq!(parse_max_turns_ceiling(Some("0")), None);
+        assert_eq!(parse_max_turns_ceiling(Some("-1")), None);
+        assert_eq!(parse_max_turns_ceiling(Some("abc")), None);
+    }
+
+    #[test]
+    fn parse_max_turns_ceiling_positive_returns_cap() {
+        assert_eq!(parse_max_turns_ceiling(Some("150")), Some(150));
+        assert_eq!(parse_max_turns_ceiling(Some(" 40 ")), Some(40));
+    }
+
+    #[test]
+    fn adaptive_turn_budget_starts_at_base_without_new_work() {
+        assert_eq!(adaptive_turn_budget(20, 100, 0), 20);
+        assert_eq!(adaptive_turn_budget(5, 25, 0), 5);
+    }
+
+    #[test]
+    fn adaptive_turn_budget_grows_with_distinct_work_and_clamps_to_ceiling() {
+        assert_eq!(adaptive_turn_budget(20, 100, 5), 30);
+        assert_eq!(adaptive_turn_budget(20, 100, 100), 100);
+        // ceiling below base → base wins (budget never shrinks below base).
+        assert_eq!(adaptive_turn_budget(20, 10, 100), 20);
+    }
 }
 
 #[cfg(test)]
@@ -1066,6 +1359,485 @@ mod sse_protocol_tests {
                 && !lc.contains("rust_panic"),
             "error body must not leak host paths or stack traces: {body_str}"
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_contract_tests {
+    use super::runtime::{
+        CapabilityExecutor, ContextBuilder, RunContext, RunRequest, ServerAgentRuntime,
+    };
+    use super::*;
+    use cade_agent::tools::manager::ToolResult;
+    use cade_ai::{LlmMessage, LlmToolCall, StreamChunk};
+    use serde_json::Value;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct RecordingContextBuilder {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ContextBuilder for RecordingContextBuilder {
+        async fn build(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _is_tool_return: bool,
+        ) -> Result<RunContext, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok((
+                "test".to_owned(),
+                vec![LlmMessage {
+                    role: "user".to_owned(),
+                    content: "bounded context".to_owned(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                    cache_control: None,
+                }],
+                Vec::new(),
+            ))
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingCapabilityExecutor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl CapabilityExecutor for RecordingCapabilityExecutor {
+        async fn execute(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _run_id: String,
+            _input: String,
+            _tool_calls: Vec<LlmToolCall>,
+            _events: SseTx,
+        ) -> Vec<(ToolResult, Value)> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        }
+    }
+
+    struct FinalResponseLlm;
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for FinalResponseLlm {
+        async fn complete(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::custom("complete is not used"))
+        }
+
+        async fn stream(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<StreamChunk>> + Send>,
+            >,
+        > {
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamChunk::Text("completed".to_owned())),
+                Ok(StreamChunk::Done),
+            ])))
+        }
+    }
+
+    struct ToolThenFinalLlm {
+        stream_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for ToolThenFinalLlm {
+        async fn complete(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::custom("complete is not used"))
+        }
+
+        async fn stream(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<StreamChunk>> + Send>,
+            >,
+        > {
+            let call = self.stream_calls.fetch_add(1, Ordering::SeqCst);
+            let chunks = if call == 0 {
+                vec![
+                    Ok(StreamChunk::ToolCall(LlmToolCall {
+                        id: "tool-call-1".to_owned(),
+                        name: "test_tool".to_owned(),
+                        arguments: serde_json::json!({}),
+                        thought_signature: None,
+                    })),
+                    Ok(StreamChunk::Done),
+                ]
+            } else {
+                vec![
+                    Ok(StreamChunk::Text("completed".to_owned())),
+                    Ok(StreamChunk::Done),
+                ]
+            };
+            Ok(Box::pin(tokio_stream::iter(chunks)))
+        }
+    }
+
+    #[derive(Clone)]
+    struct ToolResultCapabilityExecutor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl CapabilityExecutor for ToolResultCapabilityExecutor {
+        async fn execute(
+            &self,
+            _agent_id: String,
+            _conversation_id: Option<String>,
+            _run_id: String,
+            _input: String,
+            tool_calls: Vec<LlmToolCall>,
+            _events: SseTx,
+        ) -> Vec<(ToolResult, Value)> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tool_calls
+                .into_iter()
+                .map(|call| {
+                    (
+                        ToolResult {
+                            tool_call_id: call.id,
+                            tool_name: call.name,
+                            output: "tool completed".to_owned(),
+                            is_error: false,
+                            ui_resource_uri: None,
+                        },
+                        call.arguments,
+                    )
+                })
+                .collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_routes_model_tool_calls_through_its_capability_executor() -> Result<(), String>
+    {
+        let llm = Arc::new(ToolThenFinalLlm {
+            stream_calls: AtomicUsize::new(0),
+        }) as Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: "agent-capability".to_owned(),
+            name: "Capability agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+
+        let context_calls = Arc::new(AtomicUsize::new(0));
+        let capability_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = ServerAgentRuntime::with_dependencies(
+            state,
+            Arc::new(RecordingContextBuilder {
+                calls: context_calls.clone(),
+            }),
+            Arc::new(ToolResultCapabilityExecutor {
+                calls: capability_calls.clone(),
+            }),
+        );
+
+        let mut handle = runtime
+            .start(RunRequest {
+                agent_id: "agent-capability".to_owned(),
+                conversation_id: None,
+                input: "use a tool".to_owned(),
+            })
+            .await;
+        while handle.events.recv().await.is_some() {}
+
+        if capability_calls.load(Ordering::SeqCst) != 1 {
+            return Err(
+                "runtime must execute model tool calls through its capability executor".to_owned(),
+            );
+        }
+        if context_calls.load(Ordering::SeqCst) != 2 {
+            return Err("runtime must rebuild context after persisting a tool result".to_owned());
+        }
+        Ok(())
+    }
+
+    /// LLM that always requests a tool call and never produces a final
+    /// answer.  With `vary_arguments == false` every turn is byte-identical
+    /// (exercises the degenerate-loop detector); with `true` arguments
+    /// change each turn (exercises the turn budget).  `stop_after_tools` lets
+    /// a test finish after N tool turns with a normal final answer.
+    struct RepeatingToolLlm {
+        stream_calls: AtomicUsize,
+        vary_arguments: bool,
+        stop_after_tools: Option<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for RepeatingToolLlm {
+        async fn complete(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::custom("complete is not used"))
+        }
+
+        async fn stream(
+            &self,
+            _request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<StreamChunk>> + Send>,
+            >,
+        > {
+            let call = self.stream_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(stop_after) = self.stop_after_tools
+                && call >= stop_after
+            {
+                return Ok(Box::pin(tokio_stream::iter(vec![
+                    Ok(StreamChunk::Text("done".to_owned())),
+                    Ok(StreamChunk::Done),
+                ])));
+            }
+            let arguments = if self.vary_arguments {
+                serde_json::json!({ "query": format!("query-{call}") })
+            } else {
+                serde_json::json!({ "query": "stuck-query" })
+            };
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamChunk::ToolCall(LlmToolCall {
+                    id: format!("repeating-tool-call-{call}"),
+                    name: "stuck_tool".to_owned(),
+                    arguments,
+                    thought_signature: None,
+                })),
+                Ok(StreamChunk::Done),
+            ])))
+        }
+    }
+
+    struct LoopOutcome {
+        executor_calls: usize,
+        run_status: String,
+        persisted_events: String,
+    }
+
+    async fn run_repeating_llm(
+        agent_id: &str,
+        vary_arguments: bool,
+        stop_after_tools: Option<usize>,
+    ) -> Result<LoopOutcome, String> {
+        let llm = Arc::new(RepeatingToolLlm {
+            stream_calls: AtomicUsize::new(0),
+            vary_arguments,
+            stop_after_tools,
+        }) as Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: agent_id.to_owned(),
+            name: "Repeating agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+
+        let capability_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = ServerAgentRuntime::with_dependencies(
+            state.clone(),
+            Arc::new(RecordingContextBuilder {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(ToolResultCapabilityExecutor {
+                calls: capability_calls.clone(),
+            }),
+        );
+        let handle = runtime
+            .start(RunRequest {
+                agent_id: agent_id.to_owned(),
+                conversation_id: None,
+                input: "repeat forever".to_owned(),
+            })
+            .await;
+        let mut events = handle.events;
+        while events.recv().await.is_some() {}
+
+        let run = cade_store::sqlite::get_run(&state.db, &handle.run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "run must be queryable after the loop stopped".to_owned())?;
+        let persisted = cade_store::sqlite::run_events_after(&state.db, &handle.run_id, -1)
+            .map_err(|error| error.to_string())?;
+        let joined = persisted
+            .iter()
+            .map(|(_, event)| event.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        Ok(LoopOutcome {
+            executor_calls: capability_calls.load(Ordering::SeqCst),
+            run_status: run.status,
+            persisted_events: joined,
+        })
+    }
+
+    #[tokio::test]
+    async fn runtime_aborts_on_identical_repeated_tool_calls() -> Result<(), String> {
+        // Same tool + identical arguments every turn: the degenerate-loop
+        // detector must stop the run after MAX_IDENTICAL_REPEAT_TOOL_CALLS
+        // executor dispatches instead of burning all 20 turns.
+        let outcome = run_repeating_llm("agent-degenerate", false, None).await?;
+        if outcome.executor_calls != MAX_IDENTICAL_REPEAT_TOOL_CALLS {
+            return Err(format!(
+                "degenerate loop must stop after {} identical calls, executor ran {} times",
+                MAX_IDENTICAL_REPEAT_TOOL_CALLS, outcome.executor_calls
+            ));
+        }
+        if outcome.run_status != "error" {
+            return Err(format!(
+                "degenerate abort must record status 'error', got '{}'",
+                outcome.run_status
+            ));
+        }
+        if !outcome.persisted_events.contains("Agentic loop detected") {
+            return Err("degenerate abort must surface an SSE error event".to_owned());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_escalates_turn_budget_for_distinct_tool_work() -> Result<(), String> {
+        // 24 distinct (but never-converging) tool turns would blow past the
+        // default base cap of 20.  The adaptive budget grows +2 per new
+        // fingerprint, so the run completes normally instead of aborting.
+        let outcome = run_repeating_llm("agent-escalate", true, Some(24)).await?;
+        if outcome.executor_calls != 24 {
+            return Err(format!(
+                "adaptive budget must let a 24-turn productive run finish, executor ran {} times",
+                outcome.executor_calls
+            ));
+        }
+        if outcome.run_status != "done" {
+            return Err(format!(
+                "escalated run must finish with status 'done', got '{}'",
+                outcome.run_status
+            ));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_uses_its_context_builder_for_a_completed_run() -> Result<(), String> {
+        let llm = Arc::new(FinalResponseLlm) as Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: "agent-context".to_owned(),
+            name: "Context agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+
+        let context_calls = Arc::new(AtomicUsize::new(0));
+        let capability_calls = Arc::new(AtomicUsize::new(0));
+        let runtime = ServerAgentRuntime::with_dependencies(
+            state,
+            Arc::new(RecordingContextBuilder {
+                calls: context_calls.clone(),
+            }),
+            Arc::new(RecordingCapabilityExecutor {
+                calls: capability_calls.clone(),
+            }),
+        );
+
+        let mut handle = runtime
+            .start(RunRequest {
+                agent_id: "agent-context".to_owned(),
+                conversation_id: None,
+                input: "hello".to_owned(),
+            })
+            .await;
+        while handle.events.recv().await.is_some() {}
+
+        if context_calls.load(Ordering::SeqCst) != 1 {
+            return Err("runtime must build bounded context once for a final response".to_owned());
+        }
+        if capability_calls.load(Ordering::SeqCst) != 0 {
+            return Err(
+                "runtime must not execute capabilities when the model returns none".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_start_creates_a_durable_run_and_returns_its_handle() -> Result<(), String> {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let agent = cade_store::sqlite::AgentRow {
+            id: "agent-x".to_owned(),
+            name: "Test agent".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        };
+        cade_store::sqlite::create_agent(&state.db, &agent).map_err(|error| error.to_string())?;
+        let runtime = ServerAgentRuntime::new(state.clone());
+
+        let handle = runtime
+            .start(RunRequest {
+                agent_id: "agent-x".to_owned(),
+                conversation_id: None,
+                input: "hello".to_owned(),
+            })
+            .await;
+
+        let run = cade_store::sqlite::get_run(&state.db, &handle.run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "runtime start must create a durable run".to_owned())?;
+        if run.agent_id != "agent-x" {
+            return Err(format!("run must belong to agent-x, got {}", run.agent_id));
+        }
+        if state.agent_activity.read().await.get("agent-x").is_none() {
+            return Err("runtime start must record agent activity".to_owned());
+        }
+
+        drop(handle.events);
+        Ok(())
     }
 }
 
@@ -1193,6 +1965,7 @@ mod advanced_execution_tests {
             state,
             "test-agent".to_string(),
             Some("test-conv".to_string()),
+            "run-test-sequence".to_string(),
             "read Cargo.toml and run a sequence".to_string(),
             tool_calls,
             tx,

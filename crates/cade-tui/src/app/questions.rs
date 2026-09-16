@@ -29,6 +29,12 @@ impl TuiApp {
         // snap to bottom when asking
         self.scroll = 0;
 
+        self.notify_if_unfocused(
+            crate::app::notifier::AttentionCue::QuestionAsked,
+            "Question Required",
+            &question.text,
+        );
+
         let state = ActiveQuestionState {
             draw_state: ActiveQuestionDrawState {
                 question: question.clone(),
@@ -118,6 +124,12 @@ impl TuiApp {
         };
 
         self.scroll = 0;
+
+        self.notify_if_unfocused(
+            crate::app::notifier::AttentionCue::QuestionAsked,
+            "Question Required",
+            &question.text,
+        );
 
         let state = ActiveQuestionState {
             draw_state: ActiveQuestionDrawState {
@@ -214,6 +226,12 @@ impl TuiApp {
 
         // snap to bottom when asking
         self.scroll = 0;
+
+        self.notify_if_unfocused(
+            crate::app::notifier::AttentionCue::QuestionAsked,
+            "Question Required",
+            &question.text,
+        );
 
         let (tx, rx) = tokio::sync::oneshot::channel();
 

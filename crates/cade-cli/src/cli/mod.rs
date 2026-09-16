@@ -4,6 +4,7 @@ pub mod args;
 pub mod eval;
 pub mod export_import;
 pub mod headless;
+pub mod mini;
 pub mod package;
 pub mod repl;
 pub mod update;

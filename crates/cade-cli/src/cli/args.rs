@@ -31,6 +31,10 @@ pub struct Args {
     #[arg(short = 'p', long = "prompt")]
     pub prompt: Option<String>,
 
+    /// Run interactive REPL in minimal inline stream mode (no alternate screen)
+    #[arg(long = "mini")]
+    pub mini: bool,
+
     /// Start a fresh conversation on the current agent (does not create a new agent)
     #[arg(long = "new", conflicts_with = "agent")]
     pub new_conversation: bool,
@@ -160,7 +164,7 @@ pub struct Args {
     pub package: Option<PackageSubcommand>,
 }
 
-/// Top-level package subcommand group.
+/// Top-level subcommand group.
 #[derive(Subcommand, Debug)]
 pub enum PackageSubcommand {
     /// Manage CADE packages
@@ -172,6 +176,18 @@ pub enum PackageSubcommand {
     Eval {
         #[command(subcommand)]
         action: EvalAction,
+    },
+    /// Start the CADE server in foreground
+    Serve {
+        /// Port to listen on
+        #[arg(short = 'p', long, default_value_t = 8284)]
+        port: u16,
+    },
+    /// Open the CADE web dashboard in the default browser
+    Web {
+        /// Port of the CADE server
+        #[arg(short = 'p', long, default_value_t = 8284)]
+        port: u16,
     },
 }
 
@@ -232,5 +248,34 @@ impl Args {
     /// Returns the effective output format for headless mode.
     pub fn effective_output_format(&self) -> &str {
         self.output_format.as_deref().unwrap_or("text")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mini_flag() {
+        let args = Args::try_parse_from(["cade", "--mini"]).unwrap();
+        assert!(args.mini);
+    }
+
+    #[test]
+    fn parse_serve_subcommand() {
+        let args = Args::try_parse_from(["cade", "serve", "--port", "9000"]).unwrap();
+        match args.package {
+            Some(PackageSubcommand::Serve { port }) => assert_eq!(port, 9000),
+            other => panic!("expected Serve subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_web_subcommand() {
+        let args = Args::try_parse_from(["cade", "web", "--port", "8284"]).unwrap();
+        match args.package {
+            Some(PackageSubcommand::Web { port }) => assert_eq!(port, 8284),
+            other => panic!("expected Web subcommand, got {other:?}"),
+        }
     }
 }

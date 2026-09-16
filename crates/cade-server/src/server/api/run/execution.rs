@@ -133,10 +133,37 @@ async fn handle_sequential_workflow(
     }
 }
 
+async fn emit_tool_progress(
+    database: &cade_store::sqlite::Db,
+    run_id: &str,
+    tx: &SseTx,
+    payload: Value,
+) {
+    let serialized = payload.to_string();
+    let mut envelope = payload;
+    let sequence = match cade_store::sqlite::append_run_event(database, run_id, &serialized) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            tracing::error!(%run_id, %error, "failed to persist tool progress event");
+            return;
+        }
+    };
+    if let Some(object) = envelope.as_object_mut() {
+        object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
+        object.insert("seq_id".to_owned(), Value::from(sequence));
+    }
+    let _ = tx
+        .send(Ok(super::runtime::RunEventEnvelope {
+            data: envelope.to_string(),
+        }))
+        .await;
+}
+
 pub(super) async fn execute_turn_tools(
     state: AppState,
     agent_id: String,
     _conv_id: Option<String>,
+    run_id: String,
     input: String,
     tool_calls: Vec<LlmToolCall>,
     tx: SseTx,
@@ -272,20 +299,21 @@ pub(super) async fn execute_turn_tools(
                 "status": "started",
             }),
         );
-        let _ = tx
-            .send(Ok(axum::response::sse::Event::default().data(
-                json!({
-                    "message_type": "tool_progress_message",
-                    "tool_progress": {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "status": "started",
-                        "message": format!("Executing tool '{}'...", tool_name)
-                    }
-                })
-                .to_string(),
-            )))
-            .await;
+        emit_tool_progress(
+            &state.db,
+            &run_id,
+            &tx,
+            json!({
+                "message_type": "tool_progress_message",
+                "tool_progress": {
+                    "id": tool_call_id,
+                    "name": tool_name,
+                    "status": "started",
+                    "message": format!("Executing tool '{tool_name}'..."),
+                }
+            }),
+        )
+        .await;
 
         let result = if tool_name == "run_sequential_tasks" {
             let state_c = state.clone();
@@ -412,20 +440,21 @@ pub(super) async fn execute_turn_tools(
                 "status": "completed",
             }),
         );
-        let _ = tx
-            .send(Ok(axum::response::sse::Event::default().data(
-                json!({
-                    "message_type": "tool_progress_message",
-                    "tool_progress": {
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "status": "completed",
-                        "message": ""
-                    }
-                })
-                .to_string(),
-            )))
-            .await;
+        emit_tool_progress(
+            &state.db,
+            &run_id,
+            &tx,
+            json!({
+                "message_type": "tool_progress_message",
+                "tool_progress": {
+                    "id": tool_call_id,
+                    "name": tool_name,
+                    "status": "completed",
+                    "message": "",
+                }
+            }),
+        )
+        .await;
 
         turn_results.push((result, arguments));
     }

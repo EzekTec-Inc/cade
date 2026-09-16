@@ -131,6 +131,21 @@ pub fn error_icon(nerd: bool) -> &'static str {
     if nerd { "\u{f057}" } else { "✗" } //  vs ✗
 }
 
+/// Icon for user message header.
+pub fn user_icon(nerd: bool) -> &'static str {
+    if nerd { "" } else { "▲" }
+}
+
+/// Icon for assistant message header.
+pub fn assistant_icon(nerd: bool) -> &'static str {
+    if nerd { "󰚩" } else { "◆" }
+}
+
+/// Icon for thinking / reasoning status.
+pub fn thinking_icon(nerd: bool) -> &'static str {
+    if nerd { "󰑮" } else { "●" }
+}
+
 // endregion: --- Status icons
 
 #[cfg(test)]
