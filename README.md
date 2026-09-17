@@ -13,8 +13,23 @@ CADE does:  scaffolds → writes code → runs tests → builds Docker image →
 
 ---
 
+## See CADE in Action
+
+### 🖥️ Terminal Shell (`cade`)
+| Terminal Startup | Active Task Execution |
+|---|---|
+| ![CADE Terminal Startup](docs/screenshots/cade-terminal-startup.png) | ![CADE Terminal Working](docs/screenshots/cade-terminal-working.png) |
+
+### 🌐 Web Dashboard (`http://localhost:8284/dashboard`)
+| Web Dashboard Startup | Active Session & Live Telemetry |
+|---|---|
+| ![CADE Dashboard Startup](docs/screenshots/cade-dashboard-startup.png) | ![CADE Dashboard Working](docs/screenshots/cade-dashboard-working.png) |
+
+---
+
 ## Table of Contents
 
+- [See CADE in Action](#see-cade-in-action)
 - [Why CADE?](#why-cade)
 - [Quickstart — Up and Running in 2 Minutes](#quickstart--up-and-running-in-2-minutes)
 - [What Can CADE Do?](#what-can-cade-do)
