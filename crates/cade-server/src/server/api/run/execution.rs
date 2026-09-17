@@ -2,20 +2,10 @@
 
 use super::{SseTx, storage_impl, subagent};
 use crate::server::state::AppState;
-use cade_agent::tools::{bash_agent::BashToolAgent, search_agent::SearchToolAgent};
-use cade_agent::{
-    moa::{Agent, AgentRequest},
-    routing::Router,
-    tools::{
-        fs_agent::{ApplyPatchToolAgent, EditToolAgent, ReadToolAgent, WriteToolAgent},
-        manager::ToolResult,
-        runtime::ToolRuntime,
-    },
-};
+use cade_agent::tools::{manager::ToolResult, runtime::ToolRuntime};
 use cade_ai::LlmToolCall;
-use futures::future;
 use serde_json::{Value, json};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 /// Recursively substitutes placeholders in serde_json::Value.
 fn substitute_step_arguments(args: &mut Value, step_results: &[ToolResult]) {
@@ -164,42 +154,11 @@ pub(super) async fn execute_turn_tools(
     agent_id: String,
     _conv_id: Option<String>,
     run_id: String,
-    input: String,
+    _input: String,
     tool_calls: Vec<LlmToolCall>,
     tx: SseTx,
 ) -> Vec<(ToolResult, Value)> {
-    let mut router = Router::new();
-    let agents_to_register: Vec<Arc<dyn Agent>> = vec![
-        Arc::new(ReadToolAgent),
-        Arc::new(WriteToolAgent),
-        Arc::new(EditToolAgent),
-        Arc::new(ApplyPatchToolAgent),
-        Arc::new(BashToolAgent),
-        Arc::new(SearchToolAgent),
-    ];
-    let mut moa_tool_registry = HashSet::new();
-    for agent in agents_to_register {
-        for tool_name in agent.supported_tools() {
-            moa_tool_registry.insert(tool_name.to_string());
-        }
-        router.add_agent(agent);
-    }
-
-    let router_req = AgentRequest {
-        prompt: input.clone(),
-    };
-
     let mut turn_results: Vec<(ToolResult, Value)> = Vec::new();
-    let mut moa_tool_calls = Vec::new();
-    let mut legacy_tool_calls = Vec::new();
-
-    for tc in tool_calls {
-        if moa_tool_registry.contains(&tc.name) {
-            moa_tool_calls.push(tc);
-        } else {
-            legacy_tool_calls.push(tc);
-        }
-    }
 
     let runtime = Arc::new(ToolRuntime::new(
         Arc::new(storage_impl::ServerStorageBackend {
@@ -234,56 +193,7 @@ pub(super) async fn execute_turn_tools(
         Arc::new(cade_agent::tools::AutoApprovalDelegate),
     ));
 
-    if !moa_tool_calls.is_empty() {
-        let selected_agents = router.route(&router_req).unwrap_or_default();
-        let mut execution_futures = Vec::new();
-
-        for agent in selected_agents {
-            for tc in &moa_tool_calls {
-                if agent.supported_tools().contains(&tc.name.as_str()) {
-                    let exec_req = AgentRequest {
-                        prompt: format!("{} {}", tc.name, tc.arguments),
-                    };
-                    let tool_call_id = tc.id.clone();
-                    let tool_name = tc.name.clone();
-                    let arguments = tc.arguments.clone();
-                    let agent_clone = agent.clone();
-                    execution_futures.push(async move {
-                        (
-                            tool_call_id,
-                            tool_name,
-                            arguments,
-                            agent_clone.execute(&exec_req).await,
-                        )
-                    });
-                }
-            }
-        }
-
-        let moa_results = future::join_all(execution_futures).await;
-
-        for (tool_call_id, tool_name, arguments, result) in moa_results {
-            let tool_result = match result {
-                Ok(response) => ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    output: response.content,
-                    is_error: false,
-                    ui_resource_uri: None,
-                },
-                Err(e) => ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    output: e.to_string(),
-                    is_error: true,
-                    ui_resource_uri: None,
-                },
-            };
-            turn_results.push((tool_result, arguments));
-        }
-    }
-
-    for tc in legacy_tool_calls {
+    for tc in tool_calls {
         let tool_name = tc.name;
         let tool_call_id = tc.id;
         let arguments = tc.arguments;
