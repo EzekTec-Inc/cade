@@ -1249,3 +1249,280 @@ fn to_responses_input_serializes_valid_responses_api_schema() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn build_tools_fair_round_robin_core_mcp_servers_under_cap() -> Result<()> {
+    let mut tools = Vec::new();
+    // 3 core servers with 50 tools each = 150 tools total (> 128)
+    for i in 0..50 {
+        tools.push(json!({
+            "name": format!("serena__tool_{i}"),
+            "description": "Serena AST tool",
+            "parameters": { "type": "object", "properties": {}, "required": [] },
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": "serena",
+                "core_server": true
+            }
+        }));
+        tools.push(json!({
+            "name": format!("desktop-commander__tool_{i}"),
+            "description": "Desktop Commander tool",
+            "parameters": { "type": "object", "properties": {}, "required": [] },
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": "desktop-commander",
+                "core_server": true
+            }
+        }));
+        tools.push(json!({
+            "name": format!("github__tool_{i}"),
+            "description": "GitHub tool",
+            "parameters": { "type": "object", "properties": {}, "required": [] },
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": "github",
+                "core_server": true
+            }
+        }));
+    }
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128, "Total tools must be capped at 128");
+
+    // Count tools per server
+    let count_serena = arr
+        .iter()
+        .filter(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|n| n.starts_with("serena__"))
+                .unwrap_or(false)
+        })
+        .count();
+
+    let count_desktop = arr
+        .iter()
+        .filter(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|n| n.starts_with("desktop-commander__"))
+                .unwrap_or(false)
+        })
+        .count();
+
+    let count_github = arr
+        .iter()
+        .filter(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|n| n.starts_with("github__"))
+                .unwrap_or(false)
+        })
+        .count();
+
+    // With 128 cap divided among 3 servers, each should get at least 42 tools (43 + 43 + 42 = 128)
+    assert!(
+        count_serena >= 42,
+        "Serena must receive fair allocation, got {count_serena}"
+    );
+    assert!(
+        count_desktop >= 42,
+        "Desktop Commander must receive fair allocation, got {count_desktop}"
+    );
+    assert!(
+        count_github >= 42,
+        "GitHub must receive fair allocation, got {count_github}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_tools_deterministic_invariance_under_shuffling() -> Result<()> {
+    let mut tools = Vec::new();
+
+    // Add meta tools
+    for name in [
+        "load_skill",
+        "set_plan",
+        "UpdatePlan",
+        "search_memory",
+        "update_memory",
+    ] {
+        tools.push(json!({
+            "name": name,
+            "description": "Meta tool",
+            "parameters": { "type": "object", "properties": {}, "required": [] }
+        }));
+    }
+
+    // Add core MCP tools
+    for i in 0..60 {
+        tools.push(json!({
+            "name": format!("serena__cmd_{i:02}"),
+            "description": "Serena command",
+            "parameters": { "type": "object", "properties": {}, "required": [] },
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": "serena",
+                "core_server": true
+            }
+        }));
+        tools.push(json!({
+            "name": format!("github__cmd_{i:02}"),
+            "description": "GitHub command",
+            "parameters": { "type": "object", "properties": {}, "required": [] },
+            "x-cade": {
+                "kind": "mcp",
+                "server_key": "github",
+                "core_server": true
+            }
+        }));
+    }
+
+    // Add non-core tools
+    for i in 0..40 {
+        tools.push(json!({
+            "name": format!("misc_tool_{i:02}"),
+            "description": "Misc non-core tool",
+            "parameters": { "type": "object", "properties": {}, "required": [] }
+        }));
+    }
+
+    let make_req = |t: Vec<Value>| CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools: t,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let base_tools = OpenAiProvider::build_tools(&make_req(tools.clone()));
+    let base_names: Vec<String> = base_tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(String::from)
+        })
+        .collect();
+
+    // Permutation 1: Reversed order
+    let mut reversed = tools.clone();
+    reversed.reverse();
+    let rev_tools = OpenAiProvider::build_tools(&make_req(reversed));
+    let rev_names: Vec<String> = rev_tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(String::from)
+        })
+        .collect();
+    assert_eq!(
+        base_names, rev_names,
+        "Reversed schema order must produce identical selection and ordering"
+    );
+
+    // Permutation 2: Interleaved odd/even order
+    let mut interleaved = Vec::new();
+    let mid = tools.len() / 2;
+    for i in 0..mid {
+        interleaved.push(tools[mid + i].clone());
+        interleaved.push(tools[i].clone());
+    }
+    let int_tools = OpenAiProvider::build_tools(&make_req(interleaved));
+    let int_names: Vec<String> = int_tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(String::from)
+        })
+        .collect();
+    assert_eq!(
+        base_names, int_names,
+        "Interleaved schema order must produce identical selection and ordering"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_tools_preserves_plan_and_meta_tools_under_heavy_load() -> Result<()> {
+    let mut tools = Vec::new();
+    for i in 0..160 {
+        tools.push(json!({
+            "name": format!("competing_tool_{i}"),
+            "description": "random",
+            "parameters": { "type": "object", "properties": {}, "required": [] }
+        }));
+    }
+
+    for name in [
+        "set_plan",
+        "UpdatePlan",
+        "load_skill",
+        "finish_task",
+        "ask_user_question",
+    ] {
+        tools.push(json!({
+            "name": name,
+            "description": "Critical meta tool",
+            "parameters": { "type": "object", "properties": {}, "required": [] }
+        }));
+    }
+
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128);
+
+    for name in [
+        "set_plan",
+        "UpdatePlan",
+        "load_skill",
+        "finish_task",
+        "ask_user_question",
+    ] {
+        assert!(
+            arr.iter().any(|t| t
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                == Some(name)),
+            "{name} must survive 160 competing tools"
+        );
+    }
+
+    Ok(())
+}

@@ -250,6 +250,13 @@ const PRIORITY_TOOL_NAMES: &[&str] = &[
     "update_memory",
     "update_memory_typed",
     "memory_apply_patch",
+    "set_plan",
+    "UpdatePlan",
+    "finish_task",
+    "ask_user_question",
+    "create_checkpoint",
+    "restore_checkpoint",
+    "list_checkpoints",
 ];
 
 fn tool_name(schema: &Value) -> Option<&str> {
@@ -271,36 +278,100 @@ fn schema_bool(schema: &Value, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn has_priority_tag(schema: &Value) -> bool {
+fn schema_str<'a>(schema: &'a Value, key: &str) -> Option<&'a str> {
+    schema
+        .get("x-cade")
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_str)
+}
+
+fn has_tag(schema: &Value, target_tag: &str) -> bool {
     schema
         .get("tags")
         .and_then(Value::as_array)
         .map(|tags| {
             tags.iter()
-                .any(|tag| matches!(tag.as_str(), Some("meta") | Some("core") | Some("core_mcp")))
+                .any(|tag| tag.as_str() == Some(target_tag))
         })
         .unwrap_or(false)
 }
 
-fn is_priority_tool(schema: &Value) -> bool {
-    schema_bool(schema, "core_server")
-        || schema_bool(schema, "is_core")
-        || has_priority_tag(schema)
+fn is_meta_tool(schema: &Value) -> bool {
+    has_tag(schema, "meta")
         || tool_name(schema).is_some_and(|name| PRIORITY_TOOL_NAMES.contains(&name))
 }
 
+fn is_core_server_tool(schema: &Value) -> bool {
+    schema_bool(schema, "core_server")
+        || schema_bool(schema, "is_core")
+        || has_tag(schema, "core_mcp")
+        || has_tag(schema, "core")
+}
+
+fn tool_server_key(schema: &Value) -> &str {
+    schema_str(schema, "server_key")
+        .or_else(|| {
+            tool_name(schema).and_then(|n| n.split_once("__").map(|(prefix, _)| prefix))
+        })
+        .unwrap_or("")
+}
+
 fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
-    let mut selected: Vec<&Value> = schemas
+    let mut selected: Vec<&Value> = Vec::with_capacity(OPENAI_MAX_TOOLS.min(schemas.len()));
+
+    // 1. Tier 0: Meta Tools (Memory, Skills, Planning, Task Lifecycle)
+    let mut meta_tools: Vec<&Value> = schemas.iter().filter(|s| is_meta_tool(s)).collect();
+    meta_tools.sort_by_key(|s| (tool_server_key(s), tool_name(s).unwrap_or("")));
+    selected.extend(meta_tools.into_iter().take(OPENAI_MAX_TOOLS));
+
+    if selected.len() >= OPENAI_MAX_TOOLS {
+        return selected;
+    }
+
+    // 2. Tier 1: Core MCP Servers (Server-Aware Fair Round-Robin Allocation)
+    let mut core_by_server: std::collections::BTreeMap<&str, Vec<&Value>> =
+        std::collections::BTreeMap::new();
+    for schema in schemas.iter().filter(|s| !is_meta_tool(s) && is_core_server_tool(s)) {
+        let key = tool_server_key(schema);
+        core_by_server.entry(key).or_default().push(schema);
+    }
+
+    for tools in core_by_server.values_mut() {
+        tools.sort_by_key(|s| tool_name(s).unwrap_or(""));
+    }
+
+    let mut round = 0;
+    loop {
+        let mut added_in_round = 0;
+        for tools in core_by_server.values() {
+            if selected.len() >= OPENAI_MAX_TOOLS {
+                break;
+            }
+            if let Some(&tool) = tools.get(round) {
+                selected.push(tool);
+                added_in_round += 1;
+            }
+        }
+        if added_in_round == 0 || selected.len() >= OPENAI_MAX_TOOLS {
+            break;
+        }
+        round += 1;
+    }
+
+    if selected.len() >= OPENAI_MAX_TOOLS {
+        return selected;
+    }
+
+    // 3. Tier 2: Remaining Non-Core Tools (Sorted deterministically by server_key, tool_name)
+    let mut remaining: Vec<&Value> = schemas
         .iter()
-        .filter(|schema| is_priority_tool(schema))
+        .filter(|s| !is_meta_tool(s) && !is_core_server_tool(s))
         .collect();
-    selected.extend(
-        schemas
-            .iter()
-            .filter(|schema| !is_priority_tool(schema))
-            .take(OPENAI_MAX_TOOLS.saturating_sub(selected.len())),
-    );
-    selected.truncate(OPENAI_MAX_TOOLS);
+    remaining.sort_by_key(|s| (tool_server_key(s), tool_name(s).unwrap_or("")));
+
+    let slots_left = OPENAI_MAX_TOOLS.saturating_sub(selected.len());
+    selected.extend(remaining.into_iter().take(slots_left));
+
     selected
 }
 
