@@ -18,6 +18,7 @@ pub mod health;
 pub mod mcp;
 pub mod memory_evidence;
 pub mod messages;
+pub mod knowledge;
 pub mod models;
 pub mod providers;
 pub mod proxy;
@@ -166,6 +167,15 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/agents/{id}/blocks/attach", post(blocks::attach_block))
         .route("/v1/agents/{id}/blocks/detach", post(blocks::detach_block))
+        // Knowledge Graph Triples (ADR-0002)
+        .route(
+            "/v1/knowledge/edges",
+            get(knowledge::list_edges).post(knowledge::create_edge),
+        )
+        .route(
+            "/v1/knowledge/edges/{id}",
+            delete(knowledge::delete_edge),
+        )
         .route(
             "/v1/agents/{id}/archival",
             post(agents::insert_archival_memory_handler),

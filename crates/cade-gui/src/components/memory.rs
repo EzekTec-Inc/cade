@@ -53,30 +53,85 @@ pub fn MemoryBlocksView() -> Element {
     let mut is_searching = use_signal(|| false);
 
     // Knowledge graph triples state
-    let triples = use_signal(|| {
-        vec![
-            (
-                "CADE",
-                "implements",
-                "CapabilityMesh (Native + MCP + Skills)",
-            ),
-            (
-                "EmbeddedSession",
-                "links_to",
-                "SQLite & LlmRouter in-process",
-            ),
-            (
-                "Sleeptime",
-                "consolidates_at",
-                "98% Context Window Threshold",
-            ),
-            (
-                "TokenHeatmap",
-                "allocates",
-                "Pinned (Purple), Short (Cyan), Long (Slate)",
-            ),
-            ("KnowledgeEdges", "indexes_via", "sqlite-vec & FTS5 BM25"),
-        ]
+    let triples = use_signal(Vec::<crate::api::KnowledgeEdgeItem>::new);
+    let is_loading_triples = use_signal(|| true);
+    let mut new_entity = use_signal(String::new);
+    let mut new_relation = use_signal(String::new);
+    let mut new_target = use_signal(String::new);
+    let is_submitting_edge = use_signal(|| false);
+
+    let fetch_triples = move || {
+        let api_client = client();
+        let mut trip_sig = triples;
+        let mut loading = is_loading_triples;
+        let st = state;
+        loading.set(true);
+        spawn(async move {
+            match api_client.list_knowledge_edges(None, None).await {
+                Ok(edges) => trip_sig.set(edges),
+                Err(e) => add_toast(&st, ToastLevel::Error, "Failed to load knowledge edges", e),
+            }
+            loading.set(false);
+        });
+    };
+
+    let handle_create_edge = move || {
+        let ent = new_entity().trim().to_string();
+        let rel = new_relation().trim().to_string();
+        let tgt = new_target().trim().to_string();
+        if ent.is_empty() || rel.is_empty() || tgt.is_empty() {
+            return;
+        }
+        let api_client = client();
+        let st = state;
+        let mut submitting = is_submitting_edge;
+        let mut e_input = new_entity;
+        let mut r_input = new_relation;
+        let mut t_input = new_target;
+        let mut trip_sig = triples;
+        submitting.set(true);
+
+        spawn(async move {
+            match api_client.create_knowledge_edge(&ent, &rel, &tgt).await {
+                Ok(_) => {
+                    add_toast(&st, ToastLevel::Success, "Knowledge Edge Created", format!("{ent} ➔ {rel} ➔ {tgt}"));
+                    e_input.set(String::new());
+                    r_input.set(String::new());
+                    t_input.set(String::new());
+                    if let Ok(updated) = api_client.list_knowledge_edges(None, None).await {
+                        trip_sig.set(updated);
+                    }
+                }
+                Err(e) => {
+                    add_toast(&st, ToastLevel::Error, "Failed to create edge", e);
+                }
+            }
+            submitting.set(false);
+        });
+    };
+
+    let handle_delete_edge = move |edge_id: i64| {
+        let api_client = client();
+        let st = state;
+        let mut trip_sig = triples;
+        let current = trip_sig();
+        trip_sig.set(current.into_iter().filter(|e| e.id != edge_id).collect());
+
+        spawn(async move {
+            match api_client.delete_knowledge_edge(edge_id).await {
+                Ok(_) => add_toast(&st, ToastLevel::Info, "Knowledge Edge Removed", format!("Edge #{edge_id} deleted")),
+                Err(e) => {
+                    add_toast(&st, ToastLevel::Error, "Failed to delete edge", e);
+                    if let Ok(updated) = api_client.list_knowledge_edges(None, None).await {
+                        trip_sig.set(updated);
+                    }
+                }
+            }
+        });
+    };
+
+    use_effect(move || {
+        fetch_triples();
     });
 
     let mut do_semantic_search = move || {
@@ -99,6 +154,10 @@ pub fn MemoryBlocksView() -> Element {
         search_results.set(matches);
         is_searching.set(false);
     };
+
+    let edge_list = triples();
+    let edge_count = edge_list.len();
+    let node_count = edge_count + 1;
 
     rsx! {
         div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
@@ -180,26 +239,94 @@ pub fn MemoryBlocksView() -> Element {
                     }
                 } else if active_subtab() == 1 {
                     div { class: "space-y-4",
-                        div { class: "flex items-center justify-between",
-                            h2 { class: "text-sm font-semibold text-slate-100", "Knowledge Graph Edge Triples (Migration 16)" }
-                            span { class: "text-xs font-mono text-purple-400", "Entity ➔ Relation ➔ Target" }
+                        div { class: "flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2",
+                            div { class: "space-y-0.5",
+                                h2 { class: "text-sm font-semibold text-slate-100", "Live Knowledge Graph Triples (SQLite Migration 16)" }
+                                p { class: "text-xs text-slate-400", "Structured grounding edges shared across main agents and subagents." }
+                            }
+                            button {
+                                class: "text-xs bg-[#16171d] hover:bg-[#1f212a] text-slate-300 border border-[#1e293b] rounded-lg px-3 py-1.5 font-medium transition flex items-center space-x-1.5",
+                                onclick: move |_| fetch_triples(),
+                                span { "↻" }
+                                span { "Refresh Edges" }
+                            }
                         }
+
+                        // Inline "Add New Edge" Form
+                        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-4 space-y-3 shadow-lg",
+                            span { class: "text-xs font-semibold text-slate-300", "+ Insert Knowledge Edge" }
+                            div { class: "grid grid-cols-1 md:grid-cols-12 gap-2.5",
+                                input {
+                                    class: "md:col-span-4 bg-[#141720] border border-[#1e293b] rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500",
+                                    placeholder: "Subject Entity (e.g. AuthEngine)",
+                                    value: "{new_entity}",
+                                    oninput: move |e| new_entity.set(e.value().clone()),
+                                }
+                                input {
+                                    class: "md:col-span-3 bg-[#141720] border border-[#1e293b] rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500",
+                                    placeholder: "Relation (e.g. validates)",
+                                    value: "{new_relation}",
+                                    oninput: move |e| new_relation.set(e.value().clone()),
+                                }
+                                input {
+                                    class: "md:col-span-3 bg-[#141720] border border-[#1e293b] rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500",
+                                    placeholder: "Target / Object (e.g. BearerToken)",
+                                    value: "{new_target}",
+                                    oninput: move |e| new_target.set(e.value().clone()),
+                                }
+                                button {
+                                    class: "md:col-span-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 flex items-center justify-center space-x-1 cursor-pointer",
+                                    disabled: is_submitting_edge(),
+                                    onclick: move |_| handle_create_edge(),
+                                    span { if is_submitting_edge() { "Adding..." } else { "Add Edge" } }
+                                }
+                            }
+                        }
+
+                        // Triples Table
                         div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden shadow-xl",
                             div { class: "grid grid-cols-12 px-6 py-3 border-b border-[#1e293b] bg-[#070b14] text-slate-400 text-xs font-mono font-semibold select-none",
                                 div { class: "col-span-4", "Subject Entity" }
                                 div { class: "col-span-3", "Relation Edge" }
-                                div { class: "col-span-5", "Target Object / Concept" }
+                                div { class: "col-span-4", "Target Object / Concept" }
+                                div { class: "col-span-1 text-right", "Action" }
                             }
-                            div { class: "divide-y divide-[#1e293b]/60",
-                                for (sub, rel, obj) in triples() {
-                                    div { class: "grid grid-cols-12 px-6 py-3.5 items-center text-xs font-mono hover:bg-[#0f172a]/40 transition",
-                                        div { class: "col-span-4 text-cyan-300 font-bold", "{sub}" }
-                                        div { class: "col-span-3 text-purple-400 flex items-center space-x-1.5",
-                                            span { "➔" }
-                                            span { class: "bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/80 text-[11px]", "{rel}" }
+                            if is_loading_triples() && triples().is_empty() {
+                                div { class: "p-8 text-center",
+                                    p { class: "text-slate-400 text-xs animate-pulse", "Loading knowledge edges from SQLite database..." }
+                                }
+                            } else if triples().is_empty() {
+                                div { class: "p-8 text-center select-none space-y-1",
+                                    p { class: "text-slate-300 text-sm font-medium", "No Knowledge Edges Found" }
+                                    p { class: "text-slate-500 text-xs", "Insert structured facts above or run subagents to populate the graph." }
+                                }
+                            } else {
+                                div { class: "divide-y divide-[#1e293b]/60",
+                                    {triples().into_iter().map(|edge| {
+                                        let id = edge.id;
+                                        let sub = edge.entity.clone();
+                                        let rel = edge.relation.clone();
+                                        let obj = edge.target.clone();
+                                        rsx! {
+                                            div {
+                                                key: "{id}",
+                                                class: "grid grid-cols-12 px-6 py-3.5 items-center text-xs font-mono hover:bg-[#0f172a]/40 transition",
+                                                div { class: "col-span-4 text-cyan-300 font-bold truncate", "{sub}" }
+                                                div { class: "col-span-3 text-purple-400 flex items-center space-x-1.5 truncate",
+                                                    span { "➔" }
+                                                    span { class: "bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/80 text-[11px]", "{rel}" }
+                                                }
+                                                div { class: "col-span-4 text-slate-300 truncate", "{obj}" }
+                                                div { class: "col-span-1 text-right",
+                                                    button {
+                                                        class: "text-slate-500 hover:text-red-400 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition cursor-pointer",
+                                                        onclick: move |_| handle_delete_edge(id),
+                                                        "✕"
+                                                    }
+                                                }
+                                            }
                                         }
-                                        div { class: "col-span-5 text-slate-300", "{obj}" }
-                                    }
+                                    })}
                                 }
                             }
                         }
@@ -208,67 +335,72 @@ pub fn MemoryBlocksView() -> Element {
                     div { class: "space-y-4",
                         div { class: "flex items-center justify-between",
                             div { class: "flex items-center space-x-2.5",
-                                h2 { class: "text-sm font-semibold text-slate-100", "Interactive Force-Directed Knowledge Graph Canvas" }
+                                h2 { class: "text-sm font-semibold text-slate-100", "Live Force-Directed Knowledge Graph Canvas" }
                                 span { class: "text-[10px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-2 py-0.5 rounded", "Hardware-Accelerated Canvas" }
                             }
-                            span { class: "text-xs font-mono text-slate-500", "Physics Engine: Converged" }
+                            span { class: "text-xs font-mono text-slate-500", "Live SQLite Edges" }
                         }
                         div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 shadow-2xl relative overflow-hidden min-h-[480px] flex flex-col justify-between select-none",
-                            // Interactive SVG Graph Visualizer
+                            // Dynamic SVG Graph Visualizer
                             svg {
                                 class: "w-full h-[400px] bg-[#040711] rounded-lg border border-[#1e293b]/60",
                                 view_box: "0 0 800 400",
-                                // Edges with gradient glow
-                                line { x1: "400", y1: "200", x2: "220", y2: "100", stroke: "#38bdf8", "stroke-width": "2", "stroke-opacity": "0.6", "stroke-dasharray": "4" }
-                                line { x1: "400", y1: "200", x2: "580", y2: "100", stroke: "#a855f7", "stroke-width": "2", "stroke-opacity": "0.6", "stroke-dasharray": "4" }
-                                line { x1: "400", y1: "200", x2: "220", y2: "300", stroke: "#10b981", "stroke-width": "2", "stroke-opacity": "0.6" }
-                                line { x1: "400", y1: "200", x2: "580", y2: "300", stroke: "#f59e0b", "stroke-width": "2", "stroke-opacity": "0.6" }
 
-                                // Center Root Node: CADE Core Platform
-                                g { class: "cursor-pointer transform hover:scale-105 transition duration-150",
-                                    circle { cx: "400", cy: "200", r: "38", fill: "#0f172a", stroke: "#38bdf8", "stroke-width": "3" }
-                                    text { x: "400", y: "196", "text-anchor": "middle", fill: "#f8fafc", "font-size": "11", "font-weight": "bold", "font-family": "monospace", "CADE Core" }
-                                    text { x: "400", y: "212", "text-anchor": "middle", fill: "#38bdf8", "font-size": "9", "font-family": "monospace", "[Hub]" }
+                                // Center Root Node: CADE Knowledge Graph Hub
+                                g { class: "cursor-pointer",
+                                    circle { cx: "400", cy: "200", r: "36", fill: "#0f172a", stroke: "#38bdf8", "stroke-width": "3" }
+                                    text { x: "400", y: "196", "text-anchor": "middle", fill: "#f8fafc", "font-size": "11", "font-weight": "bold", "font-family": "monospace", "CADE Hub" }
+                                    text { x: "400", y: "212", "text-anchor": "middle", fill: "#38bdf8", "font-size": "9", "font-family": "monospace", "SQLite KG" }
                                 }
 
-                                // Node: CapabilityMesh
-                                g { class: "cursor-pointer",
-                                    circle { cx: "220", cy: "100", r: "30", fill: "#0f172a", stroke: "#38bdf8", "stroke-width": "2" }
-                                    text { x: "220", y: "96", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "Capability" }
-                                    text { x: "220", y: "110", "text-anchor": "middle", fill: "#38bdf8", "font-size": "8", "font-family": "monospace", "Mesh" }
-                                }
+                                // Render live edges and orbit nodes
+                                {
+                                    const PALETTE: &[&str] = &["#38bdf8", "#a855f7", "#10b981", "#f59e0b", "#ec4899", "#6366f1", "#14b8a6", "#f97316"];
+                                    let n_f64 = edge_count.max(1) as f64;
+                                    edge_list.into_iter().enumerate().map(move |(i, edge)| {
+                                        let angle = (i as f64) * (2.0 * std::f64::consts::PI / n_f64);
+                                        let rx = 270.0;
+                                        let ry = 135.0;
+                                        let x = 400.0 + rx * angle.cos();
+                                        let y = 200.0 + ry * angle.sin();
+                                        let stroke_color = PALETTE[i % PALETTE.len()];
+                                        let sub_short = if edge.entity.len() > 14 { format!("{}…", &edge.entity[..12]) } else { edge.entity.clone() };
+                                        let rel_short = if edge.relation.len() > 12 { format!("{}…", &edge.relation[..10]) } else { edge.relation.clone() };
 
-                                // Node: MemoryStore & Embeddings
-                                g { class: "cursor-pointer",
-                                    circle { cx: "580", cy: "100", r: "30", fill: "#0f172a", stroke: "#a855f7", "stroke-width": "2" }
-                                    text { x: "580", y: "96", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "MemoryStore" }
-                                    text { x: "580", y: "110", "text-anchor": "middle", fill: "#a855f7", "font-size": "8", "font-family": "monospace", "sqlite-vec" }
-                                }
-
-                                // Node: SubagentSession
-                                g { class: "cursor-pointer",
-                                    circle { cx: "220", cy: "300", r: "30", fill: "#0f172a", stroke: "#10b981", "stroke-width": "2" }
-                                    text { x: "220", y: "296", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "Subagents" }
-                                    text { x: "220", y: "310", "text-anchor": "middle", fill: "#10b981", "font-size": "8", "font-family": "monospace", "Worktree" }
-                                }
-
-                                // Node: LlmRouter & Providers
-                                g { class: "cursor-pointer",
-                                    circle { cx: "580", cy: "300", r: "30", fill: "#0f172a", stroke: "#f59e0b", "stroke-width": "2" }
-                                    text { x: "580", y: "296", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "LlmRouter" }
-                                    text { x: "580", y: "310", "text-anchor": "middle", fill: "#f59e0b", "font-size": "8", "font-family": "monospace", "Prompt Cache" }
+                                        rsx! {
+                                            g { key: "{edge.id}",
+                                                line {
+                                                    x1: "400",
+                                                    y1: "200",
+                                                    x2: "{x}",
+                                                    y2: "{y}",
+                                                    stroke: "{stroke_color}",
+                                                    "stroke-width": "2",
+                                                    "stroke-opacity": "0.55",
+                                                    "stroke-dasharray": "4",
+                                                }
+                                                // Orbit Node
+                                                g { class: "cursor-pointer transform hover:scale-105 transition duration-150",
+                                                    circle { cx: "{x}", cy: "{y}", r: "28", fill: "#0d1117", stroke: "{stroke_color}", "stroke-width": "2" }
+                                                    text { x: "{x}", y: "{y - 4.0}", "text-anchor": "middle", fill: "#f8fafc", "font-size": "9", "font-weight": "bold", "font-family": "monospace", "{sub_short}" }
+                                                    text { x: "{x}", y: "{y + 9.0}", "text-anchor": "middle", fill: "{stroke_color}", "font-size": "8", "font-family": "monospace", "{rel_short}" }
+                                                }
+                                            }
+                                        }
+                                    })
                                 }
                             }
+
                             // Canvas Controls Footer
-                            div { class: "flex items-center justify-between text-xs font-mono text-slate-400 pt-3 border-t border-[#1e293b]/80",
+                            div { class: "flex items-center justify-between text-xs font-mono text-slate-400 pt-3 border-t border-[#1e293b]/80 select-none",
                                 div { class: "flex items-center space-x-3",
-                                    span { "Zoom: 100%" }
+                                    span { "Nodes: {node_count}" }
                                     span { "•" }
-                                    span { "Nodes: 5" }
+                                    span { "Edges: {edge_count}" }
                                     span { "•" }
-                                    span { "Edges: 4" }
+                                    span { "Engine: Live SQLite" }
                                 }
-                                span { class: "text-slate-500", "Click and drag to pan / scroll to zoom" }
+                                span { class: "text-slate-500", "Connected to /v1/knowledge/edges" }
                             }
                         }
                     }

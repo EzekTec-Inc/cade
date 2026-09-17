@@ -412,6 +412,65 @@ pub async fn list_registered_tools(api_key: &str) -> Result<Vec<serde_json::Valu
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 
+// ── Knowledge Graph Triples (ADR-0002) ────────────────────────────────────
+
+/// A knowledge edge representing a structured fact triple (subject ➔ predicate ➔ target).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeEdgeItem {
+    pub id: i64,
+    pub entity: String,
+    pub relation: String,
+    pub target: String,
+    pub created_at: i64,
+}
+
+/// List all knowledge edges, optionally filtered by entity or relation.
+pub async fn list_knowledge_edges(
+    api_key: &str,
+    entity: Option<&str>,
+    relation: Option<&str>,
+) -> Result<Vec<KnowledgeEdgeItem>, String> {
+    let mut query_parts = Vec::new();
+    if let Some(ent) = entity {
+        query_parts.push(format!("entity={}", urlencoding::encode(ent)));
+    }
+    if let Some(rel) = relation {
+        query_parts.push(format!("relation={}", urlencoding::encode(rel)));
+    }
+    let query_str = if query_parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", query_parts.join("&"))
+    };
+
+    let path = format!("/v1/knowledge/edges{query_str}");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Create a new knowledge edge.
+pub async fn create_knowledge_edge(
+    api_key: &str,
+    entity: &str,
+    relation: &str,
+    target: &str,
+) -> Result<serde_json::Value, String> {
+    let payload = serde_json::json!({
+        "entity": entity,
+        "relation": relation,
+        "target": target,
+    });
+    let body = api_request("POST", "/v1/knowledge/edges", Some(&payload.to_string()), api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Delete a knowledge edge by numeric ID.
+pub async fn delete_knowledge_edge(api_key: &str, id: i64) -> Result<(), String> {
+    let path = format!("/v1/knowledge/edges/{id}");
+    api_request("DELETE", &path, None, api_key).await?;
+    Ok(())
+}
+
 // ── Models ────────────────────────────────────────────────────────────────
 
 /// List available models from all configured providers.
@@ -583,6 +642,30 @@ impl CadeApiClient {
     /// List every tool registered in CADE's database and capability mesh.
     pub async fn list_registered_tools(&self) -> Result<Vec<serde_json::Value>, String> {
         list_registered_tools(&self.api_key).await
+    }
+
+    /// List all knowledge graph edges (triples).
+    pub async fn list_knowledge_edges(
+        &self,
+        entity: Option<&str>,
+        relation: Option<&str>,
+    ) -> Result<Vec<KnowledgeEdgeItem>, String> {
+        list_knowledge_edges(&self.api_key, entity, relation).await
+    }
+
+    /// Create a new knowledge edge.
+    pub async fn create_knowledge_edge(
+        &self,
+        entity: &str,
+        relation: &str,
+        target: &str,
+    ) -> Result<serde_json::Value, String> {
+        create_knowledge_edge(&self.api_key, entity, relation, target).await
+    }
+
+    /// Delete a knowledge edge by ID.
+    pub async fn delete_knowledge_edge(&self, id: i64) -> Result<(), String> {
+        delete_knowledge_edge(&self.api_key, id).await
     }
 
     pub async fn list_models(&self) -> Result<serde_json::Value, String> {

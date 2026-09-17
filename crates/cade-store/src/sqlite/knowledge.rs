@@ -178,6 +178,13 @@ fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Option<f32> {
     Some(dot / (norm1.sqrt() * norm2.sqrt()))
 }
 
+/// Delete a knowledge edge by its numeric ID.
+pub fn delete_knowledge_edge(db: &Db, id: i64) -> Result<bool> {
+    let conn = db.get()?;
+    let affected = conn.execute("DELETE FROM knowledge_edges WHERE id = ?1", params![id])?;
+    Ok(affected > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
