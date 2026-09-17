@@ -1,8 +1,22 @@
 # Mixture of Agents (MoA) Architecture
 
-CADE is transitioning to a Mixture of Agents (MoA) architecture to improve modularity, extensibility, and the dynamic delegation of tasks. This document outlines the core components of this new architecture.
+> [!WARNING]
+> **DEPRECATED & SUPERSEDED ARCHITECTURE**
+> 
+> This document describes an early, exploratory prototype of tool routing that wrapped individual filesystem tools into custom `ToolAgent` structs matching keywords against raw prompt text.
+> 
+> **This architecture no longer applies in CADE and has been formally deprecated.**
+> 
+> In modern CADE, this prototype has been superseded by:
+> 1. **CapabilityMesh ([ADR-0020](adr/0020-capability-mesh-unified-execution-seam.md))**: The deep, unified execution seam across Native Rust Tools, Model Context Protocol (MCP) Servers, and Markdown Skills.
+> 2. **Subagents & Teams ([subagents.md](subagents.md), [ADR-0015](adr/0015-multi-agent-team-coordination-and-git-branch-sandboxing.md), [ADR-0021](adr/0021-subagent-session-harness-and-lifecycle-sandboxing.md))**: True autonomous subagent delegation with isolated context windows, git worktree sandboxing, inter-agent messaging (`intercom`), and real-time task matrix tracking.
+> 3. **ToolPipeline & Permission Engine ([permissions.md](permissions.md), [hooks.md](hooks.md))**: Production tool execution pipeline with human-in-the-loop approvals, lifecycle hooks, and audit logging.
+>
+> This document is retained solely for historical reference.
 
-## Core Components
+---
+
+## Core Components (Historical Prototype)
 
 ### 1. The `Agent` Trait
 

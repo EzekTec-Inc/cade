@@ -1,5 +1,16 @@
 # CADE UI/UX Polish & Enhancement Implementation Plan
 
+> [!NOTE]
+> **COMPLETED HISTORICAL PLAN**
+> 
+> All phases in this implementation plan (TUI-1 through TUI-6 and GUI-1) have been fully implemented and verified.
+> For the current production terminal UI architecture, interactive tool card specifications, and viewport streaming engine, see:
+> - **[TUI Advanced Implementation Specification](tui-ux-spec.md)** (`docs/tui-ux-spec.md`)
+> - **[Terminal UI Architecture Analysis & Recommendations](tui-ux-analysis.md)** (`docs/tui-ux-analysis.md`)
+> - **[TUI Buffer Compaction & Layout Caching](adr/0016-server-driven-tui-buffer-compaction-and-layout-caching.md)** (`docs/adr/0016-server-driven-tui-buffer-compaction-and-layout-caching.md`)
+
+---
+
 This document outlines the detailed architectural design, target files, implementation stages, and live tracking status of CADE's UI/UX polish initiatives.
 
 ---
