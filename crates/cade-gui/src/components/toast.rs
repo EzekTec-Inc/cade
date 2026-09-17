@@ -8,50 +8,79 @@ pub fn ToastContainer() -> Element {
     let state = use_context::<AppState>();
     let toasts = state.toasts;
 
-    // Auto-dismiss after 4 seconds
-    let toast_count = toasts().len();
-    use_effect(move || {
-        if toast_count > 0 {
-            let mut t = toasts;
-            spawn(async move {
-                gloo_timers::future::TimeoutFuture::new(4000).await;
-                let mut list = t();
-                if !list.is_empty() {
-                    list.remove(0);
-                    t.set(list);
-                }
-            });
-        }
-    });
-
     rsx! {
-        div { class: "fixed top-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none",
+        div { class: "fixed top-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none max-w-sm",
             for msg in toasts().iter() {
-                toast_bubble { msg: msg.clone() }
+                toast_bubble {
+                    key: "{msg.id}",
+                    msg: msg.clone(),
+                    on_dismiss: move |id| {
+                        let mut t = toasts;
+                        let mut list = t();
+                        list.retain(|m| m.id != id);
+                        t.set(list);
+                    },
+                }
             }
         }
     }
 }
 
 #[component]
-fn toast_bubble(msg: ToastMessage) -> Element {
-    let (bg, icon) = match msg.level {
-        ToastLevel::Info => ("bg-blue-500/20 border-blue-500/40", "\u{2139}"),
-        ToastLevel::Success => ("bg-emerald-500/20 border-emerald-500/40", "\u{2714}"),
-        ToastLevel::Warning => ("bg-yellow-500/20 border-yellow-500/40", "\u{26a0}"),
-        ToastLevel::Error => ("bg-red-500/20 border-red-500/40", "\u{2716}"),
+fn toast_bubble(msg: ToastMessage, on_dismiss: EventHandler<u64>) -> Element {
+    let id = msg.id;
+
+    // Each individual toast bubble spawns its own auto-dismiss timeout
+    use_effect(move || {
+        let dismiss = on_dismiss;
+        spawn(async move {
+            gloo_timers::future::TimeoutFuture::new(4500).await;
+            dismiss.call(id);
+        });
+    });
+
+    let (bg, border, icon, icon_color) = match msg.level {
+        ToastLevel::Info => (
+            "bg-[#0d1526]/95",
+            "border-blue-500/30",
+            "\u{2139}",
+            "text-blue-400",
+        ),
+        ToastLevel::Success => (
+            "bg-[#091a13]/95",
+            "border-emerald-500/30",
+            "\u{2714}",
+            "text-emerald-400",
+        ),
+        ToastLevel::Warning => (
+            "bg-[#1f1807]/95",
+            "border-yellow-500/30",
+            "\u{26a0}",
+            "text-yellow-400",
+        ),
+        ToastLevel::Error => (
+            "bg-[#1c0c0e]/95",
+            "border-red-500/30",
+            "\u{2716}",
+            "text-red-400",
+        ),
     };
 
     rsx! {
-        div { class: "pointer-events-auto animate-slide-in backdrop-blur-sm {bg} border rounded-lg px-4 py-3 max-w-sm shadow-lg",
-            div { class: "flex items-start space-x-2",
-                span { class: "text-sm", "{icon}" }
-                div { class: "flex flex-col",
-                    span { class: "text-white text-xs font-semibold", "{msg.title}" }
+        div { class: "pointer-events-auto backdrop-blur-md {bg} border {border} rounded-xl p-3.5 shadow-2xl transition-all duration-200 animate-slide-in flex items-start justify-between gap-3",
+            div { class: "flex items-start space-x-2.5 min-w-0 flex-1",
+                span { class: "text-sm {icon_color} shrink-0 mt-0.5", "{icon}" }
+                div { class: "flex flex-col min-w-0 flex-1",
+                    span { class: "text-slate-100 text-xs font-semibold tracking-tight", "{msg.title}" }
                     if !msg.detail.is_empty() {
-                        span { class: "text-gray-300 text-[11px] mt-0.5", "{msg.detail}" }
+                        span { class: "text-slate-400 text-[11px] mt-0.5 leading-relaxed break-words", "{msg.detail}" }
                     }
                 }
+            }
+            button {
+                class: "text-slate-500 hover:text-slate-300 text-xs p-1 rounded hover:bg-white/5 transition shrink-0 select-none",
+                onclick: move |_| on_dismiss.call(id),
+                "✕"
             }
         }
     }

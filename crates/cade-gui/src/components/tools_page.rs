@@ -24,7 +24,7 @@ pub fn ToolsView() -> Element {
     let is_loading = use_signal(|| true);
 
     // Fetch all data
-    let fetch_all = move || {
+    let fetch_all = move |show_toast: bool| {
         let st = state;
         let api_client = client();
         let mut srv = servers;
@@ -53,13 +53,20 @@ pub fn ToolsView() -> Element {
             }
 
             loading.set(false);
-            add_toast(&st, ToastLevel::Info, "Tools & Approvals refreshed", "Loaded latest servers, tools, and pending queues.");
+            if show_toast {
+                add_toast(
+                    &st,
+                    ToastLevel::Info,
+                    "Tools & Approvals refreshed",
+                    "Loaded latest servers, tools, and pending queues.",
+                );
+            }
         });
     };
 
-    // Initial load
+    // Initial load (silent)
     use_effect(move || {
-        fetch_all();
+        fetch_all(false);
     });
 
     // Approval action handler
@@ -155,7 +162,7 @@ pub fn ToolsView() -> Element {
                 div { class: "flex items-center space-x-3",
                     button {
                         class: "text-xs bg-[#16171d] hover:bg-[#1f212a] text-slate-300 border border-[#1e293b] rounded-lg px-3 py-1.5 font-medium transition flex items-center space-x-1.5",
-                        onclick: move |_| fetch_all(),
+                        onclick: move |_| fetch_all(true),
                         span { "↻" }
                         span { "Refresh" }
                     }
