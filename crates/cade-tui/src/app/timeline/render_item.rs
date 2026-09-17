@@ -171,24 +171,35 @@ pub(crate) fn render_user_message_item(
     nerd: bool,
 ) {
     let icon = crate::icons::user_icon(nerd);
+    let rail = Span::styled("▎ ", Style::default().fg(colors.c_primary()));
     out.push(Line::from(vec![
+        rail.clone(),
         Span::styled(
             format!("{icon} "),
             Style::default()
-                .fg(colors.c_border_accent())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             "You",
             Style::default()
-                .fg(colors.c_text_primary())
+                .fg(colors.c_primary())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
+    out.push(Line::from(vec![rail.clone()]));
+    let parsed = crate::markdown::parse_markdown_lines_with_theme(
+        text,
+        colors,
+        width.saturating_sub(4),
+        true,
+    );
+    for line in parsed {
+        let mut spans = vec![rail.clone()];
+        spans.extend(line.spans);
+        out.push(Line::from(spans));
+    }
     out.push(Line::from(""));
-    out.extend(crate::markdown::parse_markdown_lines_with_theme(
-        text, colors, width, true,
-    ));
 }
 
 pub(crate) fn render_assistant_item(
@@ -1282,5 +1293,20 @@ mod tests {
         assert_eq!(out.len(), 1);
         let text = out[0].to_string();
         assert!(text.contains("FINISHED"), "badge must show FINISHED when done");
+    }
+
+    #[test]
+    fn test_render_user_message_item_has_accent_rail() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        render_user_message_item("Hello world", 80, &mut out, &colors, false);
+        assert!(!out.is_empty(), "user message must render lines");
+        let header = out[0].to_string();
+        assert!(header.contains("▎"), "header must have vertical accent rail ▎");
+        assert!(header.contains("You"), "header must contain You badge");
+
+        let body_line = out.iter().find(|l| l.to_string().contains("Hello world"));
+        assert!(body_line.is_some(), "must render body text");
+        assert!(body_line.unwrap().to_string().contains("▎"), "body line must have vertical accent rail ▎");
     }
 }

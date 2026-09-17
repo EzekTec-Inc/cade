@@ -770,38 +770,45 @@ fn render_active_plan(
         List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
     };
 
+    let completed_count = plan.steps.iter().filter(|s| s.is_done).count();
+    let total_steps = plan.steps.len();
+
     let mut items = Vec::new();
     for step in &plan.steps {
-        let (prefix, color) = if step.is_done {
-            ("[✓] ", colors.c_text_muted())
+        let (prefix, prefix_style, text_style) = if step.is_done {
+            (
+                "✓ ",
+                Style::default()
+                    .fg(colors.c_success())
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(colors.c_text_muted()),
+            )
         } else {
-            ("[ ] ", colors.c_success())
+            (
+                "● ",
+                Style::default()
+                    .fg(colors.c_border_accent())
+                    .add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(colors.c_text_primary())
+                    .add_modifier(Modifier::BOLD),
+            )
         };
         items.push(ListItem::new(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(color)),
-            Span::styled(
-                format!("{}. {}", step.id, step.description),
-                Style::default().fg(if step.is_done {
-                    colors.c_text_muted()
-                } else {
-                    colors.c_text_primary()
-                }),
-            ),
+            Span::styled(format!(" {prefix}"), prefix_style),
+            Span::styled(format!("{}. ", step.id), colors.text_muted()),
+            Span::styled(step.description.clone(), text_style),
         ])));
     }
 
     let visible_rows = area.height.saturating_sub(2) as usize;
-    let total_steps = plan.steps.len();
     let needs_scrollbar = total_steps > visible_rows;
 
+    let title_str = format!(" Tasks ({completed_count} of {total_steps} completed) ");
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(colors.c_border_style())
-        .title(format!(
-            " Todos ({}/{}) ",
-            plan.steps.iter().filter(|s| s.is_done).count(),
-            total_steps,
-        ))
+        .title(title_str)
         .title_style(colors.primary_bold())
         .border_style(colors.border_base());
 
