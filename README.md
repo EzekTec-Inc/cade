@@ -139,6 +139,7 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 | **Desktop Commander** | Unified cross-platform automation seam for window tracking, screen capture, and input simulation |
 | **WASM Dashboard** | Built-in reactive Dioxus web GUI at `/dashboard` with `Cmd+K` command palette, Multi-Model Arena throughput gauges, Swarm DAG canvas, and 3-Tier memory heatmap |
 | **Headroom Proxy** | Transparent prompt compression, caching, and token savings at `http://127.0.0.1:8787` (ADR-0023) |
+| **Plugins & Marketplace** | Bundle skills, subagents, MCP servers, and reactive Lua UI extensions into verified `.tar.gz` packages ([Plugin Guide](docs/plugin-development.md)) |
 | **IDE Plugins** | Native Neovim plugin with interactive hover-edits, ghost-text, and buffer state syncing |
 
 ---

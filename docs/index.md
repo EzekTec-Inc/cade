@@ -63,6 +63,7 @@ Welcome! CADE (Coding AI-Assistant with Desktop Extensions) is your intelligent 
 | [Architecture Overview](architecture.md) | You want to understand the crate structure and data flow |
 | [Development](development.md) | You want to build CADE from source and run the test suite |
 | [Developer Guide](developer-guide.md) | You want to contribute code and follow project conventions |
+| [Plugin Development Guide](plugin-development.md) | You want to author, package, and publish CADE plugins with CLI tools and Lua extensions |
 | [TUI Streaming & Viewport Specification](tui-ux-spec.md) | You want the 11-phase terminal viewport streaming and interactive tool card specification |
 | [Architecture Decision Records (ADRs)](adr/README.md) | You want the index of all accepted architectural decision records (ADR-0001 through ADR-0023) |
 | [Subagent Delegation Protocol](workflows/subagent-delegation-protocol.md) | You want to understand autonomous subagent coordination, git worktree sandboxing, and verification gates |
