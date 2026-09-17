@@ -58,7 +58,7 @@ See `crates/cade-tui` and `crates/cade-cli/src/cli/repl/turn_loop/stream.rs` for
 - **Layout**: 8-slot vertical layout; left content + optional right **sidebar** (agent/model/cwd, cost gauge, status, plan, modified files) at width ≥ breakpoint, else breadcrumb bar. Header pinned top, status row, input area with mode badge, separator lines, footer + hotkey bar. Plan panel overlays content.
 - **Interaction**: `read_input`/`handle_key_input`; `OverlayComponent` stack (permission, questions, palette, copy overlay, pickers, help); autocomplete towers for `/`, `@`, agents, MCPs; input modes (`!`, `!!`, `/`); mouse drag-select → copy, click-to-copy highlight; V-04 scroll clamping; `Shift+J` follow; toasts with decay.
 - **Theming**: shared `cade_core::resources::Theme`, `ThemeColorsExt`, syntect syntax highlighting, Nerd Font icons with ASCII fallback, markdown via pulldown-cmark.
-- **Existing polish**: all `docs/ui-ux-polish-plan.md` items landed (timeline expansion toggle, anchor-retaining resize, floating `/` autocomplete, cost gauge, toast decay, `@` picker).
+- **Existing polish**: all core UI/UX polish items landed (timeline expansion toggle, anchor-retaining resize, floating `/` autocomplete, cost gauge, toast decay, `@` picker).
 - **TUI config**: `TuiSettings` in `cade-core/src/settings/tui.rs`, loaded from `tui.toml` (separate from `settings.json`).
 
 ## 3. Quantitative comparison
