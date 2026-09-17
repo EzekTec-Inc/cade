@@ -18,13 +18,35 @@ pub struct RegistryPluginInfo {
     pub tags: Vec<String>,
     /// URL to a compressed archive (.tar.gz) or git repo containing the plugin
     pub url: String,
+    /// Optional expected SHA-256 checksum of the archive for integrity verification
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
-/// Fetches and installs a plugin from a .tar.gz URL.
+/// Compute the SHA-256 hex digest of a byte slice.
+pub fn compute_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let hash = hasher.finalize();
+    hash.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Fetches and installs a plugin from a .tar.gz URL without checksum verification.
 pub async fn install_plugin(
     url: &str,
     plugin_id: &str,
     target_dir: &std::path::Path,
+) -> crate::Result<crate::manifest::PluginManifest> {
+    install_plugin_with_checksum(url, plugin_id, target_dir, None).await
+}
+
+/// Fetches and installs a plugin from a .tar.gz URL, validating its SHA-256 checksum before extracting.
+pub async fn install_plugin_with_checksum(
+    url: &str,
+    plugin_id: &str,
+    target_dir: &std::path::Path,
+    expected_sha256: Option<&str>,
 ) -> crate::Result<crate::manifest::PluginManifest> {
     // 1. Download tarball
     let resp = reqwest::get(url)
@@ -34,6 +56,18 @@ pub async fn install_plugin(
         .bytes()
         .await
         .map_err(|e| crate::Error::custom(e.to_string()))?;
+
+    // 1b. Verify SHA-256 checksum if provided
+    if let Some(expected) = expected_sha256 {
+        let actual = compute_sha256(&bytes);
+        let expected_clean = expected.trim().to_lowercase();
+        if actual != expected_clean {
+            return Err(crate::Error::IntegrityError {
+                expected: expected_clean,
+                actual,
+            });
+        }
+    }
 
     // 2. Unpack tarball to target_dir/plugin_id
     let plugin_dir = target_dir.join(plugin_id.replace('/', "_"));

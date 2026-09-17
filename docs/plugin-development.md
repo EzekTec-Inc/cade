@@ -1,155 +1,207 @@
-# Building and Hosting CADE Plugins
+# Building, Packaging, and Hosting CADE Plugins
 
-To build and host a plugin on the CADE Marketplace, you need to create a plugin package, compress it, and register it in the central registry. 
+CADE plugins allow developers to bundle skills, autonomous subagents, custom prompts, themes, MCP servers, and Lua UI widgets into distributable packages that can be shared across teams or published to the central CADE Marketplace.
 
-Here is the step-by-step guide based on our architecture:
+> [!TIP]
+> **Developer CLI Available**
+> You can scaffold, validate, and package plugins automatically using the built-in `cade plugin` commands:
+> ```bash
+> cade plugin init my-plugin      # Scaffolds a new plugin with standard boilerplate
+> cade plugin validate my-plugin  # Checks manifest compliance and verifies asset paths
+> cade plugin pack my-plugin      # Validates, packs into .tar.gz, and computes SHA-256
+> ```
 
-## 1. Create the Plugin Structure
-Create a new directory for your plugin. Inside, you can place your skills, subagent definitions, and prompt templates. 
+---
 
-For example:
+## 1. Plugin Directory Structure
+
+A CADE plugin is a directory containing a manifest (`cade-plugin.toml` or `cade-plugin.json`) and any combination of skills, subagents, prompt templates, themes, or Lua UI extensions.
+
 ```text
 my-awesome-plugin/
-├── cade-plugin.json         # The plugin manifest
+├── cade-plugin.toml         # Preferred TOML manifest (or cade-plugin.json)
+├── README.md                # Documentation and usage instructions
 ├── skills/
-│   └── my-skill.md          # Custom skill definition
-└── subagents/
-    └── my-subagent.md       # Custom subagent definition
+│   └── code-review/
+│       └── SKILL.md         # Custom skill definition
+├── subagents/
+│   └── security-audit.toml  # Custom subagent definition
+├── prompts/
+│   └── refactor.md          # Reusable prompt template
+├── themes/
+│   └── cyber-dark.json      # Custom TUI theme
+└── plugins/
+    └── rich-status.lua      # Asynchronous Lua UI widget
 ```
 
-## 2. Write the `cade-plugin.json` Manifest
-At the root of your plugin directory, create a `cade-plugin.json` file. This tells CADE what your plugin provides when a user installs it.
+---
+
+## 2. Declaring the Plugin Manifest
+
+CADE supports manifests in both **TOML** (`cade-plugin.toml`, preferred) and **JSON** (`cade-plugin.json`).
+
+### TOML Format (`cade-plugin.toml` — Preferred)
+
+```toml
+name = "my-awesome-plugin"
+version = "1.0.0"
+description = "Adds deep code review skills and security subagents to CADE."
+author = "Dev Lead <dev@example.com>"
+
+skills = [
+    "skills/code-review/SKILL.md"
+]
+
+subagents = [
+    "subagents/security-audit.toml"
+]
+
+[mcp_servers.everything]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-everything"]
+```
+
+### JSON Format (`cade-plugin.json`)
 
 ```json
 {
+  "$schema": "https://cade.dev/schemas/cade-plugin.v1.json",
   "name": "my-awesome-plugin",
   "version": "1.0.0",
-  "description": "Adds awesome capabilities to CADE.",
+  "description": "Adds deep code review skills and security subagents to CADE.",
+  "author": "Dev Lead <dev@example.com>",
   "skills": [
-    "skills/my-skill.md"
+    "skills/code-review/SKILL.md"
   ],
   "subagents": [
-    "subagents/my-subagent.md"
+    "subagents/security-audit.toml"
   ],
   "mcp_servers": {
-    "my-mcp-tool": {
+    "everything": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-everything"]
     }
   }
 }
 ```
-*Note: You can include skills, subagents, and even auto-configure MCP servers!*
 
-## 3. Compress the Plugin
-Once your plugin directory is ready, compress it into a standard `.tar.gz` archive.
+> [!NOTE]
+> When multiple manifest files exist in the same root, CADE resolves them with the following precedence:
+> 1. `cade-plugin.toml` (preferred)
+> 2. `cade-plugin.json`
+> 3. `package.json`
+
+---
+
+## 3. Validating and Packaging
+
+### Validating Your Plugin
+
+Before packaging, run the validator to check that all declared paths exist and syntax is valid:
 
 ```bash
-cd my-awesome-plugin
-tar -czf ../my-awesome-plugin.tar.gz .
+cade plugin validate my-awesome-plugin
 ```
 
-## 4. Host the Archive
-Upload `my-awesome-plugin.tar.gz` to a publicly accessible URL. 
-The standard practice is to create a GitHub repository for your plugin and upload the `.tar.gz` file as a **GitHub Release Asset**, but any direct download link (like an S3 bucket or a personal server) works.
+Output:
+```text
+✓ Plugin 'my-awesome-plugin-1.0.0' is valid and conforms to specification.
+```
 
-## 5. Register on the Marketplace
-Finally, to make it appear in the `/marketplace` TUI overlay for all CADE users, submit a Pull Request to the official registry repository: `https://github.com/EzekTec-Inc/cade-registry`.
+If a referenced asset is missing, CADE reports clear diagnostic errors:
+```text
+✕ Plugin validation failed for 'my-awesome-plugin':
+  • Declared skill path does not exist: skills/code-review/SKILL.md
+```
 
-You just need to add a new entry to the `index.json` file in that repository:
+### Packaging into a Tarball
+
+Package your plugin into a `.tar.gz` archive and compute its SHA-256 checksum:
+
+```bash
+cade plugin pack my-awesome-plugin
+```
+
+Output:
+```text
+✓ Successfully packed plugin:
+  Archive: my-awesome-plugin-1.0.0.tar.gz
+  Size:    4128 bytes
+  SHA-256: 4f1a5b8e990c883a2d7f1e6c3a5b0c9e7f8a1b2c3d4e5f6a7b8c9d0e1f2a3b4c
+```
+
+---
+
+## 4. Hosting the Archive
+
+Upload the generated `my-awesome-plugin-1.0.0.tar.gz` to a publicly accessible URL:
+- **GitHub Release Asset (Recommended)**: Create a release on your GitHub repository and attach the `.tar.gz` file.
+- **Direct HTTP/S3 URL**: Any static file hosting URL reachable via HTTP/HTTPS.
+
+---
+
+## 5. Registering on the Marketplace
+
+To make your plugin discoverable in CADE's interactive `/marketplace` command, submit a Pull Request to the official registry repository: [`https://github.com/EzekTec-Inc/cade-registry`](https://github.com/EzekTec-Inc/cade-registry).
+
+Add your plugin entry to `index.json`:
 
 ```json
 {
   "id": "@YourHandle/my-awesome-plugin",
   "version": "1.0.0",
-  "description": "Adds awesome capabilities to CADE.",
+  "description": "Adds deep code review skills and security subagents to CADE.",
   "author": "Your Name",
-  "tags": ["awesome", "utilities", "mcp"],
-  "url": "https://github.com/YourHandle/my-awesome-plugin/releases/download/v1.0.0/my-awesome-plugin.tar.gz"
+  "tags": ["code-review", "security", "mcp"],
+  "url": "https://github.com/YourHandle/my-awesome-plugin/releases/download/v1.0.0/my-awesome-plugin-1.0.0.tar.gz",
+  "sha256": "4f1a5b8e990c883a2d7f1e6c3a5b0c9e7f8a1b2c3d4e5f6a7b8c9d0e1f2a3b4c"
 }
 ```
 
-Once merged, any CADE user can type `/marketplace`, search for your plugin, and hit `Enter` to seamlessly install your skills, subagents, and MCP servers directly into their environment!
-
-## Building Lua UI Plugins
-
-If you want to extend the CADE Terminal UI to display rich popups, custom status lines, or intercept MCP UI responses, you can include Lua scripts inside a `.cade/plugins/` directory.
-
-A typical structure looks like:
-```text
-my-awesome-plugin/
-├── cade-plugin.json
-└── plugins/
-    └── my-ui-handler.lua
-```
-
-In your Lua script, you have access to the global `CADE_UI` object, which allows you to hook into tool results and push native TUI overlays, such as transpiling HTML resource URIs returned by your custom MCP servers into native `LuaWidget` trees!
-
-### Asynchronous & Queue-Decoupled Interaction (ADR 17)
-
-To preserve peak responsiveness in the Terminal UI (TUI) render loop, CADE strictly enforces an **Asynchronous Queue-Decoupled Architecture** for all embedded Lua UI extensions. Lua scripts must **never** execute blocking, synchronous operations (such as synchronous network requests, intensive CPU calculations, or blocking file I/O) on the primary main thread.
-
-Instead, heavy actions are offloaded to background native threads using thread-safe, non-blocking queues:
-- **`command_queue`**: Allows Lua to register slash commands to run in the background via:
-  ```lua
-  CADE.execute_slash_command("/my_slash_command arg1 arg2")
-  ```
-- **`tool_queue`**: Allows Lua to request host or MCP tool execution asynchronously via:
-  ```lua
-  CADE.call_tool("tool_name", { arg1 = "val1" })
-  ```
-
-#### Non-blocking Event Callbacks
-When an asynchronous host tool or background task finishes running, the Rust host serializes its results and sends them to the client's `ui_event_queue`. CADE's event loop automatically invokes the corresponding Lua event callback.
-
-For example, when a tool finishes executing, it triggers a `tool_complete` event:
-```lua
-CADE.bind_ui_callback("tool_complete", function(result)
-    -- result is a table containing:
-    --   result.tool_name  (string)
-    --   result.is_error   (boolean)
-    --   result.content    (string) - the raw text output from the tool
-    
-    if not result.is_error then
-        cade_log("Tool " .. result.tool_name .. " completed successfully!")
-    else
-        cade_log("Tool " .. result.tool_name .. " failed with output: " .. result.content)
-    end
-end)
-```
+> [!IMPORTANT]
+> **SHA-256 Integrity Verification**
+> When users install a plugin whose registry entry contains a `sha256` hash, CADE automatically verifies the downloaded archive bytes before extracting. If a hash mismatch occurs (e.g. from upstream tampering or an interrupted download), installation immediately aborts without modifying the filesystem.
 
 ---
 
-### Unified Style & Theme Bindings (ADR 18)
+## 6. Building Asynchronous Lua UI Plugins
 
-To ensure seamless visual cohesion with whatever active colorscheme or TextMate theme the user is currently previewing, Lua widgets must avoid using hardcoded hex values or raw ANSI color codes.
+To extend the CADE Terminal UI with rich widgets, popups, or custom status lines, include Lua scripts in your plugin's `plugins/` directory.
 
-Instead, plugins should dynamically retrieve active colors and text modifiers using the global style retriever:
+### Asynchronous Queue-Decoupled Interaction (ADR-0017)
+
+To prevent terminal freezing and maintain peak 60 FPS responsiveness, Lua scripts must **never** execute blocking synchronous I/O on the main thread. CADE offloads operations via non-blocking queues:
+
+- **Execute Slash Commands**:
+  ```lua
+  CADE.execute_slash_command("/compact")
+  ```
+- **Call Host Tools**:
+  ```lua
+  CADE.call_tool("read_file", { path = "Cargo.toml" })
+  ```
+- **Listen for Event Callbacks**:
+  ```lua
+  CADE.bind_ui_callback("tool_complete", function(result)
+      if not result.is_error then
+          cade_log("Tool " .. result.tool_name .. " completed!")
+      else
+          cade_log("Tool " .. result.tool_name .. " failed: " .. result.content)
+      end
+  end)
+  ```
+
+### Unified Theme & Style Bindings (ADR-0018)
+
+Lua widgets automatically blend with CADE's active theme using the semantic style resolver:
+
 ```lua
-local style = CADE_UI.get_style("accent.primary")
+local accent = CADE_UI.get_style("accent.primary")
+local bg = CADE_UI.get_style("bg.base")
+local success = CADE_UI.get_style("success")
 ```
 
-#### Exposed Tokens
-You can query standard UI tokens representing different semantic roles in the active theme:
-- `"bg.base"` — Core terminal background
-- `"bg.surface0"`, `"bg.surface1"`, `"bg.surface2"` — Surfaces with increasing elevated backdrops (cards, sidebars)
-- `"text.primary"`, `"text.muted"`, `"text.dim"` — Body, secondary, and de-emphasized text hierarchy
-- `"accent.primary"`, `"accent.primary_bold"` — Focal/accent actions (buttons, headers)
-- `"success"`, `"error"`, `"warning"` — Semantic indicators (green, red, yellow)
-- `"border.base"`, `"border.focus"`, `"border.muted"`, `"border.accent"` — Border hierarchies
-
-#### Serialized Style Structure
-`CADE_UI.get_style` returns a serialized representation of the style:
-```json
-{
-  "fg": "#ff8800",       // Foreground color (hex or named color, optional)
-  "bg": "#111111",       // Background color (hex or named color, optional)
-  "bold": true,          // Text modifier: bold (boolean)
-  "italic": false,       // Text modifier: italic (boolean)
-  "underlined": false,   // Text modifier: underlined (boolean)
-  "dim": false,          // Text modifier: dim (boolean)
-  "reversed": false      // Text modifier: reversed (boolean)
-}
-```
-
-By querying style values dynamically, custom sidebar overlays and widgets will naturally fit perfectly into dark, light, or community-authored TextMate themes.
+Each style table exposes:
+- `fg`: foreground color (hex string or named ANSI)
+- `bg`: background color (hex string or named ANSI)
+- `bold`, `italic`, `underlined`, `dim`, `reversed`: boolean text modifiers

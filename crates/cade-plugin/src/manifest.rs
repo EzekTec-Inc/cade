@@ -75,8 +75,15 @@ pub struct PluginManifest {
 // region:    --- Parsing
 
 impl PluginManifest {
-    /// Load a manifest from `cade-plugin.json` or `package.json` in `root`.
+    /// Load a manifest from `cade-plugin.toml`, `cade-plugin.json` or `package.json` in `root`.
     pub fn load(root: &std::path::Path) -> crate::Result<Self> {
+        let toml_path = root.join("cade-plugin.toml");
+        if toml_path.exists() {
+            let content = std::fs::read_to_string(&toml_path)?;
+            let manifest: Self = toml::from_str(&content)?;
+            return Ok(manifest);
+        }
+
         for name in &["cade-plugin.json", "package.json"] {
             let path = root.join(name);
             if path.exists() {

@@ -162,6 +162,7 @@ cade-desktop = { path = "crates/cade-desktop", optional = true }
 cade-agent   = { path = "crates/cade-agent", default-features = false }
 cade-cli     = { path = "crates/cade-cli" }
 cade-mcp     = { path = "crates/cade-mcp" }
+cade-plugin  = { path = "crates/cade-plugin" }
 cade-sdk     = { path = "crates/cade-sdk", optional = true }
 # -- Shared by both binaries
 derive_more.workspace  = true

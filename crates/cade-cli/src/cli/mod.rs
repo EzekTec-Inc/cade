@@ -10,7 +10,7 @@ pub mod repl;
 pub mod update;
 
 pub use crate::support::text::truncate;
-pub use args::{Args, EvalAction, PackageAction, PackageSubcommand};
+pub use args::{Args, EvalAction, PackageAction, PackageSubcommand, PluginAction};
 pub use repl::Repl;
 
 // endregion: --- Modules

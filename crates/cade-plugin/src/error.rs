@@ -7,11 +7,16 @@ pub enum Error {
     #[display("custom error: {_0}")]
     Custom(String),
 
+    #[display("integrity check failed: expected sha256 {expected}, got {actual}")]
+    IntegrityError { expected: String, actual: String },
+
     // -- Externals
     #[from]
     Io(std::io::Error),
     #[from]
     SerdeJson(serde_json::Error),
+    #[from]
+    Toml(toml::de::Error),
 }
 
 impl Error {

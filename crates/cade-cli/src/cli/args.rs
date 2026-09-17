@@ -189,7 +189,44 @@ pub enum PackageSubcommand {
         #[arg(short = 'p', long, default_value_t = 8284)]
         port: u16,
     },
+    /// Develop, validate, and package CADE plugins
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
 }
+
+// region:    --- Plugin subcommands
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum PluginAction {
+    /// Initialize a new plugin directory template with boilerplate
+    Init {
+        /// Name of the plugin to create
+        name: String,
+        /// Use TOML manifest (cade-plugin.toml) instead of JSON
+        #[arg(long, default_value_t = true)]
+        toml: bool,
+        /// Directory to create the plugin in (default: current directory)
+        #[arg(short = 'd', long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Validate a plugin manifest and check referenced asset paths
+    Validate {
+        /// Path to the plugin directory (default: current directory)
+        path: Option<std::path::PathBuf>,
+    },
+    /// Pack a plugin into a .tar.gz archive and compute its SHA-256 checksum
+    Pack {
+        /// Path to the plugin directory (default: current directory)
+        path: Option<std::path::PathBuf>,
+        /// Optional destination path or directory for the generated .tar.gz
+        #[arg(short = 'o', long)]
+        output: Option<std::path::PathBuf>,
+    },
+}
+
+// endregion: --- Plugin subcommands
 
 // region:    --- Eval subcommands
 

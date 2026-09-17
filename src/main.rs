@@ -22,7 +22,7 @@ use std::sync::Arc;
 use agent::{HttpTransport, session::SessionStore};
 use cade::support::text::sanitize_for_terminal;
 use cade::toolsets::Toolset;
-use cli::{Args, EvalAction, PackageAction, PackageSubcommand, Repl};
+use cli::{Args, EvalAction, PackageAction, PackageSubcommand, PluginAction, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{discover_all_skills, skills_listing};
@@ -203,6 +203,44 @@ async fn async_main() -> Result<()> {
                 cade::cli::package::cmd_update(&agent_dir)
                     .await
                     .map_err(|e| Error::custom(format!("package update: {e}")))?;
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(PackageSubcommand::Plugin { action }) = args.package.take() {
+        match action {
+            PluginAction::Init { name, toml, dir } => {
+                let target_dir = dir.unwrap_or_else(|| cwd.clone());
+                let created = cade_plugin::init_plugin(&target_dir, &name, toml)
+                    .map_err(|e| Error::custom(format!("plugin init: {e}")))?;
+                println!("✓ Initialized CADE plugin at {}", created.display());
+            }
+            PluginAction::Validate { path } => {
+                let root = path.unwrap_or_else(|| cwd.clone());
+                let report = cade_plugin::validate_plugin(&root)
+                    .map_err(|e| Error::custom(format!("plugin validate: {e}")))?;
+                if report.is_valid {
+                    println!(
+                        "✓ Plugin '{}-{}' is valid and conforms to specification.",
+                        report.name, report.version
+                    );
+                } else {
+                    eprintln!("✕ Plugin validation failed for '{}':", report.name);
+                    for issue in report.issues {
+                        eprintln!("  • {issue}");
+                    }
+                    std::process::exit(1);
+                }
+            }
+            PluginAction::Pack { path, output } => {
+                let root = path.unwrap_or_else(|| cwd.clone());
+                let packed = cade_plugin::pack_plugin(&root, output.as_deref())
+                    .map_err(|e| Error::custom(format!("plugin pack: {e}")))?;
+                println!("✓ Successfully packed plugin:");
+                println!("  Archive: {}", packed.archive_path.display());
+                println!("  Size:    {} bytes", packed.file_size_bytes);
+                println!("  SHA-256: {}", packed.sha256);
             }
         }
         return Ok(());
