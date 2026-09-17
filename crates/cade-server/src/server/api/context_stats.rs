@@ -151,6 +151,8 @@ mod tests {
             total_tokens: 8_215,
             turns_selected: 3,
             turns_omitted: 0,
+            consolidation_reason: None,
+            eager_consolidation_triggered: false,
             system_msg_count: 2,
             skills_full: 1,
             skills_summary: 0,
@@ -171,6 +173,8 @@ mod tests {
         assert_eq!(body["window_tokens"], 200_000);
         assert_eq!(body["fits_budget"], true);
         assert_eq!(body["turns_selected"], 3);
+        assert_eq!(body["consolidation_reason"], serde_json::Value::Null);
+        assert_eq!(body["eager_consolidation_triggered"], false);
         assert_eq!(body["skills_full"], 1);
     }
 }

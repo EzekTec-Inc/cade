@@ -232,9 +232,14 @@ fn resolve_rag_export_dir(agent_id: &str) -> Option<std::path::PathBuf> {
 
 // ── tunables ──────────────────────────────────────────────────────────────────
 
-/// Minimum number of DB rows required before consolidation is attempted.
-/// Below this the conversation is too short to be worth summarising.
+/// Minimum number of DB rows normally required before consolidation is
+/// attempted. A short tool-heavy exchange may still bypass this gate when
+/// enough dropped source material would otherwise be lost.
 const MIN_ROWS_FOR_CONSOLIDATION: usize = 20;
+
+/// Dropped source size that makes consolidation worthwhile regardless of the
+/// row count. This is about 4k tokens at the legacy 3:1 character estimate.
+const MIN_DROPPED_CHARS_FOR_CONSOLIDATION: usize = 12_000;
 
 /// Maximum chars of formatted history text fed to the summarisation LLM call.
 /// P5: doubled from 24k → 48k so more dropped-turn detail survives into the
@@ -440,15 +445,6 @@ impl<'a> ContextCompactionEngine<'a> {
             sqlite::list_messages_since_last_compaction(&state.db, agent_id, conversation_id, 500)
                 .unwrap_or_default();
 
-        if all_rows.len() < MIN_ROWS_FOR_CONSOLIDATION {
-            tracing::debug!(
-                "consolidate [{}]: only {} rows — skipping",
-                agent_id,
-                all_rows.len()
-            );
-            return None;
-        }
-
         // Convert rows to (role, text) pairs for turn grouping.
         let flat: Vec<(String, String)> = all_rows
             .iter()
@@ -518,6 +514,23 @@ impl<'a> ContextCompactionEngine<'a> {
                 "consolidate [{}]: all {} turns fit in budget — nothing to summarise",
                 agent_id,
                 total_turns
+            );
+            return None;
+        }
+
+        let dropped_chars: usize = turns[..dropped]
+            .iter()
+            .flatten()
+            .map(|(_, text)| text.chars().count())
+            .sum();
+        if all_rows.len() < MIN_ROWS_FOR_CONSOLIDATION
+            && dropped_chars < MIN_DROPPED_CHARS_FOR_CONSOLIDATION
+        {
+            tracing::debug!(
+                "consolidate [{}]: only {} rows and {} dropped chars — skipping",
+                agent_id,
+                all_rows.len(),
+                dropped_chars,
             );
             return None;
         }

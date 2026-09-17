@@ -225,8 +225,12 @@ pub struct ContextTelemetry {
     pub total_tokens: usize,
     /// Number of complete turns selected.
     pub turns_selected: usize,
-    /// Number of complete turns omitted because the budget exhausted.
+    /// Number of complete turns omitted because the budget was exhausted.
     pub turns_omitted: usize,
+    /// Why this build requested consolidation, if it did.
+    pub consolidation_reason: Option<String>,
+    /// Whether this build launched the turn-count-driven eager path.
+    pub eager_consolidation_triggered: bool,
     /// Number of leading system messages preserved (static + dynamic).
     pub system_msg_count: usize,
     /// Number of skill bodies injected at full fidelity (P2-3).

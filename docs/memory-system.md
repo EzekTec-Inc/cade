@@ -63,8 +63,9 @@ available, never filtered out.
 
 ## Sleeptime consolidation
 
-When the context window crosses ≈ 98% utilisation, the server runs a
-background **consolidation pass** in
+When the context build crosses **70% of its available message budget**, or it
+has to omit older turns, the server marks the agent for a background
+**consolidation pass** in
 `crates/cade-server/src/server/consolidation.rs`:
 
 1. Identify the oldest dropped turns since the last consolidation.
@@ -77,7 +78,9 @@ background **consolidation pass** in
    `session_summary_N` (long-term tier — Phase C).
 5. **Auto-Extract Facts**: The compaction model automatically scans the dialogue summary and extracts durable knowledge (decisions, constraints, conventions) into typed memory blocks, ensuring long-term project context survives without manual agent action.
 
-You can trigger this manually with `/compact` (or `/consolidate`).
+You can trigger this immediately with `/compact` (or `/consolidate`).
+Otherwise, the Sleeptime worker runs it after 20 seconds of inactivity; a
+continuous session instead triggers an eager pass every 20 affected turns.
 
 ## Adaptive guardrails
 

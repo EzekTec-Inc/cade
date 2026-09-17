@@ -629,6 +629,32 @@ fn seed_turns(db: &cade_store::sqlite::Db, agent_id: &str, n: usize, payload_cha
 }
 
 #[tokio::test]
+async fn short_but_large_dropped_history_bypasses_row_gate() {
+    let db = setup_db();
+    let agent_id = "a1";
+    // Eight rows are below the normal 20-row floor, but the oldest two turns
+    // exceed the dropped-history threshold once a small history budget keeps
+    // only the newest turn.
+    seed_turns(&db, agent_id, 4, 4_000);
+
+    let llm = Arc::new(MockSummaryLlm::new("large short history summary"));
+    let state = mk_state(db.clone(), llm.clone());
+    consolidate_agent(state, agent_id.to_string(), None, Some(9_000)).await;
+
+    assert!(
+        llm.calls.load(Ordering::SeqCst) >= 1,
+        "large dropped history must be summarised even below the row gate"
+    );
+    let blocks = store_sqlite::get_memory_blocks(&db, agent_id).unwrap();
+    assert!(
+        blocks.iter().any(|(label, value, _)| {
+            label == "session_summary" && value.contains("large short history summary")
+        }),
+        "the volume override must write a session summary"
+    );
+}
+
+#[tokio::test]
 async fn m4_consolidation_round_trip_writes_pinned_session_summary() {
     // ── arrange ─────────────────────────────────────────────────────
     let db = setup_db(); // agent "a1", model "m" (unknown → 32 000 token window)

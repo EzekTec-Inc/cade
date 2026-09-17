@@ -684,7 +684,18 @@ pub(crate) async fn build_context(
     let turns_len = group_into_turns(&all_llm_msgs, max_turn_chars).len();
     let needs_proactive_length = turns_len >= PROACTIVE_MAX_TURNS;
 
-    if omitted_turns > 0 || needs_proactive || needs_proactive_length {
+    let consolidation_reason = if omitted_turns > 0 {
+        Some("omitted_turns")
+    } else if needs_proactive {
+        Some("budget_threshold")
+    } else if needs_proactive_length {
+        Some("turn_count_threshold")
+    } else {
+        None
+    };
+    let mut eager_consolidation_triggered = false;
+
+    if consolidation_reason.is_some() {
         if omitted_turns > 0 {
             tracing::debug!(
                 "build_context [{}]: {}/{} turns fit in budget; {} older turn(s) omitted — \
@@ -751,6 +762,7 @@ pub(crate) async fn build_context(
         };
 
         if let Some(conv_for_eager) = eager_snapshot {
+            eager_consolidation_triggered = true;
             let state_eager = state.clone();
             let agent_eager = agent_id.to_string();
             tracing::info!(agent_id = %agent_id, "build_context:  eager consolidation triggered (turn-count path)");
@@ -1023,6 +1035,8 @@ pub(crate) async fn build_context(
         total_tokens,
         turns_selected,
         turns_omitted: omitted_turns,
+        consolidation_reason: consolidation_reason.map(str::to_owned),
+        eager_consolidation_triggered,
         system_msg_count,
         skills_full: skills_full_count,
         skills_summary: skills_summary_count,
@@ -1047,6 +1061,8 @@ pub(crate) async fn build_context(
         total_tokens = telemetry.total_tokens,
         turns_selected = telemetry.turns_selected,
         turns_omitted = telemetry.turns_omitted,
+        consolidation_reason = ?telemetry.consolidation_reason,
+        eager_consolidation_triggered = telemetry.eager_consolidation_triggered,
         system_msg_count = telemetry.system_msg_count,
         skills_full = telemetry.skills_full,
         skills_summary = telemetry.skills_summary,
