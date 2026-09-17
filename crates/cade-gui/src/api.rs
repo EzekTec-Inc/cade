@@ -405,6 +405,13 @@ pub async fn list_mcp_servers(api_key: &str) -> Result<Vec<serde_json::Value>, S
     Ok(arr)
 }
 
+
+/// List the registered tool catalog, including locally registered and mesh-backed tools.
+pub async fn list_registered_tools(api_key: &str) -> Result<Vec<serde_json::Value>, String> {
+    let body = api_request("GET", "/v1/tools", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
 // ── Models ────────────────────────────────────────────────────────────────
 
 /// List available models from all configured providers.
@@ -570,6 +577,12 @@ impl CadeApiClient {
 
     pub async fn list_mcp_servers(&self) -> Result<Vec<serde_json::Value>, String> {
         list_mcp_servers(&self.api_key).await
+    }
+
+
+    /// List every tool registered in CADE's database and capability mesh.
+    pub async fn list_registered_tools(&self) -> Result<Vec<serde_json::Value>, String> {
+        list_registered_tools(&self.api_key).await
     }
 
     pub async fn list_models(&self) -> Result<serde_json::Value, String> {
