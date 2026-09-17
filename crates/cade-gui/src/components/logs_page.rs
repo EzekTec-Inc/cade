@@ -8,9 +8,12 @@ pub fn LogsView() -> Element {
     let state = use_context::<AppState>();
     let events = use_signal(Vec::<serde_json::Value>::new);
     let fetching = use_signal(|| true);
-    let agent_id = (state.selected_agent)()
-        .map(|a| a.id.clone())
-        .unwrap_or_default();
+    let agent = (state.selected_agent)();
+    let agent_id = agent.as_ref().map(|a| a.id.clone()).unwrap_or_default();
+    let agent_name = agent
+        .as_ref()
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "Default Agent".to_string());
 
     let key = state.api_key;
     use_effect(move || {
@@ -20,8 +23,19 @@ pub fn LogsView() -> Element {
         let mut evts = events;
         let mut busy = fetching;
         spawn(async move {
-            if !aid.is_empty() {
-                match api::list_events(&aid, &k()).await {
+            let actual = if aid.is_empty() {
+                api::list_agents(&k())
+                    .await
+                    .ok()
+                    .and_then(|list| list.into_iter().next())
+                    .map(|a| a.id)
+                    .unwrap_or_default()
+            } else {
+                aid
+            };
+
+            if !actual.is_empty() {
+                match api::list_events(&actual, &k()).await {
                     Ok(list) => evts.set(list),
                     Err(e) => add_toast(&st, ToastLevel::Error, "Failed to fetch events", e),
                 }
@@ -34,8 +48,11 @@ pub fn LogsView() -> Element {
 
     rsx! {
         div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
-                h1 { class: "text-lg font-semibold text-slate-100", "Logs" }
+            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70 bg-[#090d16]",
+                div { class: "flex items-center space-x-3",
+                    h1 { class: "text-lg font-semibold text-slate-100", "Event Logs" }
+                    span { class: "text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-2 py-0.5 rounded", "{agent_name}" }
+                }
             }
             div { class: "p-10 space-y-4",
                 h2 { class: "text-sm font-semibold text-slate-100", "Agent Events (last 50)" }

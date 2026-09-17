@@ -54,13 +54,17 @@ pub fn AgentsView() -> Element {
                         let name = a.name.clone();
                         let model = a.model.clone().unwrap_or_else(|| "\u{2014}".to_string());
                         let provider = a.provider.clone().unwrap_or_else(|| "\u{2014}".to_string());
+                        let a_clone = a.clone();
                         rsx! {
                             div {
                                 class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 flex items-center justify-between hover:border-[#373840] transition cursor-pointer",
                                 onclick: move |_| {
-                                    let mut st = use_context::<AppState>();
-                                    st.selected_agent.set(Some(a.clone()));
-                                    st.active_page.set(SelectedPage::Chat);
+                                    let mut sel = state.selected_agent;
+                                    let mut page = state.active_page;
+                                    let mut conv = state.active_conversation;
+                                    sel.set(Some(a_clone.clone()));
+                                    conv.set(None);
+                                    page.set(SelectedPage::Chat);
                                 },
                                 div { class: "flex flex-col space-y-1",
                                     div { class: "flex items-center space-x-3",

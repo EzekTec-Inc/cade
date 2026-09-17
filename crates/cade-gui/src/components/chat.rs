@@ -9,7 +9,7 @@ pub fn ChatView() -> Element {
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let agent_name = (state.selected_agent)()
         .map(|a| a.name.clone())
-        .unwrap_or_else(|| "deep-thought-research-agent_copy".to_string());
+        .unwrap_or_else(|| "Default Agent".to_string());
 
     // Load messages when the active conversation or selected agent changes.
     // This replaces the old background-polling approach which would overwrite
