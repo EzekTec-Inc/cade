@@ -108,6 +108,8 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 | `edit_file` | Surgical string-replace edits — precise, diff-like |
 | `grep` | Regex search across your entire codebase |
 | `glob` | Find files by pattern, sorted by modification time |
+| `set_plan` | Declare structured task checklists rendered in interactive plan panel |
+| `UpdatePlan` | Update step completion status with live real-time checklist feedback |
 
 ### 🖥️ Desktop Extensions (the "D" in CADE)
 | Tool | What it does |
@@ -136,6 +138,7 @@ That's it. CADE auto-creates an agent, remembers it per directory, and you're re
 | **Hooks** | Wire shell scripts into lifecycle events (before/after tool calls, session start/end) |
 | **Desktop Commander** | Unified cross-platform automation seam for window tracking, screen capture, and input simulation |
 | **WASM Dashboard** | Built-in reactive Dioxus web GUI at `/dashboard` with `Cmd+K` command palette, Multi-Model Arena throughput gauges, Swarm DAG canvas, and 3-Tier memory heatmap |
+| **Headroom Proxy** | Transparent prompt compression, caching, and token savings at `http://127.0.0.1:8787` (ADR-0023) |
 | **IDE Plugins** | Native Neovim plugin with interactive hover-edits, ghost-text, and buffer state syncing |
 
 ---
