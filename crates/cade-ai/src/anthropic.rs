@@ -94,13 +94,35 @@ pub(crate) fn supports_adaptive_thinking(model: &str) -> bool {
 pub struct AnthropicProvider {
     client: Client,
     api_key: String,
+    base_url: Option<String>,
 }
 
 impl AnthropicProvider {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(api_key: String, base_url: Option<String>) -> Self {
+        let base = base_url
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok().filter(|s| !s.trim().is_empty()));
+
         Self {
             client: crate::utils::build_standard_http_client(),
             api_key,
+            base_url: base,
+        }
+    }
+
+    pub fn endpoint_url(&self) -> String {
+        match &self.base_url {
+            Some(base) => {
+                let trimmed = base.trim_end_matches('/');
+                if trimmed.ends_with("/messages") {
+                    trimmed.to_string()
+                } else if trimmed.ends_with("/v1") {
+                    format!("{trimmed}/messages")
+                } else {
+                    format!("{trimmed}/v1/messages")
+                }
+            }
+            None => API_URL.to_string(),
         }
     }
 
@@ -353,9 +375,10 @@ impl LlmProvider for AnthropicProvider {
                 let client = self.client.clone();
                 let api_key = self.api_key.clone();
                 let body = body.clone();
+                let url = self.endpoint_url();
                 async move {
                     let resp = client
-                        .post(API_URL)
+                        .post(&url)
                         .header("x-api-key", &api_key)
                         .header("anthropic-version", ANTHROPIC_VERSION)
                         .header("anthropic-beta", "prompt-caching-2024-07-31")
@@ -392,9 +415,10 @@ impl LlmProvider for AnthropicProvider {
                 let client = self.client.clone();
                 let api_key = self.api_key.clone();
                 let body = body.clone();
+                let url = self.endpoint_url();
                 async move {
                     let resp = client
-                        .post(API_URL)
+                        .post(&url)
                         .header("x-api-key", &api_key)
                         .header("anthropic-version", ANTHROPIC_VERSION)
                         .header("anthropic-beta", "prompt-caching-2024-07-31")
@@ -586,9 +610,10 @@ impl LlmProvider for AnthropicProvider {
                     let client = self.client.clone();
                     let api_key = self.api_key.clone();
                     let body = body.clone();
+                    let url = self.endpoint_url();
                     async move {
                         let resp = client
-                            .post(API_URL)
+                            .post(&url)
                             .header("x-api-key", &api_key)
                             .header("anthropic-version", ANTHROPIC_VERSION)
                             .header("anthropic-beta", "prompt-caching-2024-07-31")
@@ -716,7 +741,7 @@ mod tests {
     #[test]
     fn build_body_includes_model_and_system() -> Result<()> {
         // -- Setup & Fixtures
-        let provider = AnthropicProvider::new("sk-test".into());
+        let provider = AnthropicProvider::new("sk-test".into(), None);
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
             messages: vec![
@@ -760,7 +785,7 @@ mod tests {
     #[test]
     fn build_body_with_tools_adds_cache_control() -> Result<()> {
         // -- Setup & Fixtures
-        let provider = AnthropicProvider::new("sk-test".into());
+        let provider = AnthropicProvider::new("sk-test".into(), None);
         let mut req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
             messages: vec![super::super::LlmMessage {
@@ -793,7 +818,7 @@ mod tests {
     #[test]
     fn build_body_with_reasoning_effort_legacy() {
         // Older Claude 3.7 still expects the `enabled` + budget_tokens shape.
-        let provider = AnthropicProvider::new("sk-test".into());
+        let provider = AnthropicProvider::new("sk-test".into(), None);
         let req = CompletionRequest {
             model: "claude-3-7-sonnet-20250219".into(),
             messages: vec![super::super::LlmMessage {
@@ -820,7 +845,7 @@ mod tests {
     #[test]
     fn build_body_with_reasoning_effort_adaptive() {
         // Claude 4+ (e.g. sonnet-4-5) requires adaptive thinking + output_config.effort.
-        let provider = AnthropicProvider::new("sk-test".into());
+        let provider = AnthropicProvider::new("sk-test".into(), None);
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
             messages: vec![super::super::LlmMessage {
@@ -867,7 +892,7 @@ mod tests {
     #[test]
     fn build_body_merges_consecutive_tool_results() -> Result<()> {
         // -- Setup & Fixtures
-        let provider = AnthropicProvider::new("sk-test".into());
+        let provider = AnthropicProvider::new("sk-test".into(), None);
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
             messages: vec![
@@ -935,5 +960,20 @@ mod tests {
         assert_eq!(tool_results[1]["type"], "tool_result");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_anthropic_provider_endpoint_resolution() {
+        let p_default = AnthropicProvider::new("sk-test".into(), None);
+        assert_eq!(p_default.endpoint_url(), "https://api.anthropic.com/v1/messages");
+
+        let p_custom = AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787".into()));
+        assert_eq!(p_custom.endpoint_url(), "http://127.0.0.1:8787/v1/messages");
+
+        let p_custom_v1 = AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787/v1".into()));
+        assert_eq!(p_custom_v1.endpoint_url(), "http://127.0.0.1:8787/v1/messages");
+
+        let p_custom_messages = AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787/v1/messages".into()));
+        assert_eq!(p_custom_messages.endpoint_url(), "http://127.0.0.1:8787/v1/messages");
     }
 }

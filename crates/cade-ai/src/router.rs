@@ -36,7 +36,7 @@ impl LlmRouter {
         if let Some(key) = &config.anthropic_api_key {
             providers.insert(
                 "anthropic".to_string(),
-                Arc::new(anthropic::AnthropicProvider::new(key.clone())),
+                Arc::new(anthropic::AnthropicProvider::new(key.clone(), None)),
             );
             provider_keys.insert("anthropic".to_string(), key.clone());
         }
@@ -189,7 +189,7 @@ impl LlmRouter {
                 tracing::info!("hot_sync: registering/updating anthropic from env");
                 self.providers.insert(
                     "anthropic".into(),
-                    Arc::new(anthropic::AnthropicProvider::new(key.clone())),
+                    Arc::new(anthropic::AnthropicProvider::new(key.clone(), None)),
                 );
                 self.provider_keys.insert("anthropic".into(), key);
             }
@@ -486,7 +486,7 @@ impl LlmRouter {
                 let key = api_key
                     .clone()
                     .or_else(|| config.anthropic_api_key.clone())?;
-                Some(Arc::new(anthropic::AnthropicProvider::new(key)))
+                Some(Arc::new(anthropic::AnthropicProvider::new(key, base_url)))
             }
             "openai" => {
                 let key = api_key.clone().or_else(|| config.openai_api_key.clone())?;

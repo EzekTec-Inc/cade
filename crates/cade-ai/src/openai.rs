@@ -376,7 +376,10 @@ impl OpenAiProvider {
     }
 
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
-        let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
+        let base = base_url
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("OPENAI_BASE_URL").ok().filter(|s| !s.trim().is_empty()))
+            .unwrap_or_else(|| OPENAI_URL.to_string());
 
         let client = if base.contains("openrouter.ai") {
             let mut headers = reqwest::header::HeaderMap::new();

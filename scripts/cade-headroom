@@ -64,32 +64,16 @@ if ! is_proxy_ready; then
     done
 fi
 
-ORIG_OPENAI_BASE=""
-
 # 4. Route traffic through Headroom if proxy is ready
 if is_proxy_ready; then
     echo "Headroom proxy active at ${PROXY_URL}"
     export OPENAI_BASE_URL="${PROXY_URL}/v1"
     export ANTHROPIC_BASE_URL="${PROXY_URL}"
-
-    if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
-        ORIG_OPENAI_BASE="$(sqlite3 "$DB_FILE" "SELECT base_url FROM providers WHERE name = 'openai' LIMIT 1;" 2>/dev/null || true)"
-        sqlite3 "$DB_FILE" "UPDATE providers SET base_url = '${PROXY_URL}/v1' WHERE name = 'openai';" 2>/dev/null || true
-    fi
 fi
 
 # 5. Cleanup on exit
 cleanup() {
     local exit_status=$?
-
-    # Restore provider base_url in database if modified
-    if [ -f "$DB_FILE" ] && command -v sqlite3 >/dev/null 2>&1; then
-        if [ -n "$ORIG_OPENAI_BASE" ]; then
-            sqlite3 "$DB_FILE" "UPDATE providers SET base_url = '$ORIG_OPENAI_BASE' WHERE name = 'openai';" 2>/dev/null || true
-        else
-            sqlite3 "$DB_FILE" "UPDATE providers SET base_url = NULL WHERE name = 'openai' AND base_url = '${PROXY_URL}/v1';" 2>/dev/null || true
-        fi
-    fi
 
     # Terminate proxy if we started it and persistence is not requested
     if [ "$STARTED_PROXY" = "true" ] && [ -n "$PROXY_PID" ] && [ -z "${HEADROOM_PERSIST:-}" ]; then
