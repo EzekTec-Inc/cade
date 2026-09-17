@@ -90,6 +90,19 @@ impl SetPlanTool {
             }
         })
     }
+
+    pub async fn run(args: &Value) -> Result<String> {
+        let steps = args
+            .get("steps")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| crate::Error::custom("Missing required 'steps' array in set_plan"))?;
+        let count = steps.len();
+        let title = args
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Tasks");
+        Ok(format!("Plan '{title}' initialized with {count} steps."))
+    }
 }
 
 /// Marks a step in the TUI plan panel as done (or not done).
@@ -116,6 +129,19 @@ impl UpdatePlanTool {
             }
         })
     }
+
+    pub async fn run(args: &Value) -> Result<String> {
+        let step_id = args
+            .get("step_id")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| crate::Error::custom("Missing required 'step_id' in UpdatePlan"))?;
+        let done = args
+            .get("done")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| crate::Error::custom("Missing required 'done' in UpdatePlan"))?;
+        let status = if done { "completed" } else { "pending" };
+        Ok(format!("Step {step_id} marked as {status}."))
+    }
 }
 /// Finishes the current task, generating an automated audit changelog and optionally committing.
 pub struct FinishTaskTool;
@@ -139,5 +165,42 @@ impl FinishTaskTool {
                 "required": ["summary", "reason"]
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_set_plan_tool_run_success() {
+        let args = json!({
+            "title": "Refactor Viewport",
+            "steps": ["Step 1: Explore", "Step 2: Implement", "Step 3: Test"]
+        });
+        let result = SetPlanTool::run(&args).await.unwrap();
+        assert!(result.contains("Refactor Viewport"));
+        assert!(result.contains("3 steps"));
+    }
+
+    #[tokio::test]
+    async fn test_set_plan_tool_missing_steps() {
+        let args = json!({ "title": "Missing Steps" });
+        let err = SetPlanTool::run(&args).await.unwrap_err();
+        assert!(err.to_string().contains("Missing required 'steps'"));
+    }
+
+    #[tokio::test]
+    async fn test_update_plan_tool_run_done() {
+        let args = json!({ "step_id": 2, "done": true });
+        let result = UpdatePlanTool::run(&args).await.unwrap();
+        assert!(result.contains("Step 2 marked as completed"));
+    }
+
+    #[tokio::test]
+    async fn test_update_plan_tool_run_pending() {
+        let args = json!({ "step_id": 1, "done": false });
+        let result = UpdatePlanTool::run(&args).await.unwrap();
+        assert!(result.contains("Step 1 marked as pending"));
     }
 }

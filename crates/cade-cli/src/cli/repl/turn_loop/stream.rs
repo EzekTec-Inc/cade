@@ -328,18 +328,18 @@ impl Repl {
                                 })
                                 .unwrap_or_default();
 
-                            app.set_plan(steps);
+                            if !steps.is_empty() {
+                                app.set_plan(steps);
+                            }
 
-                            // Apply completed steps
+                            // Apply step status updates (done/pending)
                             if let Some(steps_arr) = plan.get("steps").and_then(|v| v.as_array()) {
                                 for step in steps_arr {
                                     let id = step.get("id").and_then(|v| v.as_u64()).unwrap_or(0)
                                         as usize;
-                                    let done = step
-                                        .get("is_done")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false);
-                                    if done {
+                                    if let Some(done) =
+                                        step.get("is_done").and_then(|v| v.as_bool())
+                                    {
                                         app.update_plan_step(id, done);
                                     }
                                 }

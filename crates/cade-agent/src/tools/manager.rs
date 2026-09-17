@@ -149,9 +149,10 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
         "ExitPlanMode" => Err(crate::Error::custom(
             "Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings.",
         )),
-        // TodoWrite — file persistence; SetPlan/UpdatePlan are intercepted in
-        // try_native_intercept (they need TuiApp access) before reaching here.
-        // WriteTodos is kept as a backward-compat alias for TodoWrite.
+        // Plan management & task checklist
+        "set_plan" => SetPlanTool::run(args).await,
+        "UpdatePlan" => UpdatePlanTool::run(args).await,
+        // TodoWrite — file persistence; WriteTodos is kept as a backward-compat alias.
         "TodoWrite" | "WriteTodos" => TodoWriteTool::run(args).await,
         "finish_task" => {
             // Audit log generation — runs both client-side and headless.

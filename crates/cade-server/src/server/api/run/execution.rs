@@ -456,6 +456,65 @@ pub(super) async fn execute_turn_tools(
         )
         .await;
 
+        // Bridge plan execution seam: publish plan_update SSE event upon set_plan or UpdatePlan
+        if !result.is_error {
+            if tool_name == "set_plan" {
+                if let Some(steps_arr) = arguments.get("steps").and_then(|v| v.as_array()) {
+                    let steps_payload: Vec<Value> = steps_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| {
+                            json!({
+                                "id": i + 1,
+                                "description": s.as_str().unwrap_or(""),
+                                "is_done": false
+                            })
+                        })
+                        .collect();
+
+                    let title = arguments
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Tasks");
+
+                    emit_tool_progress(
+                        &state.db,
+                        &run_id,
+                        &tx,
+                        json!({
+                            "message_type": "plan_update",
+                            "plan": {
+                                "title": title,
+                                "steps": steps_payload
+                            }
+                        }),
+                    )
+                    .await;
+                }
+            } else if tool_name == "UpdatePlan" {
+                let step_id = arguments.get("step_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                let done = arguments.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                emit_tool_progress(
+                    &state.db,
+                    &run_id,
+                    &tx,
+                    json!({
+                        "message_type": "plan_update",
+                        "plan": {
+                            "steps": [
+                                {
+                                    "id": step_id,
+                                    "is_done": done
+                                }
+                            ]
+                        }
+                    }),
+                )
+                .await;
+            }
+        }
+
         turn_results.push((result, arguments));
     }
 
