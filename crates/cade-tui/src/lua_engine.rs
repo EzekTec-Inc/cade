@@ -129,6 +129,9 @@ impl LuaEngine {
                     _CADE_call_tool(name, args)
                 end
             }
+            CADE_UI.get_style = function(token)
+                return _CADE_get_style(token)
+            end
         "#,
         )
         .exec()?;
@@ -582,6 +585,34 @@ mod additional_tests {
             )
             .eval()?;
         assert_eq!(path, "src/main.rs");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cade_ui_get_style() -> mlua::Result<()> {
+        let engine = LuaEngine::new()?;
+        let has_style: bool = engine
+            .lua
+            .load(
+                r#"
+            local style = CADE_UI.get_style("accent.primary")
+            return style ~= nil and style.bold ~= nil
+        "#,
+            )
+            .eval()?;
+        assert!(has_style, "CADE_UI.get_style must return a valid style table");
+
+        let has_bg: bool = engine
+            .lua
+            .load(
+                r#"
+            local bg = CADE_UI.get_style("bg.base")
+            return bg ~= nil
+        "#,
+            )
+            .eval()?;
+        assert!(has_bg, "CADE_UI.get_style('bg.base') must return a valid style table");
 
         Ok(())
     }
