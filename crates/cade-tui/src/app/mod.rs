@@ -1640,6 +1640,17 @@ impl TuiApp {
         let selection_start = self.selection_start;
         let selection_current = self.selection_current;
         let streaming_metrics = self.current_streaming_metrics();
+        let proxy_status = if std::env::var("OPENAI_BASE_URL")
+            .map(|u| u.contains("8787"))
+            .unwrap_or(false)
+            || std::env::var("ANTHROPIC_BASE_URL")
+                .map(|u| u.contains("8787"))
+                .unwrap_or(false)
+        {
+            Some("headroom (8787)")
+        } else {
+            None
+        };
 
         let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
@@ -1683,6 +1694,7 @@ impl TuiApp {
                 content_version: self.content_version,
                 modified_files: &modified_files_entries,
                 streaming_metrics,
+                proxy_status,
             };
             let (m_skip, cur_pos, msg_area) = render_frame(
                 frame,

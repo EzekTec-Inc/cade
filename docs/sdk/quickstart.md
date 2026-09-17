@@ -137,6 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let status = if is_error { "\x1b[31mFailed\x1b[0m" } else { "\x1b[32mOK\x1b[0m" };
                 println!("↳ Result [{status}]: {} chars", output.len());
             }
+            CadeStreamEvent::PlanUpdate { plan } => {
+                println!("\n\x1b[34m📋 Plan Updated:\x1b[0m {}", plan.get("title").and_then(|t| t.as_str()).unwrap_or("Tasks"));
+            }
             CadeStreamEvent::Finished { outcome } => {
                 println!("\n\x1b[32m✔ Completed:\x1b[0m {outcome}");
             }

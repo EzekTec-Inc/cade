@@ -110,3 +110,13 @@ For structured multi-step tasks, CADE provides an end-to-end plan lifecycle that
 - **Server SSE Seam:** The server execution pipeline intercepts successful plan mutations and dispatches structured `plan_update` event envelopes over the Server-Sent Events (SSE) channel.
 - **TUI Active Plan State:** The terminal UI stream consumer dynamically receives plan updates, populating `TuiApp::active_plan` and allocating non-zero layout height (`plan_h`) to render an interactive Todo checklist directly above the prompt area.
 - **Visibility Toggling:** Users can toggle the checklist visibility at any time using `Ctrl+T`.
+
+## 13. Dynamic Provider Base URL & Proxy Resolution
+
+CADE standardizes provider endpoint resolution across all supported LLM providers without hardcoding:
+- **Precedence Order:**
+  1. Explicit database configuration (`providers.base_url`) if non-empty.
+  2. Standard environment variable overrides (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GEMINI_BASE_URL` / `GOOGLE_AI_BASE_URL`, `OLLAMA_BASE_URL`, `OPENAI_COMPATIBLE_BASE_URL`).
+  3. Provider default cloud API endpoints.
+- **Transparent Local Proxying:**
+  When launched with `cade-headroom`, the proxy exports `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` and `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. CADE automatically routes all OpenAI and Anthropic requests through the local Headroom proxy daemon, enabling prompt compression and prefix caching without requiring database mutation.

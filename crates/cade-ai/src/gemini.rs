@@ -125,6 +125,7 @@ fn gemini_cache_ttl_secs() -> u64 {
 pub struct GeminiProvider {
     client: Client,
     api_key: String,
+    base_url: Option<String>,
     /// Per-content-hash cache of Gemini `cachedContent` names.
     /// Key   = hash(bare_model + system_text + tool_names)
     /// Value = (cache_resource_name, expiry)
@@ -134,10 +135,15 @@ pub struct GeminiProvider {
 }
 
 impl GeminiProvider {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(api_key: String, base_url: Option<String>) -> Self {
+        let base = base_url
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("GEMINI_BASE_URL").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| std::env::var("GOOGLE_AI_BASE_URL").ok().filter(|s| !s.trim().is_empty()));
         Self {
             client: crate::utils::build_standard_http_client(),
             api_key,
+            base_url: base,
             content_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -293,9 +299,14 @@ impl GeminiProvider {
         } else {
             "generateContent"
         };
+        let base = self
+            .base_url
+            .as_deref()
+            .map(|s| s.trim_end_matches('/'))
+            .unwrap_or(GEMINI_BASE);
         // Strip provider prefix for URL construction
         format!(
-            "{GEMINI_BASE}/{}:{action}&key={}",
+            "{base}/{}:{action}&key={}",
             bare_model(model),
             self.api_key
         )

@@ -201,9 +201,17 @@ This exposes native tools:
 ### 2. Transparent Full Coverage Proxy (`cade-headroom`)
 For transparent network-level compression on all LLM requests (OpenAI/Anthropic):
 - Use the launcher script at `scripts/cade-headroom` (or install to `~/.local/bin/cade-headroom`).
-- It checks proxy health (`/readyz`), automatically launches `headroom proxy --port 8787` if not already running, updates the SQLite provider `base_url` to `http://127.0.0.1:8787/v1`, sets proxy environment variables, and launches CADE.
-- When CADE exits, the launcher automatically resets the database provider `base_url` and shuts down the proxy (unless `HEADROOM_PERSIST=1` is set).
+- It checks proxy health (`/readyz`), automatically launches `headroom proxy --port 8787` if not already running, and exports `OPENAI_BASE_URL="http://127.0.0.1:8787/v1"` and `ANTHROPIC_BASE_URL="http://127.0.0.1:8787"`.
+- CADE's core AI layer automatically resolves these standard environment variables dynamically without requiring database mutations or hardcoding.
+- When CADE exits, the launcher cleanly terminates the proxy (unless `HEADROOM_PERSIST=1` is set).
 - Usage: `cade-headroom [args...]`
+
+### 3. Health & Diagnostic Reporting in `/mcp`
+When you open the MCP manager (`/mcp`), every configured server displays its real-time operational state:
+- **Connected (`[ready · N tools]`):** Handshake succeeded, tools registered and active.
+- **Failed (`[failed (error)]`):** Displays the exact startup or execution error (e.g. command not found, binary execution format error).
+- **Timeout (`[timeout]`):** Connection timed out after 10 seconds.
+- **Disconnected (`[disabled]`):** Server is disabled in configuration.
 
 This centralized model eliminates process starvation, port collisions, and cold-start latency across concurrent terminals and editor buffers.
 

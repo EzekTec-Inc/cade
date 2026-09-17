@@ -50,11 +50,11 @@ impl LlmRouter {
         if let Some(key) = &config.google_api_key {
             providers.insert(
                 "gemini".to_string(),
-                Arc::new(gemini::GeminiProvider::new(key.clone())),
+                Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
             );
             providers.insert(
                 "google".to_string(),
-                Arc::new(gemini::GeminiProvider::new(key.clone())),
+                Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
             );
             provider_keys.insert("gemini".to_string(), key.clone());
             provider_keys.insert("google".to_string(), key.clone());
@@ -222,11 +222,11 @@ impl LlmRouter {
                 tracing::info!("hot_sync: registering/updating gemini/google from env");
                 self.providers.insert(
                     "gemini".into(),
-                    Arc::new(gemini::GeminiProvider::new(key.clone())),
+                    Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
                 );
                 self.providers.insert(
                     "google".into(),
-                    Arc::new(gemini::GeminiProvider::new(key.clone())),
+                    Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
                 );
                 self.provider_keys.insert("gemini".into(), key.clone());
                 self.provider_keys.insert("google".into(), key);
@@ -494,17 +494,20 @@ impl LlmRouter {
             }
             "gemini" => {
                 let key = api_key.clone().or_else(|| config.google_api_key.clone())?;
-                Some(Arc::new(gemini::GeminiProvider::new(key)))
+                Some(Arc::new(gemini::GeminiProvider::new(key, base_url)))
             }
             "ollama" => {
                 let base = base_url
-                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| std::env::var("OLLAMA_BASE_URL").ok().filter(|s| !s.trim().is_empty()))
                     .unwrap_or_else(|| config.ollama_base_url.clone());
                 Some(Arc::new(ollama::OllamaProvider::new(base)))
             }
             "openai-compatible" => {
                 let key = api_key.clone().unwrap_or_default();
-                let url = base_url.clone()?;
+                let url = base_url
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| std::env::var("OPENAI_COMPATIBLE_BASE_URL").ok().filter(|s| !s.trim().is_empty()))?;
                 Some(Arc::new(openai::OpenAiProvider::new(key, Some(url))))
             }
             _ => None,

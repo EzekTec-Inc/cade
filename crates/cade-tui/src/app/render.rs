@@ -171,6 +171,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) content_version: u64,
     pub(crate) modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
     pub(crate) streaming_metrics: Option<crate::app::StreamingMetrics>,
+    pub(crate) proxy_status: Option<&'a str>,
 }
 
 pub(crate) fn render_frame(
@@ -339,6 +340,7 @@ pub(crate) fn render_frame(
             session_cost_cap_usd: ctx.session_cost_cap_usd,
             modified_files,
             streaming_metrics: ctx.streaming_metrics,
+            proxy_status: ctx.proxy_status,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }

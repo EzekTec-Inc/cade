@@ -995,3 +995,79 @@ fn test_is_processing_and_toast_suppression() {
         "Toasts must not be queued or displayed while streaming"
     );
 }
+
+#[test]
+fn test_plan_lifecycle_state_and_height_calculation() {
+    // 1. None active_plan produces height 0
+    let no_plan: Option<PlanState> = None;
+    let height_none = if let Some(plan) = &no_plan {
+        if plan.is_visible {
+            (plan.steps.len() as u16 + 2).min(10).max(4)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    assert_eq!(height_none, 0);
+
+    // 2. Visible plan with 2 steps produces height 4
+    let mut plan = PlanState {
+        steps: vec![
+            PlanStep {
+                id: 1,
+                description: "Investigate problem".into(),
+                is_done: false,
+            },
+            PlanStep {
+                id: 2,
+                description: "Implement fix".into(),
+                is_done: false,
+            },
+        ],
+        is_visible: true,
+        scroll_offset: 0,
+    };
+    let height_2 = (plan.steps.len() as u16 + 2).min(10).max(4);
+    assert_eq!(height_2, 4);
+
+    // 3. Step completion update
+    plan.steps[0].is_done = true;
+    assert!(plan.steps[0].is_done);
+    assert!(!plan.steps[1].is_done);
+
+    // 4. Hidden plan produces height 0
+    plan.is_visible = false;
+    let height_hidden = if plan.is_visible {
+        (plan.steps.len() as u16 + 2).min(10).max(4)
+    } else {
+        0
+    };
+    assert_eq!(height_hidden, 0);
+}
+
+#[test]
+fn test_plan_update_json_event_payload_conformance() {
+    let payload = serde_json::json!({
+        "message_type": "plan_update",
+        "plan": {
+            "title": "Roadmap",
+            "steps": [
+                { "id": 1, "description": "Step 1", "is_done": false },
+                { "id": 2, "description": "Step 2", "is_done": true }
+            ]
+        }
+    });
+
+    let plan_obj = payload.get("plan").expect("must contain plan");
+    let steps_arr = plan_obj.get("steps").and_then(|v| v.as_array()).expect("steps array");
+    assert_eq!(steps_arr.len(), 2);
+
+    let step1_desc = steps_arr[0].get("description").and_then(|v| v.as_str()).unwrap();
+    let step1_done = steps_arr[0].get("is_done").and_then(|v| v.as_bool()).unwrap();
+    assert_eq!(step1_desc, "Step 1");
+    assert!(!step1_done);
+
+    let step2_done = steps_arr[1].get("is_done").and_then(|v| v.as_bool()).unwrap();
+    assert!(step2_done);
+}

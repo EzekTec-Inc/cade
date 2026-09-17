@@ -23,6 +23,7 @@ pub struct McpEntry {
     pub config: McpServerConfig,
     pub tool_count: Option<usize>, // None if disconnected
     pub tools: Vec<String>,
+    pub error: Option<String>,
 }
 
 pub fn show_mcp_manager(
@@ -126,6 +127,8 @@ pub fn show_mcp_manager(
                         "Disconnected"
                     } else if s.tool_count.is_some() {
                         "Connected"
+                    } else if s.error.is_some() {
+                        "Failed"
                     } else {
                         "Error"
                     };
@@ -213,6 +216,8 @@ pub fn show_mcp_manager(
                     meta.push_str("Status: Disconnected\n");
                 } else if let Some(tc) = s.tool_count {
                     meta.push_str(&format!("Status: Connected ({} tools)\n", tc));
+                } else if let Some(ref err) = s.error {
+                    meta.push_str(&format!("Status: Failed ({err})\n"));
                 } else {
                     meta.push_str("Status: Connection Failed / Retrying\n");
                 }
@@ -359,6 +364,7 @@ mod tests {
                 "serena__find_symbol".to_string(),
                 "serena__replace_content".to_string(),
             ],
+            error: None,
         };
 
         assert_eq!(entry.key, "serena");
@@ -378,6 +384,7 @@ mod tests {
             },
             tool_count: None,
             tools: vec![],
+            error: None,
         };
 
         assert!(entry.config.disabled);

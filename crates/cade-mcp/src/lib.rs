@@ -67,6 +67,10 @@ impl McpStartResult {
     }
 }
 
+fn default_ready_status() -> String {
+    "ready".to_string()
+}
+
 /// Public summary of a running MCP server (for status & /mcp command display).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpStatus {
@@ -74,6 +78,10 @@ pub struct McpStatus {
     pub command: String,
     pub tools: Vec<String>, // prefixed names
     pub disabled: bool,
+    #[serde(default = "default_ready_status")]
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Trait for routing MCP operations to a remote CADE server.
@@ -113,11 +121,19 @@ struct McpServer {
 
 // region:    --- McpGateway / McpManager
 
+/// Diagnostic status and error recording for an MCP server.
+#[derive(Debug, Clone)]
+pub struct McpDiagnostic {
+    pub status: String,
+    pub error: Option<String>,
+}
+
 /// Central gateway managing active MCP server connections.
 pub struct McpManager {
     servers: RwLock<Vec<McpServer>>,
     pub schemas_dirty: Arc<AtomicBool>,
     pub remote_client: Option<Arc<dyn RemoteMcpClient>>,
+    pub diagnostics: Arc<RwLock<HashMap<String, McpDiagnostic>>>,
 }
 
 /// Type alias for deep module naming.
@@ -157,6 +173,8 @@ impl McpManager {
             });
         }
 
+        let mut diagnostics = HashMap::new();
+
         while let Some(Ok((key, result))) = join_set.join_next().await {
             let res = match result {
                 Ok(Ok(server)) => {
@@ -166,12 +184,26 @@ impl McpManager {
                         key: key.clone(),
                         tool_count: count,
                     };
+                    diagnostics.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "ready".into(),
+                            error: None,
+                        },
+                    );
                     servers.push(server);
                     r
                 }
                 Ok(Err(e)) => {
                     let msg = e.to_string();
                     warn!("MCP server '{}' failed to start: {msg}", key);
+                    diagnostics.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "failed".into(),
+                            error: Some(msg.clone()),
+                        },
+                    );
                     McpStartResult::Failed {
                         key: key.clone(),
                         error: msg,
@@ -181,6 +213,13 @@ impl McpManager {
                     warn!(
                         "MCP server '{}' timed out after {}s — skipping",
                         key, MCP_SERVER_TIMEOUT_SECS
+                    );
+                    diagnostics.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "timeout".into(),
+                            error: Some(format!("Timed out after {MCP_SERVER_TIMEOUT_SECS}s")),
+                        },
                     );
                     McpStartResult::Timeout {
                         key: key.clone(),
@@ -198,6 +237,7 @@ impl McpManager {
             servers: RwLock::new(servers),
             schemas_dirty: Arc::new(AtomicBool::new(false)),
             remote_client: None,
+            diagnostics: Arc::new(RwLock::new(diagnostics)),
         };
         (mgr, results)
     }
@@ -208,6 +248,7 @@ impl McpManager {
             servers: RwLock::new(vec![]),
             schemas_dirty: Arc::new(AtomicBool::new(false)),
             remote_client: Some(remote),
+            diagnostics: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -217,6 +258,7 @@ impl McpManager {
             servers: RwLock::new(vec![]),
             schemas_dirty: Arc::new(AtomicBool::new(false)),
             remote_client: None,
+            diagnostics: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -225,6 +267,11 @@ impl McpManager {
         let new_servers = other.servers.into_inner();
         let mut current = self.servers.write().await;
         current.extend(new_servers);
+
+        let new_diags = other.diagnostics.read().await.clone();
+        let mut cur_diags = self.diagnostics.write().await;
+        cur_diags.extend(new_diags);
+
         self.schemas_dirty.store(true, Ordering::SeqCst);
     }
 
@@ -365,19 +412,44 @@ impl McpManager {
             .unwrap_or_default()
     }
 
-    /// Return a public status summary for every managed server.
+    /// Return a public status summary for every managed server, including diagnostic health and errors.
     pub async fn status(&self) -> Vec<McpStatus> {
         let servers = self.servers.read().await;
-        if !servers.is_empty() {
-            return servers
-                .iter()
-                .map(|s| McpStatus {
-                    key: s.key.clone(),
-                    command: s.command.clone(),
-                    tools: s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
-                    disabled: s.disabled,
-                })
-                .collect();
+        let diagnostics = self.diagnostics.read().await;
+        let mut list = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for s in servers.iter() {
+            seen.insert(s.key.clone());
+            list.push(McpStatus {
+                key: s.key.clone(),
+                command: s.command.clone(),
+                tools: s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
+                disabled: s.disabled,
+                status: if s.disabled {
+                    "disabled".to_string()
+                } else {
+                    "ready".to_string()
+                },
+                error: None,
+            });
+        }
+
+        for (k, diag) in diagnostics.iter() {
+            if !seen.contains(k) {
+                list.push(McpStatus {
+                    key: k.clone(),
+                    command: String::new(),
+                    tools: vec![],
+                    disabled: false,
+                    status: diag.status.clone(),
+                    error: diag.error.clone(),
+                });
+            }
+        }
+
+        if !list.is_empty() {
+            return list;
         }
         if let Some(remote) = &self.remote_client {
             return remote.list_mcp_statuses().await.unwrap_or_default();
@@ -728,3 +800,41 @@ fn extract_content_text(content: &[rmcp::model::Annotated<RawContent>]) -> Strin
 }
 
 // endregion: --- Content Extraction
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mcp_manager_status_includes_failed_and_timeout_diagnostics() {
+        let mgr = McpManager::empty();
+        {
+            let mut diags = mgr.diagnostics.write().await;
+            diags.insert(
+                "broken_server".into(),
+                McpDiagnostic {
+                    status: "failed".into(),
+                    error: Some("connection refused".into()),
+                },
+            );
+            diags.insert(
+                "slow_server".into(),
+                McpDiagnostic {
+                    status: "timeout".into(),
+                    error: Some("Timed out after 10s".into()),
+                },
+            );
+        }
+
+        let statuses = mgr.status().await;
+        assert_eq!(statuses.len(), 2);
+
+        let broken = statuses.iter().find(|s| s.key == "broken_server").unwrap();
+        assert_eq!(broken.status, "failed");
+        assert_eq!(broken.error.as_deref(), Some("connection refused"));
+
+        let slow = statuses.iter().find(|s| s.key == "slow_server").unwrap();
+        assert_eq!(slow.status, "timeout");
+        assert_eq!(slow.error.as_deref(), Some("Timed out after 10s"));
+    }
+}

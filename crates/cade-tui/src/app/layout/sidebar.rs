@@ -25,6 +25,7 @@ pub(crate) struct SidebarState<'a> {
     pub session_cost_cap_usd: f64,
     pub modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
     pub streaming_metrics: Option<crate::app::StreamingMetrics>,
+    pub proxy_status: Option<&'a str>,
 }
 
 impl<'a> SidebarState<'a> {
@@ -178,6 +179,17 @@ pub(crate) fn render_sidebar(
                 Style::default().fg(context_severity_color(state.context_pct, colors)),
             ),
         ]),
+        if let Some(proxy_status) = state.proxy_status {
+            Line::from(vec![
+                Span::styled(" proxy   ", colors.text_muted()),
+                Span::styled(
+                    proxy_status,
+                    Style::default().fg(colors.c_success()).add_modifier(Modifier::BOLD),
+                ),
+            ])
+        } else {
+            Line::from("")
+        },
         Line::from(vec![
             Span::styled(" queue   ", colors.text_muted()),
             Span::styled(state.queued_count.to_string(), colors.text_primary()),
@@ -355,6 +367,7 @@ mod tests {
             session_cost_cap_usd: 120.0,
             modified_files: &[],
             streaming_metrics: None,
+            proxy_status: None,
         }
     }
 

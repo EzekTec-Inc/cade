@@ -39,6 +39,8 @@ pub enum CadeStreamEvent {
     },
     /// Stream or turn completed with the final outcome/finish reason.
     Finished { outcome: String },
+    /// A structured task plan update emitted when an agent plans or updates steps.
+    PlanUpdate { plan: Value },
     /// An error occurred during execution or streaming.
     Error(String),
 }
@@ -68,6 +70,14 @@ impl CadeStreamEvent {
     /// Returns true if this event indicates the execution has finished.
     pub fn is_finished(&self) -> bool {
         matches!(self, Self::Finished { .. })
+    }
+
+    /// Returns the plan payload if this event is a [`CadeStreamEvent::PlanUpdate`].
+    pub fn as_plan(&self) -> Option<&Value> {
+        match self {
+            Self::PlanUpdate { plan } => Some(plan),
+            _ => None,
+        }
     }
 
     /// Try to parse a loosely-typed [`cade_api_types::StreamEvent`] into a strongly-typed [`CadeStreamEvent`].
@@ -154,6 +164,10 @@ impl CadeStreamEvent {
                     .to_string();
                 Some(Self::Finished { outcome: reason })
             }
+            "plan_update" => {
+                let plan = event.data.get("plan").cloned().unwrap_or(Value::Null);
+                Some(Self::PlanUpdate { plan })
+            }
             "error" => {
                 let err_msg = event
                     .data
@@ -206,5 +220,25 @@ mod tests {
                 .map(|e| e.is_tool_executing())
                 .unwrap_or(false)
         );
+    }
+
+    #[test]
+    fn test_stream_event_plan_update() {
+        let plan_event = cade_api_types::StreamEvent {
+            message_type: "plan_update".to_string(),
+            data: json!({
+                "plan": {
+                    "title": "Roadmap",
+                    "steps": [
+                        { "id": 1, "description": "Step 1", "is_done": false }
+                    ]
+                }
+            }),
+        };
+        let parsed = CadeStreamEvent::from_stream_event(&plan_event);
+        assert!(matches!(parsed, Some(CadeStreamEvent::PlanUpdate { .. })));
+        let plan_val = parsed.as_ref().and_then(|e| e.as_plan()).unwrap();
+        assert_eq!(plan_val["title"], "Roadmap");
+        assert_eq!(plan_val["steps"][0]["description"], "Step 1");
     }
 }
