@@ -102,3 +102,11 @@ CADE supports automated, headless execution workflows triggered by external thir
 - **Dispatcher Loop:** Mounts wildcard Axum endpoints that receive HTTP JSON payloads, maps them to dynamic triggers, and asynchronously spawns decoupled agent workflows in background runtimes.
 
 Use this routing surface to integrate CADE as an automated issue-triager, Slack action responder, or CI/CD test automation agent.
+
+## 12. Interactive Task Planning & Todo Checklist
+
+For structured multi-step tasks, CADE provides an end-to-end plan lifecycle that synchronizes agent reasoning, server execution, and the interactive terminal UI:
+- **Planning Tools:** Agents invoke `set_plan` with an ordered array of sub-tasks (`steps: Vec<String>`, `title: Option<String>`) and update progress via `UpdatePlan` (`step_id: usize`, `done: bool`).
+- **Server SSE Seam:** The server execution pipeline intercepts successful plan mutations and dispatches structured `plan_update` event envelopes over the Server-Sent Events (SSE) channel.
+- **TUI Active Plan State:** The terminal UI stream consumer dynamically receives plan updates, populating `TuiApp::active_plan` and allocating non-zero layout height (`plan_h`) to render an interactive Todo checklist directly above the prompt area.
+- **Visibility Toggling:** Users can toggle the checklist visibility at any time using `Ctrl+T`.

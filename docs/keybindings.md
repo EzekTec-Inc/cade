@@ -87,6 +87,10 @@ All scroll keys work identically whether the agent is idle or actively processin
 | **Ctrl+P** | Open command palette |
 | **Ctrl+T** | Toggle plan panel visibility |
 | **Ctrl+F** | Cycle keyboard focus between prompt and active UI slots (Sidebar/Header/Footer) |
+| **Alt+↑** · **Alt+K** | Select previous tool card in timeline |
+| **Alt+↓** · **Alt+J** | Select next tool card in timeline |
+| **Alt+Enter** | Open selected tool card in dedicated modal pager |
+| **<leader>o** · **Ctrl+X O** | Open latest tool output in dedicated modal pager (`/` search, line numbers, `y` copy) |
 
 ---
 
