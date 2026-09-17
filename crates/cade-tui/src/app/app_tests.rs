@@ -123,6 +123,7 @@ fn test_prepare_timeline_entries_row_sum() {
         &colors,
         true,
         &mut temp_cache,
+        false,
     );
     assert_eq!(prepared.len(), 3);
     let total: u16 = prepared.iter().map(|p| p.rows).sum();

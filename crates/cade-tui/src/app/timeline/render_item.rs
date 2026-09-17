@@ -248,32 +248,51 @@ pub(crate) fn render_streaming_assistant_item(
 
 /// Live "thinking" block shown while the model is reasoning.  Only the most
 /// recent lines are displayed so the viewport keeps flowing; the full text
-/// becomes a collapsed `RenderLine::Reasoning` entry once committed.
+/// Renders the live/streaming reasoning accordion.
+/// Uses a compact windowed tail (max 3 lines) enclosed in a matching framed box
+/// so that transitioning to the committed collapsed header is smooth and visually stable.
 pub(crate) fn render_live_reasoning_item(
     text: &str,
     width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    const MAX_LINES: usize = 10;
+    const MAX_LIVE_LINES: usize = 3;
+    let card_w = width.max(24);
+
+    let words = text.split_whitespace().count();
+    let header_badge = " THINKING ";
+    let words_str = format!("({words} words)");
+    let hint = "streaming…";
+
+    let left_len = 3 + header_badge.len() + 1 + words_str.len() + 1;
+    let right_len = hint.len() + 6;
+    let dashes = card_w.saturating_sub(left_len + right_len).max(2);
+
     out.push(Line::from(""));
     out.push(Line::from(vec![
-        Span::styled("╭ ", colors.border_muted()),
+        Span::styled("╭─", colors.border_accent()),
         Span::styled(
-            " THINKING ",
+            header_badge,
             Style::default()
                 .fg(colors.c_primary())
+                .bg(colors.c_bg_surface1())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" · streaming", colors.text_dim()),
+        Span::raw(" "),
+        Span::styled(words_str, colors.text_muted()),
+        Span::styled(format!(" {} ", "─".repeat(dashes)), colors.border_muted()),
+        Span::styled(format!("[{hint}]"), colors.text_dim().add_modifier(Modifier::ITALIC)),
+        Span::styled(" ─╮", colors.border_accent()),
     ]));
 
-    let all_lines: Vec<&str> = text.lines().collect();
-    let skip = all_lines.len().saturating_sub(MAX_LINES);
-    let inner_w = width.saturating_sub(4);
-    for (i, ln) in all_lines.iter().skip(skip).take(MAX_LINES).enumerate() {
+    let all_lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let skip = all_lines.len().saturating_sub(MAX_LIVE_LINES);
+    let inner_w = card_w.saturating_sub(6);
+
+    for ln in all_lines.iter().skip(skip).take(MAX_LIVE_LINES) {
         out.push(Line::from(vec![
-            Span::styled("│ ", colors.border_muted()),
+            Span::styled("│  ", colors.border_muted()),
             Span::styled(
                 truncate_str(ln, inner_w),
                 Style::default()
@@ -281,10 +300,14 @@ pub(crate) fn render_live_reasoning_item(
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
-        if i == MAX_LINES - 1 && all_lines.len() > MAX_LINES {
-            out.push(Line::from(vec![Span::styled("│ ⋯", colors.border_muted())]));
-        }
     }
+
+    let bot_dashes = card_w.saturating_sub(4).max(4);
+    out.push(Line::from(vec![
+        Span::styled("╰─", colors.border_accent()),
+        Span::styled("─".repeat(bot_dashes), colors.border_muted()),
+        Span::styled("─╯", colors.border_accent()),
+    ]));
 }
 
 /// Ephemeral working/thinking status line (assessing…, tool progress, final
@@ -438,8 +461,6 @@ pub(crate) fn render_tool_result_item(
     } else {
         colors.c_diff_added()
     };
-    // Streamed-style output, inline and indented under the tool that ran it
-    // (like the rest of the timeline) instead of a boxed `[Done]/[Fail]` tag.
     let marker = if is_error {
         format!("{} ", crate::icons::error_icon(nerd))
     } else {
@@ -447,6 +468,7 @@ pub(crate) fn render_tool_result_item(
     };
     let inner_w = width.saturating_sub(11);
     let lns: Vec<&str> = content.lines().collect();
+
     if lns.is_empty() {
         out.push(Line::from(vec![
             Span::styled("│ ", colors.border_muted()),
@@ -456,17 +478,94 @@ pub(crate) fn render_tool_result_item(
             ),
             Span::styled(
                 "(no output)",
-                Style::default().fg(color).add_modifier(Modifier::ITALIC),
+                colors.text_dim().add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    } else if lns.len() == 1 && !is_error {
+        // Single-line clean success output (e.g. "OK", "Checkpoint created")
+        let single = lns[0].trim();
+        let display_txt = truncate_str(single, inner_w);
+        out.push(Line::from(vec![
+            Span::styled("│ ", colors.border_muted()),
+            Span::styled(
+                marker,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                display_txt,
+                Style::default().fg(colors.c_text_primary()),
+            ),
+        ]));
+    } else if !expand_all && !is_error {
+        // Folded Tool Execution Card (Collapsed State)
+        // Provides a compact 1-line summary that prevents viewport flooding while agent is working.
+        let line_count_str = format!("({} lines)", lns.len());
+        let first_preview = lns
+            .iter()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or(&lns[0])
+            .trim();
+
+        let hint = "ctrl+o to expand";
+        let fixed_w = 2 + marker.chars().count() + line_count_str.len() + 3 + 4 + hint.len();
+        let preview_budget = width.saturating_sub(fixed_w);
+
+        let preview_span = if preview_budget > 8 {
+            let truncated = truncate_str(first_preview, preview_budget.saturating_sub(2));
+            Span::styled(
+                format!("\"{truncated}\""),
+                Style::default().fg(colors.c_text_muted()).add_modifier(Modifier::ITALIC),
+            )
+        } else {
+            Span::raw("")
+        };
+
+        out.push(Line::from(vec![
+            Span::styled("│ ", colors.border_muted()),
+            Span::styled(
+                marker,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                line_count_str,
+                Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · ", colors.border_muted()),
+            preview_span,
+            Span::styled(" · ", colors.border_muted()),
+            Span::styled(
+                format!("[{hint}]"),
+                colors.text_dim(),
             ),
         ]));
     } else {
+        // Expanded State (or Error State)
         use ansi_to_tui::IntoText;
-        let show_limit = if expand_all { 20 } else { 3 };
+
+        if expand_all && !is_error {
+            let header_badge = format!(" Output ({} lines) ", lns.len());
+            let hint = "ctrl+o to collapse";
+            let left_len = 4 + header_badge.len();
+            let right_len = hint.len() + 6;
+            let dashes = width.saturating_sub(left_len + right_len).max(2);
+
+            out.push(Line::from(vec![
+                Span::styled("╭─", colors.border_accent()),
+                Span::styled(
+                    header_badge,
+                    Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("─".repeat(dashes), colors.border_muted()),
+                Span::styled(format!(" [{hint}] ─╮"), colors.border_accent()),
+            ]));
+        }
+
+        let show_limit = if expand_all { 50 } else { 4 };
         let show = lns.len().min(show_limit);
 
         for (i, ln) in lns.iter().take(show).enumerate() {
             let mut spans = Vec::new();
-            if i == 0 {
+            if i == 0 && (!expand_all || is_error) {
                 spans.push(Span::styled("│ ", colors.border_muted()));
                 spans.push(Span::styled(
                     marker.clone(),
@@ -490,7 +589,11 @@ pub(crate) fn render_tool_result_item(
                     .into_iter()
                     .map(|s| s.content)
                     .collect::<String>();
-                let style = Style::default().fg(color);
+                let style = if is_error {
+                    Style::default().fg(color)
+                } else {
+                    Style::default().fg(colors.c_text_primary())
+                };
                 spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
             } else {
                 let mut remaining = inner_w;
@@ -528,9 +631,20 @@ pub(crate) fn render_tool_result_item(
                 ),
             ]));
         }
+
+        if expand_all && !is_error {
+            let dashes = width.saturating_sub(4).max(4);
+            out.push(Line::from(vec![
+                Span::styled("╰─", colors.border_accent()),
+                Span::styled("─".repeat(dashes), colors.border_muted()),
+                Span::styled("─╯", colors.border_accent()),
+            ]));
+        }
     }
 }
 
+/// Renders a committed reasoning block as a smooth, framed accordion card.
+/// Collapsed state matches the live reasoning framing to avoid sudden viewport jumps.
 pub(crate) fn render_reasoning_item(
     words: usize,
     content: &str,
@@ -539,32 +653,41 @@ pub(crate) fn render_reasoning_item(
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
+    let card_w = width.max(24);
+    let header_badge = " THINKING ";
+    let words_str = format!("({words} words)");
+    let hint = if expand_all {
+        "ctrl+o to collapse"
+    } else {
+        "ctrl+o to expand"
+    };
+
+    let left_len = 3 + header_badge.len() + 1 + words_str.len() + 1;
+    let right_len = hint.len() + 6;
+    let dashes = card_w.saturating_sub(left_len + right_len).max(2);
+
     out.push(Line::from(""));
     out.push(Line::from(vec![
-        Span::styled("╭ ", colors.border_muted()),
+        Span::styled("╭─", colors.border_muted()),
         Span::styled(
-            " THINKING ",
+            header_badge,
             Style::default()
                 .fg(colors.c_text_primary())
                 .bg(colors.c_bg_surface1())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        Span::styled(format!("{words} words"), colors.text_muted()),
-        Span::styled(
-            if expand_all {
-                " · expanded"
-            } else {
-                " · ctrl+o to expand"
-            },
-            colors.text_dim(),
-        ),
+        Span::styled(words_str, colors.text_muted()),
+        Span::styled(format!(" {} ", "─".repeat(dashes)), colors.border_muted()),
+        Span::styled(format!("[{hint}]"), colors.text_dim()),
+        Span::styled(" ─╮", colors.border_muted()),
     ]));
+
     if expand_all {
-        let inner_w = width.saturating_sub(4);
+        let inner_w = card_w.saturating_sub(6);
         for ln in content.lines() {
             out.push(Line::from(vec![
-                Span::styled("│ ", colors.border_muted()),
+                Span::styled("│  ", colors.border_muted()),
                 Span::styled(
                     truncate_str(ln, inner_w),
                     Style::default()
@@ -574,25 +697,42 @@ pub(crate) fn render_reasoning_item(
             ]));
         }
     }
+
+    let bot_dashes = card_w.saturating_sub(4).max(4);
+    out.push(Line::from(vec![
+        Span::styled("╰─", colors.border_muted()),
+        Span::styled("─".repeat(bot_dashes), colors.border_muted()),
+        Span::styled("─╯", colors.border_muted()),
+    ]));
 }
 
+/// Renders live process and subprocess outputs with a windowed head/tail buffer.
+/// Displays the head (command start) and tail (latest progress/result) separated
+/// by a hidden line count, preventing long compilation or test logs from displacing
+/// the viewport during task execution.
 pub(crate) fn render_live_output_item(
     lines: &[String],
     max_visible: usize,
-    _done: bool,
+    done: bool,
     width: usize,
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
     let inner_w = width.saturating_sub(11);
-    let color = colors.c_diff_added();
+    let color = if done {
+        colors.c_diff_added()
+    } else {
+        colors.c_primary()
+    };
+
+    let badge_text = if done { " FINISHED " } else { " RUNNING " };
 
     if lines.is_empty() {
         out.push(Line::from(vec![
             Span::styled("│ ", colors.border_muted()),
             Span::styled(
-                " LIVE ",
+                badge_text,
                 Style::default()
                     .fg(color)
                     .bg(colors.c_tool_pending_bg())
@@ -601,42 +741,27 @@ pub(crate) fn render_live_output_item(
             Span::raw(" "),
             Span::styled(
                 "(starting…)",
-                Style::default()
-                    .fg(colors.c_text_dim())
-                    .add_modifier(Modifier::ITALIC),
+                colors.text_dim().add_modifier(Modifier::ITALIC),
             ),
         ]));
         return;
     }
 
     use ansi_to_tui::IntoText;
-    let visible = if expand_all {
-        lines.len()
+
+    let total = lines.len();
+    let limit = if expand_all {
+        usize::MAX
     } else {
-        lines.len().min(max_visible)
+        max_visible.max(4)
     };
-    let hidden = lines.len().saturating_sub(visible);
 
-    if hidden > 0 {
-        let hint = format!("… {hidden} earlier lines (ctrl+o to expand)");
-        out.push(Line::from(vec![
-            Span::styled("│ ", colors.border_muted()),
-            Span::styled(
-                hint,
-                Style::default()
-                    .fg(colors.c_text_dim())
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]));
-    }
-
-    let start = lines.len() - visible;
-    for (i, ln) in lines[start..].iter().enumerate() {
+    let format_line_spans = |ln: &str, is_first: bool| -> Line<'static> {
         let mut spans = Vec::new();
-        if i == 0 && hidden == 0 {
+        if is_first {
             spans.push(Span::styled("│ ", colors.border_muted()));
             spans.push(Span::styled(
-                " LIVE ",
+                badge_text,
                 Style::default()
                     .fg(color)
                     .bg(colors.c_tool_pending_bg())
@@ -644,7 +769,7 @@ pub(crate) fn render_live_output_item(
             ));
             spans.push(Span::raw(" "));
         } else {
-            spans.push(Span::styled("│      ", colors.border_muted()));
+            spans.push(Span::styled("│   ", colors.border_muted()));
         }
 
         let parsed_text = ln
@@ -661,10 +786,11 @@ pub(crate) fn render_live_output_item(
                 .into_iter()
                 .map(|s| s.content)
                 .collect::<String>();
-            let mut style = Style::default().fg(color);
-            if i == 0 && hidden == 0 {
-                style = style.add_modifier(Modifier::BOLD);
-            }
+            let style = if is_first && !done {
+                Style::default().fg(colors.c_text_primary()).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors.c_text_primary())
+            };
             spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
         } else {
             let mut remaining = inner_w;
@@ -682,7 +808,48 @@ pub(crate) fn render_live_output_item(
             }
         }
 
-        out.push(Line::from(spans));
+        Line::from(spans)
+    };
+
+    if total <= limit || expand_all {
+        let show_count = total.min(if expand_all { 100 } else { limit });
+        for (i, ln) in lines.iter().take(show_count).enumerate() {
+            out.push(format_line_spans(ln, i == 0));
+        }
+        let remaining = total.saturating_sub(show_count);
+        if remaining > 0 {
+            out.push(Line::from(vec![
+                Span::styled("│   ", colors.border_muted()),
+                Span::styled(
+                    format!("… +{remaining} more lines hidden"),
+                    colors.text_dim().add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+    } else {
+        const HEAD_LINES: usize = 1;
+        let tail_lines = limit.saturating_sub(HEAD_LINES).max(2);
+        let hidden = total.saturating_sub(HEAD_LINES + tail_lines);
+
+        for i in 0..HEAD_LINES.min(total) {
+            out.push(format_line_spans(&lines[i], i == 0));
+        }
+
+        if hidden > 0 {
+            let hint = format!("… {hidden} intermediate lines (ctrl+o to expand)");
+            out.push(Line::from(vec![
+                Span::styled("│   ", colors.border_muted()),
+                Span::styled(
+                    hint,
+                    colors.text_dim().add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+
+        let tail_start = total.saturating_sub(tail_lines);
+        for ln in &lines[tail_start..] {
+            out.push(format_line_spans(ln, false));
+        }
     }
 }
 
@@ -977,4 +1144,143 @@ pub(crate) fn render_table_item(
     out.push(Line::from(bot_spans));
 
     out.push(Line::from(""));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_tool_result_item_single_line() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        render_tool_result_item(false, "OK", 80, false, &mut out, &colors, false);
+        assert_eq!(out.len(), 1);
+        let text = out[0].to_string();
+        assert!(text.contains("OK"), "expected 'OK', got {text:?}");
+    }
+
+    #[test]
+    fn test_render_tool_result_item_collapsed_multiline() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let content = "Compiling cade-tui v0.2.6\nFinished dev profile\n1 warning emitted";
+        render_tool_result_item(false, content, 80, false, &mut out, &colors, false);
+        assert_eq!(out.len(), 1, "collapsed multiline should be exactly 1 summary line");
+        let text = out[0].to_string();
+        assert!(text.contains("(3 lines)"), "expected line count badge, got {text:?}");
+        assert!(text.contains("ctrl+o to expand"), "expected expand hint, got {text:?}");
+    }
+
+    #[test]
+    fn test_render_tool_result_item_expanded_multiline() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let content = "Compiling cade-tui v0.2.6\nFinished dev profile\n1 warning emitted";
+        render_tool_result_item(false, content, 80, true, &mut out, &colors, false);
+        assert!(out.len() >= 5);
+        let header = out[0].to_string();
+        assert!(header.contains("Output (3 lines)"), "expected header frame, got {header:?}");
+        assert!(header.contains("ctrl+o to collapse"), "expected collapse hint, got {header:?}");
+        let footer = out.last().unwrap().to_string();
+        assert!(footer.contains("╰─"), "expected closing border, got {footer:?}");
+    }
+
+    #[test]
+    fn test_render_tool_result_item_error_is_not_folded() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let content = "error[E0308]: mismatched types\nexpected Color, found Style";
+        render_tool_result_item(true, content, 80, false, &mut out, &colors, false);
+        assert!(out.len() >= 2, "errors must remain visible, not folded");
+    }
+
+    #[test]
+    fn test_render_live_reasoning_item_bounded_tail() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let content = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10";
+        render_live_reasoning_item(content, 80, &mut out, &colors);
+        // leading newline (1) + header (1) + max 3 lines (3) + footer (1) = 6 lines
+        assert_eq!(out.len(), 6, "live reasoning must be bounded to 3-line tail to prevent viewport jump");
+        let header = out[1].to_string();
+        assert!(header.contains("THINKING"), "header must contain THINKING, got {header:?}");
+        assert!(header.contains("streaming…"), "header must show streaming hint, got {header:?}");
+        let footer = out.last().unwrap().to_string();
+        assert!(footer.contains("╰─"), "footer must close the accordion box, got {footer:?}");
+    }
+
+    #[test]
+    fn test_render_reasoning_item_collapsed() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let content = "first thought\nsecond thought\nthird thought";
+        render_reasoning_item(6, content, 80, false, &mut out, &colors);
+        // leading newline (1) + header (1) + footer (1) = 3 lines
+        assert_eq!(out.len(), 3, "collapsed reasoning must be exactly 3 lines (stable frame)");
+        let header = out[1].to_string();
+        assert!(header.contains("ctrl+o to expand"), "header must contain expand hint, got {header:?}");
+        let footer = out[2].to_string();
+        assert!(footer.contains("╰─"), "must have closing border, got {footer:?}");
+    }
+
+    #[test]
+    fn test_render_reasoning_item_expanded() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let content = "first thought\nsecond thought\nthird thought";
+        render_reasoning_item(6, content, 80, true, &mut out, &colors);
+        // leading newline (1) + header (1) + 3 content lines (3) + footer (1) = 6 lines
+        assert_eq!(out.len(), 6, "expanded reasoning should render all lines plus frame");
+        let header = out[1].to_string();
+        assert!(header.contains("ctrl+o to collapse"), "header must contain collapse hint, got {header:?}");
+    }
+
+    #[test]
+    fn test_render_live_output_empty() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        render_live_output_item(&[], 5, false, 80, false, &mut out, &colors);
+        assert_eq!(out.len(), 1);
+        let text = out[0].to_string();
+        assert!(text.contains("(starting…)"));
+        assert!(text.contains("RUNNING"));
+    }
+
+    #[test]
+    fn test_render_live_output_windowed_head_and_tail() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let lines: Vec<String> = (1..=20).map(|i| format!("command log line {i}")).collect();
+        render_live_output_item(&lines, 5, false, 80, false, &mut out, &colors);
+        // Head (1) + separator (1) + tail (4) = 6 lines total, instead of 20!
+        assert_eq!(out.len(), 6, "output must be windowed to head + separator + tail");
+        let first = out[0].to_string();
+        assert!(first.contains("command log line 1"), "first line must show command head");
+        assert!(first.contains("RUNNING"), "badge must show RUNNING while active");
+        let separator = out[1].to_string();
+        assert!(separator.contains("intermediate lines"), "must show hidden intermediate lines");
+        let last = out.last().unwrap().to_string();
+        assert!(last.contains("command log line 20"), "tail must show latest output");
+    }
+
+    #[test]
+    fn test_render_live_output_expand_all() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let lines: Vec<String> = (1..=20).map(|i| format!("command log line {i}")).collect();
+        render_live_output_item(&lines, 5, false, 80, true, &mut out, &colors);
+        assert_eq!(out.len(), 20, "expand_all must display all lines");
+    }
+
+    #[test]
+    fn test_render_live_output_done_status() {
+        let colors = ThemeColors::default();
+        let mut out = Vec::new();
+        let lines = vec!["finished successfully".to_string()];
+        render_live_output_item(&lines, 5, true, 80, false, &mut out, &colors);
+        assert_eq!(out.len(), 1);
+        let text = out[0].to_string();
+        assert!(text.contains("FINISHED"), "badge must show FINISHED when done");
+    }
 }

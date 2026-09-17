@@ -6,6 +6,9 @@ impl TuiApp {
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
+        if matches!(line, RenderLine::UserMessage(_)) {
+            self.turn_start_time = Some(std::time::Instant::now());
+        }
         self.lines.push(line);
         self.content_version += 1;
 
@@ -42,21 +45,23 @@ impl TuiApp {
     /// Append a streaming chunk and redraw (throttled — max ~60 FPS).
     pub fn push_streaming_chunk(&mut self, text: &str) -> Result<()> {
         self.commit_reasoning_inner();
+        let now = std::time::Instant::now();
         if !self.streaming_active {
             self.signals.streaming.write(true);
-            // First chunk of a new agent response — always snap to bottom so the
-            // analysis is immediately visible.  push(ToolResult) may have scrolled
-            // up to show the ToolCall header; that view is correct while the tool
-            // was running, but as soon as the agent starts responding the viewport
-            // must follow the output.
+            self.streaming_start_time = Some(now);
+            if let Some(turn_start) = self.turn_start_time {
+                self.ttft_secs = Some(now.duration_since(turn_start).as_secs_f64());
+            }
+            self.streaming_tokens = 0;
+            self.streaming_revealed_len = 0;
             if self.follow {
                 self.scroll_instant(0);
                 self.pending_lines = 0;
             }
         }
-        // Subsequent chunks of the same response preserve scroll (V-01):
-        // if the user scrolled up mid-stream to read history, leave them there.
         self.streaming_active = true;
+        let delta_tokens = (text.split_whitespace().count() * 4 / 3).max(1);
+        self.streaming_tokens += delta_tokens;
         self.streaming_text.push_str(text);
         // Refresh the prompt-stripped display copy once per chunk — draw frames
         // reuse it instead of re-running the strip regex over the whole stream.
@@ -229,6 +234,9 @@ impl TuiApp {
     }
     pub(crate) fn commit_streaming_inner(&mut self) {
         if self.streaming_active {
+            if let Some(metrics) = self.current_streaming_metrics() {
+                self.last_turn_metrics = Some(metrics);
+            }
             let text = std::mem::take(&mut self.streaming_text);
             let clean = crate::app::strip_orchestrator_prompts(&text);
             self.streaming_display.clear();
@@ -237,7 +245,9 @@ impl TuiApp {
                     .push(RenderLine::AssistantText(clean.into_owned()));
                 self.content_version += 1;
             }
+            self.streaming_revealed_len = 0;
             self.streaming_active = false;
+            self.streaming_start_time = None;
         }
     }
 

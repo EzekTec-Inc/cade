@@ -1046,6 +1046,116 @@ pub fn parse_markdown_lines_with_theme(
 
     push_line(&mut lines, &mut current_spans, false, None);
 
+    // Flush unclosed in-flight code block at EOF (Phase 10: Syntax-Aware In-Flight Code Fence Framing)
+    if in_code_block {
+        let prefix_span =
+            Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
+        let border_w = if max_width > 2 {
+            max_width.saturating_sub(INDENT.len()).max(8)
+        } else {
+            33
+        };
+
+        let tag_hint = "[streaming…]";
+        if current_lang.is_empty() {
+            let dashes = "─".repeat(border_w.saturating_sub(tag_hint.len() + 4));
+            lines.push(Line::from(vec![
+                Span::styled(format!("{INDENT}╭─ {dashes} "), code_border_style(colors)),
+                Span::styled(
+                    tag_hint,
+                    Style::default()
+                        .fg(colors.c_text_muted())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+                Span::styled(" ─╮", code_border_style(colors)),
+            ]));
+        } else {
+            let prefix = format!("╭─ [{}] ", current_lang);
+            let prefix_w = UnicodeWidthStr::width(prefix.as_str());
+            let dashes = "─".repeat(border_w.saturating_sub(prefix_w + tag_hint.len() + 4));
+            lines.push(Line::from(vec![
+                Span::styled(format!("{INDENT}╭─ ["), code_border_style(colors)),
+                Span::styled(
+                    current_lang.clone(),
+                    Style::default()
+                        .fg(colors.c_primary())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("] {dashes} "), code_border_style(colors)),
+                Span::styled(
+                    tag_hint,
+                    Style::default()
+                        .fg(colors.c_text_muted())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+                Span::styled(" ─╮", code_border_style(colors)),
+            ]));
+        }
+
+        #[cfg(feature = "syntax-highlighting")]
+        let dyn_theme = crate::colors::generate_syntect_theme(colors);
+        #[cfg(feature = "syntax-highlighting")]
+        let syntax = SYNTAX_SET
+            .find_syntax_by_token(&current_lang)
+            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+        #[cfg(feature = "syntax-highlighting")]
+        let mut highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
+
+        for raw_line in code_block_buf.lines() {
+            let mut spans = vec![prefix_span.clone()];
+
+            #[cfg(feature = "syntax-highlighting")]
+            {
+                let mut line_str = raw_line.to_string();
+                if !line_str.ends_with('\n') {
+                    line_str.push('\n');
+                }
+                if let Some(ref mut h) = highlighter {
+                    if let Ok(regions) = h.highlight_line(&line_str, &SYNTAX_SET) {
+                        for (style, text) in regions {
+                            let c = style.foreground;
+                            let tc = ratatui::style::Color::Rgb(c.r, c.g, c.b);
+                            let mut s = Style::default().fg(tc);
+                            if style
+                                .font_style
+                                .contains(syntect::highlighting::FontStyle::BOLD)
+                            {
+                                s = s.add_modifier(Modifier::BOLD);
+                            }
+                            if style
+                                .font_style
+                                .contains(syntect::highlighting::FontStyle::ITALIC)
+                            {
+                                s = s.add_modifier(Modifier::ITALIC);
+                            }
+                            spans.push(Span::styled(text.replace('\n', ""), s));
+                        }
+                    } else {
+                        spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                    }
+                } else {
+                    spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+                }
+            }
+            #[cfg(not(feature = "syntax-highlighting"))]
+            {
+                spans.push(Span::styled(raw_line.to_string(), colors.text_primary()));
+            }
+
+            lines.push(Line::from(spans));
+        }
+
+        lines.push(Line::from(vec![
+            prefix_span,
+            Span::styled(
+                "⎸",
+                Style::default()
+                    .fg(colors.c_primary())
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+        ]));
+    }
+
     lines
 }
 
@@ -1516,6 +1626,29 @@ mod tests {
         assert!(
             bot_str.contains("─╯"),
             "table bottom border should end with ─╯"
+        );
+    }
+
+    #[test]
+    fn test_in_flight_unclosed_code_fence_renders_header_and_code() {
+        let colors = ThemeColors::default();
+        // An unclosed streaming code block without closing backticks
+        let md = "Here is the code:\n\n```rust\nfn calculate(x: i32) -> i32 {\n    x * 2\n}";
+        let lines = parse_markdown_lines_with_theme(md, &colors, 60, true);
+
+        let top = lines.iter().find(|l| l.to_string().contains("╭─ [rust]"));
+        assert!(
+            top.is_some(),
+            "unclosed code block must render top header fence for rust"
+        );
+
+        // The code lines must be rendered (not dropped!)
+        let code_line = lines
+            .iter()
+            .find(|l| l.to_string().contains("fn calculate"));
+        assert!(
+            code_line.is_some(),
+            "unclosed code block lines must be rendered in-flight"
         );
     }
 }

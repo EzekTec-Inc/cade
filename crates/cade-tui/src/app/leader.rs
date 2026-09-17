@@ -53,6 +53,8 @@ pub enum LeaderAction {
     StashPrompt,
     /// Toggle concealment of secrets ('C').
     ToggleConceal,
+    /// Open the dedicated tool output pager overlay ('o').
+    ToolPager,
 }
 
 /// Result of processing a key event while in leader chord mode.
@@ -184,6 +186,10 @@ impl LeaderKeyEngine {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::RedoCheckpoint)
             }
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                self.dismiss();
+                LeaderOutcome::Action(LeaderAction::ToolPager)
+            }
             KeyCode::Char('?') | KeyCode::Char('h') | KeyCode::Char('H') => {
                 self.dismiss();
                 LeaderOutcome::Action(LeaderAction::HelpOverlay)
@@ -212,6 +218,7 @@ impl LeaderKeyEngine {
 
         let shortcuts = [
             ("p", "Quote"),
+            ("o", "Pager"),
             ("y", "Copy"),
             ("m", "Model"),
             ("s", "Session"),

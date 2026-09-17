@@ -154,3 +154,24 @@ The following MUST hold end-to-end (Linux + macOS nominal, Windows best-effort):
 6. **D, H, I, J** remaining UX/config.
 
 After each step: `cargo test -p cade-core -p cade-tui -p cade-server-lib -p cade-cli` and `cargo clippy --all-targets` must pass. TUI unit tests that require a TTY are expected to fail in headless CI — do not gate on them; add non-TTY unit tests for pure logic (keybind parsing, frecency scoring, selection→quote assembly, clipboard command construction).
+
+---
+
+## N. Streaming Viewport & Interactive Tool Card Architecture (Phases 1–11)
+
+### N.1 Viewport Stability & Pacing
+1. **Folding Tool Execution Cards (Phase 1)**: Multi-line tool results auto-collapse into clean 1-line checkmarks (`│ ✓ (N lines) · "preview..." · [ctrl+o to expand]`), keeping user prompts and context pinned in the viewport. Single-line successes stay compact; errors remain visible.
+2. **Smooth Reasoning Accordion (Phase 2)**: Eliminates 30-line viewport jumping when switching from thinking to assistant response. Live reasoning displays a bounded 3-line rolling tail enclosed in symmetrical framing borders that cleanly transition into the committed collapsed state.
+3. **Incremental Markdown Parser Cache (Phase 3)**: Implements `StreamingMarkdownCache` and `find_last_block_boundary`. Parses and wraps completed blocks once, freezing them in cache. Only the trailing in-flight block is parsed per chunk, reducing re-parsing complexity from $O(N^2)$ to $O(N)$ characters parsed and maintaining 60 FPS redraws.
+4. **Windowed Process Tail Buffer (Phase 4)**: Compacts compiler, build, and test outputs into a 1-line Head (command start) + Hidden Lines count badge + 4-line Tail (latest progress/result) buffer with live `[ RUNNING ]` → `[ FINISHED ]` status transitions.
+5. **Syntax-Aware In-Flight Code Fence Framing (Phase 10)**: Unclosed streaming code blocks render immediate top fence headers (`╭─ [lang] ... [streaming…] ─╮`) with live syntect syntax highlighting and open gutter cursors (`│  ⎸`).
+6. **Smooth Character-Paced Stream Revealer (Phase 11)**: Pacing buffer (`streaming_view_snapshot`) smooths out bursty network SSE token arrivals into fluid, character-paced rendering without delaying stream completion.
+
+### N.2 Active Turn Encapsulation & Subagents
+7. **Ephemeral Active Turn Container (Phase 5)**: In-flight tool calls, results, live reasoning, and live status are visually grouped via `CardStyle::ActiveTurn` with a unified primary bold left gutter (`▎`), automatically settling into permanent conversation history upon turn completion.
+8. **Concurrent Task Matrix Card (Phase 8)**: Replaces floating popups with a single consolidated matrix card (`⠋ Concurrent Task Matrix (N active, M completed)`), rendering status, task id, elapsed time, tool calls, and active subagent state.
+
+### N.3 Interactive Tool Navigation & Modal Pager
+9. **Dedicated Tool Output Pager Overlay (Phase 6)**: Modal pager triggered via `<leader>o` / `ctrl+x o` or `Enter` on a selected tool card. Provides line numbering, text search (`/`), match jumping (`n`/`N`), smooth scrolling (`j`/`k`, `d`/`u`, `g`/`G`), and full text clipboard copy (`y`).
+10. **In-Line Keyboard Navigation for Tool Cards (Phase 9)**: `Alt+Up` / `Alt+k` and `Alt+Down` / `Alt+j` cycle selection across timeline tool cards with persistent highlight; pressing `Enter` directly opens that specific tool card in the modal pager.
+11. **Live Token Generation Velocity & Turn Metrics (Phase 7)**: Real-time generation velocity (`tok/s`), time-to-first-token (`ttft_secs`), accumulated tokens, and elapsed duration tracked on `TuiApp` and displayed live under `SidebarState` Activity.

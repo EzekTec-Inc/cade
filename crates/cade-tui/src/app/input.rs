@@ -506,6 +506,35 @@ impl TuiApp {
                 return Ok(None);
             }
 
+            // Esc: clear tool card selection if active (Phase 9)
+            KeyCode::Esc if self.selected_tool_card_index.is_some() => {
+                self.selected_tool_card_index = None;
+                self.copy_highlight = None;
+                self.draw_dirty = true;
+                return Ok(None);
+            }
+
+            // Alt+Up / Alt+k: Select previous tool card (Phase 9)
+            KeyCode::Up | KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::ALT) => {
+                self.select_prev_tool_card();
+                return Ok(None);
+            }
+
+            // Alt+Down / Alt+j: Select next tool card (Phase 9)
+            KeyCode::Down | KeyCode::Char('j') if k.modifiers.contains(KeyModifiers::ALT) => {
+                self.select_next_tool_card();
+                return Ok(None);
+            }
+
+            // Alt+Enter or Enter with empty prompt and card selected: Open tool pager (Phase 9)
+            KeyCode::Enter
+                if k.modifiers.contains(KeyModifiers::ALT)
+                    || (self.selected_tool_card_index.is_some() && self.editor.is_empty()) =>
+            {
+                self.open_selected_or_latest_tool_pager();
+                return Ok(None);
+            }
+
             _ if self.leader_engine.is_active
                 || (k.modifiers.contains(KeyModifiers::CONTROL)
                     && k.code == KeyCode::Char('x')) =>
@@ -569,6 +598,10 @@ impl TuiApp {
                         }
                         crate::app::leader::LeaderAction::ToggleConceal => {
                             self.toggle_conceal();
+                            return Ok(None);
+                        }
+                        crate::app::leader::LeaderAction::ToolPager => {
+                            self.open_tool_pager_overlay();
                             return Ok(None);
                         }
                     },

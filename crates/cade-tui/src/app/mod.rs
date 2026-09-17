@@ -6,6 +6,7 @@ pub mod help_overlay;
 pub mod input;
 pub mod layout;
 pub mod leader;
+pub mod pager_overlay;
 pub mod notifier;
 pub mod password;
 pub mod permission_overlay;
@@ -859,6 +860,15 @@ pub enum ServerBootStatus {
     Timeout(u64),
 }
 
+/// Real-time streaming generation velocity, latency, and token metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StreamingMetrics {
+    pub tokens_per_sec: f64,
+    pub ttft_secs: Option<f64>,
+    pub tokens_streamed: usize,
+    pub elapsed_secs: f64,
+}
+
 pub struct TuiApp {
     /// The single ratatui terminal (alternate screen, raw mode).
     pub terminal: DefaultTerminal,
@@ -1027,6 +1037,20 @@ pub struct TuiApp {
 
     /// Lua script engine for UI extensions.
     pub lua_engine: Option<crate::lua_engine::LuaEngine>,
+
+    // -- Live Token Generation Velocity & Turn Metrics (Phase 7)
+    pub turn_start_time: Option<std::time::Instant>,
+    pub streaming_start_time: Option<std::time::Instant>,
+    pub ttft_secs: Option<f64>,
+    pub streaming_tokens: usize,
+    pub last_turn_metrics: Option<StreamingMetrics>,
+
+    // -- In-Line Keyboard Navigation for Tool Cards (Phase 9)
+    pub selected_tool_card_index: Option<usize>,
+
+    // -- Smooth Character-Paced Stream Revealer (Phase 11)
+    pub streaming_revealed_len: usize,
+    pub streaming_pacing_enabled: bool,
 
     // -- Scroll indicator
     /// Number of committed lines pushed while the user was scrolled up.
@@ -1285,6 +1309,36 @@ impl TuiApp {
             mcp_processed: false,
             mcp_closed: false,
             signals: crate::signals::SignalRegistry::new(),
+            turn_start_time: None,
+            streaming_start_time: None,
+            ttft_secs: None,
+            streaming_tokens: 0,
+            last_turn_metrics: None,
+            selected_tool_card_index: None,
+            streaming_revealed_len: 0,
+            streaming_pacing_enabled: true,
+        }
+    }
+
+    /// Calculate current streaming generation velocity and turn metrics.
+    pub fn current_streaming_metrics(&self) -> Option<StreamingMetrics> {
+        if self.streaming_active {
+            let start = self.streaming_start_time?;
+            let elapsed = start.elapsed().as_secs_f64();
+            let tokens = self.streaming_tokens;
+            let tok_per_sec = if elapsed > 0.05 {
+                tokens as f64 / elapsed
+            } else {
+                0.0
+            };
+            Some(StreamingMetrics {
+                tokens_per_sec: tok_per_sec,
+                ttft_secs: self.ttft_secs,
+                tokens_streamed: tokens,
+                elapsed_secs: elapsed,
+            })
+        } else {
+            self.last_turn_metrics
         }
     }
 
@@ -1428,15 +1482,32 @@ impl TuiApp {
 
     /// Snapshot of the streaming text currently visible in the viewport.
     ///
-    /// Uses the prompt-stripped [`TuiApp::streaming_display`] buffer (refreshed
-    /// once per chunk).  Reveal-free: the full accumulated text is returned on
-    /// every chunk arrival so the rendered markdown never drifts while in
-    /// flight.
-    fn streaming_view_snapshot(&self) -> Option<String> {
+    /// Uses the prompt-stripped [`TuiApp::streaming_display`] buffer.
+    /// When `streaming_pacing_enabled` is active, paces the character reveal smoothly
+    /// across frames to eliminate network chunk bursts while keeping the typing fluid.
+    fn streaming_view_snapshot(&mut self) -> Option<String> {
         if !self.streaming_active {
             None
-        } else {
+        } else if !self.streaming_pacing_enabled {
             Some(self.streaming_display.clone())
+        } else {
+            let full_len = self.streaming_display.len();
+            if self.streaming_revealed_len < full_len {
+                let backlog = full_len.saturating_sub(self.streaming_revealed_len);
+                // Dynamically pace: between 3 and 32 bytes per frame based on backlog
+                let step = (backlog / 3).clamp(3, 32);
+                self.streaming_revealed_len = snap_to_char_boundary(
+                    &self.streaming_display,
+                    (self.streaming_revealed_len + step).min(full_len),
+                );
+                if self.streaming_revealed_len < full_len {
+                    self.draw_dirty = true;
+                }
+            }
+            Some(streaming_revealed_prefix(
+                &self.streaming_display,
+                self.streaming_revealed_len,
+            ))
         }
     }
 
@@ -1450,11 +1521,11 @@ impl TuiApp {
     }
 
     pub fn draw_impl(&mut self) -> Result<()> {
+        // Live assistant text: reveal-limited typewriter view of the cached
+        // prompt-stripped buffer (paces character reveal smoothly across frames).
+        let streaming = self.streaming_view_snapshot();
         // Borrow rendering data by reference (avoids cloning entire data per frame).
         let lines: &[RenderLine] = &self.lines;
-        // Live assistant text: reveal-limited typewriter view of the cached
-        // prompt-stripped buffer (never re-runs the strip regex per frame).
-        let streaming = self.streaming_view_snapshot();
         // Live thinking block: full prompt-stripped reasoning streamed inline
         // while the model reasons; collapsed into a RenderLine::Reasoning row
         // on commit.
@@ -1568,6 +1639,7 @@ impl TuiApp {
         let selection_active = self.selection_active;
         let selection_start = self.selection_start;
         let selection_current = self.selection_current;
+        let streaming_metrics = self.current_streaming_metrics();
 
         let mut messages_area = Rect::default();
         self.terminal.draw(|frame| {
@@ -1610,6 +1682,7 @@ impl TuiApp {
                 subagent_trackers: &self.subagent_trackers,
                 content_version: self.content_version,
                 modified_files: &modified_files_entries,
+                streaming_metrics,
             };
             let (m_skip, cur_pos, msg_area) = render_frame(
                 frame,
@@ -2173,6 +2246,157 @@ impl TuiApp {
 
         self.show_toast("No messages to copy", crate::app::ToastLevel::Info);
         false
+    }
+
+    /// Open the dedicated tool output pager overlay with the latest tool output or compiler/process logs.
+    pub fn open_tool_pager_overlay(&mut self) {
+        let mut found: Option<(String, String)> = None;
+
+        for line in self.lines.iter().rev() {
+            match line {
+                RenderLine::ToolResult { content, .. } => {
+                    found = Some(("Tool Output".to_string(), content.clone()));
+                    break;
+                }
+                RenderLine::LiveOutput { lines, .. } => {
+                    found = Some(("Process Log".to_string(), lines.join("\n")));
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some((title, content)) = found {
+            self.overlays.push(Box::new(pager_overlay::PagerOverlay::new(title, content)));
+            self.draw_dirty = true;
+        } else {
+            self.show_toast("No tool outputs available to page", ToastLevel::Info);
+        }
+    }
+
+    /// Select the previous tool card in the timeline for keyboard navigation (Phase 9).
+    pub fn select_prev_tool_card(&mut self) {
+        let tool_indices: Vec<(usize, String)> = self
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| match line {
+                RenderLine::ToolCall { name, .. } => Some((idx, name.clone())),
+                RenderLine::ToolResult { .. } => Some((idx, "Tool Result".to_string())),
+                RenderLine::LiveOutput { .. } => Some((idx, "Process Output".to_string())),
+                _ => None,
+            })
+            .collect();
+
+        if tool_indices.is_empty() {
+            self.show_toast("No tool cards to select", ToastLevel::Info);
+            return;
+        }
+
+        let next_selected = match self.selected_tool_card_index {
+            None => tool_indices.last().map(|(idx, _)| *idx),
+            Some(curr) => {
+                let pos = tool_indices.iter().position(|(idx, _)| *idx == curr);
+                match pos {
+                    Some(0) => tool_indices.last().map(|(idx, _)| *idx),
+                    Some(p) => Some(tool_indices[p - 1].0),
+                    None => tool_indices.last().map(|(idx, _)| *idx),
+                }
+            }
+        };
+
+        if let Some(idx) = next_selected {
+            self.selected_tool_card_index = Some(idx);
+            self.copy_highlight = Some((
+                idx,
+                std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            ));
+            let name = tool_indices
+                .iter()
+                .find(|(i, _)| *i == idx)
+                .map(|(_, n)| n.as_str())
+                .unwrap_or("Tool");
+            self.show_toast(
+                format!("Selected: [{name}] · Press Enter to page"),
+                ToastLevel::Info,
+            );
+            self.draw_dirty = true;
+        }
+    }
+
+    /// Select the next tool card in the timeline for keyboard navigation (Phase 9).
+    pub fn select_next_tool_card(&mut self) {
+        let tool_indices: Vec<(usize, String)> = self
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| match line {
+                RenderLine::ToolCall { name, .. } => Some((idx, name.clone())),
+                RenderLine::ToolResult { .. } => Some((idx, "Tool Result".to_string())),
+                RenderLine::LiveOutput { .. } => Some((idx, "Process Output".to_string())),
+                _ => None,
+            })
+            .collect();
+
+        if tool_indices.is_empty() {
+            self.show_toast("No tool cards to select", ToastLevel::Info);
+            return;
+        }
+
+        let next_selected = match self.selected_tool_card_index {
+            None => tool_indices.first().map(|(idx, _)| *idx),
+            Some(curr) => {
+                let pos = tool_indices.iter().position(|(idx, _)| *idx == curr);
+                match pos {
+                    Some(p) if p + 1 < tool_indices.len() => Some(tool_indices[p + 1].0),
+                    Some(_) => tool_indices.first().map(|(idx, _)| *idx),
+                    None => tool_indices.first().map(|(idx, _)| *idx),
+                }
+            }
+        };
+
+        if let Some(idx) = next_selected {
+            self.selected_tool_card_index = Some(idx);
+            self.copy_highlight = Some((
+                idx,
+                std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            ));
+            let name = tool_indices
+                .iter()
+                .find(|(i, _)| *i == idx)
+                .map(|(_, n)| n.as_str())
+                .unwrap_or("Tool");
+            self.show_toast(
+                format!("Selected: [{name}] · Press Enter to page"),
+                ToastLevel::Info,
+            );
+            self.draw_dirty = true;
+        }
+    }
+
+    /// Open the tool output pager for the currently selected card or latest tool output (Phase 9).
+    pub fn open_selected_or_latest_tool_pager(&mut self) {
+        if let Some(selected_idx) = self.selected_tool_card_index
+            && let Some(line) = self.lines.get(selected_idx)
+        {
+            let (title, content) = match line {
+                RenderLine::ToolResult { content, .. } => {
+                    ("Tool Result".to_string(), content.clone())
+                }
+                RenderLine::ToolCall { name, preview } => {
+                    (format!("Tool Call: {name}"), preview.clone())
+                }
+                RenderLine::LiveOutput { lines, .. } => {
+                    ("Process Log".to_string(), lines.join("\n"))
+                }
+                _ => ("Output".to_string(), String::new()),
+            };
+            self.overlays
+                .push(Box::new(pager_overlay::PagerOverlay::new(title, content)));
+            self.draw_dirty = true;
+            return;
+        }
+        self.open_tool_pager_overlay();
     }
 
     /// Toggle concealment of tokens, secrets, and sensitive strings (Section H).

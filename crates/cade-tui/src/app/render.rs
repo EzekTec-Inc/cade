@@ -170,6 +170,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) subagent_trackers: &'a [crate::subagent_tracker::SubagentTracker],
     pub(crate) content_version: u64,
     pub(crate) modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
+    pub(crate) streaming_metrics: Option<crate::app::StreamingMetrics>,
 }
 
 pub(crate) fn render_frame(
@@ -287,6 +288,7 @@ pub(crate) fn render_frame(
     } else {
         ctx.last_status.as_deref().map(str::to_string)
     };
+    layout_engine.set_processing(ctx.is_processing);
     layout_engine.set_active_stream(streaming);
     layout_engine.set_active_reasoning(reasoning);
     layout_engine.set_active_status(live_status.as_deref());
@@ -336,6 +338,7 @@ pub(crate) fn render_frame(
             session_cost_usd: ctx.session_cost_usd,
             session_cost_cap_usd: ctx.session_cost_cap_usd,
             modified_files,
+            streaming_metrics: ctx.streaming_metrics,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }
@@ -354,9 +357,9 @@ pub(crate) fn render_frame(
         render_active_plan(frame, chunks[1], plan, colors);
     }
 
-    // -- Subagent Floating Cards
+    // -- Parallel & Subagent Concurrent Task Matrix
     if !subagent_trackers.is_empty() {
-        render_subagent_trackers(frame, main_area, subagent_trackers, colors);
+        render_subagent_task_matrix(frame, main_area, subagent_trackers, colors);
     }
 
     (max_skip, input_cursor_pos, messages_area)
@@ -825,73 +828,110 @@ fn render_active_plan(
     }
 }
 
-fn render_subagent_trackers(
+fn render_subagent_task_matrix(
     frame: &mut Frame,
     main_area: ratatui::layout::Rect,
     trackers: &[crate::subagent_tracker::SubagentTracker],
     colors: &ThemeColors,
 ) {
+    if trackers.is_empty() {
+        return;
+    }
+
     use ratatui::widgets::Clear;
-    let mut y_offset = main_area.y + 1;
 
-    for tracker in trackers {
+    let active_count = trackers
+        .iter()
+        .filter(|t| matches!(t.status, crate::subagent_tracker::SubagentStatus::Running))
+        .count();
+    let completed_count = trackers.len().saturating_sub(active_count);
+
+    let title = format!(
+        " ⠋ Concurrent Task Matrix ({} active, {} completed) ",
+        active_count, completed_count
+    );
+
+    let max_w = 64.min(main_area.width.saturating_sub(4));
+    let width = max_w.max(36);
+    let row_count = trackers.len();
+    let height = (row_count as u16 + 2).min(main_area.height.saturating_sub(2));
+
+    let x = main_area.x + main_area.width.saturating_sub(width + 2);
+    let y = main_area.y + 1;
+
+    let rect = ratatui::layout::Rect::new(x, y, width, height);
+
+    let shadow_rect = ratatui::layout::Rect::new(x + 1, y + 1, width, height);
+    let shadow_text = vec![
+        Line::from(Span::styled(
+            "█".repeat(width as usize),
+            Style::default().fg(colors.c_text_dim()),
+        ));
+        height as usize
+    ];
+    frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
+
+    frame.render_widget(Clear, rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(colors.c_border_style())
+        .style(colors.style_surface1())
+        .border_style(colors.primary())
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(colors.c_primary())
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let mut rows = Vec::new();
+    let val_w = inner.width as usize;
+
+    for tracker in trackers.iter().take(inner.height as usize) {
+        let (glyph, glyph_color) = match tracker.status {
+            crate::subagent_tracker::SubagentStatus::Running => ("● ", colors.c_warning()),
+            crate::subagent_tracker::SubagentStatus::Completed { .. } => ("✓ ", colors.c_success()),
+            crate::subagent_tracker::SubagentStatus::Failed { .. } => ("✗ ", colors.c_diff_removed()),
+        };
+
         let elapsed = tracker.started.elapsed().as_secs();
-        let tool_info = if let Some(ref tool) = tracker.current_tool {
-            format!(" · {} tools · {}", tracker.tool_calls, tool)
-        } else {
-            format!(" · {} tools", tracker.tool_calls)
-        };
-        let text = format!("⟳ Subagent [{}] · {}s{}", tracker.mode, elapsed, tool_info);
-        let width = text.chars().count() as u16 + 4;
-        let height = 3;
-        let x = main_area.x + main_area.width.saturating_sub(width + 2);
-
-        let rect = ratatui::layout::Rect::new(x, y_offset, width, height);
-
-        let shadow_rect = ratatui::layout::Rect::new(x + 1, y_offset + 1, width, height);
-        let shadow_text = vec![
-            Line::from(Span::styled(
-                "█".repeat(width as usize),
-                Style::default().fg(colors.c_text_dim())
-            ));
-            height as usize
-        ];
-        frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
-
-        frame.render_widget(Clear, rect);
-
-        let border_color = match tracker.mode.as_str() {
-            "plan" => colors.success(),
-            "build" => colors.warning(),
-            _ => colors.primary(),
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(colors.c_border_style())
-            .style(colors.style_surface1())
-            .border_style(border_color);
+        let tag = format!("[{}: {}]", tracker.task_id, tracker.mode);
 
         let mut spans = vec![
-            Span::styled("⟳ ", colors.warning()),
-            Span::styled(
-                format!("Subagent [{}]", tracker.mode),
-                colors.text_primary_bold(),
-            ),
-            Span::styled(
-                format!(" · {elapsed}s · {} tools", tracker.tool_calls),
-                colors.text_dim(),
-            ),
+            Span::styled(glyph, Style::default().fg(glyph_color).add_modifier(Modifier::BOLD)),
+            Span::styled(tag, Style::default().fg(colors.c_text_primary()).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" · {elapsed}s · {} tools", tracker.tool_calls), colors.text_dim()),
         ];
+
         if let Some(ref tool) = tracker.current_tool {
-            spans.push(Span::styled(format!(" · {tool}"), colors.warning()));
+            spans.push(Span::styled(format!(" · {tool}"), Style::default().fg(colors.c_warning())));
+        } else if matches!(tracker.status, crate::subagent_tracker::SubagentStatus::Completed { .. }) {
+            spans.push(Span::styled(" · done", colors.text_dim()));
         }
-        let p = Paragraph::new(Line::from(spans)).block(block);
 
-        frame.render_widget(p, rect);
+        let row_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        if row_len > val_w {
+            let overflow = row_len.saturating_sub(val_w);
+            if let Some(last) = spans.last_mut() {
+                let current = last.content.clone();
+                let keep = current.chars().count().saturating_sub(overflow + 1);
+                let truncated: String = current.chars().take(keep).collect();
+                last.content = std::borrow::Cow::Owned(format!("{truncated}…"));
+            }
+        }
 
-        y_offset += height + 1;
+        rows.push(Line::from(spans));
     }
+
+    frame.render_widget(Paragraph::new(rows), inner);
 }
 
 #[cfg(test)]

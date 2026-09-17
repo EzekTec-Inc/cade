@@ -24,6 +24,7 @@ pub(crate) struct SidebarState<'a> {
     pub session_cost_usd: f64,
     pub session_cost_cap_usd: f64,
     pub modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
+    pub streaming_metrics: Option<crate::app::StreamingMetrics>,
 }
 
 impl<'a> SidebarState<'a> {
@@ -207,6 +208,24 @@ pub(crate) fn render_sidebar(
             truncate_str(&think_text, val_w),
             colors.text_muted(),
         )),
+        if let Some(metrics) = state.streaming_metrics {
+            if metrics.tokens_streamed > 0 {
+                Line::from(vec![
+                    Span::styled(" speed   ", colors.text_muted()),
+                    Span::styled(
+                        format!("{:.1} tok/s", metrics.tokens_per_sec),
+                        Style::default()
+                            .fg(colors.c_success())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!(" ({} tok)", metrics.tokens_streamed), colors.text_dim()),
+                ])
+            } else {
+                Line::from("")
+            }
+        } else {
+            Line::from("")
+        },
         Line::from(""),
         Line::from(Span::styled(
             " Plan ",
@@ -335,6 +354,7 @@ mod tests {
             session_cost_usd: 0.14,
             session_cost_cap_usd: 120.0,
             modified_files: &[],
+            streaming_metrics: None,
         }
     }
 
@@ -384,5 +404,20 @@ mod tests {
     fn format_plan_summary_none() {
         let s = make_state();
         assert_eq!(s.format_plan_summary(), "none");
+    }
+
+    #[test]
+    fn test_sidebar_streaming_metrics_present() {
+        let mut s = make_state();
+        s.streaming_metrics = Some(crate::app::StreamingMetrics {
+            tokens_per_sec: 42.5,
+            ttft_secs: Some(0.85),
+            tokens_streamed: 350,
+            elapsed_secs: 8.2,
+        });
+        assert!(s.streaming_metrics.is_some());
+        let m = s.streaming_metrics.unwrap();
+        assert_eq!(m.tokens_streamed, 350);
+        assert!((m.tokens_per_sec - 42.5).abs() < f64::EPSILON);
     }
 }
