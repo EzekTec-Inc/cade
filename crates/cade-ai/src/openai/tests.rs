@@ -887,6 +887,21 @@ fn resolve_endpoint_uses_preview_base_url_for_frontier_models() {
 }
 
 #[test]
+fn resolve_endpoint_with_custom_proxy_base_url() {
+    let proxy_provider =
+        OpenAiProvider::new("test-key".into(), Some("http://127.0.0.1:8787/v1".into()));
+
+    assert_eq!(
+        proxy_provider.resolve_endpoint_with_preview("openai/gpt-4o", false, None),
+        "http://127.0.0.1:8787/v1/chat/completions"
+    );
+    assert_eq!(
+        proxy_provider.resolve_endpoint_with_preview("openai/gpt-5.6-terra", true, None),
+        "http://127.0.0.1:8787/v1/responses"
+    );
+}
+
+#[test]
 fn gpt56_sol_with_tools_and_reasoning_uses_responses_api_shape() -> Result<()> {
     let provider = OpenAiProvider::new("test-key".into(), None);
     let req = CompletionRequest {

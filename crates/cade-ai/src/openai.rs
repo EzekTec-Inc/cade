@@ -360,11 +360,7 @@ impl OpenAiProvider {
             return OPENAI_RESPONSES_URL.to_string();
         }
 
-        if use_responses_api && self.base_url.ends_with("/chat/completions") {
-            self.base_url.replace("/chat/completions", "/responses")
-        } else {
-            self.base_url.clone()
-        }
+        Self::append_endpoint_path(&self.base_url, endpoint_path)
     }
 
     fn resolve_endpoint_for_request(&self, req: &CompletionRequest) -> String {
@@ -1119,12 +1115,12 @@ impl LlmProvider for OpenAiProvider {
                 std::time::Duration::from_secs(1),
                 |_| {
                     let client = self.client.clone();
-                    let base_url = self.base_url.clone();
+                    let target_url = self.resolve_endpoint_with_preview(&req.model, false, None);
                     let api_key = self.api_key.clone();
                     let body = body.clone();
                     let label = provider_label;
                     async move {
-                        let mut req = client.post(&base_url).json(&body);
+                        let mut req = client.post(&target_url).json(&body);
                         if !api_key.is_empty() {
                             req = req.bearer_auth(&api_key);
                         }
