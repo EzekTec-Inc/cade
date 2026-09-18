@@ -10,6 +10,7 @@ pub fn ChatView() -> Element {
     let agent_name = (state.selected_agent)()
         .map(|a| a.name.clone())
         .unwrap_or_else(|| "Default Agent".to_string());
+    let mut show_conversations = use_signal(|| true);
 
     // Load messages when the active conversation or selected agent changes.
     // This replaces the old background-polling approach which would overwrite
@@ -40,18 +41,29 @@ pub fn ChatView() -> Element {
     });
 
     rsx! {
-        div { class: "flex flex-1 h-full overflow-hidden",
-            chat_sidebar {
-                agent_name: agent_name.clone(),
-                conversations: state.conversations,
-                active_conversation: state.active_conversation,
-                selected_agent: state.selected_agent,
-                api_key: state.api_key,
+        div { class: "flex flex-1 h-full overflow-hidden w-full min-w-0",
+            if show_conversations() {
+                chat_sidebar {
+                    agent_name: agent_name.clone(),
+                    conversations: state.conversations,
+                    active_conversation: state.active_conversation,
+                    selected_agent: state.selected_agent,
+                    api_key: state.api_key,
+                }
             }
 
-            div { class: "flex-1 flex flex-col justify-between bg-[#040711] h-full",
-                header { class: "px-6 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
-                    span { class: "text-white font-medium text-sm", "Main chat" }
+            div { class: "flex-1 min-w-0 w-full flex flex-col justify-between bg-[#040711] h-full overflow-hidden",
+                header { class: "px-6 py-3.5 flex items-center justify-between select-none border-b border-[#1e293b]/70 bg-[#090d16] shrink-0",
+                    div { class: "flex items-center space-x-3 min-w-0",
+                        button {
+                            class: "p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition cursor-pointer text-xs shrink-0",
+                            title: if show_conversations() { "Hide threads" } else { "Show threads" },
+                            onclick: move |_| show_conversations.set(!show_conversations()),
+                            span { "💬" }
+                        }
+                        span { class: "text-white font-medium text-sm truncate", "Chat" }
+                        span { class: "text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-2 py-0.5 rounded truncate", "{agent_name}" }
+                    }
                 }
 
                 messages_panel { messages: state.messages, agent_name: agent_name.clone() }
@@ -67,7 +79,7 @@ pub fn ChatView() -> Element {
             }
 
             // Right-hand Side-Tray Context Panel (Phase 4)
-            div { class: "w-72 border-l border-[#1e293b]/70 bg-[#090d16] p-5 flex flex-col space-y-6 hidden xl:flex select-none overflow-y-auto",
+            div { class: "w-72 border-l border-[#1e293b]/70 bg-[#090d16] p-5 flex flex-col space-y-6 hidden xl:flex select-none overflow-y-auto shrink-0",
                 div { class: "space-y-1.5",
                     div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider", "Session Agent" }
                     div { class: "text-xs font-bold text-slate-200 font-mono truncate", "{agent_name}" }
@@ -234,7 +246,7 @@ fn chat_sidebar(
     let num_threads = conv_rows.len();
 
     rsx! {
-        div { class: "w-[280px] bg-[#070b14] border-r border-[#1e293b] flex flex-col p-4 justify-between h-full select-none shrink-0",
+        div { class: "w-60 lg:w-72 bg-[#070b14] border-r border-[#1e293b] flex flex-col p-3.5 justify-between h-full select-none shrink-0 transition-all duration-200",
             div { class: "flex flex-col space-y-4 overflow-hidden",
                 // Agent Header Card
                 div { class: "flex items-center justify-between p-2.5 bg-[#090d16] border border-[#1e293b] rounded-xl shadow-sm",
@@ -437,15 +449,18 @@ fn messages_panel(
     rsx! {
         div {
             id: "chat-messages-panel",
-            class: "flex-1 overflow-y-auto p-8 space-y-6 flex flex-col",
-            if messages().is_empty() {
-                div { class: "m-auto flex flex-col items-center select-none",
-                    div { class: "w-16 h-16 rounded-xl bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_12px_rgba(236,72,153,0.4)] mb-4" }
-                    h2 { class: "text-[24px] font-semibold text-white mb-6", "Hi, I'm {agent_name}" }
-                }
-            } else {
-                for m in messages().iter() {
-                    message_bubble { key: "{m.id}", id: m.id.clone() }
+            class: "flex-1 min-w-0 w-full overflow-y-auto px-4 md:px-8 py-6 space-y-6 flex flex-col",
+            div { class: "w-full max-w-4xl mx-auto space-y-6 flex flex-col flex-1",
+                if messages().is_empty() {
+                    div { class: "m-auto flex flex-col items-center select-none text-center p-6",
+                        div { class: "w-16 h-16 rounded-xl bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_12px_rgba(236,72,153,0.4)] mb-4 flex items-center justify-center text-white text-2xl font-bold font-mono", "C" }
+                        h2 { class: "text-[22px] font-semibold text-white mb-2", "Chat with {agent_name}" }
+                        p { class: "text-xs text-slate-400 max-w-md", "Ask questions, explore code, generate diagrams, or delegate complex tasks." }
+                    }
+                } else {
+                    for m in messages().iter() {
+                        message_bubble { key: "{m.id}", id: m.id.clone() }
+                    }
                 }
             }
         }
@@ -758,8 +773,8 @@ fn input_area(
     };
 
     rsx! {
-        div { class: "p-6 bg-[#040711] border-t border-[#1e293b]/70",
-            div { class: "relative border border-[#1e293b] bg-[#090d16] rounded-xl p-4 flex flex-col space-y-2",
+        div { class: "px-4 md:px-8 py-4 bg-[#040711] border-t border-[#1e293b]/70 shrink-0 w-full min-w-0",
+            div { class: "max-w-4xl mx-auto w-full relative border border-[#1e293b] bg-[#090d16] rounded-xl p-3 md:p-4 flex flex-col space-y-2 shadow-xl",
                 if show_suggestions() && !suggestions().is_empty() {
                     div { class: "absolute bottom-full left-0 right-0 mb-2 bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden shadow-2xl z-50 max-h-48 overflow-y-auto select-none",
                         {suggestions().into_iter().enumerate().map(|(idx, s)| {
