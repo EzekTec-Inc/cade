@@ -1168,7 +1168,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             }
 
             // Check for `finish` tool call first — handle before dispatch.
-            if let Some(finish_tc) = resp.tool_calls.iter().find(|tc| tc.name == "finish") {
+            if let Some(finish_tc) = resp.tool_calls.iter().find(|tc| tc.name == "finish" || tc.name == "finish_task") {
                 let summary = finish_tc.arguments["summary"]
                     .as_str()
                     .unwrap_or("")
@@ -1417,6 +1417,9 @@ ui_resource_uri: None,
             }
 
             if iter == max_iters - 1 {
+                if !last_text.is_empty() {
+                    break;
+                }
                 llm_err = Some("Subagent exceeded maximum iteration limit without converging.".to_string());
                 break;
             }
