@@ -5,6 +5,7 @@ PLAN.md
 /target
 .cade-db.key
 .cade/
+!.cade/themes/
 .cade
 .fastembed_cache/
 .cargo/

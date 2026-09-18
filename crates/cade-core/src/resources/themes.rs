@@ -221,7 +221,243 @@ impl ThemeResolver {
             .map(|(primary, fallbacks)| resolve_token(theme, primary, fallbacks))
             .collect()
     }
+
+    /// Validate a theme by name or file path, returning a detailed validation report.
+    pub fn validate(&self, name_or_path: &str) -> ThemeValidationReport {
+        let path = Path::new(name_or_path);
+        if path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                return validate_theme_str(&content);
+            } else {
+                return ThemeValidationReport {
+                    name: name_or_path.to_string(),
+                    is_valid: false,
+                    errors: vec![format!("Failed to read file: {name_or_path}")],
+                    warnings: Vec::new(),
+                    defined_tokens: 0,
+                    missing_recommended_tokens: Vec::new(),
+                    contrast_warnings: Vec::new(),
+                };
+            }
+        }
+
+        if let Some(theme) = self.resolve(name_or_path) {
+            validate_theme(&theme)
+        } else {
+            ThemeValidationReport {
+                name: name_or_path.to_string(),
+                is_valid: false,
+                errors: vec![format!("Theme '{name_or_path}' not found in project, global, or built-in registry")],
+                warnings: Vec::new(),
+                defined_tokens: 0,
+                missing_recommended_tokens: Vec::new(),
+                contrast_warnings: Vec::new(),
+            }
+        }
+    }
 }
+
+/// Canonical recommended token roles for complete CADE theming.
+pub const CANONICAL_RECOMMENDED_ROLES: &[(&str, &str)] = &[
+    ("bg.base", "Base terminal background"),
+    ("bg.panel", "Panel / card background"),
+    ("bg.elevated", "Elevated / success container background"),
+    ("bg.highlight", "Highlight / selection background"),
+    ("bg.selection", "Text selection background"),
+    ("text.primary", "Primary foreground body text"),
+    ("text.muted", "Muted secondary text"),
+    ("text.dim", "Dim metadata text"),
+    ("accent.primary", "Primary brand accent"),
+    ("accent.secondary", "Secondary accent"),
+    ("accent.tertiary", "Tertiary accent"),
+    ("accent.deep", "Deep accent"),
+    ("border.unfocused", "Subtle unfocused border"),
+    ("border.focused", "Active / focused border"),
+    ("success", "Success status indicator"),
+    ("warning", "Warning status indicator"),
+    ("error", "Error status indicator"),
+    ("code.keyword", "Syntax keyword"),
+    ("code.string", "Syntax string literal"),
+    ("code.comment", "Syntax comment"),
+    ("code.function", "Syntax function/method"),
+    ("code.number", "Syntax numeric literal"),
+    ("code.type", "Syntax type / struct"),
+];
+
+/// Detailed report on theme validity, coverage, and accessibility.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ThemeValidationReport {
+    pub name: String,
+    pub is_valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub defined_tokens: usize,
+    pub missing_recommended_tokens: Vec<String>,
+    pub contrast_warnings: Vec<String>,
+}
+
+/// Validate an Opaline theme string directly.
+pub fn validate_theme_str(content: &str) -> ThemeValidationReport {
+    match opaline::load_from_str(content, None) {
+        Ok(theme) => validate_theme(&theme),
+        Err(e) => ThemeValidationReport {
+            name: "unparsed".to_string(),
+            is_valid: false,
+            errors: vec![format!("TOML parse error: {e}")],
+            warnings: Vec::new(),
+            defined_tokens: 0,
+            missing_recommended_tokens: Vec::new(),
+            contrast_warnings: Vec::new(),
+        },
+    }
+}
+
+/// Validate a loaded Opaline theme.
+pub fn validate_theme(theme: &opaline::Theme) -> ThemeValidationReport {
+    let mut warnings = Vec::new();
+    let mut missing_recommended_tokens = Vec::new();
+    let mut contrast_warnings = Vec::new();
+
+    let mut defined = 0;
+    for &(role, desc) in CANONICAL_RECOMMENDED_ROLES {
+        if theme.has_token(role) {
+            defined += 1;
+        } else {
+            missing_recommended_tokens.push(role.to_string());
+            warnings.push(format!("Missing recommended token '{role}' ({desc})"));
+        }
+    }
+
+    // Contrast analysis: text.primary vs bg.base
+    if let (Some(fg), Some(bg)) = (theme.try_color("text.primary"), theme.try_color("bg.base")) {
+        let ratio = calculate_contrast_ratio((fg.r, fg.g, fg.b), (bg.r, bg.g, bg.b));
+        if ratio < 4.5 {
+            let msg = format!(
+                "Low contrast between 'text.primary' and 'bg.base': {ratio:.2}:1 (WCAG AA requires >= 4.5:1)"
+            );
+            contrast_warnings.push(msg.clone());
+            warnings.push(msg);
+        }
+    }
+
+    ThemeValidationReport {
+        name: theme.meta.name.clone(),
+        is_valid: true,
+        errors: Vec::new(),
+        warnings,
+        defined_tokens: defined,
+        missing_recommended_tokens,
+        contrast_warnings,
+    }
+}
+
+/// Compute relative luminance for an sRGB color per WCAG 2.1 specifications.
+fn relative_luminance(r: u8, g: u8, b: u8) -> f64 {
+    fn channel_l(c: u8) -> f64 {
+        let v = c as f64 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel_l(r) + 0.7152 * channel_l(g) + 0.0722 * channel_l(b)
+}
+
+/// Compute contrast ratio between two sRGB colors per WCAG 2.1 specifications.
+pub fn calculate_contrast_ratio(c1: (u8, u8, u8), c2: (u8, u8, u8)) -> f64 {
+    let l1 = relative_luminance(c1.0, c1.1, c1.2);
+    let l2 = relative_luminance(c2.0, c2.1, c2.2);
+    let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// Canonical starter/reference theme exhibiting full semantic token coverage.
+pub const REFERENCE_THEME_TOML: &str = r##"# CADE Canonical Theme Definition
+# Format: Opaline TOML Specification
+
+[meta]
+name = "reference"
+variant = "dark"
+description = "Canonical reference theme exhibiting full semantic token coverage for CADE"
+author = "CADE Architecture Team"
+
+[palette]
+bg_dark         = "#1e1e2e"
+bg_panel        = "#252538"
+bg_elevated     = "#2f2f45"
+bg_highlight    = "#3b3b55"
+bg_selection    = "#45475a"
+
+fg_primary      = "#cdd6f4"
+fg_muted        = "#a6adc8"
+fg_dim          = "#6c7086"
+
+accent_primary  = "#89b4fa"
+accent_secondary= "#f5c2e7"
+accent_tertiary = "#94e2d5"
+accent_deep     = "#b4befe"
+
+status_success  = "#a6e3a1"
+status_warning  = "#f9e2af"
+status_error    = "#f38ba8"
+
+border_base     = "#313244"
+border_active   = "#89b4fa"
+
+syn_keyword     = "#cba6f7"
+syn_string      = "#a6e3a1"
+syn_comment     = "#6c7086"
+syn_function    = "#89b4fa"
+syn_number      = "#fab387"
+syn_type        = "#f9e2af"
+
+[tokens]
+"bg.base"          = "bg_dark"
+"bg.panel"         = "bg_panel"
+"bg.elevated"      = "bg_elevated"
+"bg.highlight"     = "bg_highlight"
+"bg.selection"     = "bg_selection"
+
+"text.primary"     = "fg_primary"
+"text.muted"       = "fg_muted"
+"text.dim"         = "fg_dim"
+
+"accent.primary"   = "accent_primary"
+"accent.secondary" = "accent_secondary"
+"accent.tertiary"  = "accent_tertiary"
+"accent.deep"      = "accent_deep"
+
+"success"          = "status_success"
+"warning"          = "status_warning"
+"error"            = "status_error"
+
+"border.unfocused" = "border_base"
+"border.focused"   = "border_active"
+
+"code.keyword"     = "syn_keyword"
+"code.string"      = "syn_string"
+"code.comment"     = "syn_comment"
+"code.function"    = "syn_function"
+"code.number"      = "syn_number"
+"code.type"        = "syn_type"
+
+# Documented Compatibility Aliases
+"cade.success"             = "status_success"
+"cade.warning"             = "status_warning"
+"cade.error"               = "status_error"
+"cade.border"              = "border_base"
+"cade.border_accent"       = "border_active"
+"cade.selected_bg"         = "bg_highlight"
+"cade.user_message_bg"     = "bg_panel"
+"cade.tool_success_bg"     = "bg_elevated"
+"cade.syntax_comment"      = "syn_comment"
+"cade.syntax_keyword"      = "syn_keyword"
+"cade.syntax_function"     = "syn_function"
+"cade.syntax_string"       = "syn_string"
+"cade.syntax_number"       = "syn_number"
+"cade.syntax_type"         = "syn_type"
+"##;
 
 fn find_theme_in_dir(dir: &Path, name: &str) -> Option<opaline::Theme> {
     if !dir.exists() {
@@ -376,5 +612,46 @@ mod tests {
         let c = resolved.try_color("bg.base").unwrap();
         // Should resolve from project dir (#222222 -> r: 34, g: 34, b: 34)
         assert_eq!((c.r, c.g, c.b), (34, 34, 34));
+    }
+
+    #[test]
+    fn test_reference_theme_is_valid_and_complete() {
+        let report = validate_theme_str(REFERENCE_THEME_TOML);
+        assert!(report.is_valid, "reference theme should be valid");
+        assert!(report.errors.is_empty(), "reference theme should have 0 errors");
+        assert_eq!(
+            report.defined_tokens,
+            CANONICAL_RECOMMENDED_ROLES.len(),
+            "reference theme should define all canonical recommended tokens"
+        );
+        assert!(
+            report.missing_recommended_tokens.is_empty(),
+            "no recommended tokens should be missing in reference theme"
+        );
+        assert!(
+            report.contrast_warnings.is_empty(),
+            "reference theme should meet WCAG contrast guidelines"
+        );
+    }
+
+    #[test]
+    fn test_validation_reports_missing_tokens_and_contrast() {
+        let toml_missing_and_low_contrast = r##"
+        [meta]
+        name = "low-contrast"
+        variant = "dark"
+        [palette]
+        dark = "#222222"
+        dim = "#282828"
+        [tokens]
+        "bg.base" = "dark"
+        "text.primary" = "dim"
+        "##;
+        let report = validate_theme_str(toml_missing_and_low_contrast);
+        assert!(report.is_valid);
+        assert!(!report.warnings.is_empty());
+        assert!(!report.contrast_warnings.is_empty());
+        assert!(report.contrast_warnings[0].contains("Low contrast"));
+        assert!(report.missing_recommended_tokens.contains(&"accent.primary".to_string()));
     }
 }

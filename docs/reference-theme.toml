@@ -1,0 +1,91 @@
+# CADE Canonical Reference Theme
+# Specification: Opaline TOML Semantic Theming
+
+[meta]
+name = "reference"
+variant = "dark"
+description = "Canonical reference theme exhibiting complete semantic token coverage for CADE"
+author = "CADE Architecture Team"
+version = "1.0.0"
+
+[palette]
+bg_dark          = "#1e1e2e"
+bg_panel         = "#252538"
+bg_elevated      = "#2f2f45"
+bg_highlight     = "#3b3b55"
+bg_selection     = "#45475a"
+
+fg_primary       = "#cdd6f4"
+fg_muted         = "#a6adc8"
+fg_dim           = "#6c7086"
+
+accent_primary   = "#89b4fa"
+accent_secondary = "#f5c2e7"
+accent_tertiary  = "#94e2d5"
+accent_deep      = "#b4befe"
+
+status_success   = "#a6e3a1"
+status_warning   = "#f9e2af"
+status_error     = "#f38ba8"
+
+border_base      = "#313244"
+border_active    = "#89b4fa"
+
+syn_keyword      = "#cba6f7"
+syn_string       = "#a6e3a1"
+syn_comment      = "#6c7086"
+syn_function     = "#89b4fa"
+syn_number       = "#fab387"
+syn_type         = "#f9e2af"
+
+[tokens]
+# --- Surface & Background Roles ---
+"bg.base"          = "bg_dark"
+"bg.panel"         = "bg_panel"
+"bg.elevated"      = "bg_elevated"
+"bg.highlight"     = "bg_highlight"
+"bg.selection"     = "bg_selection"
+
+# --- Typography Roles ---
+"text.primary"     = "fg_primary"
+"text.muted"       = "fg_muted"
+"text.dim"         = "fg_dim"
+
+# --- Accent Roles ---
+"accent.primary"   = "accent_primary"
+"accent.secondary" = "accent_secondary"
+"accent.tertiary"  = "accent_tertiary"
+"accent.deep"      = "accent_deep"
+
+# --- Status Indicators ---
+"success"          = "status_success"
+"warning"          = "status_warning"
+"error"            = "status_error"
+
+# --- Border Roles ---
+"border.unfocused" = "border_base"
+"border.focused"   = "border_active"
+
+# --- Syntax Highlighting Roles ---
+"code.keyword"     = "syn_keyword"
+"code.string"      = "syn_string"
+"code.comment"     = "syn_comment"
+"code.function"    = "syn_function"
+"code.number"      = "syn_number"
+"code.type"        = "syn_type"
+
+# --- Documented Compatibility Aliases ---
+"cade.success"             = "status_success"
+"cade.warning"             = "status_warning"
+"cade.error"               = "status_error"
+"cade.border"              = "border_base"
+"cade.border_accent"       = "border_active"
+"cade.selected_bg"         = "bg_highlight"
+"cade.user_message_bg"     = "bg_panel"
+"cade.tool_success_bg"     = "bg_elevated"
+"cade.syntax_comment"      = "syn_comment"
+"cade.syntax_keyword"      = "syn_keyword"
+"cade.syntax_function"     = "syn_function"
+"cade.syntax_string"       = "syn_string"
+"cade.syntax_number"       = "syn_number"
+"cade.syntax_type"         = "syn_type"
