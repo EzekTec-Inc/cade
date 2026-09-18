@@ -992,31 +992,28 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     images: None, cache_control: None,
                 });
             }
-            if let Some(budget) = cfg.max_tokens_budget {
-                let mut iter_input_tokens = 0;
-                for m in &messages {
-                    if !m.content.is_empty() {
-                        iter_input_tokens += cade_ai::count_tokens(&model, &m.content) as u64;
-                    }
-                    if let Some(tcs) = &m.tool_calls {
-                        for tc in tcs {
-                            let json = tc.arguments.to_string();
-                            if !json.is_empty() {
-                                iter_input_tokens += cade_ai::count_tokens(&model, &json) as u64;
-                            }
+            // Guard input messages against model's context window limit
+            let context_limit = cade_ai::catalogue::context_window_for_model(&model);
+            let mut iter_input_tokens = 0usize;
+            for m in &messages {
+                if !m.content.is_empty() {
+                    iter_input_tokens += cade_ai::count_tokens(&model, &m.content);
+                }
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        let json = tc.arguments.to_string();
+                        if !json.is_empty() {
+                            iter_input_tokens += cade_ai::count_tokens(&model, &json);
                         }
                     }
                 }
-
-                if cumulative_tokens + iter_input_tokens > budget {
-                    llm_err = Some(format!(
-                        "error: subagent token budget exceeded ({} > {})",
-                        cumulative_tokens + iter_input_tokens,
-                        budget
-                    ));
-                    break;
-                }
-                cumulative_tokens += iter_input_tokens;
+            }
+            if iter_input_tokens > context_limit as usize {
+                llm_err = Some(format!(
+                    "error: subagent input prompt exceeded model context window ({} > {})",
+                    iter_input_tokens, context_limit
+                ));
+                break;
             }
 
             let llm_req = cade_ai::CompletionRequest {
