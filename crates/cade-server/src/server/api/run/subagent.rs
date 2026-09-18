@@ -1024,50 +1024,57 @@ pub(super) async fn handle_run_subagent_tool_inner(
                 reasoning_effort: None,
             };
 
-            let mut fallback_triggered = false;
-            let mut fallback_model = String::new();
+            let providers = cade_ai::catalogue::available_env_providers();
+            let candidate_chain = build_failover_chain(&model, &parent_model, &providers);
+
             let mut resp_opt = None;
+            for candidate in candidate_chain {
+                let mut req = llm_req.clone();
+                req.model = candidate.clone();
 
-            tokio::select! {
-                res = state.llm.complete(&llm_req) => {
-                    match res {
-                        Ok(r) => resp_opt = Some(r),
-                        Err(e) => {
-                            let e_str = e.to_string();
-                            if e_str.contains("404") || e_str.contains("429") {
-                                fallback_triggered = true;
-                                // Fallback to the parent agent's model
-                                fallback_model = parent_model.clone();
-                                tracing::warn!("Model {} failed ({}), falling back to {}", model, e_str, fallback_model);
-                            } else {
-                                llm_err = Some(e_str);
-                            }
-                        }
-                    }
-                }
-                _ = cancel_rx.recv() => {
-                    llm_err = Some("Task cancelled by parent".to_string());
-                }
-            };
-
-            if fallback_triggered {
-                let mut fallback_req = llm_req.clone();
-                fallback_req.model = fallback_model.clone();
-                tokio::select! {
-                    res = state.llm.complete(&fallback_req) => {
+                let cancelled = tokio::select! {
+                    res = state.llm.complete(&req) => {
                         match res {
                             Ok(r) => {
+                                if candidate != model {
+                                    tracing::info!(
+                                        subagent_id = %subagent_id,
+                                        from = %model,
+                                        to = %candidate,
+                                        "Subagent successfully failed over to candidate model"
+                                    );
+                                    model = candidate;
+                                }
                                 resp_opt = Some(r);
-                                model = fallback_model;
-                            },
+                                llm_err = None;
+                                break;
+                            }
                             Err(e) => {
-                                llm_err = Some(format!("Fallback failed: {}", e));
+                                let e_str = e.to_string();
+                                if is_failover_worthy_error(&e_str) {
+                                    tracing::warn!(
+                                        subagent_id = %subagent_id,
+                                        candidate = %candidate,
+                                        error = %e_str,
+                                        "Subagent model candidate failed, attempting next provider in failover chain"
+                                    );
+                                    llm_err = Some(format!("Model {candidate} failed: {e_str}"));
+                                    false
+                                } else {
+                                    llm_err = Some(e_str);
+                                    break;
+                                }
                             }
                         }
                     }
                     _ = cancel_rx.recv() => {
                         llm_err = Some("Task cancelled by parent".to_string());
+                        true
                     }
+                };
+
+                if cancelled {
+                    break;
                 }
             }
 
@@ -1805,6 +1812,64 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
     }
 }
 
+/// Build a prioritized multi-provider failover chain.
+pub(crate) fn build_failover_chain(
+    primary_model: &str,
+    parent_model: &str,
+    available_providers: &[String],
+) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // 1. Primary requested model
+    if !primary_model.is_empty() {
+        chain.push(primary_model.to_string());
+        seen.insert(primary_model.to_string());
+    }
+
+    // 2. Parent model (if distinct)
+    if !parent_model.is_empty() && !seen.contains(parent_model) {
+        chain.push(parent_model.to_string());
+        seen.insert(parent_model.to_string());
+    }
+
+    // 3. Known fast models across available providers
+    const FAST_PROVIDER_MODELS: &[(&str, &str)] = &[
+        ("gemini", "gemini/gemini-2.0-flash"),
+        ("openai", "openai/gpt-4o-mini"),
+        ("anthropic", "anthropic/claude-haiku-4-5"),
+        ("deepseek", "deepseek/deepseek-chat"),
+        ("ollama", "ollama/qwen2.5-coder:7b"),
+    ];
+
+    for &(prov, model_id) in FAST_PROVIDER_MODELS {
+        if available_providers.iter().any(|p| p.eq_ignore_ascii_case(prov))
+            && !seen.contains(model_id)
+        {
+            chain.push(model_id.to_string());
+            seen.insert(model_id.to_string());
+        }
+    }
+
+    chain
+}
+
+/// Determine whether an error warrants trying the next candidate in the failover chain.
+pub(crate) fn is_failover_worthy_error(err_str: &str) -> bool {
+    let s = err_str.to_lowercase();
+    s.contains("404")
+        || s.contains("not found")
+        || s.contains("429")
+        || s.contains("rate limit")
+        || s.contains("credit balance")
+        || s.contains("insufficient_quota")
+        || s.contains("quota exceeded")
+        || s.contains("billing")
+        || s.contains("402")
+        || s.contains("unauthorized")
+        || s.contains("invalid api key")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1907,5 +1972,30 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_build_failover_chain_ordering_and_deduplication() {
+        let providers = vec!["gemini".to_string(), "openai".to_string()];
+        let chain = super::build_failover_chain(
+            "gemini/gemini-2.0-flash",
+            "anthropic/claude-sonnet-4",
+            &providers,
+        );
+
+        assert_eq!(chain[0], "gemini/gemini-2.0-flash");
+        assert_eq!(chain[1], "anthropic/claude-sonnet-4");
+        assert!(chain.contains(&"openai/gpt-4o-mini".to_string()));
+        // Deduplicated
+        assert_eq!(chain.iter().filter(|m| *m == "gemini/gemini-2.0-flash").count(), 1);
+    }
+
+    #[test]
+    fn test_is_failover_worthy_error() {
+        assert!(super::is_failover_worthy_error("HTTP 404 Not Found"));
+        assert!(super::is_failover_worthy_error("HTTP 429 Rate limit exceeded"));
+        assert!(super::is_failover_worthy_error("Your credit balance is too low to access the Anthropic API"));
+        assert!(super::is_failover_worthy_error("insufficient_quota error from provider"));
+        assert!(!super::is_failover_worthy_error("Invalid json syntax in tool call"));
     }
 }
