@@ -48,20 +48,33 @@ fn color_to_rgb(color: ratatui::style::Color) -> Option<(u8, u8, u8)> {
 
 fn pick_high_contrast_fg(
     bg_color: ratatui::style::Color,
-    option1: ratatui::style::Color,
-    option2: ratatui::style::Color,
+    colors: &ThemeColors,
 ) -> ratatui::style::Color {
-    if let (Some(bg), Some(c1), Some(c2)) = (
-        color_to_rgb(bg_color),
-        color_to_rgb(option1),
-        color_to_rgb(option2),
-    ) {
-        let r1 = cade_core::resources::calculate_contrast_ratio(c1, bg);
-        let r2 = cade_core::resources::calculate_contrast_ratio(c2, bg);
-        if r1 >= r2 { option1 } else { option2 }
-    } else {
-        option1
+    let candidates = [
+        colors.c_bg_base(),
+        colors.c_text_primary(),
+        ratatui::style::Color::Rgb(255, 255, 255),
+        ratatui::style::Color::Rgb(20, 20, 25),
+    ];
+    let bg_rgb = match color_to_rgb(bg_color) {
+        Some(rgb) => rgb,
+        None => return colors.c_bg_base(),
+    };
+
+    let mut best_color = colors.c_bg_base();
+    let mut best_ratio = 0.0;
+
+    for &cand in &candidates {
+        if let Some(cand_rgb) = color_to_rgb(cand) {
+            let ratio = cade_core::resources::calculate_contrast_ratio(cand_rgb, bg_rgb);
+            if ratio > best_ratio {
+                best_ratio = ratio;
+                best_color = cand;
+            }
+        }
     }
+
+    best_color
 }
 
 pub(crate) fn render_tool_activity_pill(
@@ -71,9 +84,8 @@ pub(crate) fn render_tool_activity_pill(
 ) -> Vec<Span<'static>> {
     let icon = crate::icons::tool_icon(&presentation.icon_name, nerd);
     let pill_bg = colors.c_primary();
-    let pill_fg = pick_high_contrast_fg(pill_bg, colors.c_bg_base(), colors.c_text_primary());
+    let pill_fg = pick_high_contrast_fg(pill_bg, colors);
     let base_bg = colors.c_bg_base();
-    let shadow_bg = colors.c_bg_surface0();
 
     let pill_style = Style::default()
         .fg(pill_fg)
@@ -84,20 +96,21 @@ pub(crate) fn render_tool_activity_pill(
         vec![
             // Left rounded edge
             Span::styled("\u{e0b6}", Style::default().fg(pill_bg).bg(base_bg)),
-            // Pill content
-            Span::styled(format!("{icon} {}", presentation.label), pill_style),
-            // Right rounded edge with shadow transition
-            Span::styled("\u{e0b4}", Style::default().fg(pill_bg).bg(shadow_bg)),
-            // Drop-shadow background segment
-            Span::styled("\u{2590}", Style::default().fg(shadow_bg).bg(base_bg)),
+            // Inner left padding
+            Span::styled(" ", pill_style),
+            // Pill icon and label with breathing room
+            Span::styled(format!("{icon}  {}", presentation.label), pill_style),
+            // Inner right padding
+            Span::styled(" ", pill_style),
+            // Right rounded edge without shadow
+            Span::styled("\u{e0b4}", Style::default().fg(pill_bg).bg(base_bg)),
         ]
     } else {
         vec![
-            // ASCII rounded bookends
-            Span::styled("(", pill_style),
-            Span::styled(format!("{icon} {}", presentation.label), pill_style),
-            Span::styled(")", pill_style),
-            Span::styled("\u{2590}", Style::default().fg(shadow_bg).bg(base_bg)),
+            // Clean ASCII rounded bookends with inner padding
+            Span::styled("[ ", pill_style),
+            Span::styled(format!("{icon}  {}", presentation.label), pill_style),
+            Span::styled(" ]", pill_style),
         ]
     }
 }
@@ -158,12 +171,12 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert!(text.contains("(▶ Search codebase)"), "got {text:?}");
-        assert!(text.contains("\u{2590}"), "shadow should be present");
+        assert!(text.contains("[ ▶  Search codebase ]"), "got {text:?}");
+        assert!(!text.contains("\u{2590}"), "shadow should be removed");
     }
 
     #[test]
-    fn renders_nerd_rounded_pill_with_shadow() {
+    fn renders_nerd_rounded_pill_without_shadow_and_with_padding() {
         let colors = ThemeColors::default();
         let spans = render_tool_activity_pill(
             &resolve_tool_presentation("execute_shell_command"),
@@ -175,8 +188,18 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.starts_with("\u{e0b6}"), "left rounded cap expected");
-        assert!(text.contains("Run command"), "label expected");
-        assert!(text.contains("\u{e0b4}"), "right rounded cap expected");
-        assert!(text.ends_with("\u{2590}"), "shadow glyph expected");
+        assert!(text.contains(" Run command "), "inner padding expected");
+        assert!(text.ends_with("\u{e0b4}"), "right rounded cap expected with no shadow");
+        assert!(!text.contains("\u{2590}"), "shadow should be removed");
+    }
+
+    #[test]
+    fn test_pill_contrast_ratio_meets_guidelines() {
+        let dark_theme = ThemeColors::default();
+        let fg = pick_high_contrast_fg(dark_theme.c_primary(), &dark_theme);
+        if let (Some(bg_rgb), Some(fg_rgb)) = (color_to_rgb(dark_theme.c_primary()), color_to_rgb(fg)) {
+            let ratio = cade_core::resources::calculate_contrast_ratio(fg_rgb, bg_rgb);
+            assert!(ratio >= 3.0, "contrast ratio {ratio} should meet readability threshold");
+        }
     }
 }

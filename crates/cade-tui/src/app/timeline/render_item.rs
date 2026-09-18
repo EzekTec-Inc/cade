@@ -432,7 +432,13 @@ pub(crate) fn render_tool_call_item(
     left_spans.extend(pill_spans);
     left_spans.push(Span::styled(" ", colors.text_dim()));
 
-    let prefix_width = UnicodeWidthStr::width(prompt_glyph) + pill_width + 1;
+    // Clean margin between pill and argument preview
+    let margin_str = if preview.is_empty() { "" } else { "  " };
+    left_spans.push(Span::styled(margin_str, colors.text_dim()));
+
+    let prefix_width = UnicodeWidthStr::width(prompt_glyph)
+        + pill_width
+        + UnicodeWidthStr::width(margin_str);
     let budget = width.saturating_sub(prefix_width + 4);
     let args_str = if preview.is_empty() {
         String::new()
@@ -442,7 +448,7 @@ pub(crate) fn render_tool_call_item(
         let truncated = truncate_str(preview, budget.saturating_sub(1));
         format!("{truncated}…")
     };
-    left_spans.push(Span::styled(args_str, colors.text_dim()));
+    left_spans.push(Span::styled(args_str, colors.text_muted()));
 
     out.push(Line::from(left_spans));
 }
