@@ -2,6 +2,7 @@ use crate::app::timeline::render_item::*;
 use crate::colors::ThemeColorsExt;
 pub mod diff_view;
 pub mod render_item;
+pub(crate) mod tool_presentation;
 
 use super::*;
 pub use diff_view::{DiffLayout, DiffViewEngine};
@@ -953,7 +954,8 @@ impl StreamingMarkdownCache {
         // If a new block completed beyond our current committed offset, parse and freeze it
         if boundary > self.committed_raw_text.len() {
             let new_slice = &clean_body[self.committed_raw_text.len()..boundary];
-            let new_lines = crate::markdown::parse_markdown_lines_with_theme(new_slice, colors, width, true);
+            let new_lines =
+                crate::markdown::parse_markdown_lines_with_theme(new_slice, colors, width, true);
             for l in new_lines {
                 self.committed_lines.extend(wrap_line(l, width as u16));
             }
@@ -965,7 +967,8 @@ impl StreamingMarkdownCache {
         if in_flight.is_empty() {
             self.committed_lines.clone()
         } else {
-            let in_flight_raw = crate::markdown::parse_markdown_lines_with_theme(in_flight, colors, width, true);
+            let in_flight_raw =
+                crate::markdown::parse_markdown_lines_with_theme(in_flight, colors, width, true);
             let mut out = self.committed_lines.clone();
             for l in in_flight_raw {
                 out.extend(wrap_line(l, width as u16));
@@ -1306,7 +1309,11 @@ mod tests {
     #[test]
     fn test_find_last_block_boundary_paragraphs() {
         let single = "Hello world";
-        assert_eq!(find_last_block_boundary(single), 0, "single in-flight paragraph has no boundary");
+        assert_eq!(
+            find_last_block_boundary(single),
+            0,
+            "single in-flight paragraph has no boundary"
+        );
 
         let two_paras = "First paragraph\n\nSecond paragraph";
         let boundary = find_last_block_boundary(two_paras);

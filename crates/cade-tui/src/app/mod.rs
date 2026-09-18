@@ -73,7 +73,7 @@ use crate::editor::{Editor, ImageEntry};
 pub(crate) use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
-use layout::helpers::{abbreviate_cwd, display_tool_name};
+use layout::helpers::abbreviate_cwd;
 pub use layout::helpers::{cycle_mode, cycle_mode_back, truncate_str};
 pub use reducer::TuiAction;
 use render::{RenderContext, count_wrapped_rows, render_frame};
@@ -1418,6 +1418,14 @@ impl TuiApp {
     }
 
     /// Redraw the full screen (unconditional — always redraws).
+    /// Handle a terminal resize event: wipe the terminal emulator's buffer to prevent
+    /// underlying shell scrollback from bleeding through, mark draw dirty, and force a full redraw.
+    pub fn handle_resize(&mut self) -> Result<()> {
+        let _ = self.terminal.clear();
+        self.draw_dirty = true;
+        self.draw()
+    }
+
     pub fn draw(&mut self) -> Result<()> {
         // R-01/Perf: while live output is streaming (assistant chunks or
         // thinking), cap redraws at ~30 FPS.  The 16 ms tick task keeps
