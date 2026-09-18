@@ -29,8 +29,8 @@ pub fn tool_icon(stripped_name: &str, nerd: bool) -> &'static str {
         "apply_patch" | "ide_apply_patch" => "\u{f440}", //
 
         // -- Search / grep
-        "grep" | "grep_search" | "GlobGemini" | "SearchFileContent" | "start_search"
-        | "find_references" | "symbol_search" => "\u{f002}", //
+        "grep" | "grep_search" | "search_for_pattern" | "semantic_search" | "GlobGemini"
+        | "SearchFileContent" | "start_search" | "find_references" | "symbol_search" => "\u{f002}", //
 
         // -- Directory / glob
         "list_directory" | "glob" | "get_file_info" => "\u{f07b}", //
@@ -195,6 +195,8 @@ mod tests {
     fn known_tool_returns_specific_icon() {
         assert_eq!(tool_icon("bash", true), "\u{f120}");
         assert_eq!(tool_icon("read_file", true), "\u{f15c}");
+        assert_eq!(tool_icon("search_for_pattern", true), "\u{f002}");
+        assert_eq!(tool_icon("semantic_search", true), "\u{f002}");
         assert_eq!(tool_icon("commit", true), "\u{e725}");
         assert_eq!(tool_icon("create_pull_request", true), "\u{f09b}");
         assert_eq!(tool_icon("update_memory", true), "\u{f0eb}");
