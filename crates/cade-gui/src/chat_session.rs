@@ -47,17 +47,29 @@ impl ChatSessionCoordinator {
     }
 
     /// Process an incoming stream event and update message state in-place.
+    /// If the placeholder message with `stream_id` does not exist yet, it is automatically
+    /// created and appended to prevent dropping events during external run following.
     pub fn apply_stream_event(
-        messages: &mut [ChatMessage],
+        messages: &mut Vec<ChatMessage>,
         stream_id: &str,
         event: StreamEvent,
         reasoning_acc: &mut String,
     ) {
+        let idx = if let Some(i) = messages.iter().position(|m| m.id == stream_id) {
+            i
+        } else {
+            messages.push(ChatMessage {
+                id: stream_id.to_string(),
+                role: "assistant".to_string(),
+                content: serde_json::Value::String(String::new()),
+                conversation_id: None,
+            });
+            messages.len() - 1
+        };
+
         match event.msg_type() {
             "assistant_message" => {
-                if let Some(delta) = event.content()
-                    && let Some(idx) = messages.iter().position(|m| m.id == stream_id)
-                {
+                if let Some(delta) = event.content() {
                     let existing = messages[idx].content.as_str().unwrap_or("").to_string();
                     messages[idx].content = serde_json::Value::String(format!("{existing}{delta}"));
                 }
@@ -67,17 +79,15 @@ impl ChatSessionCoordinator {
                 if !r_text.is_empty() {
                     reasoning_acc.push_str(r_text);
                     let reasoning_block = format!("<reasoning>\n{reasoning_acc}\n</reasoning>");
-                    if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                        let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                        let updated = if existing.is_empty() || existing == reasoning_block {
-                            reasoning_block.clone()
-                        } else if let Some(tail) = existing.split("</reasoning>").nth(1) {
-                            format!("{reasoning_block}{tail}")
-                        } else {
-                            format!("{reasoning_block}\n{existing}")
-                        };
-                        messages[idx].content = serde_json::Value::String(updated);
-                    }
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let updated = if existing.is_empty() || existing == reasoning_block {
+                        reasoning_block.clone()
+                    } else if let Some(tail) = existing.split("</reasoning>").nth(1) {
+                        format!("{reasoning_block}{tail}")
+                    } else {
+                        format!("{reasoning_block}\n{existing}")
+                    };
+                    messages[idx].content = serde_json::Value::String(updated);
                 }
             }
             "tool_call_message" | "tool_executing" => {
@@ -89,12 +99,10 @@ impl ChatSessionCoordinator {
                     .tool_args()
                     .or_else(|| event.data.get("arguments").and_then(|v| v.as_str()))
                     .unwrap_or("");
-                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    let tool_block = format!("\n\n[Tool Executing: {name}]\nArguments: {args}\n");
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{tool_block}"));
-                }
+                let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                let tool_block = format!("\n\n[Tool Executing: {name}]\nArguments: {args}\n");
+                messages[idx].content =
+                    serde_json::Value::String(format!("{existing}{tool_block}"));
             }
             "tool_result_message" | "tool_completed" => {
                 let name = event.tool_name().unwrap_or("tool");
@@ -115,26 +123,22 @@ impl ChatSessionCoordinator {
                     } else {
                         String::new()
                     };
-                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    let result_block =
-                        format!("\n[Tool {status_label}: {name}]{ui_meta}\nOutput: {output}\n");
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{result_block}"));
-                }
+                let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                let result_block =
+                    format!("\n[Tool {status_label}: {name}]{ui_meta}\nOutput: {output}\n");
+                messages[idx].content =
+                    serde_json::Value::String(format!("{existing}{result_block}"));
             }
             "approval_required" => {
                 let tool_name = event.tool_name().unwrap_or("tool");
                 let approval_id = event.approval_id().unwrap_or("pending");
                 let args = event.tool_args().unwrap_or("");
-                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    let approval_card = format!(
-                        "\n\n[Approval Required: {tool_name}] (ID: {approval_id})\nRequires human review before execution.\nArguments: {args}\n"
-                    );
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{approval_card}"));
-                }
+                let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                let approval_card = format!(
+                    "\n\n[Approval Required: {tool_name}] (ID: {approval_id})\nRequires human review before execution.\nArguments: {args}\n"
+                );
+                messages[idx].content =
+                    serde_json::Value::String(format!("{existing}{approval_card}"));
             }
             "approval_resolved" => {
                 let approval_id = event.approval_id().unwrap_or("unknown");
@@ -144,13 +148,11 @@ impl ChatSessionCoordinator {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
                 let verdict_str = if approved { "Approved" } else { "Denied" };
-                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    let resolved_block =
-                        format!("\n[Approval Resolved: {approval_id} -> {verdict_str}]\n");
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{resolved_block}"));
-                }
+                let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                let resolved_block =
+                    format!("\n[Approval Resolved: {approval_id} -> {verdict_str}]\n");
+                messages[idx].content =
+                    serde_json::Value::String(format!("{existing}{resolved_block}"));
             }
             "progress" => {
                 let percent = event
@@ -163,18 +165,14 @@ impl ChatSessionCoordinator {
                     .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                    let progress_block = format!("\n[Progress: {:.0}%] {}\n", percent, msg);
-                    messages[idx].content =
-                        serde_json::Value::String(format!("{existing}{progress_block}"));
-                }
+                let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                let progress_block = format!("\n[Progress: {:.0}%] {}\n", percent, msg);
+                messages[idx].content =
+                    serde_json::Value::String(format!("{existing}{progress_block}"));
             }
             "error" => {
                 let err_msg = event.error().unwrap_or("Unknown error");
-                if let Some(idx) = messages.iter().position(|m| m.id == stream_id) {
-                    messages[idx].content = serde_json::Value::String(format!("[Error] {err_msg}"));
-                }
+                messages[idx].content = serde_json::Value::String(format!("[Error] {err_msg}"));
             }
             _ => {}
         }

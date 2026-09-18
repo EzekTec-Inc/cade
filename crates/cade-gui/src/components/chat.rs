@@ -33,8 +33,14 @@ pub fn ChatView() -> Element {
 
         spawn(async move {
             if !agent_id.is_empty()
-                && let Ok(list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await
+                && let Ok(mut list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await
             {
+                // Preserve in-flight live stream placeholder if present in current messages
+                if let Some(live_msg) = msgs.peek().iter().find(|m| m.id.starts_with("live-")).cloned() {
+                    if !list.iter().any(|m| m.id == live_msg.id) {
+                        list.push(live_msg);
+                    }
+                }
                 msgs.set(list);
             }
         });

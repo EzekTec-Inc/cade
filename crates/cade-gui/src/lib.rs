@@ -313,8 +313,10 @@ fn App() -> Element {
                                     if let Some(curr) = selected()
                                         && curr.id == r_agent_id
                                     {
-                                        if active_conversation().is_none() && r_conv_id.is_some() {
-                                            active_conversation.set(r_conv_id.clone());
+                                        if let Some(ref cid) = r_conv_id {
+                                            if active_conversation().as_ref() != Some(cid) {
+                                                active_conversation.set(Some(cid.clone()));
+                                            }
                                         }
 
                                         if active_stream_id() != Some(run_id.clone()) {
@@ -388,7 +390,7 @@ fn App() -> Element {
                                 }
                                 runs.set(r_list);
 
-                                // 2. Refresh messages for current agent from server DB to sync final state
+                                // 2. Refresh messages and conversations for current agent from server DB to sync final state
                                 if let Some(curr) = selected()
                                     && curr.id == r_agent_id
                                 {
@@ -396,12 +398,16 @@ fn App() -> Element {
                                     let aid_c = r_agent_id.to_string();
                                     let cid_c = active_conversation();
                                     let mut msgs_sig = messages;
+                                    let mut convs_sig = convs;
                                     spawn(async move {
-                                        let c = api::CadeApiClient::new(key_c);
+                                        let c = api::CadeApiClient::new(key_c.clone());
                                         if let Ok(list) =
                                             c.get_messages(&aid_c, cid_c.as_deref()).await
                                         {
                                             msgs_sig.set(list);
+                                        }
+                                        if let Ok(c_list) = api::list_conversations(&aid_c, &key_c).await {
+                                            convs_sig.set(c_list);
                                         }
                                     });
                                 }

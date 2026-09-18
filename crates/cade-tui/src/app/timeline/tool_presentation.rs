@@ -35,22 +35,71 @@ pub(crate) fn resolve_tool_presentation(raw_name: &str) -> ToolPresentation {
     ToolPresentation { icon_name, label }
 }
 
+fn color_to_rgb(color: ratatui::style::Color) -> Option<(u8, u8, u8)> {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => Some((r, g, b)),
+        ratatui::style::Color::Black => Some((0, 0, 0)),
+        ratatui::style::Color::White => Some((255, 255, 255)),
+        ratatui::style::Color::Gray => Some((128, 128, 128)),
+        ratatui::style::Color::DarkGray => Some((64, 64, 64)),
+        _ => None,
+    }
+}
+
+fn pick_high_contrast_fg(
+    bg_color: ratatui::style::Color,
+    option1: ratatui::style::Color,
+    option2: ratatui::style::Color,
+) -> ratatui::style::Color {
+    if let (Some(bg), Some(c1), Some(c2)) = (
+        color_to_rgb(bg_color),
+        color_to_rgb(option1),
+        color_to_rgb(option2),
+    ) {
+        let r1 = cade_core::resources::calculate_contrast_ratio(c1, bg);
+        let r2 = cade_core::resources::calculate_contrast_ratio(c2, bg);
+        if r1 >= r2 { option1 } else { option2 }
+    } else {
+        option1
+    }
+}
+
 pub(crate) fn render_tool_activity_pill(
     presentation: &ToolPresentation,
     colors: &ThemeColors,
     nerd: bool,
 ) -> Vec<Span<'static>> {
     let icon = crate::icons::tool_icon(&presentation.icon_name, nerd);
+    let pill_bg = colors.c_primary();
+    let pill_fg = pick_high_contrast_fg(pill_bg, colors.c_bg_base(), colors.c_text_primary());
+    let base_bg = colors.c_bg_base();
+    let shadow_bg = colors.c_bg_surface0();
+
     let pill_style = Style::default()
-        .fg(colors.c_bg_base())
-        .bg(colors.c_primary())
+        .fg(pill_fg)
+        .bg(pill_bg)
         .add_modifier(Modifier::BOLD);
 
-    vec![
-        Span::styled(" ", pill_style),
-        Span::styled(format!("{icon} {}", presentation.label), pill_style),
-        Span::styled(" ", pill_style),
-    ]
+    if nerd {
+        vec![
+            // Left rounded edge
+            Span::styled("\u{e0b6}", Style::default().fg(pill_bg).bg(base_bg)),
+            // Pill content
+            Span::styled(format!("{icon} {}", presentation.label), pill_style),
+            // Right rounded edge with shadow transition
+            Span::styled("\u{e0b4}", Style::default().fg(pill_bg).bg(shadow_bg)),
+            // Drop-shadow background segment
+            Span::styled("\u{2590}", Style::default().fg(shadow_bg).bg(base_bg)),
+        ]
+    } else {
+        vec![
+            // ASCII rounded bookends
+            Span::styled("(", pill_style),
+            Span::styled(format!("{icon} {}", presentation.label), pill_style),
+            Span::styled(")", pill_style),
+            Span::styled("\u{2590}", Style::default().fg(shadow_bg).bg(base_bg)),
+        ]
+    }
 }
 
 fn humanize(name: &str) -> String {
@@ -109,6 +158,25 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert!(text.contains("▶ Search codebase"), "got {text:?}");
+        assert!(text.contains("(▶ Search codebase)"), "got {text:?}");
+        assert!(text.contains("\u{2590}"), "shadow should be present");
+    }
+
+    #[test]
+    fn renders_nerd_rounded_pill_with_shadow() {
+        let colors = ThemeColors::default();
+        let spans = render_tool_activity_pill(
+            &resolve_tool_presentation("execute_shell_command"),
+            &colors,
+            true,
+        );
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.starts_with("\u{e0b6}"), "left rounded cap expected");
+        assert!(text.contains("Run command"), "label expected");
+        assert!(text.contains("\u{e0b4}"), "right rounded cap expected");
+        assert!(text.ends_with("\u{2590}"), "shadow glyph expected");
     }
 }
