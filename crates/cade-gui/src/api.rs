@@ -471,6 +471,16 @@ pub async fn delete_knowledge_edge(api_key: &str, id: i64) -> Result<(), String>
     Ok(())
 }
 
+// ── Swarm Topology & Teams (PRD #128 / Issue #133) ────────────────────────
+
+/// Fetch the complete multi-agent swarm topology, team hierarchies, and subagents.
+pub async fn list_swarm_topology(
+    api_key: &str,
+) -> Result<cade_api_types::SwarmTopologyResponse, String> {
+    let body = api_request("GET", "/v1/swarm/topology", None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
 // ── Models ────────────────────────────────────────────────────────────────
 
 /// List available models from all configured providers.
@@ -666,6 +676,11 @@ impl CadeApiClient {
     /// Delete a knowledge edge by ID.
     pub async fn delete_knowledge_edge(&self, id: i64) -> Result<(), String> {
         delete_knowledge_edge(&self.api_key, id).await
+    }
+
+    /// Fetch the complete multi-agent swarm topology, team hierarchies, and subagents.
+    pub async fn list_swarm_topology(&self) -> Result<cade_api_types::SwarmTopologyResponse, String> {
+        list_swarm_topology(&self.api_key).await
     }
 
     pub async fn list_models(&self) -> Result<serde_json::Value, String> {

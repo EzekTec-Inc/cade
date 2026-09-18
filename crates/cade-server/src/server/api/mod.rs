@@ -25,6 +25,7 @@ pub mod proxy;
 pub mod run;
 pub mod runs;
 pub mod skills;
+pub mod teams;
 pub mod tool_executions;
 pub mod tools;
 pub mod workflows;
@@ -176,6 +177,9 @@ pub fn router(state: AppState) -> Router {
             "/v1/knowledge/edges/{id}",
             delete(knowledge::delete_edge),
         )
+        // Swarm Topology & Teams (PRD #128 / Issue #133)
+        .route("/v1/teams", get(teams::get_swarm_topology_handler))
+        .route("/v1/swarm/topology", get(teams::get_swarm_topology_handler))
         .route(
             "/v1/agents/{id}/archival",
             post(agents::insert_archival_memory_handler),

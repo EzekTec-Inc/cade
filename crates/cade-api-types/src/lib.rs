@@ -262,6 +262,43 @@ pub struct WorkflowStepEvent {
 
 // endregion: --- Workflows
 
+// region:    --- Swarm & Teams
+
+/// Summary of a team member / subagent node in the swarm topology.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeamMemberSummary {
+    pub id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub description: String,
+    pub model: Option<String>,
+    pub tools: String,
+    pub status: String,
+}
+
+/// Summary of an agent team definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeamSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub mode: String,
+    pub max_iterations: usize,
+    pub leader_model: Option<String>,
+    pub members: Vec<TeamMemberSummary>,
+    pub scope: String,
+}
+
+/// Aggregated swarm topology response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmTopologyResponse {
+    pub teams: Vec<TeamSummary>,
+    pub standalone_subagents: Vec<TeamMemberSummary>,
+    pub total_nodes: usize,
+}
+
+// endregion: --- Swarm & Teams
+
 #[cfg(test)]
 mod tests {
     use super::*;
