@@ -254,13 +254,11 @@ impl StorageBackend for HttpTransport {
 
     async fn install_plugin(
         &self,
-        _agent_id: &str,
-        _url: &str,
-        _plugin_id: &str,
+        agent_id: &str,
+        url: &str,
+        plugin_id: &str,
     ) -> Result<String> {
-        Err(crate::Error::custom(
-            "install_plugin not implemented on HttpTransport yet",
-        ))
+        self.install_plugin(agent_id, url, plugin_id).await
     }
 
     async fn install_skill(

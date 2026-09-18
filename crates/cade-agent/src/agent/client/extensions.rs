@@ -189,6 +189,36 @@ impl HttpTransport {
         Ok(())
     }
 
+    // -- Plugins
+
+    /// Install a WebAssembly plugin via the server plugin engine.
+    pub async fn install_plugin(
+        &self,
+        agent_id: &str,
+        url: &str,
+        plugin_id: &str,
+    ) -> Result<String> {
+        let body = serde_json::json!({
+            "agent_id": agent_id,
+            "url": url,
+            "plugin_id": plugin_id,
+        });
+
+        let resp = self
+            .client
+            .post(self.url("/v1/plugins/install"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            return Err(crate::Error::custom(format!("install_plugin failed: {txt}")));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        Ok(v["status"].as_str().unwrap_or("installed").to_string())
+    }
+
     // -- Artifacts
 
     /// Store an artifact (screenshot, diff, log, test report, etc.).

@@ -33,6 +33,19 @@ pub fn steer_subagent(subagent_id: &str, message: String) -> bool {
     }
 }
 
+static HOTSWAP_MODELS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn get_hotswap_models() -> &'static Mutex<HashMap<String, String>> {
+    HOTSWAP_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Request a dynamic model hot-swap for an active subagent, taking effect on its next iteration turn.
+pub fn swap_subagent_model(subagent_id: &str, new_model: String) -> bool {
+    let mut models = get_hotswap_models().lock().unwrap();
+    models.insert(subagent_id.to_string(), new_model);
+    true
+}
+
 /// REC-2: Drop guard that ensures the ephemeral agent DB row is cleaned
 /// up even if the agentic loop panics or returns early.  On drop it:
 ///   1. Writes back any subagent findings to the parent (A15).
@@ -980,6 +993,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
         fn drop(&mut self) {
             let mut queues = get_steering_queues().lock().unwrap();
             queues.remove(&self.subagent_id);
+            let mut models = get_hotswap_models().lock().unwrap();
+            models.remove(&self.subagent_id);
         }
     }
     let _steering_cleanup = SteeringCleanup {
@@ -991,6 +1006,20 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let mut cumulative_tokens = 0u64;
     let loop_result = tokio::time::timeout(timeout_dur, async {
         for iter in 0..max_iters {
+            // Check for dynamic model hot-swap requested for this subagent
+            if let Some(new_m) = {
+                let mut map = get_hotswap_models().lock().unwrap();
+                map.remove(&subagent_id)
+            } && new_m != model {
+                tracing::info!(
+                    subagent_id = %subagent_id,
+                    from = %model,
+                    to = %new_m,
+                    "Subagent model hot-swapped mid-flight for next turn"
+                );
+                model = new_m;
+            }
+
             // Consume any queued steering messages
             let mut steer_msgs = Vec::new();
             while let Ok(msg) = steer_rx.try_recv() {
@@ -998,7 +1027,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             }
             if !steer_msgs.is_empty() {
                 let steering_content = format!(
-                    "SYSTEM INTERVENTION: The user has redirected your task mid-run with the following instructions:\n\n{}",
+                    "[Supervisor Steering Guidance]:\n\n{}",
                     steer_msgs.join("\n\n")
                 );
                 messages.push(cade_ai::LlmMessage {
@@ -1006,7 +1035,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     content: steering_content,
                     tool_calls: None,
                     tool_call_id: None,
-                    images: None, cache_control: None,
+                    images: None,
+                    cache_control: None,
                 });
             }
             // Guard input messages against model's context window limit

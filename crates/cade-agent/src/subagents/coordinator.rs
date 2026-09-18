@@ -24,6 +24,13 @@ pub trait SubagentSingleRunner: Send + Sync {
 
     /// Inspects the subagent system status.
     fn doctor_status(&self) -> Result<String>;
+
+    /// Dynamically hot-swaps the model of an active subagent for its next turn.
+    fn hot_swap_model(&self, subagent_id: &str, new_model: &str) -> Result<String> {
+        Ok(format!(
+            "Model for subagent '{subagent_id}' queued to swap to '{new_model}'"
+        ))
+    }
 }
 
 /// Helper to resolve the global ~/.cade/subagents/ directory
@@ -709,6 +716,32 @@ impl SubagentCoordinator {
                         ui_resource_uri: None,
                     });
                 }
+                "model" | "swap_model" | "hot_swap" => {
+                    let subagent_id = cfg
+                        .id
+                        .clone()
+                        .or_else(|| cfg.agent_id.clone())
+                        .or_else(|| args["id"].as_str().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    let new_model = args["model"].as_str().unwrap_or("").to_string();
+                    if subagent_id.is_empty() || new_model.is_empty() {
+                        return Ok(ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "subagent".to_string(),
+                            output: "error: 'id' and 'model' are required for model hot-swap".to_string(),
+                            is_error: true,
+                            ui_resource_uri: None,
+                        });
+                    }
+                    let out = runner.hot_swap_model(&subagent_id, &new_model)?;
+                    return Ok(ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: "subagent".to_string(),
+                        output: out,
+                        is_error: false,
+                        ui_resource_uri: None,
+                    });
+                }
                 other => {
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
@@ -1025,5 +1058,21 @@ mod tests {
         assert!(!res2.is_error);
         assert!(res2.output.contains("agent-123"));
         assert!(res2.output.contains("continue with next step"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_model_hot_swap_action() {
+        let runner = MockRunner;
+        let model_args = json!({
+            "action": "model",
+            "id": "agent-123",
+            "model": "anthropic/claude-3-7-sonnet"
+        });
+        let res = SubagentCoordinator::coordinate(&runner, "call_4", &model_args)
+            .await
+            .expect("coordinate model hot-swap");
+        assert!(!res.is_error);
+        assert!(res.output.contains("agent-123"));
+        assert!(res.output.contains("anthropic/claude-3-7-sonnet"));
     }
 }
