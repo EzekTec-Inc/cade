@@ -354,6 +354,24 @@ impl Repl {
                                                         app.draw_dirty = true;
                                                         let _ = app.draw();
                                                     }
+                                                    // F5 — toggle subagent control tray
+                                                    (KeyCode::F(5), _) => {
+                                                        app.toggle_subagent_tray();
+                                                        let _ = app.draw();
+                                                    }
+                                                    // Ctrl+W — toggle focus between prompt editor and subagent tray
+                                                    (KeyCode::Char('w') | KeyCode::Char('W'), KeyModifiers::CONTROL) => {
+                                                        app.toggle_subagent_tray_focus();
+                                                        let _ = app.draw();
+                                                    }
+                                                    _ if app.subagent_tray.is_visible
+                                                        && app.subagent_tray.is_focused =>
+                                                    {
+                                                        let trackers = app.subagent_trackers.clone();
+                                                        if app.subagent_tray.handle_key(k, &trackers) {
+                                                            let _ = app.draw();
+                                                        }
+                                                    }
                                                     // Ctrl+C — strictly graceful interrupt (stop only).
                                                     // Does NOT submit typed text (no steering).
                                                     // Leaves typed text in the editor.

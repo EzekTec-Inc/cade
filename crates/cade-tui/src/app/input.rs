@@ -347,6 +347,31 @@ impl TuiApp {
             }
         }
 
+        // -- Subagent Control Tray hotkeys & input routing
+        if matches!(k.code, KeyCode::F(5)) {
+            self.toggle_subagent_tray();
+            let _ = self.draw();
+            return Ok(None);
+        }
+
+        if matches!(k.code, KeyCode::Char('w') | KeyCode::Char('W'))
+            && k.modifiers.contains(KeyModifiers::CONTROL)
+            && self.subagent_tray.is_visible
+        {
+            self.toggle_subagent_tray_focus();
+            let _ = self.draw();
+            return Ok(None);
+        }
+
+        if self.subagent_tray.is_visible && self.subagent_tray.is_focused {
+            let trackers = self.subagent_trackers.clone();
+            if self.subagent_tray.handle_key(k, &trackers) {
+                self.draw_dirty = true;
+                let _ = self.draw();
+                return Ok(None);
+            }
+        }
+
         // Legacy overlay dispatch blocks removed — all four overlays
         // (summary, command palette, theme picker, file picker) are now
         // handled by the dynamic overlay stack above (Phase 3).
@@ -655,14 +680,16 @@ impl TuiApp {
             }
 
             KeyCode::F(5) => {
-                let trackers = self.subagent_trackers.clone();
-                if !trackers.is_empty() {
-                    self.overlays.push(Box::new(
-                        crate::app::subagent_inspector::SubagentInspectorOverlay::new(trackers),
-                    ));
-                    self.draw_dirty = true;
-                } else {
-                    self.show_toast("No subagents running", ToastLevel::Info);
+                self.toggle_subagent_tray();
+                let _ = self.draw();
+                return Ok(None);
+            }
+
+            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.subagent_tray.is_visible {
+                    self.toggle_subagent_tray_focus();
+                    let _ = self.draw();
+                    return Ok(None);
                 }
             }
 

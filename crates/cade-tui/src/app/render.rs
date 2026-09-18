@@ -172,6 +172,7 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) modified_files: &'a [crate::app::layout::modified_files::ModifiedFileEntry],
     pub(crate) streaming_metrics: Option<crate::app::StreamingMetrics>,
     pub(crate) proxy_status: Option<&'a str>,
+    pub(crate) subagent_tray: Option<&'a crate::app::subagent_tray::SubagentTrayState>,
 }
 
 pub(crate) fn render_frame(
@@ -225,15 +226,31 @@ pub(crate) fn render_frame(
     } else {
         (area, None)
     };
-    let w = main_area.width as usize;
+
+    let (content_area, subagent_tray_area) = if let Some(tray) = ctx.subagent_tray {
+        if tray.is_visible && main_area.width >= 100 {
+            let split = Layout::horizontal([
+                Constraint::Percentage(65),
+                Constraint::Percentage(35),
+            ])
+            .split(main_area);
+            (split[0], Some(split[1]))
+        } else {
+            (main_area, None)
+        }
+    } else {
+        (main_area, None)
+    };
+
+    let w = content_area.width as usize;
 
     let input = textarea.lines().join("\n");
     let (input_badge, _input_badge_color) = input_mode_badge(ctx.input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
-    let available_w = main_area.width;
+    let available_w = content_area.width;
     let inline_h = ctx
         .top_overlay
-        .map(|o| o.inline_height(main_area.height))
+        .map(|o| o.inline_height(content_area.height))
         .unwrap_or(0);
     let mut input_rows =
         calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
@@ -247,10 +264,10 @@ pub(crate) fn render_frame(
     let hotkey_bar_h: u16 = 1;
     let bottom_rows = FIXED_ROWS + input_rows + 2 + footer_extra_h + hotkey_bar_h;
 
-    if main_area.height <= bottom_rows + 1 {
+    if content_area.height <= bottom_rows + 1 {
         frame.render_widget(
             Paragraph::new("Terminal too small").style(colors.error()),
-            main_area,
+            content_area,
         );
         return (0, None, ratatui::layout::Rect::default());
     }
@@ -271,7 +288,7 @@ pub(crate) fn render_frame(
         Constraint::Length(input_rows + 2),                    // [2] floating rounded input box
         Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [3] footer
     ])
-    .split(main_area);
+    .split(content_area);
 
     // -- Pinned header & viewport layout splits
     let (header_area_opt, messages_area) =
@@ -359,9 +376,29 @@ pub(crate) fn render_frame(
         render_active_plan(frame, chunks[1], plan, colors);
     }
 
-    // -- Parallel & Subagent Concurrent Task Matrix
-    if !subagent_trackers.is_empty() {
-        render_subagent_task_matrix(frame, main_area, subagent_trackers, colors);
+    // -- Subagent Control Tray
+    if let Some(tray) = ctx.subagent_tray
+        && tray.is_visible
+    {
+        if let Some(tray_rect) = subagent_tray_area {
+            tray.render(frame, tray_rect, subagent_trackers, colors);
+        } else {
+            let overlay_rect = ratatui::layout::Rect {
+                x: main_area.x + 1,
+                y: main_area.y + 1,
+                width: main_area.width.saturating_sub(2),
+                height: main_area.height.saturating_sub(2),
+            };
+            frame.render_widget(ratatui::widgets::Clear, overlay_rect);
+            tray.render(frame, overlay_rect, subagent_trackers, colors);
+        }
+    }
+
+    // -- Parallel & Subagent Concurrent Task Matrix (active when tray is closed)
+    if !subagent_trackers.is_empty()
+        && ctx.subagent_tray.map(|t| !t.is_visible).unwrap_or(true)
+    {
+        render_subagent_task_matrix(frame, content_area, subagent_trackers, colors);
     }
 
     (max_skip, input_cursor_pos, messages_area)

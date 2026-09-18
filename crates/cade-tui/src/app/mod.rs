@@ -16,6 +16,7 @@ pub mod reducer;
 pub mod render;
 pub mod state;
 pub mod subagent_inspector;
+pub mod subagent_tray;
 pub mod timeline;
 pub(crate) use timeline::*;
 
@@ -886,6 +887,8 @@ pub struct TuiApp {
     /// Per-item expansion overrides keyed by stable timeline identity.
     expanded_items: std::collections::HashSet<TimelineKey>,
     pub active_plan: Option<PlanState>,
+    /// Persistent dockable Subagent Control Tray state.
+    pub subagent_tray: subagent_tray::SubagentTrayState,
     /// When true, hide the right sidebar regardless of terminal width.
     pub sidebar_hidden: bool,
 
@@ -1222,6 +1225,7 @@ impl TuiApp {
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
             active_plan: None,
+            subagent_tray: subagent_tray::SubagentTrayState::default(),
             sidebar_hidden: false,
             streaming_text: String::new(),
             streaming_active: false,
@@ -1380,6 +1384,28 @@ impl TuiApp {
     // -- Config updates
 
     // -- Thinking animation
+
+    // -- Subagent Control Tray
+
+    /// Toggle visibility and focus of the dockable Subagent Control Tray.
+    pub fn toggle_subagent_tray(&mut self) {
+        self.subagent_tray.toggle_visible();
+        self.draw_dirty = true;
+        let msg = if self.subagent_tray.is_visible {
+            "Subagent Control Tray opened (Ctrl+W to switch focus)"
+        } else {
+            "Subagent Control Tray closed"
+        };
+        self.show_toast(msg, ToastLevel::Info);
+    }
+
+    /// Toggle focus between the prompt editor and the Subagent Control Tray.
+    pub fn toggle_subagent_tray_focus(&mut self) {
+        if self.subagent_tray.is_visible {
+            self.subagent_tray.toggle_focus();
+            self.draw_dirty = true;
+        }
+    }
 
     // -- Rendering
 
@@ -1706,6 +1732,7 @@ impl TuiApp {
                 modified_files: &modified_files_entries,
                 streaming_metrics,
                 proxy_status,
+                subagent_tray: Some(&self.subagent_tray),
             };
             let (m_skip, cur_pos, msg_area) = render_frame(
                 frame,
