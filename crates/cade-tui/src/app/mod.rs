@@ -1346,6 +1346,9 @@ impl TuiApp {
 
     /// Apply a new theme without re-initializing the terminal.
     pub fn apply_theme(&mut self, colors: ThemeColors) {
+        if let Some(ref engine) = self.lua_engine {
+            engine.update_colors(&colors);
+        }
         self.colors = colors;
         self.draw_dirty = true;
         // U7: do NOT call self.draw() here — let the tick loop or the

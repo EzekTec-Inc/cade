@@ -20,24 +20,91 @@ To set the default theme persistently, edit your `~/.cade/settings.json`:
 
 ## Creating Custom Themes
 
-Themes are either natively supported TextMate (`.tmTheme`) files or custom JSON files located in `~/.cade/themes/`. 
+CADE uses a native, declarative **TOML specification** powered by an authoritative `ThemeResolver` and Opaline engine. Themes can be placed in:
+1. **Project-local**: `.cade/themes/<name>.toml` (highest precedence, shared with team members in a git repository)
+2. **User-global**: `~/.cade/themes/<name>.toml` (user-specific custom themes)
+3. **Built-in themes**: Built directly into CADE binary (`dark`, `light`, `tokyonight`, `catppuccin`, `gruvbox`, etc.)
 
-### The Modern TextMate (.tmTheme) Approach
+### Quick Start: Scaffold a Starter Theme
 
-CADE natively parses standard `.tmTheme` (TextMate / Sublime Text) files, the exact format powering VS Code and Neovim color schemes. This is the **recommended** way to theme CADE because it requires zero manual color mapping and applies exactly the same syntax-highlighting to markdown blocks as your editor.
+You can generate a starter template directly inside your project:
+```
+/theme init my-brand
+```
+This generates a fully-specified `.cade/themes/my-brand.toml` containing all core roles, palette declarations, syntax tokens, and fallback mappings.
 
-To use an existing theme (e.g. Tokyonight, Catppuccin, Gruvbox):
-1. Download its `.tmTheme` file (usually found in the `extras` or `bat` directory of your favorite Neovim/VSCode theme repository).
-2. Place it in `~/.cade/themes/mytheme.tmTheme`.
-3. Switch to it dynamically using `/theme mytheme`.
+### Validating and Inspecting Themes
 
-CADE automatically extracts UI colors (borders, backgrounds, prompts) by dynamically parsing semantic scopes like `keyword.control`, `string`, `invalid`, and the global `background`/`foreground` properties.
+CADE provides built-in validation to ensure custom themes are fully functional, have sufficient WCAG contrast, and correctly map all recommended roles:
+```
+/theme validate my-brand
+/theme validate path/to/theme.toml
+```
+
+To see exactly how tokens resolve (exact match vs. derived from fallback):
+```
+/theme inspect my-brand
+```
 
 ---
 
-### Legacy JSON Theme Schema
+### Canonical TOML Theme Schema
 
-If you prefer building a theme manually from scratch without a `.tmTheme` base, a typical theme file like `~/.cade/themes/my-theme.json` looks like this:
+A theme file is structured into three clean sections:
+- `[meta]`: Metadata about the theme (name, variant, description, author).
+- `[palette]`: Raw hex color definitions (`#rrggbb`).
+- `[tokens]`: Semantic role mappings binding UI and syntax tokens to palette colors.
+
+Example:
+```toml
+[meta]
+name = "my-brand"
+variant = "dark"
+description = "High-contrast branded dark theme"
+author = "Your Name"
+
+[palette]
+bg_dark         = "#1e1e2e"
+bg_panel        = "#252538"
+bg_elevated     = "#2f2f45"
+fg_primary      = "#cdd6f4"
+fg_muted        = "#a6adc8"
+accent_primary  = "#89b4fa"
+status_success  = "#a6e3a1"
+status_warning  = "#f9e2af"
+status_error    = "#f38ba8"
+border_base     = "#313244"
+border_active   = "#89b4fa"
+
+[tokens]
+"bg.base"          = "bg_dark"
+"bg.panel"         = "bg_panel"
+"bg.elevated"      = "bg_elevated"
+"text.primary"     = "fg_primary"
+"text.muted"       = "fg_muted"
+"accent.primary"   = "accent_primary"
+"success"          = "status_success"
+"warning"          = "status_warning"
+"error"            = "status_error"
+"border.unfocused" = "border_base"
+"border.focused"   = "border_active"
+```
+
+A complete, production-grade reference theme is available in `.cade/themes/reference.toml`.
+
+---
+
+### Fallback Semantics & Intentional Gray Preservation
+
+CADE does not require you to specify every single token. When an optional token is absent, `ThemeResolver` will automatically check documented semantic fallbacks before using built-in defaults.
+
+Crucially, **intentional neutral gray RGB `(128, 128, 128)` (`#808080`) is fully preserved**. Older heuristic color sentinel checks have been replaced with explicit presence checks (`try_color`), meaning dark/low-saturation design systems reproduce accurately.
+
+---
+
+### Legacy JSON and Migration Notes
+
+Earlier versions supported a JSON-based schema. While JSON files can be converted easily to the canonical TOML format, all active and new themes should use `.toml`. If you have a legacy JSON theme:
 
 ```json
 {

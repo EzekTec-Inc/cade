@@ -145,6 +145,13 @@ impl LuaEngine {
         })
     }
 
+    /// Update the active theme colors exposed to Lua plugins via `_CADE_get_style`.
+    pub fn update_colors(&self, colors: &ThemeColors) {
+        if let Ok(mut current) = self.active_colors.lock() {
+            *current = colors.clone();
+        }
+    }
+
     pub fn set_state_u8(&self, key: &str, value: u8) -> mlua::Result<()> {
         let state: mlua::Table = self.lua.globals().get("CADE_STATE")?;
         state.set(key, value)?;
@@ -373,8 +380,12 @@ fn resolve_token_to_style(colors: &ThemeColors, token: &str) -> ratatui::style::
         "bg.surface0" | "bg.panel" => colors.style_surface0(),
         "bg.surface1" | "bg.elevated" => colors.style_surface1(),
         "bg.surface2" => colors.style_surface2(),
+        "bg.card" => colors.bg_card_style(),
+        "bg.selected" | "selected" => colors.selected_bg_style(),
         "text.primary" | "text" => colors.text_primary(),
+        "text.primary_bold" => colors.text_primary_bold(),
         "text.muted" => colors.text_muted(),
+        "text.muted_bold" => colors.text_muted_bold(),
         "text.dim" => colors.text_dim(),
         "accent.primary" | "primary" => colors.primary(),
         "accent.primary_bold" | "primary_bold" => colors.primary_bold(),
@@ -385,6 +396,21 @@ fn resolve_token_to_style(colors: &ThemeColors, token: &str) -> ratatui::style::
         "border.focus" => colors.border_focus(),
         "border.muted" => colors.border_muted(),
         "border.accent" => colors.border_accent(),
+        "badge" => colors.badge(),
+        "diff.added" => colors.diff_added(),
+        "diff.removed" => colors.diff_removed(),
+        "diff.context" => colors.diff_context(),
+        "code.keyword" | "syntax_keyword" => colors.syntax_keyword(),
+        "code.string" | "syntax_string" => colors.syntax_string(),
+        "code.comment" | "syntax_comment" => colors.syntax_comment(),
+        "code.function" | "syntax_function" => colors.syntax_function(),
+        "code.number" | "syntax_number" => colors.syntax_number(),
+        "code.type" | "syntax_type" => colors.syntax_type(),
+        "code.operator" => colors.syntax_operator(),
+        "code.punctuation" => colors.syntax_punctuation(),
+        "tool.success" => colors.tool_success_bg_style(),
+        "tool.error" => colors.tool_error_bg_style(),
+        "tool.pending" => colors.tool_pending_bg_style(),
         _ => colors.text_primary(),
     }
 }
@@ -613,6 +639,44 @@ mod additional_tests {
             )
             .eval()?;
         assert!(has_bg, "CADE_UI.get_style('bg.base') must return a valid style table");
+
+        // Verify extended semantic tokens for syntax and diff
+        let code_keyword: bool = engine
+            .lua
+            .load(
+                r#"
+            local kw = CADE_UI.get_style("code.keyword")
+            local diff_add = CADE_UI.get_style("diff.added")
+            local success = CADE_UI.get_style("success")
+            return kw ~= nil and diff_add ~= nil and success ~= nil
+        "#,
+            )
+            .eval()?;
+        assert!(code_keyword, "CADE_UI.get_style must support syntax, diff, and status tokens");
+
+        // Verify theme switching updates CADE_UI.get_style
+        let toml_custom = r##"
+        [meta]
+        name = "lua-custom"
+        variant = "dark"
+        [palette]
+        c_accent = "#334455"
+        [tokens]
+        "accent.primary" = "c_accent"
+        "##;
+        let custom_theme = opaline::load_from_str(toml_custom, None).unwrap();
+        engine.update_colors(&custom_theme);
+
+        let custom_fg: String = engine
+            .lua
+            .load(
+                r#"
+            local style = CADE_UI.get_style("accent.primary")
+            return style.fg or ""
+        "#,
+            )
+            .eval()?;
+        assert_eq!(custom_fg, "#334455");
 
         Ok(())
     }

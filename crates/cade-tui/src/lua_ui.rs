@@ -2,7 +2,6 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -225,7 +224,7 @@ impl SlotComponent for LuaUiSlot {
         } else {
             let p = Paragraph::new(Line::from(vec![Span::styled(
                 "No plugins active",
-                Style::default().fg(Color::DarkGray),
+                colors.text_dim(),
             )]));
             frame.render_widget(p, inner_area);
         }
@@ -396,17 +395,23 @@ fn render_widget(
     widget: &LuaWidget,
     frame: &mut Frame,
     area: Rect,
-    _colors: &ThemeColors,
+    colors: &ThemeColors,
     focused_id: Option<&str>,
     hitboxes: &mut Vec<(String, ratatui::layout::Rect)>,
 ) {
     use ratatui::layout::{Alignment, Rect};
-    use ratatui::style::{Color, Style};
+    use ratatui::style::Style;
     use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 
     match widget {
-        LuaWidget::Text { content, color: _ } => {
-            let p = Paragraph::new(content.as_str());
+        LuaWidget::Text { content, color } => {
+            let mut style = colors.text_primary();
+            if let Some(c_str) = color
+                && let Some(c) = parse_color(c_str)
+            {
+                style = style.fg(c);
+            }
+            let p = Paragraph::new(content.as_str()).style(style);
             frame.render_widget(p, area);
         }
         LuaWidget::Button { id, label } => {
@@ -417,9 +422,11 @@ fn render_widget(
             hitboxes.push((id.clone(), button_area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(colors.c_bg_base())
+                    .bg(colors.c_primary())
             } else {
-                Style::default().fg(Color::White)
+                colors.text_primary()
             };
             let p = Paragraph::new(format!("[ {} ]", label)).style(style);
             frame.render_widget(p, button_area);
@@ -432,9 +439,11 @@ fn render_widget(
             hitboxes.push((id.clone(), toggle_area));
             let is_focused = focused_id == Some(id);
             let style = if is_focused {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(colors.c_bg_base())
+                    .bg(colors.c_primary())
             } else {
-                Style::default().fg(Color::White)
+                colors.text_primary()
             };
             let p = Paragraph::new(format!("[{}] {}", if *state { "X" } else { " " }, label))
                 .style(style);
@@ -462,24 +471,35 @@ fn render_widget(
 
             for (i, child) in children.iter().enumerate() {
                 if let Some(child_area) = chunks.get(i) {
-                    render_widget(child, frame, *child_area, _colors, focused_id, hitboxes);
+                    render_widget(child, frame, *child_area, colors, focused_id, hitboxes);
                 }
             }
         }
-        LuaWidget::Clock { format, color: _ } => {
+        LuaWidget::Clock { format, color } => {
             let fmt_str = format.as_deref().unwrap_or("%H:%M:%S");
             let time_str = chrono::Local::now().format(fmt_str).to_string();
-            let p = Paragraph::new(time_str).alignment(Alignment::Right);
+            let mut style = colors.text_dim();
+            if let Some(c_str) = color
+                && let Some(c) = parse_color(c_str)
+            {
+                style = style.fg(c);
+            }
+            let p = Paragraph::new(time_str).style(style).alignment(Alignment::Right);
             frame.render_widget(p, area);
         }
         LuaWidget::Gauge {
             label,
             ratio,
-            color: _,
+            color,
         } => {
+            let gauge_fg = if let Some(c_str) = color {
+                parse_color(c_str).unwrap_or_else(|| colors.c_primary())
+            } else {
+                colors.c_primary()
+            };
             let mut gauge = Gauge::default()
-                .block(Block::default().borders(Borders::ALL))
-                .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
+                .block(Block::default().borders(Borders::ALL).border_style(colors.border_muted()))
+                .gauge_style(Style::default().fg(gauge_fg).bg(colors.c_bg_surface0()))
                 .ratio((*ratio).clamp(0.0, 1.0));
             if let Some(l) = label {
                 gauge = gauge.label(l.as_str());
@@ -497,21 +517,25 @@ fn render_widget(
             let is_focused = id.as_deref() == focused_id;
             let mut list_items = Vec::new();
             for (i, item) in items.iter().enumerate() {
-                let mut style = Style::default();
-                if Some(i) == *selected {
-                    style = style.fg(Color::Black).bg(Color::Cyan);
-                }
+                let style = if Some(i) == *selected {
+                    colors.selected_bg_style()
+                } else {
+                    colors.text_primary()
+                };
                 list_items.push(ListItem::new(item.as_str()).style(style));
             }
-            let mut block = Block::default().borders(Borders::ALL);
-            if is_focused {
-                block = block.border_style(Style::default().fg(Color::Cyan));
-            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if is_focused {
+                    colors.border_focus()
+                } else {
+                    colors.border_muted()
+                });
             let list = List::new(list_items).block(block);
             frame.render_widget(list, area);
         }
         LuaWidget::Paragraph { content, wrap } => {
-            let mut p = Paragraph::new(content.as_str());
+            let mut p = Paragraph::new(content.as_str()).style(colors.text_primary());
             if *wrap {
                 p = p.wrap(Wrap { trim: true });
             }
@@ -521,7 +545,7 @@ fn render_widget(
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(title.as_deref().unwrap_or(""))
-                .border_style(Style::default().fg(Color::Cyan));
+                .border_style(colors.border_focus());
 
             let popup_w = 50u16.min(area.width.saturating_sub(2));
             let popup_h = 10u16.min(area.height.saturating_sub(2));
@@ -532,8 +556,41 @@ fn render_widget(
             frame.render_widget(Clear, popup_area); // Clear background
             let inner_area = block.inner(popup_area);
             frame.render_widget(block, popup_area);
-            render_widget(content, frame, inner_area, _colors, focused_id, hitboxes);
+            render_widget(content, frame, inner_area, colors, focused_id, hitboxes);
         }
+    }
+}
+
+/// Helper parsing color escape hatches (hex `#rrggbb` or named ANSI colors) for third-party Lua plugins.
+fn parse_color(s: &str) -> Option<ratatui::style::Color> {
+    use ratatui::style::Color;
+    let s = s.trim();
+    if let Some(hex) = s.strip_prefix('#')
+        && hex.len() == 6
+    {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        return Some(Color::Rgb(r, g, b));
+    }
+    match s.to_lowercase().as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "gray" | "grey" => Some(Color::Gray),
+        "darkgray" | "dark_gray" => Some(Color::DarkGray),
+        "lightred" | "light_red" => Some(Color::LightRed),
+        "lightgreen" | "light_green" => Some(Color::LightGreen),
+        "lightyellow" | "light_yellow" => Some(Color::LightYellow),
+        "lightblue" | "light_blue" => Some(Color::LightBlue),
+        "lightmagenta" | "light_magenta" => Some(Color::LightMagenta),
+        "lightcyan" | "light_cyan" => Some(Color::LightCyan),
+        "white" => Some(Color::White),
+        _ => None,
     }
 }
 
