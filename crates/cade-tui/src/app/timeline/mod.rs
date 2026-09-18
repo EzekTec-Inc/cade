@@ -47,6 +47,7 @@ pub(crate) struct TimelineKey {
     pub(crate) streaming: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct TimelineEntry<'a> {
     pub(crate) key: TimelineKey,
     pub(crate) item: TimelineItem<'a>,
@@ -84,10 +85,12 @@ pub(crate) enum TimelineItem<'a> {
     ToolCall {
         name: &'a str,
         preview: &'a str,
+        is_terminal: bool,
     },
     ToolResult {
         is_error: bool,
         content: &'a str,
+        is_terminal: bool,
     },
     LiveOutput {
         lines: &'a [String],
@@ -174,10 +177,15 @@ impl<'a> TimelineItem<'a> {
             },
             RenderLine::UserMessage(text) => Self::User(text),
             RenderLine::AssistantText(text) => Self::Assistant(text),
-            RenderLine::ToolCall { name, preview } => Self::ToolCall { name, preview },
+            RenderLine::ToolCall { name, preview } => Self::ToolCall {
+                name,
+                preview,
+                is_terminal: true,
+            },
             RenderLine::ToolResult { is_error, content } => Self::ToolResult {
                 is_error: *is_error,
                 content,
+                is_terminal: true,
             },
             RenderLine::LiveOutput {
                 lines,
@@ -235,12 +243,34 @@ impl<'a> TimelineItem<'a> {
             Self::Assistant(text) => {
                 render_assistant_item(text, width, expand_all, out, colors, nerd)
             }
-            Self::ToolCall { name, preview } => {
-                render_tool_call_item(name, preview, width, expand_all, out, colors, nerd)
-            }
-            Self::ToolResult { is_error, content } => {
-                render_tool_result_item(*is_error, content, width, expand_all, out, colors, nerd)
-            }
+            Self::ToolCall {
+                name,
+                preview,
+                is_terminal,
+            } => render_tool_call_item(
+                name,
+                preview,
+                *is_terminal,
+                width,
+                expand_all,
+                out,
+                colors,
+                nerd,
+            ),
+            Self::ToolResult {
+                is_error,
+                content,
+                is_terminal,
+            } => render_tool_result_item(
+                *is_error,
+                content,
+                *is_terminal,
+                width,
+                expand_all,
+                out,
+                colors,
+                nerd,
+            ),
             Self::LiveOutput {
                 lines,
                 max_visible,
@@ -543,10 +573,49 @@ pub(crate) fn prepare_timeline_entries(
                         | TimelineItemKind::Reasoning
                 );
 
+            let mut resolved_entry = *entry;
+            match entry.item {
+                TimelineItem::ToolCall { name, preview, .. } => {
+                    let has_subsequent_tool = entries[i + 1..]
+                        .iter()
+                        .take_while(|next| {
+                            !matches!(
+                                next.key.kind,
+                                TimelineItemKind::User | TimelineItemKind::Assistant
+                            )
+                        })
+                        .any(|next| next.key.kind == TimelineItemKind::ToolCall);
+                    resolved_entry.item = TimelineItem::ToolCall {
+                        name,
+                        preview,
+                        is_terminal: !has_subsequent_tool,
+                    };
+                }
+                TimelineItem::ToolResult {
+                    is_error, content, ..
+                } => {
+                    let has_subsequent_tool = entries[i + 1..]
+                        .iter()
+                        .take_while(|next| {
+                            !matches!(
+                                next.key.kind,
+                                TimelineItemKind::User | TimelineItemKind::Assistant
+                            )
+                        })
+                        .any(|next| next.key.kind == TimelineItemKind::ToolCall);
+                    resolved_entry.item = TimelineItem::ToolResult {
+                        is_error,
+                        content,
+                        is_terminal: !has_subsequent_tool,
+                    };
+                }
+                _ => {}
+            }
+
             // Compute a precise content hash of the inner item to enable content-aware caching
             let content_hash = {
                 let mut h = DefaultHasher::new();
-                entry.item.hash(&mut h);
+                resolved_entry.item.hash(&mut h);
                 h.finish()
             };
 
@@ -582,7 +651,7 @@ pub(crate) fn prepare_timeline_entries(
                 _ => width.saturating_sub(2), // 1 for gutter rail, 1 for padding
             };
             let mut lines = Vec::new();
-            entry.render_with_state(
+            resolved_entry.render_with_state(
                 effective_width,
                 expand_all,
                 expanded_items,
