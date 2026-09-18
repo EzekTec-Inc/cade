@@ -184,23 +184,49 @@ pub(crate) fn render_theme_picker(
         .min(max_visible);
     let h = (n + 4).clamp(5, area.height.saturating_sub(4));
 
-    let r = ratatui::layout::Rect {
-        x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
+    let show_preview = area.width >= 80;
+    let (picker_rect, preview_rect) = if show_preview {
+        let total_w = (area.width.saturating_sub(4)).min(115);
+        let left_w = (total_w * 54 / 100).max(42);
+        let right_w = total_w.saturating_sub(left_w);
+        let x = area.x + (area.width.saturating_sub(total_w)) / 2;
+        let y = area.y + (area.height.saturating_sub(h)) / 2;
+        (
+            ratatui::layout::Rect {
+                x,
+                y,
+                width: left_w,
+                height: h,
+            },
+            Some(ratatui::layout::Rect {
+                x: x + left_w,
+                y,
+                width: right_w,
+                height: h,
+            }),
+        )
+    } else {
+        (
+            ratatui::layout::Rect {
+                x: area.x + (area.width.saturating_sub(w)) / 2,
+                y: area.y + (area.height.saturating_sub(h)) / 2,
+                width: w,
+                height: h,
+            },
+            None,
+        )
     };
 
     // Dim backdrop behind the overlay
     super::helpers::render_backdrop(frame, area, colors);
 
-    frame.render_widget(Clear, r);
+    frame.render_widget(Clear, picker_rect);
 
     // Split into table area + filter box
     let [table_area, filter_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(4), Constraint::Length(3)])
-        .areas(r);
+        .areas(picker_rect);
 
     // -- Outer block
     let total = tp.filtered_indices.len();
@@ -341,6 +367,126 @@ pub(crate) fn render_theme_picker(
         .block(filter_block)
         .style(colors.text_primary());
     frame.render_widget(filter_text, filter_area);
+
+    // -- Visual Theme Preview Card (when wide enough)
+    if let Some(pr) = preview_rect {
+        let active_theme = if let Some(&orig_idx) = tp.filtered_indices.get(tp.cursor) {
+            &tp.themes[orig_idx]
+        } else {
+            colors
+        };
+        frame.render_widget(Clear, pr);
+        render_theme_preview(frame, pr, active_theme, colors);
+    }
+}
+
+/// Render a comprehensive visual preview card of a theme demonstrating
+/// typography, contrast, status cues, syntax, and tool card states.
+fn render_theme_preview(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    theme: &opaline::Theme,
+    colors: &ThemeColors,
+) {
+    use ratatui::widgets::{Block, Borders, Paragraph};
+
+    let preview_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(colors.c_border_style())
+        .title(Span::styled(
+            format!(" Preview: {} ", theme.meta.name),
+            Style::default()
+                .fg(theme.c_primary())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(theme.border_focus())
+        .style(Style::default().bg(theme.c_bg_base()));
+
+    let inner = preview_block.inner(area);
+    frame.render_widget(preview_block, area);
+
+    let contrast_ratio = if let (Some(fg), Some(bg)) = (
+        theme.try_color("text.primary"),
+        theme.try_color("bg.base"),
+    ) {
+        cade_core::resources::calculate_contrast_ratio((fg.r, fg.g, fg.b), (bg.r, bg.g, bg.b))
+    } else {
+        4.5
+    };
+
+    let mut lines = Vec::new();
+
+    // 1. Accessibility & Health Status
+    let contrast_span = if contrast_ratio >= 4.5 {
+        Span::styled(
+            format!("✓ WCAG AA ({:.1}:1)", contrast_ratio),
+            theme.success(),
+        )
+    } else {
+        Span::styled(
+            format!("! Low Contrast ({:.1}:1)", contrast_ratio),
+            theme.warning(),
+        )
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Accessibility: ", theme.text_muted()),
+        contrast_span,
+    ]));
+
+    // 2. Typography & Hierarchy
+    lines.push(Line::from(vec![
+        Span::styled("Text: ", theme.text_muted()),
+        Span::styled("Primary ", theme.text_primary()),
+        Span::styled("Muted ", theme.text_muted()),
+        Span::styled("Dim", theme.text_dim()),
+    ]));
+
+    // 3. Status Badges & Non-color glyph cues
+    lines.push(Line::from(vec![
+        Span::styled("Status: ", theme.text_muted()),
+        Span::styled("[✓] Ok ", theme.success()),
+        Span::styled("[!] Warn ", theme.warning()),
+        Span::styled("[✗] Error ", theme.error()),
+    ]));
+
+    // 4. Selection & Surfaces
+    lines.push(Line::from(vec![
+        Span::styled("Surface: ", theme.text_muted()),
+        Span::styled(" Base ", theme.style_base()),
+        Span::styled(" Panel ", theme.style_surface0()),
+        Span::styled(" Selected ", theme.selected_bg_style()),
+    ]));
+
+    // 5. Diff Rows
+    lines.push(Line::from(vec![
+        Span::styled("Diff: ", theme.text_muted()),
+        Span::styled("+ added ", theme.diff_added()),
+        Span::styled("- removed ", theme.diff_removed()),
+        Span::styled("  context", theme.diff_context()),
+    ]));
+
+    // 6. Code & Syntax Highlighting
+    lines.push(Line::from(vec![
+        Span::styled("Syntax: ", theme.text_muted()),
+        Span::styled("fn ", theme.syntax_keyword()),
+        Span::styled("run", theme.syntax_function()),
+        Span::styled("() -> ", theme.syntax_punctuation()),
+        Span::styled("Result", theme.syntax_type()),
+        Span::styled(" { ", theme.syntax_punctuation()),
+        Span::styled("\"ok\"", theme.syntax_string()),
+        Span::styled(" }", theme.syntax_punctuation()),
+    ]));
+
+    // 7. Tool Results
+    lines.push(Line::from(vec![
+        Span::styled("Tools: ", theme.text_muted()),
+        Span::styled(" bash ", theme.badge()),
+        Span::styled(" ✓ success ", theme.tool_success_bg_style()),
+        Span::styled(" ✗ fail ", theme.tool_error_bg_style()),
+    ]));
+
+    let p = Paragraph::new(lines).style(theme.style_base());
+    frame.render_widget(p, inner);
 }
 
 /// Calculate a sliding scroll window that keeps `cursor` visible within `visible` rows.
@@ -382,5 +528,28 @@ mod tests {
         assert_eq!(picker_scroll_window(10, 30, 8), (6, 14));
         // Cursor at bottom
         assert_eq!(picker_scroll_window(29, 30, 8), (22, 30));
+    }
+
+    #[test]
+    fn test_theme_swatches_and_contrast() {
+        let toml = r##"
+        [meta]
+        name = "preview-test"
+        variant = "dark"
+        [palette]
+        bg = "#111111"
+        fg = "#eeeeee"
+        [tokens]
+        "bg.base" = "bg"
+        "text.primary" = "fg"
+        "##;
+        let theme = opaline::load_from_str(toml, None).unwrap();
+        let swatches = theme_swatches(&theme);
+        assert_eq!(swatches.len(), 5, "theme_swatches should produce 5 color spans");
+
+        let fg = theme.try_color("text.primary").unwrap();
+        let bg = theme.try_color("bg.base").unwrap();
+        let ratio = cade_core::resources::calculate_contrast_ratio((fg.r, fg.g, fg.b), (bg.r, bg.g, bg.b));
+        assert!(ratio >= 4.5, "contrast ratio should be WCAG AA compliant");
     }
 }
