@@ -1309,6 +1309,36 @@ impl Repl {
         drop(_askpass_server);
         cade_core::askpass::clear();
 
+        // Restore terminal to normal mode (leaves alternate screen and disables raw mode)
+        ratatui::restore();
+
+        let agent_id = self.agent_id();
+        let agent_name = self.agent_name();
+        let in_tok = self.session_input_tokens.load(std::sync::atomic::Ordering::SeqCst);
+        let out_tok = self.session_output_tokens.load(std::sync::atomic::Ordering::SeqCst);
+
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        let _ = writeln!(stdout);
+        let _ = writeln!(stdout, "\x1b[38;2;140;140;140mSession ended.\x1b[0m");
+        let _ = writeln!(stdout, "  \x1b[1mAgent:\x1b[0m   {} ({})", agent_id, agent_name);
+        if in_tok > 0 || out_tok > 0 {
+            let _ = writeln!(
+                stdout,
+                "  \x1b[1mTokens:\x1b[0m  in: {}  out: {}  (total: {})",
+                in_tok,
+                out_tok,
+                in_tok + out_tok
+            );
+        }
+        let _ = writeln!(
+            stdout,
+            "  \x1b[1mResume:\x1b[0m  \x1b[36mcade --agent {}\x1b[0m",
+            agent_id
+        );
+        let _ = writeln!(stdout);
+        let _ = stdout.flush();
+
         Ok(())
     }
 }

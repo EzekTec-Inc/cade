@@ -44,6 +44,8 @@ learning-records/
 lessons/
 reference/
 swap-pane
+docs/architecture.md
+docs/architecture-llm-comparison.md
 
 # Development debris
 CADE_AUDIT.md

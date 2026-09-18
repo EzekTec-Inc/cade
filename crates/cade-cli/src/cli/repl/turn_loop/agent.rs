@@ -416,9 +416,19 @@ impl Repl {
 
         let messages = messages?;
 
-        let _is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
+        let is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
+
+        if is_cancelled {
+            let aid = self.agent_id();
+            let _ = self.app.lock().push(RenderLine::SystemMsg(format!(
+                "Turn detached via Ctrl+C. Agent: {aid} | Run persisting in background."
+            )));
+            let _ = self.app.lock().push(RenderLine::SystemMsg(
+                "Press Ctrl+C again or type /exit to end session.".to_string(),
+            ));
+        }
 
         let _ = messages;
 
