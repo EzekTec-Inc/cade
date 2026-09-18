@@ -748,6 +748,34 @@ impl CadeApiClient {
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
 
+    pub async fn steer_subagent(
+        &self,
+        id: &str,
+        message: &str,
+    ) -> Result<serde_json::Value, String> {
+        let path = format!("/v1/subagents/{}/steer", id);
+        let body = serde_json::json!({ "message": message });
+        let res = api_request("POST", &path, Some(&body.to_string()), &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn swap_subagent_model(
+        &self,
+        id: &str,
+        model: &str,
+    ) -> Result<serde_json::Value, String> {
+        let path = format!("/v1/subagents/{}/model", id);
+        let body = serde_json::json!({ "model": model });
+        let res = api_request("POST", &path, Some(&body.to_string()), &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
+    pub async fn cancel_run(&self, run_id: &str) -> Result<serde_json::Value, String> {
+        let path = format!("/v1/runs/{}/cancel", run_id);
+        let res = api_request("POST", &path, None, &self.api_key).await?;
+        serde_json::from_str(&res).map_err(|e| e.to_string())
+    }
+
     pub async fn list_workflows(&self) -> Result<Vec<cade_api_types::WorkflowSummary>, String> {
         let res = api_request("GET", "/v1/workflows", None, &self.api_key).await?;
         let val: serde_json::Value = serde_json::from_str(&res).map_err(|e| e.to_string())?;

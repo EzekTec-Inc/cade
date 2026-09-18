@@ -111,10 +111,18 @@ impl IsolatedWorkspace {
         &self.primary_dir
     }
 
+    /// Global serialization mutex preventing concurrent git index.lock collisions
+    /// when multiple parallel subagents merge back into the primary workspace simultaneously.
+    const fn git_mutex() -> &'static tokio::sync::Mutex<()> {
+        static MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        &MUTEX
+    }
+
     /// Scan the temporary directory and safely copy all modified or new files
     /// back to the primary workspace, acquiring exclusive file locks dynamically
     /// to prevent concurrent write collisions.
     pub async fn merge_back(&self) -> io::Result<()> {
+        let _git_lock = Self::git_mutex().lock().await;
         if let Some(ref branch) = self.git_branch {
             let temp_path = self.temp_dir.path();
 

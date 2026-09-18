@@ -1372,18 +1372,29 @@ pub fn write_back_subagent_memory(db: &Db, subagent_id: &str, parent_agent_id: &
             ))
         };
 
-        if crate::sqlite::upsert_memory_block_typed(
-            db,
-            parent_agent_id,
-            &parent_label,
-            &fact.value,
-            desc.as_deref(),
-            None,
-            Some(&fact.memory_type),
-            Some(fact.confidence),
-        )
-        .is_ok()
-        {
+        let mut success = false;
+        let mut delay_ms = 5;
+        for _attempt in 0..5 {
+            if crate::sqlite::upsert_memory_block_typed(
+                db,
+                parent_agent_id,
+                &parent_label,
+                &fact.value,
+                desc.as_deref(),
+                None,
+                Some(&fact.memory_type),
+                Some(fact.confidence),
+            )
+            .is_ok()
+            {
+                success = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            delay_ms *= 2;
+        }
+
+        if success {
             written += 1;
         }
     }

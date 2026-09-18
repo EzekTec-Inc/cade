@@ -20,6 +20,7 @@ pub mod memory_evidence;
 pub mod messages;
 pub mod knowledge;
 pub mod models;
+pub mod plugins;
 pub mod providers;
 pub mod proxy;
 pub mod run;
@@ -81,6 +82,23 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/subagents/{id}/steer",
             post(run::steer_subagent_handler),
+        )
+        .route(
+            "/v1/subagents/{id}/model",
+            post(run::swap_subagent_model_handler),
+        )
+        .route("/v1/plugins", get(plugins::list_plugins_handler))
+        .route(
+            "/v1/plugins/install",
+            post(plugins::install_plugin_handler),
+        )
+        .route(
+            "/v1/plugins/{id}",
+            delete(plugins::uninstall_plugin_handler),
+        )
+        .route(
+            "/v1/plugins/events",
+            get(plugins::stream_plugin_events_handler),
         )
         .route("/v1/workflows", get(workflows::list_workflows_handler))
         .route(
