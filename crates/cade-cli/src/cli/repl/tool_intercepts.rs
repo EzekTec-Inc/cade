@@ -244,7 +244,7 @@ impl Repl {
                         .resolve_model(def_opt.as_ref())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| {
-                            cade_ai::catalogue::fast_model_for_main_model(&main_model)
+                            cade_ai::catalogue::select_fast_subagent_model(&main_model, None)
                         });
 
                     let req = cade_agent::agent::client::CreateAgentRequest {

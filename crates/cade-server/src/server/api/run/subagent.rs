@@ -698,7 +698,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let mut model = cfg
         .resolve_model(def_opt)
         .map(|s| s.to_string())
-        .unwrap_or_else(|| parent_model.clone());
+        .unwrap_or_else(|| {
+            cade_ai::catalogue::select_fast_subagent_model(&parent_model, None)
+        });
 
     emitter
         .emit_started(&subagent_id, &task_preview, &cfg.mode, &model)
