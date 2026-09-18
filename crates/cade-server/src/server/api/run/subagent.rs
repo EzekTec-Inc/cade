@@ -192,7 +192,24 @@ pub(super) fn filter_subagent_tools(
                             | "conversation_search"
                             | "archival_memory_search"
                             | "recall"
-                    )
+                            | "fetch_doc"
+                    ) || (name.contains("__")
+                        && (name.contains("read")
+                            || name.contains("find")
+                            || name.contains("get")
+                            || name.contains("list")
+                            || name.contains("search")
+                            || name.contains("inspect")
+                            || name.contains("describe")
+                            || name.contains("show")
+                            || name.contains("view")
+                            || name.contains("check")
+                            || name.contains("status")
+                            || name.contains("select")
+                            || name.contains("ask")
+                            || name.contains("query")
+                            || name.contains("skeleton")
+                            || name.contains("extract")))
                 }
                 cade_agent::subagents::SubagentTools::List(names) => {
                     names.iter().any(|n| n == name)
@@ -1873,6 +1890,48 @@ pub(crate) fn is_failover_worthy_error(err_str: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use super::*;
+
+    #[test]
+    fn test_filter_subagent_tools_constitutional_inheritance() {
+        let schemas = vec![
+            serde_json::json!({ "name": "read_file" }),
+            serde_json::json!({ "name": "serena__search_for_pattern" }),
+            serde_json::json!({ "name": "serena__replace_content" }),
+            serde_json::json!({ "name": "desktop-commander-mcp__read_file" }),
+            serde_json::json!({ "name": "run_subagent" }),
+            serde_json::json!({ "name": "finish" }),
+        ];
+
+        let filtered = filter_subagent_tools(
+            schemas,
+            &cade_agent::subagents::SubagentTools::Readonly,
+            false,
+        );
+
+        let names: Vec<&str> = filtered
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"read_file"));
+        assert!(
+            names.contains(&"serena__search_for_pattern"),
+            "read/search MCP tools must pass in readonly mode"
+        );
+        assert!(
+            names.contains(&"desktop-commander-mcp__read_file"),
+            "desktop read MCP tools must pass"
+        );
+        assert!(
+            !names.contains(&"serena__replace_content"),
+            "mutating tools must be filtered in readonly mode"
+        );
+        assert!(!names.contains(&"run_subagent"), "nesting tools filtered");
+        assert!(
+            !names.contains(&"finish"),
+            "stale finish filtered for fresh injection"
+        );
+    }
 
     #[tokio::test]
     async fn test_workspace_cloning_and_copy_back() -> std::io::Result<()> {
