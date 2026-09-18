@@ -1,6 +1,5 @@
 //! Multi-Model Arena Matrix & Parallel Stream Multiplexer (PRD #128 / Issue #129).
 
-use crate::api_engine::ApiClientEngine;
 use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq)]
@@ -19,7 +18,7 @@ pub struct ArenaLaneState {
 #[component]
 pub fn ArenaView() -> Element {
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
-    let engine = use_context::<ApiClientEngine>();
+    let engine = crate::api_engine::ApiClientEngine::new(client);
 
     let agents_list = use_signal(Vec::<cade_api_types::AgentInfo>::new);
     let mut prompt = use_signal(String::new);
@@ -76,26 +75,16 @@ pub fn ArenaView() -> Element {
             {
                 ags.set(list.clone());
                 let mut current = lns();
-                if current.len() >= 2 && list.len() >= 2 {
-                    current[0].agent_id = list[0].id.clone();
-                    current[0].agent_name = list[0].name.clone();
-                    current[0].model = list[0]
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| "claude-3-5-sonnet".to_string());
-
-                    current[1].agent_id = list[1].id.clone();
-                    current[1].agent_name = list[1].name.clone();
-                    current[1].model = list[1]
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| "gpt-4o".to_string());
-                    lns.set(current);
-                } else if !current.is_empty() {
-                    current[0].agent_id = list[0].id.clone();
-                    current[0].agent_name = list[0].name.clone();
-                    lns.set(current);
+                for (idx, lane) in current.iter_mut().enumerate() {
+                    if let Some(agent) = list.get(idx).or_else(|| list.first()) {
+                        lane.agent_id = agent.id.clone();
+                        lane.agent_name = agent.name.clone();
+                        if let Some(ref m) = agent.model {
+                            lane.model = m.clone();
+                        }
+                    }
                 }
+                lns.set(current);
             }
         });
     });
@@ -153,7 +142,7 @@ pub fn ArenaView() -> Element {
         let active_lanes = lanes();
         let api = client();
         let mut lns_sig = lanes;
-        let mut running_sig = is_running_all;
+        let running_sig = is_running_all;
 
         // Reset lane contents
         let mut init_lanes = active_lanes.clone();
@@ -166,11 +155,14 @@ pub fn ArenaView() -> Element {
         }
         lns_sig.set(init_lanes);
 
+        let remaining = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(active_lanes.len()));
         for lane in active_lanes {
             let api_client = api.clone();
             let aid = lane.agent_id.clone();
             let lane_id = lane.id;
             let prompt_text = p.clone();
+            let rem = remaining.clone();
+            let mut running_done = running_sig;
 
             spawn(async move {
                 let start = js_sys::Date::now();
@@ -181,6 +173,9 @@ pub fn ArenaView() -> Element {
                         current[idx].status = "No agent selected".to_string();
                     }
                     lns_sig.set(current);
+                    if rem.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) <= 1 {
+                        running_done.set(false);
+                    }
                     return;
                 }
 
@@ -215,9 +210,11 @@ pub fn ArenaView() -> Element {
                     };
                 }
                 lns_sig.set(current);
+                if rem.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) <= 1 {
+                    running_done.set(false);
+                }
             });
         }
-        running_sig.set(false);
     };
 
     let active_lanes = lanes();
@@ -285,8 +282,44 @@ pub fn ArenaView() -> Element {
                                             span { class: "text-slate-100 font-semibold text-xs truncate", "Model Lane #{l_id}" }
                                             span { class: "text-[10px] font-mono text-amber-400 truncate", "🙈 Blind Identity" }
                                         } else {
-                                            span { class: "text-slate-100 font-semibold text-xs truncate", "{l_name}" }
-                                            span { class: "text-[10px] font-mono text-cyan-400 truncate", "{l_model}" }
+                                            div { class: "flex items-center space-x-2",
+                                                if !agents_list().is_empty() {
+                                                    select {
+                                                        class: "bg-[#141720] text-slate-100 text-xs font-semibold rounded border border-[#1e293b] px-2 py-0.5 outline-none cursor-pointer hover:border-slate-500 transition max-w-[140px]",
+                                                        value: "{lane.agent_id}",
+                                                        onchange: {
+                                                            let l_id = lane.id;
+                                                            let ags_snap = agents_list();
+                                                            let mut lns_mut = lanes;
+                                                            move |e: FormEvent| {
+                                                                let val = e.value();
+                                                                let mut cur = lns_mut();
+                                                                if let Some(target_lane) = cur.iter_mut().find(|l| l.id == l_id) {
+                                                                    target_lane.agent_id = val.clone();
+                                                                    if let Some(ag) = ags_snap.iter().find(|a| a.id == val) {
+                                                                        target_lane.agent_name = ag.name.clone();
+                                                                        if let Some(ref m) = ag.model {
+                                                                            target_lane.model = m.clone();
+                                                                        }
+                                                                    }
+                                                                }
+                                                                lns_mut.set(cur);
+                                                            }
+                                                        },
+                                                        for ag in agents_list() {
+                                                            option {
+                                                                key: "{ag.id}",
+                                                                value: "{ag.id}",
+                                                                selected: ag.id == lane.agent_id,
+                                                                "{ag.name}"
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    span { class: "text-slate-100 font-semibold text-xs truncate", "{l_name}" }
+                                                }
+                                                span { class: "text-[10px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/80 px-1.5 py-0.5 rounded truncate max-w-[130px]", "{l_model}" }
+                                            }
                                         }
                                     }
                                     div { class: "flex items-center space-x-2",
