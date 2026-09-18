@@ -451,6 +451,32 @@ mod tests {
         assert!(session.is_budget_exhausted().is_some());
     }
 
+    #[tokio::test]
+    async fn test_subagent_budget_permits_large_initial_prompt() {
+        // Budget of 5,000 generation tokens
+        let config = SubagentConfig::from_args(&json!({
+            "prompt": "Large prompt...",
+            "max_tokens_budget": 5000
+        }));
+        let mut session = SubagentSession::new(config, "parent-1")
+            .with_max_iters(10);
+
+        // Before any generations, budget is not exhausted regardless of prompt size
+        assert!(session.is_budget_exhausted().is_none());
+
+        // First turn produces 1,500 generated tokens
+        session.record_turn(1500, 2).await;
+        assert!(session.is_budget_exhausted().is_none());
+
+        // Second turn produces 2,000 generated tokens (total 3,500 < 5,000)
+        session.record_turn(2000, 1).await;
+        assert!(session.is_budget_exhausted().is_none());
+
+        // Third turn produces 2,000 generated tokens (total 5,500 > 5,000)
+        session.record_turn(2000, 1).await;
+        assert!(session.is_budget_exhausted().is_some());
+    }
+
     #[test]
     fn test_check_finish_tool_call() {
         let args = json!({

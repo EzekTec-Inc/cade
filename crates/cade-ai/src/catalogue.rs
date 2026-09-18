@@ -148,14 +148,6 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     // -- Google Gemini
     (
         "gemini",
-        "Gemini 3.6 Flash",
-        "gemini/gemini-3.6-flash",
-        "gemini",
-        8192,
-        1_048_576,
-    ),
-    (
-        "gemini",
         "Gemini 2.5 Pro",
         "gemini/gemini-2.5-pro",
         "gemini",
@@ -417,10 +409,75 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
         // - gemini-2.0-flash (actually fast — 2.5-pro is the large reasoning model).
         "anthropic" => "anthropic/claude-haiku-4-5".to_string(),
         "openai" => "openai/o4-mini".to_string(),
-        "gemini" => "gemini/gemini-3.6-flash".to_string(),
+        "gemini" => "gemini/gemini-2.0-flash".to_string(),
         "deepseek" => "deepseek/deepseek-chat".to_string(),
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
+}
+
+/// Inspect environment variables to detect which LLM providers have keys configured.
+pub fn available_env_providers() -> Vec<String> {
+    let mut provs = Vec::new();
+    let has_val = |k: &str| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false);
+
+    if has_val("GOOGLE_API_KEY") || has_val("GEMINI_API_KEY") {
+        provs.push("gemini".to_string());
+    }
+    if has_val("ANTHROPIC_API_KEY") || has_val("CLAUDE_API_KEY") {
+        provs.push("anthropic".to_string());
+    }
+    if has_val("OPENAI_API_KEY") {
+        provs.push("openai".to_string());
+    }
+    if has_val("DEEPSEEK_API_KEY") {
+        provs.push("deepseek".to_string());
+    }
+    provs
+}
+
+/// Select a fast subagent model given a parent model and optionally a list of available/authenticated providers.
+/// If `available_providers` is None, detects available providers from the environment.
+/// If the preferred fast model's provider is available (or if no providers can be detected),
+/// returns that provider's fast model. If the preferred provider is unconfigured,
+/// falls back to the best available configured provider's fast model.
+pub fn select_fast_subagent_model(
+    parent_model: &str,
+    available_providers: Option<&[String]>,
+) -> String {
+    let fast_default = fast_model_for_main_model(parent_model);
+    let env_providers;
+    let providers = match available_providers {
+        Some(p) => p,
+        None => {
+            env_providers = available_env_providers();
+            &env_providers[..]
+        }
+    };
+    if providers.is_empty() {
+        return fast_default;
+    }
+
+    let default_provider = fast_default.split('/').next().unwrap_or(&fast_default);
+    if providers.iter().any(|p| p.eq_ignore_ascii_case(default_provider)) {
+        return fast_default;
+    }
+
+    // Preferred fast model order across providers
+    const PREFERRED_FAST_ORDER: &[(&str, &str)] = &[
+        ("gemini", "gemini/gemini-2.0-flash"),
+        ("openai", "openai/gpt-4o-mini"),
+        ("anthropic", "anthropic/claude-haiku-4-5"),
+        ("deepseek", "deepseek/deepseek-chat"),
+        ("ollama", "ollama/qwen2.5-coder:7b"),
+    ];
+
+    for &(p, model) in PREFERRED_FAST_ORDER {
+        if providers.iter().any(|avail| avail.eq_ignore_ascii_case(p)) {
+            return model.to_string();
+        }
+    }
+
+    fast_default
 }
 
 // endregion: --- Tests
@@ -661,14 +718,29 @@ mod tests {
     }
 
     #[test]
-    fn fast_model_gemini_returns_3_6_flash() {
+    fn fast_model_gemini_returns_2_0_flash() {
         let result = super::fast_model_for_main_model("gemini/gemini-2.5-pro");
-        assert_eq!(result, "gemini/gemini-3.6-flash");
+        assert_eq!(result, "gemini/gemini-2.0-flash");
     }
 
     #[test]
     fn fast_model_unknown_provider_echoes_input() {
         let result = super::fast_model_for_main_model("ollama/llama3");
         assert_eq!(result, "ollama/llama3");
+    }
+
+    #[test]
+    fn select_fast_subagent_model_prefers_matching_provider_if_available() {
+        let providers = vec!["gemini".to_string(), "openai".to_string()];
+        let model = select_fast_subagent_model("gemini/gemini-2.5-pro", Some(&providers));
+        assert_eq!(model, "gemini/gemini-2.0-flash");
+    }
+
+    #[test]
+    fn select_fast_subagent_model_falls_back_when_preferred_provider_missing() {
+        // Parent model is Anthropic, but only Gemini and OpenAI keys are available
+        let providers = vec!["gemini".to_string(), "openai".to_string()];
+        let model = select_fast_subagent_model("anthropic/claude-sonnet-4", Some(&providers));
+        assert_eq!(model, "gemini/gemini-2.0-flash");
     }
 }
