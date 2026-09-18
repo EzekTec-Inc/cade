@@ -225,6 +225,8 @@ pub struct WorkflowSummary {
     pub name: String,
     pub description: String,
     pub steps_count: usize,
+    #[serde(default)]
+    pub steps: Vec<WorkflowStepDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<WorkflowRunSummary>,
 }

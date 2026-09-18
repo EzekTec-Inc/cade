@@ -35,6 +35,41 @@ pub async fn list_workflows_handler(State(state): State<AppState>) -> impl IntoR
     (StatusCode::OK, Json(json!({ "workflows": workflows }))).into_response()
 }
 
+/// GET /v1/workflows/:workflow_name — Get a workflow definition including its DAG steps.
+pub async fn get_workflow_handler(
+    Path(workflow_name): Path<String>,
+    State(_state): State<AppState>,
+) -> impl IntoResponse {
+    let builtins = WorkflowEngine::builtin_workflows();
+    if let Some(def) = builtins.into_iter().find(|w| w.name == workflow_name) {
+        return (StatusCode::OK, Json(json!(def))).into_response();
+    }
+
+    let path = std::path::Path::new(".cade/workflows").join(format!("{}.json", workflow_name));
+    if path.exists()
+        && let Ok(content) = std::fs::read_to_string(&path)
+        && let Ok(config) = serde_json::from_str::<WorkflowConfig>(&content)
+    {
+        let def = WorkflowDef {
+            name: config.name.clone(),
+            description: format!("Custom workflow: {}", config.name),
+            steps: vec![cade_api_types::WorkflowStepDef {
+                name: "run-agent".to_string(),
+                agent: Some(config.agent),
+                prompt: config.prompt,
+                depends_on: vec![],
+            }],
+        };
+        return (StatusCode::OK, Json(json!(def))).into_response();
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": format!("Workflow '{workflow_name}' not found") })),
+    )
+        .into_response()
+}
+
 /// POST /v1/workflows/:workflow_name/run — Dispatch a workflow run.
 pub async fn run_workflow_handler(
     Path(workflow_name): Path<String>,

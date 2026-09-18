@@ -84,7 +84,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/workflows", get(workflows::list_workflows_handler))
         .route(
             "/v1/workflows/{workflow_name}",
-            post(workflows::dispatch_workflow),
+            get(workflows::get_workflow_handler).post(workflows::dispatch_workflow),
         )
         .route(
             "/v1/workflows/{workflow_name}/run",

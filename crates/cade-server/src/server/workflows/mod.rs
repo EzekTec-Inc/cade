@@ -83,6 +83,7 @@ impl WorkflowEngine {
                 name: def.name,
                 description: def.description,
                 steps_count: def.steps.len(),
+                steps: def.steps,
                 last_run,
             });
         }

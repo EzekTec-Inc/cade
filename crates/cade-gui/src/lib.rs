@@ -120,6 +120,9 @@ fn App() -> Element {
     let store = use_memo(move || crate::types::AppSessionStore::new(app_state));
     use_context_provider(|| store);
 
+    let api_engine = crate::api_engine::ApiClientEngine::new(client);
+    use_context_provider(|| api_engine);
+
     // ── Startup: fetch first agent + start real-time SSE event loop ─────────
     use_effect(move || {
         let key = api_key;
