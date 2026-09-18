@@ -20,12 +20,24 @@ use crate::overlay::{
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
 use crate::subagent_tracker::{SubagentStatus, SubagentTracker};
 
+/// Interactive actions triggered from the Subagent Control Tray.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentTrayAction {
+    None,
+    Steer { subagent_id: String },
+    HotSwapModel { subagent_id: String },
+    PauseResume { subagent_id: String },
+    Kill { subagent_id: String },
+}
+
 pub struct SubagentInspectorOverlay {
     trackers: Vec<SubagentTracker>,
     selected: usize,
     transcript_scroll: usize,
     viewing_transcript: bool,
     dismissed: bool,
+    is_docked: bool,
+    pending_action: SubagentTrayAction,
 }
 
 impl SubagentInspectorOverlay {
@@ -36,7 +48,21 @@ impl SubagentInspectorOverlay {
             transcript_scroll: 0,
             viewing_transcript: false,
             dismissed: false,
+            is_docked: false,
+            pending_action: SubagentTrayAction::None,
         }
+    }
+
+    pub fn is_docked(&self) -> bool {
+        self.is_docked
+    }
+
+    pub fn set_docked(&mut self, docked: bool) {
+        self.is_docked = docked;
+    }
+
+    pub fn take_pending_action(&mut self) -> SubagentTrayAction {
+        std::mem::replace(&mut self.pending_action, SubagentTrayAction::None)
     }
 }
 
@@ -96,6 +122,37 @@ impl OverlayComponent for SubagentInspectorOverlay {
             (KeyCode::PageDown, _) => {
                 self.transcript_scroll = self.transcript_scroll.saturating_sub(20);
             }
+            (KeyCode::Char('d'), _) if !self.viewing_transcript => {
+                self.is_docked = !self.is_docked;
+            }
+            (KeyCode::Char('s'), _) | (KeyCode::Char('i'), _) if !self.viewing_transcript => {
+                if let Some(t) = self.trackers.get(self.selected) {
+                    self.pending_action = SubagentTrayAction::Steer {
+                        subagent_id: t.task_id.clone(),
+                    };
+                }
+            }
+            (KeyCode::Char('m'), _) if !self.viewing_transcript => {
+                if let Some(t) = self.trackers.get(self.selected) {
+                    self.pending_action = SubagentTrayAction::HotSwapModel {
+                        subagent_id: t.task_id.clone(),
+                    };
+                }
+            }
+            (KeyCode::Char(' '), _) if !self.viewing_transcript => {
+                if let Some(t) = self.trackers.get(self.selected) {
+                    self.pending_action = SubagentTrayAction::PauseResume {
+                        subagent_id: t.task_id.clone(),
+                    };
+                }
+            }
+            (KeyCode::Char('x'), _) if !self.viewing_transcript => {
+                if let Some(t) = self.trackers.get(self.selected) {
+                    self.pending_action = SubagentTrayAction::Kill {
+                        subagent_id: t.task_id.clone(),
+                    };
+                }
+            }
             _ => {}
         }
         OverlayInputResult::Consumed
@@ -108,10 +165,15 @@ impl OverlayComponent for SubagentInspectorOverlay {
 
 impl SubagentInspectorOverlay {
     fn render_list(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
+        let title = if self.is_docked {
+            " Subagent Control Tray [Docked] (d: undock · Esc: close) "
+        } else {
+            " Subagent Control Tray [Overlay] (d: dock · Esc: close) "
+        };
         let inner = render_overlay_shell(
             frame,
             area,
-            " Subagents (Enter: view output · Esc: close) ",
+            title,
             colors,
         );
 
@@ -137,6 +199,7 @@ impl SubagentInspectorOverlay {
                 } else {
                     Style::default().fg(colors.c_text_primary())
                 };
+                let approx_tokens = (t.output_lines * 40) / 1000 + 1;
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("[{status}] "),
@@ -158,8 +221,8 @@ impl SubagentInspectorOverlay {
                     ),
                     Span::styled(
                         format!(
-                            "  · {elapsed}s · {} tools · {} lines{tool}",
-                            t.tool_calls, t.output_lines
+                            "  · {elapsed}s · {} tools · ~{approx_tokens}k tok{tool}",
+                            t.tool_calls
                         ),
                         colors.text_muted(),
                     ),
@@ -179,7 +242,7 @@ impl SubagentInspectorOverlay {
             frame,
             footer,
             &format!(
-                "{n} subagents — ↑/↓ select · Enter open · Esc close",
+                "{n} subagents — ↑/↓ select · Enter open · s steer · m model · Space pause · x kill · d dock · Esc close",
                 n = self.trackers.len()
             ),
             colors,
@@ -292,5 +355,31 @@ mod tests {
             o.handle_input(key(KeyCode::Esc)),
             OverlayInputResult::Dismiss
         );
+    }
+
+    #[test]
+    fn hotkeys_trigger_subagent_actions() {
+        let mut o = SubagentInspectorOverlay::new(vec![tracker("task-42", "worker", &[])]);
+
+        // 's' triggers steer action
+        assert_eq!(o.handle_input(key(KeyCode::Char('s'))), OverlayInputResult::Consumed);
+        assert_eq!(o.take_pending_action(), SubagentTrayAction::Steer { subagent_id: "task-42".into() });
+
+        // 'm' triggers model hot-swap
+        assert_eq!(o.handle_input(key(KeyCode::Char('m'))), OverlayInputResult::Consumed);
+        assert_eq!(o.take_pending_action(), SubagentTrayAction::HotSwapModel { subagent_id: "task-42".into() });
+
+        // Space triggers pause/resume
+        assert_eq!(o.handle_input(key(KeyCode::Char(' '))), OverlayInputResult::Consumed);
+        assert_eq!(o.take_pending_action(), SubagentTrayAction::PauseResume { subagent_id: "task-42".into() });
+
+        // 'x' triggers kill
+        assert_eq!(o.handle_input(key(KeyCode::Char('x'))), OverlayInputResult::Consumed);
+        assert_eq!(o.take_pending_action(), SubagentTrayAction::Kill { subagent_id: "task-42".into() });
+
+        // 'd' toggles docking
+        assert!(!o.is_docked());
+        assert_eq!(o.handle_input(key(KeyCode::Char('d'))), OverlayInputResult::Consumed);
+        assert!(o.is_docked());
     }
 }

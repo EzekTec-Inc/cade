@@ -43,6 +43,13 @@ pub fn LiveView() -> Element {
         .unwrap_or_else(|| "—".to_string());
     let pending_approvals = (state.pending_approvals)();
 
+    let mut selected_run = use_signal(|| None::<serde_json::Value>);
+    let mut is_drawer_open = use_signal(|| false);
+    let mut steer_input = use_signal(String::new);
+    let mut model_input = use_signal(|| "gemini/gemini-2.0-flash".to_string());
+    let drawer_logs = use_signal(Vec::<String>::new);
+    let is_streaming_drawer = use_signal(|| false);
+
     rsx! {
         div { class: "flex-1 flex flex-col bg-[#040711] overflow-y-auto",
             // Header Bar
@@ -205,7 +212,42 @@ pub fn LiveView() -> Element {
                                                     }
                                                     td { class: "px-6 py-4 text-slate-400 truncate max-w-xs", "{conv}" }
                                                     td { class: "px-6 py-4 text-slate-400", "{created}" }
-                                                    td { class: "px-6 py-4 text-right",
+                                                    td { class: "px-6 py-4 text-right space-x-2",
+                                                        button {
+                                                            class: "px-3 py-1 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700/50 text-xs font-semibold cursor-pointer transition-colors",
+                                                            onclick: {
+                                                                let r_clone = r.clone();
+                                                                let rid_c = rid.clone();
+                                                                move |_| {
+                                                                    selected_run.set(Some(r_clone.clone()));
+                                                                    is_drawer_open.set(true);
+                                                                    let key_c = (state.api_key)();
+                                                                    let mut logs = drawer_logs;
+                                                                    let mut is_str = is_streaming_drawer;
+                                                                    logs.set(vec!["Following live run stream...".to_string()]);
+                                                                    let rid_sub = rid_c.clone();
+                                                                    spawn(async move {
+                                                                        is_str.set(true);
+                                                                        let _ = crate::api::stream_run(&key_c, &rid_sub, None, move |evt| {
+                                                                            let mut list = logs();
+                                                                            if let Some(c) = evt.content() {
+                                                                                list.push(format!("[prose] {c}"));
+                                                                            } else if let Some(t) = evt.tool_name() {
+                                                                                list.push(format!("[tool] {t}"));
+                                                                            } else if let Some(r) = evt.reasoning() {
+                                                                                list.push(format!("[thought] {r}"));
+                                                                            }
+                                                                            if list.len() > 200 {
+                                                                                list.remove(0);
+                                                                            }
+                                                                            logs.set(list);
+                                                                        }).await;
+                                                                        is_str.set(false);
+                                                                    });
+                                                                }
+                                                            },
+                                                            "Inspect"
+                                                        }
                                                         button {
                                                             class: "px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition-colors",
                                                             onclick: move |_| {
@@ -219,6 +261,153 @@ pub fn LiveView() -> Element {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Slide-Over Drawer for Subagent/Run Action & Stream
+            if is_drawer_open() && selected_run().is_some() {
+                {
+                    let run_val = selected_run().unwrap();
+                    let run_id = run_val["id"].as_str().unwrap_or("").to_string();
+                    let status = run_val["status"].as_str().unwrap_or("unknown").to_string();
+                    let agent_id = run_val["agent_id"].as_str().unwrap_or("").to_string();
+                    let run_id_steer = run_id.clone();
+                    let run_id_swap = run_id.clone();
+                    let run_id_cancel = run_id.clone();
+                    let key_steer = (state.api_key)();
+                    let key_swap = (state.api_key)();
+                    let key_cancel = (state.api_key)();
+                    let st = state;
+
+                    rsx! {
+                        div {
+                            class: "fixed inset-0 bg-black/60 backdrop-blur-xs z-40 transition-opacity",
+                            onclick: move |_| is_drawer_open.set(false),
+                        }
+                        div {
+                            class: "fixed top-0 right-0 h-full w-full max-w-xl bg-[#090d16] border-l border-slate-800 shadow-2xl z-50 flex flex-col font-mono text-xs",
+                            // Drawer Header
+                            header { class: "px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-[#0e1322]",
+                                div { class: "space-y-0.5",
+                                    h3 { class: "text-sm font-bold text-slate-100 uppercase tracking-wide flex items-center space-x-2",
+                                        span { "Subagent Control Tray" }
+                                    }
+                                    div { class: "text-[11px] text-slate-400 flex items-center space-x-2",
+                                        span { "ID: {run_id}" }
+                                        span { "·" }
+                                        span { class: "text-cyan-400 font-semibold", "{agent_id}" }
+                                    }
+                                }
+                                button {
+                                    class: "p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-100 text-sm cursor-pointer",
+                                    onclick: move |_| is_drawer_open.set(false),
+                                    "✕"
+                                }
+                            }
+
+                            // Drawer Action Bar
+                            div { class: "p-5 border-b border-slate-800 bg-[#0b101c] space-y-4",
+                                div { class: "space-y-1.5",
+                                    label { class: "text-[10px] uppercase text-slate-400 font-bold", "Supervisor Steering Guidance" }
+                                    div { class: "flex items-center space-x-2",
+                                        input {
+                                            class: "flex-1 px-3 py-1.5 rounded-lg bg-[#141926] border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500",
+                                            placeholder: "Inject steering guidance for next turn...",
+                                            value: "{steer_input}",
+                                            oninput: move |e| steer_input.set(e.value()),
+                                        }
+                                        button {
+                                            class: "px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold cursor-pointer transition-colors shadow",
+                                            onclick: move |_| {
+                                                let id = run_id_steer.clone();
+                                                let msg = (steer_input)().clone();
+                                                let k = key_steer.clone();
+                                                let st_c = st;
+                                                let mut input_sig = steer_input;
+                                                spawn(async move {
+                                                    let client = crate::api::CadeApiClient::new(k);
+                                                    match client.steer_subagent(&id, &msg).await {
+                                                        Ok(_) => {
+                                                            add_toast(&st_c, ToastLevel::Success, "Steered", format!("Guidance sent to {id}"));
+                                                            input_sig.set(String::new());
+                                                        }
+                                                        Err(e) => add_toast(&st_c, ToastLevel::Error, "Failed", e),
+                                                    }
+                                                });
+                                            },
+                                            "Steer"
+                                        }
+                                    }
+                                }
+
+                                div { class: "space-y-1.5",
+                                    label { class: "text-[10px] uppercase text-slate-400 font-bold", "Model Hot-Swap" }
+                                    div { class: "flex items-center space-x-2",
+                                        input {
+                                            class: "flex-1 px-3 py-1.5 rounded-lg bg-[#141926] border border-slate-700 text-slate-100 font-mono focus:outline-none focus:border-amber-500",
+                                            value: "{model_input}",
+                                            oninput: move |e| model_input.set(e.value()),
+                                        }
+                                        button {
+                                            class: "px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold cursor-pointer transition-colors shadow",
+                                            onclick: move |_| {
+                                                let id = run_id_swap.clone();
+                                                let m = (model_input)().clone();
+                                                let k = key_swap.clone();
+                                                let st_c = st;
+                                                spawn(async move {
+                                                    let client = crate::api::CadeApiClient::new(k);
+                                                    match client.swap_subagent_model(&id, &m).await {
+                                                        Ok(_) => {
+                                                            add_toast(&st_c, ToastLevel::Success, "Model Swapped", format!("Swapped {id} to {m}"));
+                                                        }
+                                                        Err(e) => add_toast(&st_c, ToastLevel::Error, "Failed", e),
+                                                    }
+                                                });
+                                            },
+                                            "Hot-Swap"
+                                        }
+                                    }
+                                }
+
+                                div { class: "flex items-center justify-between pt-1",
+                                    span { class: "text-slate-400 text-[11px]", "Status: " span { class: "text-slate-200 font-bold uppercase", "{status}" } }
+                                    button {
+                                        class: "px-3 py-1 rounded bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700/50 cursor-pointer text-xs font-semibold",
+                                        onclick: move |_| {
+                                            let id = run_id_cancel.clone();
+                                            let k = key_cancel.clone();
+                                            let st_c = st;
+                                            spawn(async move {
+                                                let client = crate::api::CadeApiClient::new(k);
+                                                match client.cancel_run(&id).await {
+                                                    Ok(_) => add_toast(&st_c, ToastLevel::Warning, "Cancelled", format!("Run {id} cancelled")),
+                                                    Err(e) => add_toast(&st_c, ToastLevel::Error, "Failed", e),
+                                                }
+                                            });
+                                        },
+                                        "Cancel Task"
+                                    }
+                                }
+                            }
+
+                            // Drawer Streaming Output
+                            div { class: "p-3 bg-[#0c101c] border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-400",
+                                span { "Live Streaming Activity Log" }
+                                if is_streaming_drawer() {
+                                    span { class: "text-emerald-400 animate-pulse flex items-center space-x-1.5",
+                                        span { class: "w-1.5 h-1.5 rounded-full bg-emerald-400" }
+                                        span { "Streaming" }
+                                    }
+                                }
+                            }
+                            div { class: "flex-1 overflow-y-auto p-4 bg-[#050811] space-y-1.5 font-mono text-slate-300 select-text",
+                                for (idx, line) in drawer_logs().iter().enumerate() {
+                                    div { key: "{idx}", class: "text-[11px] break-words whitespace-pre-wrap leading-relaxed", "{line}" }
                                 }
                             }
                         }
