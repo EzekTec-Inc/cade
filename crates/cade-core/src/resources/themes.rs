@@ -465,10 +465,10 @@ fn find_theme_in_dir(dir: &Path, name: &str) -> Option<opaline::Theme> {
     }
     // Direct path check: <name>.toml
     let direct = dir.join(format!("{name}.toml"));
-    if direct.is_file() {
-        if let Ok(theme) = load_theme(&direct) {
-            return Some(theme);
-        }
+    if direct.is_file()
+        && let Ok(theme) = load_theme(&direct)
+    {
+        return Some(theme);
     }
 
     // Scan directory for matching meta.name
@@ -481,10 +481,10 @@ fn find_theme_in_dir(dir: &Path, name: &str) -> Option<opaline::Theme> {
         paths.sort();
 
         for path in paths {
-            if let Ok(theme) = load_theme(&path) {
-                if theme.meta.name == name {
-                    return Some(theme);
-                }
+            if let Ok(theme) = load_theme(&path)
+                && theme.meta.name == name
+            {
+                return Some(theme);
             }
         }
     }
