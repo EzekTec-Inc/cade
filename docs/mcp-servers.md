@@ -80,6 +80,14 @@ CADE supports native TUI rendering of interactive UI components returned by MCP 
 
 This allows MCP servers to trigger rich interactive flows (such as form inputs, confirmation dialogs, or dynamic data tables) directly on the host machine without having to stream text continuously.
 
+## Web Dashboard: Tools & Approvals Interface
+
+In addition to terminal commands, CADE provides a dedicated **Tools & Approvals** interface in the web dashboard at `http://localhost:8284/dashboard`:
+
+- **MCP Gateway Tab**: Surfaces real-time connection states (`Ready`, `Failed` with diagnostic error, `Timeout`, `Disabled`), transport commands, tool counts, and expandable grids of all tools provided by each connected MCP server.
+- **Tool Catalog Tab**: Provides a searchable catalog of all active tools across native core tools, memory utilities, planning tools, and the MCP mesh (`GET /v1/tools`), with category filters (`Native Core`, `MCP Mesh`, `Memory & Context`, `Planning & Tasks`).
+- **Security Approvals Tab**: Displays pending human-in-the-loop permission requests with high-impact badges (`bash`, `delete_file`), formatted JSON payloads, and instant `✓ Approve` / `✕ Deny` buttons with optimistic UI updates.
+
 ## Built-in MCP servers (in-tree)
 
 | Server | Crate | Purpose |

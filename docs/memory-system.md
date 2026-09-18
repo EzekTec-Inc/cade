@@ -87,15 +87,27 @@ continuous session instead triggers an eager pass every 20 affected turns.
 - **Inflation guard** — if the new summary's character count exceeds the
   raw turns it summarises, consolidation is skipped (the summary would
   cost more than the dropped content).
+- **Volume-based gate override** — consolidation normally requires at least 20
+  stored message rows (`MIN_ROWS_FOR_CONSOLIDATION`). If a conversation is short
+  but tool-heavy with ≥ 12,000 dropped characters (~4k estimated tokens), the
+  gate is bypassed so vital tool output is preserved in the summary.
+- **Compaction telemetry** — `GET /v1/agents/:id/context_stats` surfaces
+  live compaction metrics including `consolidation_reason` (`omitted_turns`,
+  `budget_threshold`, `turn_count_threshold`) and `eager_consolidation_triggered`.
 - **Per-agent compaction model** — `/compaction-model anthropic/claude-3-5-haiku-latest`
   pins a cheap summariser. Default resolver picks the cheapest model in
   the same provider family as the agent's main model.
 
 ## Centralized Knowledge Graph (Structured Grounding)
 
-Rather than storing isolated, separate text memory blocks that must be constantly synchronized or merged, CADE implements a centralized, durable **Unified Knowledge Graph** stored in the SQLite database (`knowledge_edges` table):
+Rather than storing isolated, separate text memory blocks that must be constantly synchronized or merged, CADE implements a centralized, durable **Unified Knowledge Graph** stored in the SQLite database (`knowledge_edges` table, Migration 16):
 - **Durable Grounding**: All agents and active subagents read and write structured knowledge edges (e.g., `["main.rs", "calls", "setup_panic_hook"]`) directly to and from the centralized graph store. This acts as a single, concurrent, non-ephemeral source of truth.
-- **Semantic Vector Search**: When a knowledge edge is inserted, CADE calculates its semantic vector embedding and packs it as a binary f32 BLOB. CADE can then perform high-performance semantic vector searches using local cosine-similarity checks, retrieving relevant facts instantly.
+- **Semantic Vector Search**: When a knowledge edge is inserted, CADE calculates its semantic vector embedding and packs it as a binary f32 BLOB. CADE performs high-performance semantic vector searches using local cosine-similarity checks, retrieving relevant facts instantly.
+- **REST & GUI Management**:
+  - `GET /v1/knowledge/edges?entity=...&relation=...`: List all edges or filter by entity/relation.
+  - `POST /v1/knowledge/edges`: Create a new semantic edge (`entity`, `relation`, `target`).
+  - `DELETE /v1/knowledge/edges/:id`: Delete an edge by ID.
+  - Interactive visualization via the **Memory Blocks ➔ Knowledge Graph Triples** tab in the web dashboard, featuring live tabular management and a hardware-accelerated SVG force-directed orbit canvas.
 
 ## Memory-related env vars
 

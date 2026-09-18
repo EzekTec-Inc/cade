@@ -83,8 +83,10 @@ integrations, talk to the same server/API surface.
    - Loop until the LLM emits `finish` or the adaptive turn budget is exhausted. The budget starts at `MAX_TURNS=20` (override with `CADE_MAX_TURNS`), grows `+2` per distinct tool call, and is bounded by `CADE_MAX_TURNS_CEILING` (default `5 × MAX_TURNS`).
 3. Each tool result is persisted to `tool_executions` with `output_chars`
    and an Unicode-correct character count for cost telemetry.
-4. After the turn, the server may run **Sleeptime consolidation** if the
-   context window is ≥ 98% full — see [memory-system.md](memory-system.md).
+4. After the turn, the server marks the agent for **consolidation** if context
+   consumption exceeds **70% of available message budget** or omitted turns occur.
+   The Sleeptime worker runs consolidation after 20 seconds of inactivity, or eagerly
+   every 20 affected turns in continuous sessions — see [memory-system.md](memory-system.md).
 
 ## Subsystems
 
@@ -92,12 +94,16 @@ integrations, talk to the same server/API surface.
 |---|---|---|
 | In-Process Embedded & Team SDK | `cade-sdk` | [crates/cade-sdk/README.md](../crates/cade-sdk/README.md) |
 | Capability Mesh Seam | `cade-core::capabilities::mesh` | [ADR-0020](adr/0020-capability-mesh-unified-execution-seam.md) |
+| Unified Tool Pipeline | `cade-agent::tools::pipeline` | [permissions.md](permissions.md) |
 | Memory Distillation Engine | `cade-server::server::consolidation` | [memory-system.md](memory-system.md) |
+| Knowledge Graph Triples (Migration 16) | `cade-store::sqlite::knowledge` | [ADR-0002](adr/0002-sqlite-unified-knowledge-graph.md) |
 | Permissions & Consent Governor | `cade-core::permissions` | [permissions.md](permissions.md) |
 | SubagentSession Harness | `cade-agent::subagents::session` | [subagents.md](subagents.md) |
+| Multi-Agent Teams & Swarm Topology | `cade-agent::team`, `cade-server::api::teams` | [ADR-0015](adr/0015-multi-agent-team-coordination-and-git-branch-sandboxing.md) |
 | Hook engine | `cade-core::hooks` | [hooks.md](hooks.md) |
 | Skill discovery + loading | `cade-core::skills`, `cade-server` | [skills.md](skills.md) |
 | MCP integration & Stream Health | `cade-mcp`, `cade-agent::mcp` | [mcp-servers.md](mcp-servers.md) |
+| Headroom Token Compression Proxy | `http://127.0.0.1:8787` | [ADR-0023](adr/0023-gemini-and-headroom-proxy-integration.md) |
 | Desktop Commander Seam | `cade-desktop::desktop::commander` | [desktop-commander.md](desktop-commander.md) |
 | Plugin Engine Host | `cade-plugin::engine` | [plugin-development.md](plugin-development.md) |
 | Intelligent Tool Selection | `cade-ai::its` | [intelligent-tool-selection.md](intelligent-tool-selection.md) |
@@ -144,6 +150,10 @@ CADE utilizes robust, production-grade systems to ensure zero-panic stability, s
 19. **Real-Time Subagent Telemetry (`SubagentEventEmitter`)**: Streams typed events (`TurnStarted`, `ToolExecuting`, `Progress`, `ApprovalRequired`, `Finished`) asynchronously without blocking execution loops.
 20. **Unified DesktopCommander & PluginEngine Seams**: Cross-platform automation abstraction for screen capture and window control in `cade-desktop`, alongside deep package discovery, tarball extraction, and manifest validation in `cade-plugin`.
 21. **In-Process Zero-Daemon & Multi-Agent Squad Runtime (`cade-sdk`)**: Provides `EmbeddedSession` linking directly to `cade-store` SQLite and `cade-ai` `LlmRouter` in-process with zero background daemon overhead, paired with `TeamSession` programmatic squad orchestration and `CadeStreamEvent` strongly-typed reactive streams.
+22. **Unified ToolPipeline Execution Seam**: 100% of tool executions pass through `cade-agent::tools::ToolPipeline`. Integrates `PermissionManager`, `HookEngine` intercepts, and audit logging into a single execution point, emitting live SSE `tool_progress` notifications to keep frontends informed.
+23. **Live SQLite Knowledge Graph Triples (Migration 16)**: Centralized knowledge graph (`knowledge_edges` table) with binary vector embeddings and cosine similarity search. Exposed via `/v1/knowledge/edges` for cross-agent semantic grounding.
+24. **11-Phase TUI Viewport Streaming Engine**: Features vertical block accent rails `▎`, bounded 3-line rolling reasoning accordions, folding tool execution cards, windowed process tail buffers, and interactive plan checklists (`set_plan`/`UpdatePlan`).
+25. **Dynamic Responsive Web Dashboard**: The Dioxus web GUI at `/dashboard` features a collapsible sidebar (`w-16` vs `w-56`), fluid responsive Chat layout (`min-w-0`), multi-lane Model Arena with agent selectors, visual Workflows DAG canvas, and live Swarm Topology.
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in
@@ -183,7 +193,12 @@ When working on registered coding projects, local PreToolUse hooks enforce that 
 | POST | `/v1/agents/:id/links` | Sync and re-attach tools to session |
 | GET / POST / DELETE | `/v1/mcp/servers` | Manage MCP servers |
 | GET / POST | `/v1/backends` | Manage execution backends |
-| POST | `/v1/workflows/:workflow_name` | Webhook workflow dispatch loop with payload injection |
+| GET / POST | `/v1/knowledge/edges` | List / insert structured knowledge graph triples |
+| DELETE | `/v1/knowledge/edges/:id` | Delete knowledge edge by numeric ID |
+| GET | `/v1/teams` | Discovered multi-agent teams and member hierarchies |
+| GET | `/v1/swarm/topology` | Aggregated swarm topology, teams, and subagent nodes |
+| GET / POST | `/v1/workflows/:workflow_name` | Workflow definition with full DAG steps / dispatch run |
+| GET | `/v1/agents/:id/context_stats` | Compaction and context budget telemetry |
 | GET | `/v1/runs/:id` `/v1/runs/:id/stream` | Background run status |
 | GET / POST / DELETE | `/v1/providers` | LLM provider keys |
 | GET | `/v1/health` `/v1/config` | Server health |

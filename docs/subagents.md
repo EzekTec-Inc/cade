@@ -165,6 +165,45 @@ If a subagent is running a long-horizon task or is suspended awaiting permission
 *   The server intercepts this command via the `/subagents/:id/steer` endpoint, pushes it to the subagent's active instruction stream, and triggers a dynamic LLM redirection turn.
 *   This allows you to change constraints, correct early mistakes, or redirect subagents mid-flight without having to cancel, kill, or restart the entire task.
 
+## Multi-Agent Teams & Swarm Topology (ADR-0015)
+
+In addition to individual subagents, CADE supports **Specialist Teams** — groups of subagents organized under a designated leader to tackle complex multi-step pipelines:
+
+### 1. Team Configuration (`.cade/teams/<team>.toml`)
+```toml
+id = "qa-tester"
+name = "Quality Assurance Team"
+description = "Executes linting, unit tests, and security reviews in parallel"
+mode = "parallel"             # "coordinate" | "pipeline" | "parallel"
+max_iterations = 10
+leader_model = "anthropic/claude-sonnet-4-5"
+
+[[members]]
+id = "linter"
+name = "Clippy Auditor"
+role = "Rust compiler and linter specialist"
+tools = ["bash", "read_file"]
+status = "Ready"
+
+[[members]]
+id = "tester"
+name = "Integration Tester"
+role = "Executes cargo test and analyzes failure reports"
+tools = ["bash", "read_file", "write_file"]
+status = "Ready"
+```
+
+### 2. Team Discovery & Endpoints
+- Teams are auto-discovered from `~/.cade/teams/` (global) and `.cade/teams/` (project).
+- `GET /v1/teams` — lists all discovered teams, members, and coordination modes.
+- `GET /v1/swarm/topology` — returns aggregated swarm topology combining teams and standalone subagents.
+- Visual inspection via the **Swarm Topology** tab in the web dashboard at `/dashboard`.
+
+### 3. Inter-Agent Intercom Channel
+Subagents communicate through non-blocking IPC message passing via the `intercom` and `subagent_supervisor` tools:
+- `intercom(action="send", to="linter", message="Check crates/cade-core")`
+- `intercom(action="reply", replyTo="msg-123", message="0 warnings found")`
+
 ## Isolation & Harness Execution (`AgentHarness`)
 
 The **`AgentHarness`** module (`crates/cade-agent/src/subagents/harness.rs`) provides unified isolation and execution policies:

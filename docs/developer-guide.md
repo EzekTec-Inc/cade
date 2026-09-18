@@ -120,3 +120,27 @@ CADE standardizes provider endpoint resolution across all supported LLM provider
   3. Provider default cloud API endpoints.
 - **Transparent Local Proxying:**
   When launched with `cade-headroom`, the proxy exports `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` and `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. CADE automatically routes all OpenAI and Anthropic requests through the local Headroom proxy daemon, enabling prompt compression and prefix caching without requiring database mutation.
+
+## 14. Plugin Developer Tooling (Issue #194)
+
+CADE provides built-in CLI subcommands to streamline plugin development and publishing:
+- **`cade plugin init <name>`**: Scaffolds a compliant plugin directory structure with `cade-plugin.toml`, a sample skill, and `README.md`.
+- **`cade plugin validate [path]`**: Parses the manifest (`cade-plugin.toml` or `cade-plugin.json`), checks schema compliance, and verifies that all declared skills, subagents, and asset paths exist on disk.
+- **`cade plugin pack [path]`**: Validates the plugin, bundles it into a `.tar.gz` archive, and computes its SHA-256 integrity hash for marketplace submission.
+
+## 15. CapabilityMesh Unified Execution Seam (ADR-0020)
+
+To eliminate fragmented tool dispatching, CADE routes all tool requests through the `CapabilityMesh`:
+- Unifies **Built-in Native Tools**, **External MCP Servers**, and **Markdown Skills** behind a single trait interface.
+- Applies Intelligent Tool Selection (ITS) tagging (`["cade"]`, `["mcp"]`, `["core_mcp"]`) to protect core servers from token pruning.
+- Routes execution through `ToolPipeline`, ensuring that `PermissionManager` policies, `HookEngine` intercepts, and audit logs are enforced universally.
+
+## 16. Pre-Deployment Verification Protocol
+
+Before opening a pull request, tagging a release, or approving code modifications, developers must run the three-stage verification gate:
+```bash
+cargo check
+cargo test --all-features
+cargo clippy -- -D warnings
+```
+All pull requests must compile cleanly with zero warnings under `-D warnings`.
