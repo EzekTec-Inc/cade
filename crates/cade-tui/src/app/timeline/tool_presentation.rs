@@ -13,6 +13,49 @@ pub(crate) struct ToolPresentation {
     pub(crate) label: String,
 }
 
+/// Structural hierarchy branch position for a tool invocation in a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TreeBranch {
+    /// Intermediate tool invocation in a multi-tool sequence (`├─ `).
+    Intermediate,
+    /// Terminal or single tool invocation in a turn (`└─ `).
+    Terminal,
+}
+
+impl TreeBranch {
+    pub(crate) fn from_is_terminal(is_terminal: bool) -> Self {
+        if is_terminal {
+            Self::Terminal
+        } else {
+            Self::Intermediate
+        }
+    }
+
+    /// Tree connector box-drawing string anchoring the tool pill.
+    pub(crate) fn connector(&self) -> &'static str {
+        match self {
+            Self::Intermediate => "├─ ",
+            Self::Terminal => "└─ ",
+        }
+    }
+
+    /// Primary guide rail prefix anchoring the first line of the tool result.
+    pub(crate) fn guide_rail(&self) -> &'static str {
+        match self {
+            Self::Intermediate => "│  ",
+            Self::Terminal => "   ",
+        }
+    }
+
+    /// Indented continuation rail prefix for subsequent multiline result outputs.
+    pub(crate) fn continuation_rail(&self) -> &'static str {
+        match self {
+            Self::Intermediate => "│    ",
+            Self::Terminal => "     ",
+        }
+    }
+}
+
 pub(crate) fn resolve_tool_presentation(raw_name: &str) -> ToolPresentation {
     let icon_name = display_tool_name(raw_name);
 
@@ -201,5 +244,18 @@ mod tests {
             let ratio = cade_core::resources::calculate_contrast_ratio(fg_rgb, bg_rgb);
             assert!(ratio >= 3.0, "contrast ratio {ratio} should meet readability threshold");
         }
+    }
+
+    #[test]
+    fn test_tree_branch_connector_and_rails() {
+        let intermediate = TreeBranch::Intermediate;
+        assert_eq!(intermediate.connector(), "├─ ");
+        assert_eq!(intermediate.guide_rail(), "│  ");
+        assert_eq!(intermediate.continuation_rail(), "│    ");
+
+        let terminal = TreeBranch::Terminal;
+        assert_eq!(terminal.connector(), "└─ ");
+        assert_eq!(terminal.guide_rail(), "   ");
+        assert_eq!(terminal.continuation_rail(), "     ");
     }
 }

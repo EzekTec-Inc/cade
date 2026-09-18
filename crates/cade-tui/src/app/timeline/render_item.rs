@@ -15,7 +15,9 @@ pub(crate) fn render_separator_item(
     )));
 }
 
-use super::tool_presentation::{render_tool_activity_pill, resolve_tool_presentation};
+use super::tool_presentation::{
+    render_tool_activity_pill, resolve_tool_presentation, TreeBranch,
+};
 
 pub(crate) fn render_blank_item(out: &mut Vec<Line<'static>>) {
     out.push(Line::from(""));
@@ -408,7 +410,7 @@ pub(crate) fn render_live_status_item(
 pub(crate) fn render_tool_call_item(
     name: &str,
     preview: &str,
-    is_terminal: bool,
+    branch: TreeBranch,
     width: usize,
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
@@ -416,7 +418,7 @@ pub(crate) fn render_tool_call_item(
     nerd: bool,
 ) {
     let presentation = resolve_tool_presentation(name);
-    let tree_connector = if is_terminal { "└─ " } else { "├─ " };
+    let tree_connector = branch.connector();
     let pill_spans = render_tool_activity_pill(&presentation, colors, nerd);
     let pill_width = UnicodeWidthStr::width(
         pill_spans
@@ -456,7 +458,7 @@ pub(crate) fn render_tool_call_item(
 pub(crate) fn render_tool_result_item(
     is_error: bool,
     content: &str,
-    is_terminal: bool,
+    branch: TreeBranch,
     width: usize,
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
@@ -491,7 +493,7 @@ pub(crate) fn render_tool_result_item(
     };
     let inner_w = width.saturating_sub(12);
     let lns: Vec<&str> = content.lines().collect();
-    let guide_prefix = if is_terminal { "   " } else { "│  " };
+    let guide_prefix = branch.guide_rail();
 
     if lns.is_empty() {
         out.push(Line::from(vec![
@@ -597,7 +599,7 @@ pub(crate) fn render_tool_result_item(
                 ));
             } else {
                 spans.push(Span::styled(
-                    if is_terminal { "     " } else { "│    " },
+                    branch.continuation_rail(),
                     colors.border_muted(),
                 ));
             }
@@ -650,7 +652,7 @@ pub(crate) fn render_tool_result_item(
             };
             out.push(Line::from(vec![
                 Span::styled(
-                    if is_terminal { "     " } else { "│    " },
+                    branch.continuation_rail(),
                     colors.border_muted(),
                 ),
                 Span::styled(
@@ -1186,7 +1188,7 @@ mod tests {
     fn test_render_tool_result_item_single_line() {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
-        render_tool_result_item(false, "OK", true, 80, false, &mut out, &colors, false);
+        render_tool_result_item(false, "OK", TreeBranch::Terminal, 80, false, &mut out, &colors, false);
         assert!(out.len() >= 1);
         let text = out[0].to_string();
         assert!(text.contains("OK"), "expected 'OK', got {text:?}");
@@ -1197,7 +1199,7 @@ mod tests {
     fn test_render_tool_result_item_continuation_rail() {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
-        render_tool_result_item(false, "OK", false, 80, false, &mut out, &colors, false);
+        render_tool_result_item(false, "OK", TreeBranch::Intermediate, 80, false, &mut out, &colors, false);
         assert!(out.len() >= 1);
         let text = out[0].to_string();
         assert!(text.contains("│  "), "intermediate result uses continuation rail");
@@ -1211,7 +1213,7 @@ mod tests {
         render_tool_call_item(
             "serena__search_for_pattern",
             "Event::Resize",
-            false,
+            TreeBranch::Intermediate,
             80,
             false,
             &mut out,
@@ -1229,7 +1231,7 @@ mod tests {
         render_tool_call_item(
             "serena__search_for_pattern",
             "Event::Resize",
-            true,
+            TreeBranch::Terminal,
             80,
             false,
             &mut out_term,
@@ -1247,7 +1249,7 @@ mod tests {
         render_tool_call_item(
             "custom_mcp__archive_project",
             "a preview long enough to require truncation in a narrow terminal",
-            true,
+            TreeBranch::Terminal,
             30,
             false,
             &mut out,
@@ -1264,7 +1266,7 @@ mod tests {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
         let content = "Compiling cade-tui v0.2.6\nFinished dev profile\n1 warning emitted";
-        render_tool_result_item(false, content, true, 80, false, &mut out, &colors, false);
+        render_tool_result_item(false, content, TreeBranch::Terminal, 80, false, &mut out, &colors, false);
         assert!(
             out.len() >= 2,
             "collapsed multiline should be 1 summary line plus trailing spacer"
@@ -1286,7 +1288,7 @@ mod tests {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
         let content = "Compiling cade-tui v0.2.6\nFinished dev profile\n1 warning emitted";
-        render_tool_result_item(false, content, true, 80, true, &mut out, &colors, false);
+        render_tool_result_item(false, content, TreeBranch::Terminal, 80, true, &mut out, &colors, false);
         assert!(out.len() >= 6);
         let header = out[0].to_string();
         assert!(
@@ -1310,7 +1312,7 @@ mod tests {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
         let content = "error[E0308]: mismatched types\nexpected Color, found Style";
-        render_tool_result_item(true, content, true, 80, false, &mut out, &colors, false);
+        render_tool_result_item(true, content, TreeBranch::Terminal, 80, false, &mut out, &colors, false);
         assert!(out.len() >= 2, "errors must remain visible, not folded");
     }
 

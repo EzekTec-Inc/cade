@@ -6,6 +6,7 @@ pub(crate) mod tool_presentation;
 
 use super::*;
 pub use diff_view::{DiffLayout, DiffViewEngine};
+pub(crate) use tool_presentation::TreeBranch;
 
 // -- Timeline adapter
 
@@ -85,12 +86,12 @@ pub(crate) enum TimelineItem<'a> {
     ToolCall {
         name: &'a str,
         preview: &'a str,
-        is_terminal: bool,
+        branch: TreeBranch,
     },
     ToolResult {
         is_error: bool,
         content: &'a str,
-        is_terminal: bool,
+        branch: TreeBranch,
     },
     LiveOutput {
         lines: &'a [String],
@@ -180,12 +181,12 @@ impl<'a> TimelineItem<'a> {
             RenderLine::ToolCall { name, preview } => Self::ToolCall {
                 name,
                 preview,
-                is_terminal: true,
+                branch: TreeBranch::Terminal,
             },
             RenderLine::ToolResult { is_error, content } => Self::ToolResult {
                 is_error: *is_error,
                 content,
-                is_terminal: true,
+                branch: TreeBranch::Terminal,
             },
             RenderLine::LiveOutput {
                 lines,
@@ -246,11 +247,11 @@ impl<'a> TimelineItem<'a> {
             Self::ToolCall {
                 name,
                 preview,
-                is_terminal,
+                branch,
             } => render_tool_call_item(
                 name,
                 preview,
-                *is_terminal,
+                *branch,
                 width,
                 expand_all,
                 out,
@@ -260,11 +261,11 @@ impl<'a> TimelineItem<'a> {
             Self::ToolResult {
                 is_error,
                 content,
-                is_terminal,
+                branch,
             } => render_tool_result_item(
                 *is_error,
                 content,
-                *is_terminal,
+                *branch,
                 width,
                 expand_all,
                 out,
@@ -540,6 +541,20 @@ pub(crate) fn wrap_line(
     wrapped
 }
 
+/// Helper checking whether there is a subsequent tool call in the current turn
+/// before the next user or assistant message.
+fn has_subsequent_tool_in_turn(entries: &[TimelineEntry<'_>], start_idx: usize) -> bool {
+    entries[start_idx..]
+        .iter()
+        .take_while(|next| {
+            !matches!(
+                next.key.kind,
+                TimelineItemKind::User | TimelineItemKind::Assistant
+            )
+        })
+        .any(|next| next.key.kind == TimelineItemKind::ToolCall)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_timeline_entries(
     entries: &[TimelineEntry<'_>],
@@ -576,37 +591,21 @@ pub(crate) fn prepare_timeline_entries(
             let mut resolved_entry = *entry;
             match entry.item {
                 TimelineItem::ToolCall { name, preview, .. } => {
-                    let has_subsequent_tool = entries[i + 1..]
-                        .iter()
-                        .take_while(|next| {
-                            !matches!(
-                                next.key.kind,
-                                TimelineItemKind::User | TimelineItemKind::Assistant
-                            )
-                        })
-                        .any(|next| next.key.kind == TimelineItemKind::ToolCall);
+                    let has_subsequent = has_subsequent_tool_in_turn(entries, i + 1);
                     resolved_entry.item = TimelineItem::ToolCall {
                         name,
                         preview,
-                        is_terminal: !has_subsequent_tool,
+                        branch: TreeBranch::from_is_terminal(!has_subsequent),
                     };
                 }
                 TimelineItem::ToolResult {
                     is_error, content, ..
                 } => {
-                    let has_subsequent_tool = entries[i + 1..]
-                        .iter()
-                        .take_while(|next| {
-                            !matches!(
-                                next.key.kind,
-                                TimelineItemKind::User | TimelineItemKind::Assistant
-                            )
-                        })
-                        .any(|next| next.key.kind == TimelineItemKind::ToolCall);
+                    let has_subsequent = has_subsequent_tool_in_turn(entries, i + 1);
                     resolved_entry.item = TimelineItem::ToolResult {
                         is_error,
                         content,
-                        is_terminal: !has_subsequent_tool,
+                        branch: TreeBranch::from_is_terminal(!has_subsequent),
                     };
                 }
                 _ => {}
