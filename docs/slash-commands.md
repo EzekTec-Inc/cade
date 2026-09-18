@@ -97,7 +97,8 @@ See [memory-system.md](memory-system.md) for tier semantics.
 | `/disconnect <name>` | Stop and detach an MCP server |
 | `/skills [filter]` | Browse installed skills |
 | `/subagents` | `/agents-list` — list discovered subagents |
-| `/hooks` | Show configured hooks |
+| `/marketplace` | Browse, inspect, and install plugins from the central marketplace |
+| `/hooks` | Show configured hooks and trigger hot-reload |
 
 ## Cost, telemetry & status
 
@@ -121,6 +122,48 @@ See [memory-system.md](memory-system.md) for tier semantics.
 | `/todo` | Show contents of `.cade-todo.md` (static scratchpad) |
 | `/debug-last` | Dump the last assistant message as stored on the server |
 | `/providers` | `/provider-list` — list LLM providers |
+
+## Practical Command Examples
+
+### Example 1: Snapshotting and Restoring Working Tree State
+Before asking CADE to perform a massive or risky code refactor:
+```bash
+# 1. Create a snapshot commit
+/checkpoint before-major-refactor
+# Output: ✓ Checkpoint created: cp-8106c89f [before-major-refactor]
+
+# 2. If the agent makes an undesired change, immediately revert:
+/undo
+# Output: ✓ Restored working tree to checkpoint: cp-8106c89f
+```
+
+### Example 2: Inspecting Live Context Budget & Compaction Telemetry
+```bash
+/context
+```
+Output:
+```text
+Context Window Utilization:
+  Active Model: anthropic/claude-sonnet-4-5 (200k tokens)
+  Current Prompt: 18,420 tokens (9.2% of window)
+  Budget Pressure: 34% of message allocation (threshold: 70%)
+  Compaction State: Idle (last compaction: 14 turns ago)
+  Eager Trigger: 6 turns remaining until eager threshold
+```
+
+### Example 3: Dynamic Subagent Intervention
+When a long-running background subagent is exploring the wrong directory:
+```bash
+/steer sa_a94b Please stop inspecting node_modules; focus strictly on crates/cade-core/src
+```
+The subagent receives this instruction immediately as a system intervention message and adjusts course mid-flight.
+
+### Example 4: Manual Memory Compaction
+To force an immediate summarization and fact extraction pass:
+```bash
+/compact
+```
+The compaction model compresses older turns, updates `session_summary`, extracts durable project decisions into typed memory blocks, and restores prompt space.
 
 ## GUI dashboard parity
 

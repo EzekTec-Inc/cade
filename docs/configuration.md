@@ -182,6 +182,98 @@ The session cost cap is also available in settings files as
 
 Run `cade --help` for the full list.
 
+## Comprehensive Configuration Examples
+
+### Example 1: Enterprise Hardened Project (`.cade/settings.json`)
+Ideal for security-conscious teams, enforcing strict permissions, pre-tool safety hooks, transparent Headroom token compression, and core MCP servers:
+```json
+{
+  "permission_mode": "strict",
+  "auto_checkpoint_on_destructive": true,
+  "max_session_cost_usd": 5.00,
+  "default_model": "anthropic/claude-sonnet-4-5",
+
+  "permissions": {
+    "always_allow": [
+      "read_file",
+      "glob",
+      "grep",
+      "set_plan",
+      "UpdatePlan"
+    ],
+    "always_deny": [
+      "bash:rm -rf /",
+      "bash:git push --force",
+      "bash:docker system prune"
+    ]
+  },
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "bash",
+        "command": ".cade/hooks/block-dangerous-git.sh"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_file",
+        "command": ".cade/hooks/notify-on-mutation.sh"
+      }
+    ]
+  },
+
+  "mcpServers": {
+    "serena": {
+      "command": "serena",
+      "args": ["start-mcp"],
+      "core_server": true
+    },
+    "cade-rag": {
+      "command": "cade-rag-mcp",
+      "core_server": true
+    }
+  }
+}
+```
+
+### Example 2: Local-First / Zero-Cloud Developer Configuration
+Ideal for offline development with zero remote API calls and 100% private data isolation:
+```bash
+# ~/.bashrc or terminal environment
+export CADE_LLM_PROVIDER=ollama
+export CADE_DEFAULT_MODEL=ollama/qwen2.5-coder:7b
+export OLLAMA_BASE_URL=http://127.0.0.1:11434
+export CADE_PERMISSION_MODE=default
+export CADE_AUTO_START_SERVER=true
+```
+With `~/.cade/settings.json`:
+```json
+{
+  "default_model": "ollama/qwen2.5-coder:7b",
+  "permission_mode": "default",
+  "theme": "cyber-dark",
+  "execution": {
+    "backend": "local"
+  },
+  "permissions": {
+    "always_allow": ["read_file", "write_file", "edit_file", "glob", "grep"]
+  }
+}
+```
+
+### Example 3: Automated CI/CD Non-Interactive Pipeline
+For GitHub Actions, GitLab CI, or headless automation tasks:
+```bash
+#!/usr/bin/env bash
+export CADE_PERMISSION_MODE=yolo
+export CADE_DEFAULT_MODEL=anthropic/claude-haiku-4-5
+export CADE_MAX_TURNS=15
+export CADE_OUTPUT_FORMAT=json
+
+cade --prompt "Audit all dependencies in Cargo.lock and generate a vulnerability markdown table" > report.json
+```
+
 ## Settings hot-reload
 
 `/hooks` re-reads `settings.json` and re-applies hooks, permissions, and

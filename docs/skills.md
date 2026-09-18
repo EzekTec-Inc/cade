@@ -79,6 +79,51 @@ install_skill(url="https://github.com/...", scope="project")
 - Direct `SKILL.md` URLs
 - Use the `--skill <name>` selector when a repo contains multiple skills
 
+## Practical Authoring & Installation Examples
+
+### Example 1: Authoring a Project-Specific Skill
+Create `.cade/skills/graphql-conventions/SKILL.md`:
+```markdown
+---
+name: graphql-conventions
+description: Enforces schema naming conventions, pagination patterns, and query complexity guards in GraphQL APIs. Use when creating or modifying GraphQL resolvers and schemas.
+---
+
+# GraphQL Engineering Conventions
+
+When authoring or modifying GraphQL schemas and resolvers in this repository:
+1. Use PascalCase for Type names (`UserProfile`, `PaymentIntent`).
+2. Use camelCase for field names (`createdAt`, `billingAddress`).
+3. Always implement Relay-style cursor pagination (`first`, `after`, `edges`, `node`, `pageInfo`) on plural collections. Never use offset/limit on production queries.
+4. Enforce query depth limiting (max depth: 7).
+5. Ensure every mutation returns a payload object containing a nullable `errors` list.
+```
+
+### Example 2: Installing a Skill via Agent Tool
+During execution, ask CADE to install a skill from GitHub:
+```text
+> Please install the rust-mcp-server-generator skill from https://github.com/github/awesome-copilot
+```
+CADE invokes:
+```json
+{
+  "tool": "install_skill",
+  "arguments": {
+    "url": "https://github.com/github/awesome-copilot",
+    "skill": "rust-mcp-server-generator",
+    "scope": "project"
+  }
+}
+```
+The skill is downloaded and placed into `.cade/skills/rust-mcp-server-generator/SKILL.md`, immediately discoverable in the session.
+
+### Example 3: Invoking Skills Interactively via Slash Command
+Directly invoke a loaded skill with a prompt:
+```bash
+/conventional-commits Review git diff and format a commit message for the recent Axum route changes
+```
+CADE anchors the `conventional-commits` skill prompt into context and formats the response following the exact specification.
+
 ## Skill blacklist (per agent)
 
 Phase B introduced a per-agent skill blacklist. The agent's system prompt

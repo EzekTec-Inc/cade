@@ -50,6 +50,36 @@ Overlays open on top:
 - Model picker, theme picker, permissions, hooks
 - Pricing, stats, context breakdown
 
+## Interactive Operational Examples
+
+### Example 1: Dynamic Responsive Layout & Window Resizing
+CADE's dashboard dynamically adapts to small laptop displays, split screens, and ultra-wide monitors:
+- **Collapsible Sidebar**: Click the toggle button (`◀` / `▶`) at the top of the sidebar. In collapsed mode, the sidebar shrinks to `w-16` (64px) with centered icon navigation, giving 100% focus to your active workspace.
+- **Vertical Scroll Containment**: On displays with short vertical heights, the navigation links scroll smoothly (`overflow-y-auto`) while the brand header and bottom settings remain permanently pinned.
+- **Chat Threads Toggle**: Inside the **Chat** page, click the `💬` toggle in the top header to collapse or reveal the conversation threads sidebar, giving your message timeline maximum horizontal width without clipping.
+
+### Example 2: Managing Tools & Security Approvals
+Navigate to the **Tools & Approvals** tab (`🛠`):
+1. **Security Approvals**: When a background subagent requests permission to execute a high-impact operation (`bash`, `delete_file`), review its formatted JSON payload arguments and click **`✓ Approve`** or **`✕ Deny`** for instant zero-refresh processing.
+2. **Tool Catalog**: Search the live catalog (`GET /v1/tools`) across `Native Core`, `MCP Mesh`, `Memory & Context`, and `Planning & Tasks` categories.
+3. **MCP Gateway**: Inspect live server health states (`Ready`, `Failed` with diagnostic error, `Timeout`, `Disabled`) and explore the tools provided by each connected process.
+
+### Example 3: Visualizing and Dispatching Workflows DAG
+Navigate to the **Workflows DAG** tab (`🔄`):
+1. Select a pipeline (e.g. `ci-validation`) from the grid.
+2. The visual DAG canvas dynamically renders all sequential and fan-out steps with dependency connectors:
+   ```text
+   [ 1. cargo-check ] ────┬───➔ [ 2. cargo-clippy ]
+                          └───➔ [ 3. cargo-test   ]
+   ```
+3. Click **`▶ Run Pipeline`** to dispatch execution with real-time SSE progress indicators and step completion alerts.
+
+### Example 4: Managing Knowledge Graph Triples & SVG Canvas
+Navigate to the **Memory Blocks** tab (`🧠`):
+1. Open the **Knowledge Graph Triples** subtab to review structured facts stored in the SQLite database (`GET /v1/knowledge/edges`).
+2. Use the **`+ Insert Knowledge Edge`** inline form to create new grounding facts (`AuthEngine` ➔ `validates` ➔ `BearerToken`).
+3. Switch to the **Interactive Force-Directed Canvas** subtab to explore a live hardware-accelerated SVG orbit diagram dynamically centered around the CADE knowledge hub.
+
 ## Command palette
 
 Press `Ctrl+P`. Same triggers as the TUI palette (see

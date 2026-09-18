@@ -129,6 +129,53 @@ match outcome {
 Tests in `crates/cade-core/src/permissions/tests.rs` verify path
 protection, suspicious-bash detection, and granular allow/deny rules.
 
+## Practical Scenarios & Usage Examples
+
+### Scenario 1: Authorizing a Sensitive Tool Call in the Terminal
+When the agent requests to execute a potentially destructive tool (e.g. `bash` or `write_file` in Safe mode):
+```text
+╭─ Permission Request: bash ──────────────────────────────────────────────────╮
+│ Command: cargo test --all                                                   │
+│ [y] Allow Once  [s] Allow for Session  [a] Always Allow  [d] Deny           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+- Type **`y`**: Grants permission for this single tool call only.
+- Type **`s`**: Adds an in-memory rule (`add_session_allow`) so `cargo test` runs without prompting for the rest of this session.
+- Type **`a`**: Persists to `~/.cade/settings.json` permanently.
+- Type **`d`**: Rejects execution and triggers LLM recovery.
+
+### Scenario 2: Rejecting with Constructive Redirection (`/deny <id> [feedback]`)
+When an autonomous background subagent requests a risky tool call:
+```bash
+# Deny the tool call while providing redirection instructions:
+/deny app-0912 Do not rewrite the entire file; use edit_file to patch only the broken function.
+```
+CADE delivers your instructions directly into the subagent's active context as a system intervention message. The subagent revises its plan immediately without terminating the task.
+
+### Scenario 3: Granular File I/O Sandboxing (RBAC allowed_paths)
+Restrict a specialist worker to a frontend directory:
+```json
+{
+  "execution": {
+    "backend": "local"
+  },
+  "permissions": {
+    "allowed_paths": [
+      "crates/cade-gui/src",
+      "crates/cade-gui/dist"
+    ]
+  }
+}
+```
+If the agent attempts to run `read_file(path="crates/cade-server/src/main.rs")`, the dispatcher rejects the call with `[Blocked by RBAC: Path outside allowed_paths]`.
+
+### Scenario 4: Managing Approvals in the Web Dashboard
+In the web dashboard (`http://localhost:8284/dashboard`):
+1. Navigate to **Tools & Approvals ➔ Security Approvals**.
+2. If subagents request authorization, a crimson **Action Required** badge illuminates.
+3. Review formatted JSON arguments in a syntax-highlighted box.
+4. Click **`✓ Approve`** or **`✕ Deny`** for instant zero-refresh processing.
+
 ## Plan-mode + hooks combined
 
 A `PreToolUse` hook can supplement plan mode by blocking specific

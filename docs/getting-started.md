@@ -82,7 +82,54 @@ Type a message and hit Enter.
 | Save a checkpoint before risky edits | `/checkpoint pre-refactor` |
 | Quit | `/exit` or `Ctrl+C` twice |
 
-## 5. Common next steps
+## 5. Practical Walkthrough Examples
+
+### Example A: Interactive Coding & Auto-Verification
+Ask CADE to inspect code, make surgical edits, and prove correctness:
+```text
+> Find all unused imports in crates/cade-core/src/lib.rs, remove them, and run cargo check
+```
+CADE executes an autonomous tool turn:
+1. `read_file(path="crates/cade-core/src/lib.rs")` — inspects AST structure.
+2. `edit_file(path="crates/cade-core/src/lib.rs", old_string="...", new_string="...")` — cleans imports.
+3. `bash(command="cargo check")` — verifies clean compilation.
+4. Reports final diff and compiler exit code directly in the terminal.
+
+### Example B: Structured Multi-Step Tasks with the Plan Panel
+When giving CADE complex, multi-stage requests:
+```text
+> Refactor the error handling in crates/cade-plugin, add unit tests, and verify clippy
+```
+CADE immediately initializes an interactive plan checklist rendered in the TUI:
+```text
+╭─ Tasks (1 of 3 completed) ─────────────────────────────────────────────────╮
+│  ✓ 1. Add Error::IntegrityError to crates/cade-plugin/src/error.rs         │
+│  ● 2. Write regression tests in crates/cade-plugin/src/tests.rs            │
+│    3. Run cargo clippy -- -D warnings and format codebase                  │
+╰────────────────────────────────────────────────────────────────────────────╯
+```
+Press **`Ctrl+T`** at any time to toggle the plan checklist on or off.
+
+### Example C: Seamlessly Switching Between Cloud & Local Models
+Pivoting between reasoning frontiers and offline local models is instantaneous:
+```bash
+# Switch to Claude 3.5 Sonnet for complex architecture reasoning
+/model anthropic/claude-sonnet-4-5
+
+# Switch to local Ollama for zero-cost, private offline coding
+/model ollama/qwen2.5-coder:7b
+```
+
+### Example D: Launching and Using the Web Dashboard
+CADE serves a reactive WASM dashboard alongside the terminal shell:
+1. Open `http://localhost:8284/dashboard` in your browser.
+2. Press **`Cmd+K`** or **`Ctrl+K`** to open the Global Command Palette.
+3. Switch views:
+   - **Model Arena**: Compare two models side-by-side with live token speed gauges.
+   - **Workflows DAG**: View visual dependency graphs and click **Run Pipeline**.
+   - **Memory Studio**: Inspect live Knowledge Graph Triples from SQLite.
+
+## 6. Common next steps
 
 - **Set project context** — `/init` writes a starter `project` memory block
   by inspecting the current directory.

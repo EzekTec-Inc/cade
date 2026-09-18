@@ -89,6 +89,51 @@ descriptions compressed when not recently used:
 always keep their full descriptions so the LLM can reliably understand and call
 them.
 
+## Practical Configuration & Tuning Examples
+
+### Example 1: Protecting Mission-Critical MCP Tools with `core_server: true`
+When connecting tools you rely on continuously (e.g. AST refactoring with Serena or Git operations), mark them as `core_server`. This decorates their database tags with `core_mcp`, exempting them from description compression and guaranteeing priority retention even when capped under OpenAI's 128-tool limit:
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "serena",
+      "args": ["start-mcp"],
+      "core_server": true
+    },
+    "cade-rag": {
+      "command": "cade-rag-mcp",
+      "core_server": true
+    },
+    "third-party-weather": {
+      "command": "python",
+      "args": ["weather_mcp.py"],
+      "core_server": false
+    }
+  }
+}
+```
+- Tools from `serena` and `cade-rag` retain full schema fidelity across all turns.
+- Unused tools from `third-party-weather` compress to 80-character descriptions after 20 messages.
+
+### Example 2: Inspecting Tool Allocations in the TUI Sidebar
+During an active session, CADE renders live tool allocation and status in the sidebar:
+```text
+╭─ MCP Gateway (128 Tools) ──────────────────────────────────────────────────╮
+│  serena      ✓ ready (18) [core]                                           │
+│  cade-rag    ✓ ready (6)  [core]                                           │
+│  github      ✓ ready (26)                                                  │
+│  desktop     ✓ ready (28)                                                  │
+│  headroom    ✓ ready (3)  [core]                                           │
+╰────────────────────────────────────────────────────────────────────────────╯
+```
+
+### Example 3: Automatic Output Truncation in Long Turns
+When a command emits verbose logs (e.g. `cargo build` with thousands of warnings):
+- CADE enforces category-specific caps (4,096 chars for `bash`, 3,072 for `grep`).
+- In the TUI, the **Windowed Process Tail Buffer** renders the first line, collapses intermediate compiler noise into `… 42 intermediate lines (ctrl+o to expand)`, and shows the final result.
+- The LLM context window is protected from overflow while allowing the user to inspect the full uncompressed output via `<leader>o` (Tool Output Pager).
+
 ## Sequential Tool Classification
 
 In headless mode, meta tools are classified as sequential (cannot run in

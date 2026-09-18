@@ -143,7 +143,66 @@ Once the workflow is committed to your repository's default branch, you can trig
 
 ---
 
-## 3. Workflow Configuration Schema
+## 3. Multi-Step DAG Pipeline Configuration Examples
+
+### Example 1: Multi-Step CI/CD Verification Pipeline
+Define `.cade/workflows/ci-validation.json` with sequential and parallel dependency steps:
+```json
+{
+  "name": "ci-validation",
+  "description": "Automated build, lint, and unit test verification pipeline",
+  "steps": [
+    {
+      "name": "cargo-check",
+      "agent": "compiler-auditor",
+      "prompt": "Run cargo check across the workspace and report any compilation errors.",
+      "depends_on": []
+    },
+    {
+      "name": "cargo-clippy",
+      "agent": "linter-specialist",
+      "prompt": "Run cargo clippy -- -D warnings and fix all style/lint violations.",
+      "depends_on": ["cargo-check"]
+    },
+    {
+      "name": "cargo-test",
+      "agent": "test-runner",
+      "prompt": "Run cargo test --all-features and verify all unit and integration tests pass.",
+      "depends_on": ["cargo-check"]
+    }
+  ]
+}
+```
+
+### Example 2: Triggering and Monitoring via cURL & SSE Stream
+Trigger execution programmatically from any script or CI job:
+```bash
+# 1. Dispatch the pipeline run
+RUN_RESP=$(curl -s -X POST "http://localhost:8284/v1/workflows/ci-validation" \
+  -H "Authorization: Bearer $CADE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"branch": "feature/new-api", "trigger": "push"}')
+
+RUN_ID=$(echo "$RUN_RESP" | jq -r '.run_id')
+echo "Dispatched Run ID: $RUN_ID"
+
+# 2. Subscribe to live execution progress via Server-Sent Events (SSE)
+curl -N -s "http://localhost:8284/v1/runs/$RUN_ID/stream" \
+  -H "Authorization: Bearer $CADE_API_KEY"
+```
+
+### Example 3: Visual Inspection in the Web Dashboard
+In the web dashboard (`http://localhost:8284/dashboard`):
+1. Navigate to the **Workflows DAG** tab.
+2. Select **`ci-validation`** from the available pipeline list.
+3. The visual canvas renders the directed dependency graph with real-time status pulses:
+   ```text
+   [ 1. cargo-check ] ────┬───➔ [ 2. cargo-clippy ]
+                          └───➔ [ 3. cargo-test   ]
+   ```
+4. Click **`▶ Run Pipeline`** for live status tracking and step completion reports.
+
+## 4. Single-Agent Workflow Schema
 
 Each workflow is defined in `.cade/workflows/{workflow_name}.json`. Here is the structured JSON schema:
 

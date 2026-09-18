@@ -129,6 +129,80 @@ This project uses `.cade/hooks/rag-session-start.sh` to verify the
 workspace index is fresh and bump the agent into the right working
 directory. See the file for an end-to-end pattern.
 
+## Practical Hook Recipes
+
+### Recipe 1: PreToolUse Destructive Command Blocker
+Block force pushes, branch deletions, and dangerous shell commands:
+```bash
+#!/usr/bin/env bash
+# .cade/hooks/block-destructive.sh
+set -euo pipefail
+payload=$(cat)
+command=$(jq -r '.args.command // ""' <<< "$payload")
+
+if [[ "$command" =~ (git\ push\ .*(force|-f)|git\ branch\ -D|rm\ -rf\ /|mkfs) ]]; then
+  echo "Blocked by hook: Command '$command' is classified as destructive" >&2
+  exit 2
+fi
+exit 0
+```
+Configuration in `.cade/settings.json`:
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "bash",
+        "command": ".cade/hooks/block-destructive.sh"
+      }
+    ]
+  }
+}
+```
+
+### Recipe 2: PostToolUse Linter & Diagnostic Context Injector
+Automatically run a syntax check after code writes and inject compiler errors directly into the LLM's tool result:
+```bash
+#!/usr/bin/env bash
+# .cade/hooks/inject-diagnostics.sh
+set -euo pipefail
+
+# Run cargo check silently to capture compiler warnings/errors
+if ! diag=$(cargo check --message-format=short 2>&1); then
+  # Inject compiler feedback into LLM context
+  jq -n --arg d "$diag" '{"additionalContext": ("Compiler diagnostics:\n" + $d)}'
+  exit 0
+fi
+
+echo '{}'
+exit 0
+```
+
+### Recipe 3: Desktop Notification on Subagent Completion
+Send a native desktop notification when a background subagent finishes:
+```bash
+#!/usr/bin/env bash
+# .cade/hooks/notify-subagent.sh
+payload=$(cat)
+subagent=$(jq -r '.subagent // "worker"' <<< "$payload")
+outcome=$(jq -r '.outcome // "completed"' <<< "$payload")
+
+notify-send "CADE Subagent Finished" "Subagent [$subagent] finished with outcome: $outcome"
+exit 0
+```
+Configuration in `~/.cade/settings.json`:
+```json
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "command": "~/.cade/hooks/notify-subagent.sh"
+      }
+    ]
+  }
+}
+```
+
 ## Hot reload
 
 `/hooks` reloads from disk without restarting the session. MCP server
