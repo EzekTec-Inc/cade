@@ -161,8 +161,8 @@ impl TuiApp {
                     self.handle_bracketed_paste_text(&text);
                     self.draw()?;
                 }
-                Event::Resize(_, _) => {
-                    self.draw()?;
+                Event::Resize(_w, _h) => {
+                    self.handle_resize()?;
                 }
                 Event::Mouse(m) => {
                     let _ = self.handle_message_area_mouse_event(m)?;
@@ -456,6 +456,12 @@ impl TuiApp {
             }
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(None));
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                let _ = self.terminal.clear();
+                self.draw_dirty = true;
+                self.draw()?;
+                return Ok(None);
             }
             KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.editor.is_empty() {

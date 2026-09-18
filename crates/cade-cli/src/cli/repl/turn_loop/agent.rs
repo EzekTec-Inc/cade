@@ -347,6 +347,13 @@ impl Repl {
                                                         app.draw_dirty = true;
                                                         let _ = app.draw();
                                                     }
+                                                    // Ctrl+L — clear screen & force full redraw
+                                                    (KeyCode::Char('l') | KeyCode::Char('L'), KeyModifiers::CONTROL)
+                                                    | (KeyCode::Char('\x0c'), _) => {
+                                                        let _ = app.terminal.clear();
+                                                        app.draw_dirty = true;
+                                                        let _ = app.draw();
+                                                    }
                                                     // Ctrl+C — strictly graceful interrupt (stop only).
                                                     // Does NOT submit typed text (no steering).
                                                     // Leaves typed text in the editor.
@@ -391,6 +398,9 @@ impl Repl {
                                 Event::Paste(text) => {
                                     app.handle_bracketed_paste_text(&text);
                                     let _ = app.draw();
+                                }
+                                Event::Resize(_w, _h) => {
+                                    let _ = app.handle_resize();
                                 }
                                 _ => {}
                             }
