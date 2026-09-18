@@ -140,11 +140,12 @@ pub trait ThemeColorsExt {
 }
 
 fn resolve_fallback(theme: &ThemeColors, primary: &str, fallback: &str) -> RC {
-    let c = theme.color(primary);
-    if c.r == 128 && c.g == 128 && c.b == 128 {
-        theme.color(fallback).into()
-    } else {
+    if let Some(c) = theme.try_color(primary) {
         c.into()
+    } else if let Some(c) = theme.try_color(fallback) {
+        c.into()
+    } else {
+        theme.color(primary).into()
     }
 }
 
@@ -610,5 +611,45 @@ pub fn generate_syntect_theme(_colors: &ThemeColors) -> syntect::highlighting::T
             shadow: None,
         },
         scopes: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_neutral_gray_preserved_in_fallback_resolution() {
+        let toml = r##"
+        [meta]
+        name = "neutral-gray-tui"
+        variant = "dark"
+        [palette]
+        gray = "#808080"
+        accent = "#112233"
+        [tokens]
+        "bg.panel" = "gray"
+        "cade.user_message_bg" = "accent"
+        "##;
+        let theme = opaline::load_from_str(toml, None).expect("valid toml");
+        // c_bg_surface0 attempts "bg.panel" first with fallback "cade.user_message_bg"
+        let surface0 = theme.c_bg_surface0();
+        assert_eq!(surface0, RC::Rgb(128, 128, 128));
+    }
+
+    #[test]
+    fn test_fallback_selected_when_primary_token_absent() {
+        let toml = r##"
+        [meta]
+        name = "fallback-tui"
+        variant = "dark"
+        [palette]
+        accent = "#112233"
+        [tokens]
+        "cade.user_message_bg" = "accent"
+        "##;
+        let theme = opaline::load_from_str(toml, None).expect("valid toml");
+        let surface0 = theme.c_bg_surface0();
+        assert_eq!(surface0, RC::Rgb(0x11, 0x22, 0x33));
     }
 }
