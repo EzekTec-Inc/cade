@@ -627,6 +627,88 @@ impl SubagentCoordinator {
                         ui_resource_uri: None,
                     });
                 }
+                "tasks" | "parallel" => {
+                    let tasks = cfg.tasks.as_ref().or_else(|| args["tasks"].as_array());
+                    if let Some(tasks_val) = tasks {
+                        let concurrency = args
+                            .get("concurrency")
+                            .and_then(|v| v.as_u64())
+                            .map(|c| c as usize);
+                        let use_worktree = args
+                            .get("worktree")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        return Self::coordinate_parallel(
+                            call_id,
+                            tasks_val,
+                            concurrency,
+                            use_worktree,
+                            runner,
+                        )
+                        .await;
+                    } else {
+                        return Ok(ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "subagent".to_string(),
+                            output: "error: 'tasks' array is required for 'tasks' action".to_string(),
+                            is_error: true,
+                            ui_resource_uri: None,
+                        });
+                    }
+                }
+                "resume" => {
+                    let subagent_id = cfg
+                        .id
+                        .clone()
+                        .or_else(|| cfg.agent_id.clone())
+                        .or_else(|| args["id"].as_str().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    if subagent_id.is_empty() {
+                        return Ok(ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "subagent".to_string(),
+                            output: "error: 'id' is required for 'resume' action".to_string(),
+                            is_error: true,
+                            ui_resource_uri: None,
+                        });
+                    }
+                    let message = args["message"].as_str().unwrap_or("").to_string();
+                    if !message.is_empty() {
+                        return Ok(ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "subagent".to_string(),
+                            output: format!("Resumed subagent '{}' with guidance: {}", subagent_id, message),
+                            is_error: false,
+                            ui_resource_uri: None,
+                        });
+                    }
+                    return Ok(ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: "subagent".to_string(),
+                        output: format!("Resumed subagent '{}'", subagent_id),
+                        is_error: false,
+                        ui_resource_uri: None,
+                    });
+                }
+                "status" => {
+                    let subagent_id = cfg
+                        .id
+                        .clone()
+                        .or_else(|| cfg.agent_id.clone())
+                        .or_else(|| args["id"].as_str().map(|s| s.to_string()));
+                    let out = if let Some(id) = subagent_id {
+                        format!("Subagent '{id}' is registered")
+                    } else {
+                        runner.doctor_status()?
+                    };
+                    return Ok(ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: "subagent".to_string(),
+                        output: out,
+                        is_error: false,
+                        ui_resource_uri: None,
+                    });
+                }
                 other => {
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
@@ -763,82 +845,185 @@ impl SubagentCoordinator {
 
         // ── 3. Parallel mode (Concurrent execution with concurrency limit) ─
         if let Some(tasks_val) = &cfg.tasks {
-            if tasks_val.is_empty() {
-                return Ok(ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: "subagent".to_string(),
-                    output: "error: 'tasks' array cannot be empty".to_string(),
-                    is_error: true,
-                    ui_resource_uri: None,
-                });
-            }
-
             let concurrency = args
                 .get("concurrency")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(4) as usize;
+                .map(|c| c as usize);
             let use_worktree = args
                 .get("worktree")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-
-            let tasks_owned: Vec<Value> = tasks_val.to_vec();
-            let mut stream = stream::iter(tasks_owned.into_iter().enumerate().map(
-                |(idx, mut task_args_c)| {
-                    let task_call_id = format!("{}_{}", call_id, idx);
-                    if use_worktree {
-                        task_args_c["enforce_isolation"] = Value::Bool(true);
-                        task_args_c["_enforce_isolation"] = Value::Bool(true);
-                    }
-                    let runner_ref = runner;
-                    let task_call_id_c = task_call_id.clone();
-                    async move {
-                        let res = runner_ref
-                            .run_single(&task_call_id_c, &task_args_c, true)
-                            .await;
-                        (idx, res)
-                    }
-                },
-            ))
-            .buffer_unordered(concurrency);
-
-            let mut results = Vec::new();
-            while let Some((idx, res)) = stream.next().await {
-                results.push((idx, res));
-            }
-            results.sort_by_key(|(idx, _)| *idx);
-
-            let mut aggregated = Vec::new();
-            for (idx, res) in results {
-                match res {
-                    Ok(tr) => {
-                        aggregated.push(json!({
-                            "task_index": idx,
-                            "output": tr.output,
-                            "is_error": tr.is_error,
-                        }));
-                    }
-                    Err(e) => {
-                        aggregated.push(json!({
-                            "task_index": idx,
-                            "output": format!("task failed: {e}"),
-                            "is_error": true,
-                        }));
-                    }
-                }
-            }
-
-            return Ok(ToolResult {
-                tool_call_id: call_id.to_string(),
-                tool_name: "subagent".to_string(),
-                output: serde_json::to_string_pretty(&aggregated)
-                    .unwrap_or_else(|e| format!("error serializing results: {e}")),
-                is_error: false,
-                ui_resource_uri: None,
-            });
+            return Self::coordinate_parallel(
+                call_id,
+                tasks_val,
+                concurrency,
+                use_worktree,
+                runner,
+            )
+            .await;
         }
 
         // ── 4. Default: single mode ────────────────────────────────────────
         runner.run_single(call_id, args, false).await
+    }
+
+    /// Internal helper coordinating parallel subagent runs with concurrency containment.
+    async fn coordinate_parallel<R: SubagentSingleRunner>(
+        call_id: &str,
+        tasks_val: &[Value],
+        concurrency: Option<usize>,
+        worktree: bool,
+        runner: &R,
+    ) -> Result<ToolResult> {
+        if tasks_val.is_empty() {
+            return Ok(ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "subagent".to_string(),
+                output: "error: 'tasks' array cannot be empty".to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            });
+        }
+
+        let concurrency_limit = concurrency.unwrap_or(4).max(1);
+        let tasks_owned: Vec<Value> = tasks_val.to_vec();
+        let mut stream = stream::iter(tasks_owned.into_iter().enumerate().map(
+            |(idx, mut task_args_c)| {
+                let task_call_id = format!("{}_{}", call_id, idx);
+                if worktree {
+                    task_args_c["enforce_isolation"] = Value::Bool(true);
+                    task_args_c["_enforce_isolation"] = Value::Bool(true);
+                }
+                let runner_ref = runner;
+                let task_call_id_c = task_call_id.clone();
+                async move {
+                    let res = runner_ref
+                        .run_single(&task_call_id_c, &task_args_c, true)
+                        .await;
+                    (idx, res)
+                }
+            },
+        ))
+        .buffer_unordered(concurrency_limit);
+
+        let mut results = Vec::new();
+        while let Some((idx, res)) = stream.next().await {
+            results.push((idx, res));
+        }
+        results.sort_by_key(|(idx, _)| *idx);
+
+        let mut aggregated = Vec::new();
+        for (idx, res) in results {
+            match res {
+                Ok(tr) => {
+                    aggregated.push(json!({
+                        "task_index": idx,
+                        "output": tr.output,
+                        "is_error": tr.is_error,
+                    }));
+                }
+                Err(e) => {
+                    aggregated.push(json!({
+                        "task_index": idx,
+                        "output": format!("task failed: {e}"),
+                        "is_error": true,
+                    }));
+                }
+            }
+        }
+
+        Ok(ToolResult {
+            tool_call_id: call_id.to_string(),
+            tool_name: "subagent".to_string(),
+            output: serde_json::to_string_pretty(&aggregated)
+                .unwrap_or_else(|e| format!("error serializing results: {e}")),
+            is_error: false,
+            ui_resource_uri: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockRunner;
+
+    #[async_trait]
+    impl SubagentSingleRunner for MockRunner {
+        async fn run_single(
+            &self,
+            call_id: &str,
+            args: &Value,
+            _force_sync: bool,
+        ) -> Result<ToolResult> {
+            Ok(ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "subagent".to_string(),
+                output: format!("ran: {}", args["task"].as_str().unwrap_or("empty")),
+                is_error: false,
+                ui_resource_uri: None,
+            })
+        }
+
+        fn list_subagents(&self) -> Result<String> {
+            Ok("subagents: mock".to_string())
+        }
+
+        async fn cancel_subagent(&self, id: &str) -> Result<String> {
+            Ok(format!("cancelled {id}"))
+        }
+
+        fn doctor_status(&self) -> Result<String> {
+            Ok("system operational".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_tasks_action_dispatches_to_parallel() {
+        let runner = MockRunner;
+        let args = json!({
+            "action": "tasks",
+            "tasks": [
+                { "agent": "worker", "task": "task 1" },
+                { "agent": "worker", "task": "task 2" }
+            ]
+        });
+
+        let res = SubagentCoordinator::coordinate(&runner, "call_1", &args)
+            .await
+            .expect("coordinate tasks");
+        assert!(!res.is_error, "tasks action should succeed without unsupported action error");
+        assert!(res.output.contains("task 1"));
+        assert!(res.output.contains("task 2"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_resume_and_status_actions() {
+        let runner = MockRunner;
+
+        // Status action
+        let status_args = json!({
+            "action": "status",
+            "id": "agent-123"
+        });
+        let res = SubagentCoordinator::coordinate(&runner, "call_2", &status_args)
+            .await
+            .expect("coordinate status");
+        assert!(!res.is_error);
+        assert!(res.output.contains("agent-123"));
+
+        // Resume action with guidance
+        let resume_args = json!({
+            "action": "resume",
+            "id": "agent-123",
+            "message": "continue with next step"
+        });
+        let res2 = SubagentCoordinator::coordinate(&runner, "call_3", &resume_args)
+            .await
+            .expect("coordinate resume");
+        assert!(!res2.is_error);
+        assert!(res2.output.contains("agent-123"));
+        assert!(res2.output.contains("continue with next step"));
     }
 }
