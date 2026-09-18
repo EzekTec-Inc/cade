@@ -80,6 +80,7 @@ pub struct AppState {
     pub active_stream: Signal<SafeAbortHandle>,
     pub parsed_messages: Signal<std::collections::HashMap<String, (String, Option<String>)>>,
     pub pending_approvals: Signal<Vec<serde_json::Value>>,
+    pub runs: Signal<Vec<serde_json::Value>>,
 }
 
 /// Helper: push a toast notification into global state.

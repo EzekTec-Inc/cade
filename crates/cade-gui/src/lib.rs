@@ -77,6 +77,7 @@ fn App() -> Element {
     let parsed_messages =
         use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
     let mut pending_approvals = use_signal(Vec::<serde_json::Value>::new);
+    let runs = use_signal(Vec::<serde_json::Value>::new);
     let mut show_palette = use_signal(|| false);
     let mut palette_query = use_signal(String::new);
 
@@ -95,6 +96,7 @@ fn App() -> Element {
     use_context_provider(|| active_stream);
     use_context_provider(|| parsed_messages);
     use_context_provider(|| pending_approvals);
+    use_context_provider(|| runs);
 
     let app_state = AppState {
         api_key,
@@ -111,6 +113,7 @@ fn App() -> Element {
         active_stream,
         parsed_messages,
         pending_approvals,
+        runs,
     };
     use_context_provider(|| app_state);
 
@@ -132,6 +135,8 @@ fn App() -> Element {
         let mut messages = messages;
         let mut active_conversation = active_conversation;
         let mut global_error = global_error;
+        let mut runs = runs;
+        let mut active_stream_id = active_stream_id;
 
         spawn(async move {
             // Wait until an API key is configured
@@ -154,6 +159,9 @@ fn App() -> Element {
                         let _ = api::list_conversations(&agent_id, &key())
                             .await
                             .map(|list| convs.set(list));
+                        let _ = api::list_agent_runs(&agent_id, &key())
+                            .await
+                            .map(|r| runs.set(r));
                     }
                 }
                 Err(e) => {
@@ -275,6 +283,127 @@ fn App() -> Element {
                                     let mut list = pending_approvals();
                                     list.retain(|a| a["id"].as_str() != Some(approval_id));
                                     pending_approvals.set(list);
+                                }
+                            }
+                            "run_started" => {
+                                let run_id = event["run_id"].as_str().unwrap_or("").to_string();
+                                let r_agent_id =
+                                    event["agent_id"].as_str().unwrap_or("").to_string();
+                                let r_conv_id = event["conversation_id"].as_str().map(String::from);
+
+                                if !run_id.is_empty() {
+                                    // 1. Update runs list in AppState
+                                    let mut r_list = runs();
+                                    if !r_list.iter().any(|r| r["id"].as_str() == Some(&run_id)) {
+                                        let now = js_sys::Date::now() as i64 / 1000;
+                                        r_list.insert(
+                                            0,
+                                            serde_json::json!({
+                                                "id": run_id.clone(),
+                                                "agent_id": r_agent_id.clone(),
+                                                "status": "running",
+                                                "conversation_id": r_conv_id.clone(),
+                                                "created_at": now,
+                                            }),
+                                        );
+                                        runs.set(r_list);
+                                    }
+
+                                    // 2. If this run is for the currently selected agent, sync conversation and stream
+                                    if let Some(curr) = selected()
+                                        && curr.id == r_agent_id
+                                    {
+                                        if active_conversation().is_none() && r_conv_id.is_some() {
+                                            active_conversation.set(r_conv_id.clone());
+                                        }
+
+                                        if active_stream_id() != Some(run_id.clone()) {
+                                            active_stream_id.set(Some(run_id.clone()));
+                                            let key_c = key();
+                                            let rid_c = run_id.clone();
+                                            let mut msgs_sig = messages;
+                                            let mut active_sid = active_stream_id;
+
+                                            spawn(async move {
+                                                let mut reasoning_acc = String::new();
+                                                let stream_msg_id = format!("live-{}", rid_c);
+
+                                                // Insert initial placeholder message for assistant stream if not present
+                                                {
+                                                    let mut list = msgs_sig();
+                                                    if !list.iter().any(|m| m.id == stream_msg_id) {
+                                                        list.push(cade_api_types::ChatMessage {
+                                                            id: stream_msg_id.clone(),
+                                                            role: "assistant".to_string(),
+                                                            content: serde_json::Value::String(
+                                                                String::new(),
+                                                            ),
+                                                            conversation_id: r_conv_id.clone(),
+                                                        });
+                                                        msgs_sig.set(list);
+                                                    }
+                                                }
+
+                                                let _ = api::stream_run(
+                                                    &key_c,
+                                                    &rid_c,
+                                                    None,
+                                                    move |stream_evt| {
+                                                        let mut list = msgs_sig();
+                                                        crate::chat_session::ChatSessionCoordinator::apply_stream_event(
+                                                            &mut list,
+                                                            &stream_msg_id,
+                                                            stream_evt,
+                                                            &mut reasoning_acc,
+                                                        );
+                                                        msgs_sig.set(list);
+                                                    },
+                                                )
+                                                .await;
+
+                                                if active_sid() == Some(rid_c) {
+                                                    active_sid.set(None);
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            "run_finished" => {
+                                let run_id = event["run_id"].as_str().unwrap_or("");
+                                let r_status = event["status"].as_str().unwrap_or("done");
+                                let r_agent_id = event["agent_id"].as_str().unwrap_or("");
+
+                                // 1. Update status in runs list
+                                let mut r_list = runs();
+                                for r in r_list.iter_mut() {
+                                    if r["id"].as_str() == Some(run_id) {
+                                        if let Some(obj) = r.as_object_mut() {
+                                            obj.insert(
+                                                "status".to_string(),
+                                                serde_json::json!(r_status),
+                                            );
+                                        }
+                                    }
+                                }
+                                runs.set(r_list);
+
+                                // 2. Refresh messages for current agent from server DB to sync final state
+                                if let Some(curr) = selected()
+                                    && curr.id == r_agent_id
+                                {
+                                    let key_c = key();
+                                    let aid_c = r_agent_id.to_string();
+                                    let cid_c = active_conversation();
+                                    let mut msgs_sig = messages;
+                                    spawn(async move {
+                                        let c = api::CadeApiClient::new(key_c);
+                                        if let Ok(list) =
+                                            c.get_messages(&aid_c, cid_c.as_deref()).await
+                                        {
+                                            msgs_sig.set(list);
+                                        }
+                                    });
                                 }
                             }
                             _ => {}

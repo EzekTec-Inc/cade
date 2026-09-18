@@ -5,20 +5,29 @@ use dioxus::prelude::*;
 #[component]
 pub fn LiveView() -> Element {
     let state = use_context::<AppState>();
-    let mut runs = use_signal(Vec::<serde_json::Value>::new);
+    let runs = state.runs;
     let mut is_fetching = use_signal(|| false);
 
-    // Fetch runs whenever selected agent changes
+    // Continuously sync runs while Live view is active, and refresh immediately when selected agent changes
     use_effect(move || {
         let key = (state.api_key)();
+        let mut runs_sig = state.runs;
         if let Some(agent) = (state.selected_agent)() {
             let aid = agent.id.clone();
             spawn(async move {
                 is_fetching.set(true);
                 if let Ok(r) = crate::api::list_agent_runs(&aid, &key).await {
-                    runs.set(r);
+                    runs_sig.set(r);
                 }
                 is_fetching.set(false);
+
+                // Polling heartbeat (2s) to ensure telemetry never desyncs during long turns
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(2000).await;
+                    if let Ok(r) = crate::api::list_agent_runs(&aid, &key).await {
+                        runs_sig.set(r);
+                    }
+                }
             });
         }
     });

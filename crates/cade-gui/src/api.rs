@@ -271,6 +271,19 @@ where
     Ok(())
 }
 
+/// Stream live events for a run, following it in real-time until completion.
+pub async fn stream_run<F>(
+    api_key: &str,
+    run_id: &str,
+    starting_after: Option<i64>,
+    on_event: F,
+) -> Result<(), String>
+where
+    F: FnMut(cade_api_types::StreamEvent),
+{
+    resume_run_stream(run_id, starting_after, api_key, on_event).await
+}
+
 // ── Conversations ─────────────────────────────────────────────────────────
 
 /// Fetch all conversations for an agent.
