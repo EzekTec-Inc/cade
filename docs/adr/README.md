@@ -26,3 +26,4 @@ This directory documents the significant architectural decisions made in the evo
 | [ADR-0021](0021-subagent-session-harness-and-lifecycle-sandboxing.md) | Subagent Session Harness and Lifecycle Sandboxing | Accepted | Autonomous Subagents |
 | [ADR-0022](0022-cade-gui-sequential-refactoring-and-zero-placeholder-contract.md) | CADE GUI Sequential Refactoring & Zero-Placeholder Contract | Accepted | GUI Architecture |
 | [ADR-0023](0023-gemini-and-headroom-proxy-integration.md) | Gemini and Headroom Proxy Integration Strategy | Accepted | AI Routing & Token Compression |
+| [ADR-0024](0024-timeline-tool-activity-tree-and-pill-margins.md) | Timeline Tool Activity Tree and Pill Margins | Accepted | TUI Presentation & Layout |
