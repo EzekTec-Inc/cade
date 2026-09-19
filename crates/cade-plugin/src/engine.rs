@@ -39,6 +39,9 @@ pub trait PluginEngine: Send + Sync {
     /// Install a plugin package from a remote URL or tarball into target directory.
     async fn install(&self, url: &str, plugin_id: &str) -> Result<PluginReport>;
 
+    /// Remove a project-local plugin by stable identifier and refresh the resolved registry.
+    fn uninstall(&self, plugin_id: &str) -> Result<PluginReport>;
+
     /// List all resolved plugin tools ready for agent execution.
     fn list_tools(&self) -> Vec<ResolvedPluginTool>;
 
@@ -135,6 +138,30 @@ impl PluginEngine for NativePluginEngine {
         })
     }
 
+    fn uninstall(&self, plugin_id: &str) -> Result<PluginReport> {
+        let plugin_dir = self.primary_install_dir.join(plugin_id);
+        if !plugin_dir.is_dir() {
+            return Err(Error::custom(format!("Unknown plugin: {plugin_id}")));
+        }
+
+        let manifest = crate::manifest::PluginManifest::load(&plugin_dir)?;
+        std::fs::remove_dir_all(&plugin_dir)?;
+        let fresh_registry = PluginRegistry::discover(&self.search_dirs);
+        *self.registry.write() = fresh_registry;
+
+        Ok(PluginReport {
+            id: plugin_id.to_string(),
+            name: manifest.name,
+            version: manifest.version.unwrap_or_else(|| "0.0.0".to_string()),
+            scope: "project".to_string(),
+            status: "removed".to_string(),
+            diagnostic: None,
+            tools_count: manifest.tools.len(),
+            skills_count: manifest.skills.len(),
+            mcp_servers_count: manifest.mcp_servers.len(),
+        })
+    }
+
     fn list_tools(&self) -> Vec<ResolvedPluginTool> {
         self.registry.read().list_resolved_tools()
     }
@@ -209,6 +236,16 @@ impl PluginEngine for MockPluginEngine {
         Ok(self.canned_report.clone())
     }
 
+    fn uninstall(&self, plugin_id: &str) -> Result<PluginReport> {
+        if plugin_id == self.canned_report.id {
+            let mut report = self.canned_report.clone();
+            report.status = "removed".to_string();
+            Ok(report)
+        } else {
+            Err(Error::custom(format!("Unknown plugin: {plugin_id}")))
+        }
+    }
+
     fn list_tools(&self) -> Vec<ResolvedPluginTool> {
         self.canned_tools.clone()
     }
@@ -249,6 +286,10 @@ mod tests {
 
         let err = mock.dispatch("nonexistent", &serde_json::json!({})).await;
         assert!(err.is_err());
+
+        let removed = mock.uninstall("test-plugin")?;
+        assert_eq!(removed.status, "removed");
+        assert!(mock.uninstall("missing-plugin").is_err());
 
         Ok(())
     }
