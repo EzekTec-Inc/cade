@@ -17,5 +17,8 @@ pub(crate) fn now_epoch_ms() -> u64 {
 }
 
 pub mod agent;
+pub mod director;
 pub mod env_context;
 pub mod stream;
+
+pub use director::{TurnDirector, TurnOutcome};
