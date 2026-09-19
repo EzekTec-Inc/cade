@@ -4,6 +4,7 @@
 //! dual budget enforcement (max_iters & max_tokens_budget), RAII workspace isolation,
 //! real-time telemetry streaming, and structured outcome models.
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -40,6 +41,89 @@ pub fn canonical_finish_tool_schema() -> Value {
             "required": ["status", "summary"]
         }
     })
+}
+
+/// Message representation within an autonomous subagent execution turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubagentMessage {
+    pub role: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<SubagentToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl SubagentMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant(
+        content: impl Into<String>,
+        tool_calls: Option<Vec<SubagentToolCall>>,
+    ) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+}
+
+/// Tool invocation request within a turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubagentToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// Turn completion response returned by a subagent LLM executor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubagentTurnResponse {
+    pub content: Option<String>,
+    pub tool_calls: Vec<SubagentToolCall>,
+    pub tokens_used: u64,
+}
+
+/// Abstraction for LLM completion driving subagent turns.
+#[async_trait]
+pub trait SubagentLlmExecutor: Send + Sync {
+    async fn complete_turn(
+        &self,
+        model: &str,
+        system_prompt: &str,
+        messages: &[SubagentMessage],
+        tools: &[Value],
+    ) -> Result<SubagentTurnResponse, String>;
+}
+
+/// Abstraction for executing tools during a subagent session.
+#[async_trait]
+pub trait SubagentToolExecutor: Send + Sync {
+    async fn execute_tool(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &Value,
+        execution_path: &Path,
+    ) -> Result<String, String>;
 }
 
 /// Structured memory finding produced during subagent execution for writeback.
@@ -242,6 +326,8 @@ pub struct SubagentSession {
     pub event_emitter: SubagentEventEmitter,
     pub findings: Vec<SubagentFinding>,
     pub approval_channel: SubagentApprovalChannel,
+    pub steering_queue: Vec<String>,
+    pub pending_model_swap: Option<String>,
 }
 
 impl SubagentSession {
@@ -261,6 +347,8 @@ impl SubagentSession {
             event_emitter: SubagentEventEmitter::noop(),
             findings: Vec::new(),
             approval_channel: SubagentApprovalChannel::noop(),
+            steering_queue: Vec::new(),
+            pending_model_swap: None,
         }
     }
 
@@ -378,9 +466,29 @@ impl SubagentSession {
         outcome
     }
 
-    /// Inspect a tool call to determine if it is the canonical `finish` tool.
+    /// Enqueue a steering message to be prioritized on the subagent's subsequent turn.
+    pub fn steer(&mut self, message: String) -> bool {
+        self.steering_queue.push(message);
+        true
+    }
+
+    /// Request a model hot-swap taking effect on the subsequent turn.
+    pub fn hot_swap_model(&mut self, new_model: String) -> bool {
+        self.pending_model_swap = Some(new_model);
+        true
+    }
+
+    pub fn take_pending_steering(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.steering_queue)
+    }
+
+    pub fn take_pending_model_hot_swap(&mut self) -> Option<String> {
+        self.pending_model_swap.take()
+    }
+
+    /// Inspect a tool call to determine if it is the canonical `finish` or `finish_task` tool.
     pub fn check_finish_tool_call(tool_name: &str, arguments: &Value) -> Option<SubagentOutcome> {
-        if tool_name != FINISH_TOOL_NAME {
+        if tool_name != FINISH_TOOL_NAME && tool_name != "finish_task" {
             return None;
         }
 
@@ -419,6 +527,200 @@ impl SubagentSession {
                 token_usage: 0,
             }),
         }
+    }
+
+    /// Execute the full autonomous reasoning loop until completion, budget exhaustion, or error.
+    pub async fn run_autonomous_loop<L: SubagentLlmExecutor, T: SubagentToolExecutor>(
+        &mut self,
+        llm: &L,
+        tools: &T,
+        mut model: String,
+        system_prompt: String,
+        initial_prompt: String,
+        tool_schemas: Vec<Value>,
+        failover_models: Vec<String>,
+        primary_path: &Path,
+    ) -> SubagentOutcome {
+        let mut messages = vec![SubagentMessage::user(initial_prompt)];
+        let mut last_text = String::new();
+        let mut failover_idx = 0;
+
+        for _iter in 0..self.max_iters {
+            // 1. Dynamic Model Hot-Swap check
+            if let Some(new_model) = self.take_pending_model_hot_swap()
+                && new_model != model
+            {
+                model = new_model;
+            }
+
+            // 2. Priority Steering Guidance Queue Drain
+            let steer_msgs = self.take_pending_steering();
+            if !steer_msgs.is_empty() {
+                let guidance = format!(
+                    "[Supervisor Steering Guidance]:\n\n{}",
+                    steer_msgs.join("\n\n")
+                );
+                messages.push(SubagentMessage::user(guidance));
+            }
+
+            // 3. Emit Turn Started
+            self.event_emitter
+                .emit(SubagentEvent::TurnStarted {
+                    turn: self.current_iteration + 1,
+                    max_turns: self.max_iters,
+                })
+                .await;
+
+            // 4. Call LLM with Multi-Provider Failover
+            let mut turn_resp = None;
+            let mut last_error = None;
+            let active_candidates = {
+                let mut c = vec![model.clone()];
+                c.extend(failover_models.clone());
+                c
+            };
+
+            for candidate in active_candidates.iter().skip(failover_idx) {
+                match llm
+                    .complete_turn(candidate, &system_prompt, &messages, &tool_schemas)
+                    .await
+                {
+                    Ok(resp) => {
+                        turn_resp = Some(resp);
+                        break;
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                        failover_idx += 1;
+                    }
+                }
+            }
+
+            let resp = match turn_resp {
+                Some(r) => r,
+                None => {
+                    let err_msg = last_error.unwrap_or_else(|| "LLM execution failed".to_string());
+                    return self.finalize_outcome(SubagentOutcome::Failed { error: err_msg }).await;
+                }
+            };
+
+            // 5. Accumulate text and record turn metrics
+            if let Some(ref txt) = resp.content
+                && !txt.is_empty()
+            {
+                if !last_text.is_empty() {
+                    last_text.push_str("\n\n");
+                }
+                last_text.push_str(txt);
+                self.event_emitter
+                    .emit(SubagentEvent::OutputChunk { text: txt.clone() })
+                    .await;
+            }
+
+            self.record_turn(resp.tokens_used, resp.tool_calls.len()).await;
+
+            // 6. Check budget limits
+            if let Some(reason) = self.is_budget_exhausted() {
+                return self
+                    .finalize_outcome(SubagentOutcome::Exhausted {
+                        reason,
+                        iterations: self.current_iteration,
+                        tokens_used: self.cumulative_tokens as usize,
+                    })
+                    .await;
+            }
+
+            // 7. Check for canonical finish / finish_task tool calls
+            if let Some(finish_tc) = resp
+                .tool_calls
+                .iter()
+                .find(|tc| tc.name == FINISH_TOOL_NAME || tc.name == "finish_task")
+            {
+                let outcome = Self::check_finish_tool_call(&finish_tc.name, &finish_tc.arguments)
+                    .unwrap_or_else(|| SubagentOutcome::Done {
+                        summary: last_text.clone(),
+                        iterations: self.current_iteration,
+                        tool_calls_count: self.total_tool_calls,
+                        token_usage: self.cumulative_tokens as usize,
+                    });
+                return self.finalize_outcome(outcome).await;
+            }
+
+            // 8. Natural completion (no tool calls and has text)
+            if resp.tool_calls.is_empty() {
+                let summary = if !last_text.is_empty() {
+                    last_text
+                } else {
+                    "Task concluded without tool calls.".to_string()
+                };
+                return self
+                    .finalize_outcome(SubagentOutcome::Done {
+                        summary,
+                        iterations: self.current_iteration,
+                        tool_calls_count: self.total_tool_calls,
+                        token_usage: self.cumulative_tokens as usize,
+                    })
+                    .await;
+            }
+
+            // 9. Execute tools
+            let exec_path = self.execution_path(primary_path).to_path_buf();
+            messages.push(SubagentMessage::assistant(
+                resp.content.clone().unwrap_or_default(),
+                Some(resp.tool_calls.clone()),
+            ));
+
+            for tc in &resp.tool_calls {
+                self.event_emitter
+                    .emit(SubagentEvent::ToolExecuting {
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.name.clone(),
+                        arguments: tc.arguments.clone(),
+                    })
+                    .await;
+
+                let output_res = tools
+                    .execute_tool(&tc.id, &tc.name, &tc.arguments, &exec_path)
+                    .await;
+
+                let is_error = output_res.is_err();
+                let output_text = match output_res {
+                    Ok(out) => out,
+                    Err(err) => format!("Tool error: {err}"),
+                };
+
+                self.event_emitter
+                    .emit(SubagentEvent::ToolCompleted {
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.name.clone(),
+                        is_error,
+                    })
+                    .await;
+
+                messages.push(SubagentMessage::tool_result(&tc.id, output_text));
+            }
+        }
+
+        // Final iteration limit reached: check if last_text provides a valid answer
+        let final_outcome = if !last_text.is_empty() {
+            SubagentOutcome::Done {
+                summary: last_text,
+                iterations: self.current_iteration,
+                tool_calls_count: self.total_tool_calls,
+                token_usage: self.cumulative_tokens as usize,
+            }
+        } else {
+            SubagentOutcome::Exhausted {
+                reason: format!(
+                    "Iteration limit of {} reached without converging",
+                    self.max_iters
+                ),
+                iterations: self.current_iteration,
+                tokens_used: self.cumulative_tokens as usize,
+            }
+        };
+
+        self.finalize_outcome(final_outcome).await
     }
 }
 
@@ -616,5 +918,217 @@ mod tests {
             .expect("Approval succeeded");
         assert!(verdict.approved);
         assert_eq!(verdict.feedback.as_deref(), Some("Approved with caution"));
+    }
+
+    struct MockLlm {
+        turns: std::sync::Mutex<Vec<SubagentTurnResponse>>,
+        observed_models: std::sync::Mutex<Vec<String>>,
+        observed_messages: std::sync::Mutex<Vec<Vec<SubagentMessage>>>,
+    }
+
+    #[async_trait]
+    impl SubagentLlmExecutor for MockLlm {
+        async fn complete_turn(
+            &self,
+            model: &str,
+            _system_prompt: &str,
+            messages: &[SubagentMessage],
+            _tools: &[Value],
+        ) -> Result<SubagentTurnResponse, String> {
+            self.observed_models.lock().unwrap().push(model.to_string());
+            self.observed_messages
+                .lock()
+                .unwrap()
+                .push(messages.to_vec());
+            let mut turns = self.turns.lock().unwrap();
+            if turns.is_empty() {
+                Ok(SubagentTurnResponse {
+                    content: Some("Default completion".to_string()),
+                    tool_calls: Vec::new(),
+                    tokens_used: 10,
+                })
+            } else {
+                Ok(turns.remove(0))
+            }
+        }
+    }
+
+    struct MockToolExecutor;
+
+    #[async_trait]
+    impl SubagentToolExecutor for MockToolExecutor {
+        async fn execute_tool(
+            &self,
+            _tool_call_id: &str,
+            tool_name: &str,
+            _arguments: &Value,
+            _execution_path: &Path,
+        ) -> Result<String, String> {
+            Ok(format!("Output from {tool_name}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_autonomous_loop_natural_completion() {
+        let llm = MockLlm {
+            turns: std::sync::Mutex::new(vec![SubagentTurnResponse {
+                content: Some("Task finished without tool calls".to_string()),
+                tool_calls: Vec::new(),
+                tokens_used: 25,
+            }]),
+            observed_models: std::sync::Mutex::new(Vec::new()),
+            observed_messages: std::sync::Mutex::new(Vec::new()),
+        };
+        let tools = MockToolExecutor;
+        let config = SubagentConfig::from_args(&json!({ "prompt": "Solve problem" }));
+        let mut session = SubagentSession::new(config, "parent");
+
+        let outcome = session
+            .run_autonomous_loop(
+                &llm,
+                &tools,
+                "model-primary".to_string(),
+                "System prompt".to_string(),
+                "Initial prompt".to_string(),
+                vec![],
+                vec![],
+                Path::new("."),
+            )
+            .await;
+
+        assert!(outcome.is_success());
+        assert_eq!(
+            outcome.summary_text(),
+            "Task finished without tool calls"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_autonomous_loop_finish_tool_calls() {
+        // Test standard 'finish' tool call
+        let llm1 = MockLlm {
+            turns: std::sync::Mutex::new(vec![SubagentTurnResponse {
+                content: None,
+                tool_calls: vec![SubagentToolCall {
+                    id: "call_1".to_string(),
+                    name: "finish".to_string(),
+                    arguments: json!({ "status": "done", "summary": "Finished successfully via finish" }),
+                }],
+                tokens_used: 15,
+            }]),
+            observed_models: std::sync::Mutex::new(Vec::new()),
+            observed_messages: std::sync::Mutex::new(Vec::new()),
+        };
+        let tools = MockToolExecutor;
+        let config1 = SubagentConfig::from_args(&json!({ "prompt": "Do task 1" }));
+        let mut session1 = SubagentSession::new(config1, "parent");
+
+        let outcome1 = session1
+            .run_autonomous_loop(
+                &llm1,
+                &tools,
+                "model-1".to_string(),
+                "Sys".to_string(),
+                "Init".to_string(),
+                vec![],
+                vec![],
+                Path::new("."),
+            )
+            .await;
+        assert_eq!(outcome1.summary_text(), "Finished successfully via finish");
+
+        // Test 'finish_task' tool call
+        let llm2 = MockLlm {
+            turns: std::sync::Mutex::new(vec![SubagentTurnResponse {
+                content: None,
+                tool_calls: vec![SubagentToolCall {
+                    id: "call_2".to_string(),
+                    name: "finish_task".to_string(),
+                    arguments: json!({ "status": "done", "summary": "Finished successfully via finish_task" }),
+                }],
+                tokens_used: 15,
+            }]),
+            observed_models: std::sync::Mutex::new(Vec::new()),
+            observed_messages: std::sync::Mutex::new(Vec::new()),
+        };
+        let config2 = SubagentConfig::from_args(&json!({ "prompt": "Do task 2" }));
+        let mut session2 = SubagentSession::new(config2, "parent");
+
+        let outcome2 = session2
+            .run_autonomous_loop(
+                &llm2,
+                &tools,
+                "model-1".to_string(),
+                "Sys".to_string(),
+                "Init".to_string(),
+                vec![],
+                vec![],
+                Path::new("."),
+            )
+            .await;
+        assert_eq!(outcome2.summary_text(), "Finished successfully via finish_task");
+    }
+
+    #[tokio::test]
+    async fn test_autonomous_loop_steering_and_model_hot_swap() {
+        let llm = MockLlm {
+            turns: std::sync::Mutex::new(vec![
+                SubagentTurnResponse {
+                    content: Some("First thought".to_string()),
+                    tool_calls: vec![SubagentToolCall {
+                        id: "call_read".to_string(),
+                        name: "read_file".to_string(),
+                        arguments: json!({ "path": "test.txt" }),
+                    }],
+                    tokens_used: 20,
+                },
+                SubagentTurnResponse {
+                    content: None,
+                    tool_calls: vec![SubagentToolCall {
+                        id: "call_finish".to_string(),
+                        name: "finish".to_string(),
+                        arguments: json!({ "status": "done", "summary": "Steering incorporated and completed" }),
+                    }],
+                    tokens_used: 30,
+                },
+            ]),
+            observed_models: std::sync::Mutex::new(Vec::new()),
+            observed_messages: std::sync::Mutex::new(Vec::new()),
+        };
+        let tools = MockToolExecutor;
+        let config = SubagentConfig::from_args(&json!({ "prompt": "Initial problem" }));
+        let mut session = SubagentSession::new(config, "parent");
+
+        // Inject steering and model hot-swap before turn 1
+        session.steer("Focus strictly on test assertion".to_string());
+        session.hot_swap_model("hot-swapped-model-v2".to_string());
+
+        let outcome = session
+            .run_autonomous_loop(
+                &llm,
+                &tools,
+                "initial-model".to_string(),
+                "Sys".to_string(),
+                "Initial problem".to_string(),
+                vec![],
+                vec![],
+                Path::new("."),
+            )
+            .await;
+
+        assert_eq!(
+            outcome.summary_text(),
+            "Steering incorporated and completed"
+        );
+
+        // Verify that model was hot-swapped
+        let models = llm.observed_models.lock().unwrap();
+        assert_eq!(models[0], "hot-swapped-model-v2");
+
+        // Verify that steering guidance was injected with priority envelope
+        let messages = llm.observed_messages.lock().unwrap();
+        let turn_0_msgs = &messages[0];
+        assert!(turn_0_msgs.iter().any(|m| m.content.contains("[Supervisor Steering Guidance]")));
+        assert!(turn_0_msgs.iter().any(|m| m.content.contains("Focus strictly on test assertion")));
     }
 }
