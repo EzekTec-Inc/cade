@@ -594,4 +594,45 @@ mod tests {
             None,
         );
     }
+
+    #[test]
+    fn test_subagent_events_track_lifecycle() {
+        use cade_tui::subagent_tracker::{SubagentStatus, SubagentTracker};
+
+        let mut trackers: Vec<SubagentTracker> = Vec::new();
+
+        // 1. subagent_started
+        let mut tracker = SubagentTracker::new("sub-test-123".to_string(), "scout".to_string());
+        tracker.current_tool = Some("init".to_string());
+        tracker.push_output("[TASK]: check git".to_string());
+        trackers.push(tracker);
+
+        assert_eq!(trackers.len(), 1);
+        assert_eq!(trackers[0].task_id, "sub-test-123");
+        assert_eq!(trackers[0].mode, "scout");
+        assert_eq!(trackers[0].current_tool, Some("init".to_string()));
+
+        // 2. subagent_tool_start
+        if let Some(t) = trackers.iter_mut().find(|t| t.task_id == "sub-test-123") {
+            t.current_tool = Some("bash".to_string());
+            t.tool_calls += 1;
+            t.push_output("▶ tool: bash".to_string());
+        }
+        assert_eq!(trackers[0].tool_calls, 1);
+        assert_eq!(trackers[0].current_tool, Some("bash".to_string()));
+
+        // 3. subagent_complete
+        if let Some(t) = trackers.iter_mut().find(|t| t.task_id == "sub-test-123") {
+            t.current_tool = None;
+            t.push_output("[RESULT]: main branch clean".to_string());
+            t.status = SubagentStatus::Completed {
+                finished_at: std::time::Instant::now(),
+            };
+        }
+        assert_eq!(trackers[0].current_tool, None);
+        assert!(matches!(
+            trackers[0].status,
+            SubagentStatus::Completed { .. }
+        ));
+    }
 }

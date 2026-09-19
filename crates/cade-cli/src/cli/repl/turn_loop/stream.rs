@@ -400,6 +400,110 @@ impl Repl {
                         use std::io::Write;
                         let _ = std::io::stdout().flush();
                     }
+                    "subagent_started" => {
+                        let subagent_id =
+                            msg.data["subagent_id"].as_str().unwrap_or("").to_string();
+                        let mode = msg.data["mode"].as_str().unwrap_or("worker").to_string();
+                        let task = msg.data["task"].as_str().unwrap_or("").to_string();
+                        if !subagent_id.is_empty() {
+                            let mut app = app_arc.lock();
+                            let mut tracker = cade_tui::subagent_tracker::SubagentTracker::new(
+                                subagent_id.clone(),
+                                mode.clone(),
+                            );
+                            tracker.current_tool = Some("init".to_string());
+                            if !task.is_empty() {
+                                tracker.push_output(format!("[TASK]: {task}"));
+                            }
+                            app.subagent_trackers.push(tracker);
+                            app.show_toast(
+                                format!("Subagent [{mode}] started: {subagent_id}"),
+                                crate::ui::ToastLevel::Info,
+                            );
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
+                    }
+                    "subagent_output" => {
+                        let subagent_id = msg.data["subagent_id"].as_str().unwrap_or("");
+                        if let Some(chunk) = msg.data["chunk"].as_str() {
+                            let mut app = app_arc.lock();
+                            if let Some(t) = app
+                                .subagent_trackers
+                                .iter_mut()
+                                .find(|t| t.task_id == subagent_id)
+                            {
+                                t.push_output(chunk.to_string());
+                                app.draw_dirty = true;
+                                let _ = app.draw();
+                            }
+                        }
+                    }
+                    "subagent_tool_start" => {
+                        let subagent_id = msg.data["subagent_id"].as_str().unwrap_or("");
+                        let tool = msg.data["tool"].as_str().unwrap_or("tool");
+                        let mut app = app_arc.lock();
+                        if let Some(t) = app
+                            .subagent_trackers
+                            .iter_mut()
+                            .find(|t| t.task_id == subagent_id)
+                        {
+                            t.current_tool = Some(tool.to_string());
+                            t.tool_calls += 1;
+                            t.push_output(format!("▶ tool: {tool}"));
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
+                    }
+                    "subagent_tool_end" => {
+                        let subagent_id = msg.data["subagent_id"].as_str().unwrap_or("");
+                        let mut app = app_arc.lock();
+                        if let Some(t) = app
+                            .subagent_trackers
+                            .iter_mut()
+                            .find(|t| t.task_id == subagent_id)
+                        {
+                            t.current_tool = None;
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
+                    }
+                    "subagent_complete" => {
+                        let subagent_id = msg.data["subagent_id"].as_str().unwrap_or("");
+                        let is_error = msg.data["is_error"].as_bool().unwrap_or(false);
+                        let result_preview = msg.data["result_preview"].as_str().unwrap_or("");
+                        let mut app = app_arc.lock();
+                        if let Some(t) = app
+                            .subagent_trackers
+                            .iter_mut()
+                            .find(|t| t.task_id == subagent_id)
+                        {
+                            t.current_tool = None;
+                            if is_error {
+                                t.status = cade_tui::subagent_tracker::SubagentStatus::Failed {
+                                    finished_at: std::time::Instant::now(),
+                                    error: result_preview.to_string(),
+                                };
+                                app.show_toast(
+                                    format!("Subagent {subagent_id} failed"),
+                                    crate::ui::ToastLevel::Error,
+                                );
+                            } else {
+                                if !result_preview.is_empty() {
+                                    t.push_output(format!("[RESULT]: {result_preview}"));
+                                }
+                                t.status = cade_tui::subagent_tracker::SubagentStatus::Completed {
+                                    finished_at: std::time::Instant::now(),
+                                };
+                                app.show_toast(
+                                    format!("Subagent {subagent_id} completed"),
+                                    crate::ui::ToastLevel::Success,
+                                );
+                            }
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
+                    }
                     _ => {}
                 }
             }
