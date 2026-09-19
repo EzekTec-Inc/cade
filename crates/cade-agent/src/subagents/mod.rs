@@ -10,8 +10,9 @@ pub use config::SubagentConfig;
 pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 pub use harness::{AgentHarness, HarnessLifecycleState, HarnessTaskSpec, IsolationPolicy};
 pub use session::{
-    FINISH_TOOL_NAME, SubagentEvent, SubagentEventEmitter, SubagentOutcome, SubagentSession,
-    canonical_finish_tool_schema,
+    canonical_finish_tool_schema, FINISH_TOOL_NAME, SubagentEvent, SubagentEventEmitter,
+    SubagentLlmExecutor, SubagentMessage, SubagentOutcome, SubagentSession, SubagentToolCall,
+    SubagentToolExecutor, SubagentTurnResponse,
 };
 pub use workspace_guard::IsolatedWorkspaceGuard;
 
