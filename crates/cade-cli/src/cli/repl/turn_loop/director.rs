@@ -33,6 +33,7 @@ enum TurnHotkey {
     ClearAndRedraw,
     ToggleSubagentTray,
     ToggleSubagentTrayFocus,
+    ToggleExpandAll,
 }
 
 /// Event categories the turn loop translates from Crossterm input.
@@ -57,6 +58,9 @@ fn route_turn_hotkey(key: KeyEvent) -> Option<TurnHotkey> {
         (KeyCode::F(5), _) => Some(TurnHotkey::ToggleSubagentTray),
         (KeyCode::Char('w' | 'W'), KeyModifiers::CONTROL) => {
             Some(TurnHotkey::ToggleSubagentTrayFocus)
+        }
+        (KeyCode::Char('o' | 'O'), KeyModifiers::CONTROL) | (KeyCode::Char('\x0f'), _) => {
+            Some(TurnHotkey::ToggleExpandAll)
         }
         _ => None,
     }
@@ -224,6 +228,18 @@ impl<'a> TurnDirector<'a> {
                                                 }
                                                 _ if route_turn_hotkey(k) == Some(TurnHotkey::ClearAndRedraw) => {
                                                     let _ = app.terminal.clear();
+                                                    app.draw_dirty = true;
+                                                    let _ = app.draw();
+                                                }
+                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleExpandAll) => {
+                                                    app.expand_all = !app.expand_all;
+                                                    app.content_version += 1;
+                                                    let msg = if app.expand_all {
+                                                        "All blocks expanded"
+                                                    } else {
+                                                        "All blocks collapsed"
+                                                    };
+                                                    app.show_toast(msg, cade_tui::ToastLevel::Info);
                                                     app.draw_dirty = true;
                                                     let _ = app.draw();
                                                 }
@@ -555,6 +571,18 @@ mod tests {
             (
                 KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
                 TurnHotkey::ToggleSubagentTrayFocus,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+                TurnHotkey::ToggleExpandAll,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('O'), KeyModifiers::CONTROL),
+                TurnHotkey::ToggleExpandAll,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('\x0f'), KeyModifiers::NONE),
+                TurnHotkey::ToggleExpandAll,
             ),
         ];
 

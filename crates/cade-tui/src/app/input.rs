@@ -701,9 +701,31 @@ impl TuiApp {
                 }
             }
 
-            KeyCode::Char('o') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('o' | 'O') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.expand_all = !self.expand_all;
+                self.content_version += 1;
                 self.draw_dirty = true;
+                let msg = if self.expand_all {
+                    "All blocks expanded"
+                } else {
+                    "All blocks collapsed"
+                };
+                self.show_toast(msg, ToastLevel::Info);
+                let _ = self.draw();
+                return Ok(None);
+            }
+            KeyCode::Char('\x0f') => {
+                self.expand_all = !self.expand_all;
+                self.content_version += 1;
+                self.draw_dirty = true;
+                let msg = if self.expand_all {
+                    "All blocks expanded"
+                } else {
+                    "All blocks collapsed"
+                };
+                self.show_toast(msg, ToastLevel::Info);
+                let _ = self.draw();
+                return Ok(None);
             }
 
             KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
