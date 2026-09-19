@@ -129,6 +129,8 @@ impl<'a> TurnDirector<'a> {
         let tick_queued_followup = self.repl.queued_followup.clone();
         let tick_modal_close_ms = self.repl.last_modal_close_ms.clone();
         let tick_permissions = self.repl.permissions.clone();
+        let tick_cancellations = self.repl.subagent_cancellations.clone();
+        let tick_client = self.repl.client.clone();
 
         let tick_handle = tokio::spawn(async move {
             use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
@@ -236,7 +238,91 @@ impl<'a> TurnDirector<'a> {
                                                 _ if app.subagent_tray.is_visible && app.subagent_tray.is_focused => {
                                                     let trackers = app.subagent_trackers.clone();
                                                     if app.subagent_tray.handle_key(k, &trackers) {
+                                                        let action = app.subagent_tray.take_pending_action();
                                                         let _ = app.draw();
+                                                        if action != cade_tui::app::subagent_tray::SubagentTrayAction::None {
+                                                            match action {
+                                                                cade_tui::app::subagent_tray::SubagentTrayAction::None => {}
+                                                                cade_tui::app::subagent_tray::SubagentTrayAction::Kill { subagent_id } => {
+                                                                    let cancellations = tick_cancellations.clone();
+                                                                    let client = tick_client.clone();
+                                                                    let subagent_id_c = subagent_id.clone();
+                                                                    if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id) {
+                                                                        t.status = cade_tui::subagent_tracker::SubagentStatus::Failed {
+                                                                            finished_at: std::time::Instant::now(),
+                                                                            error: "Killed from Control Tray".into(),
+                                                                        };
+                                                                    }
+                                                                    app.show_toast(format!("Subagent {subagent_id} killed"), cade_tui::ToastLevel::Info);
+                                                                    let _ = app.draw();
+                                                                    tokio::spawn(async move {
+                                                                        let tx_opt = {
+                                                                            let map = cancellations.lock().await;
+                                                                            map.get(&subagent_id_c).cloned()
+                                                                        };
+                                                                        if let Some(tx) = tx_opt {
+                                                                            let _ = tx.send(()).await;
+                                                                        } else {
+                                                                            let _ = client
+                                                                                .raw_post(
+                                                                                    &format!("/subagents/{subagent_id_c}/cancel"),
+                                                                                    &serde_json::json!({ "action": "cancel", "id": subagent_id_c }),
+                                                                                )
+                                                                                .await;
+                                                                        }
+                                                                    });
+                                                                }
+                                                                cade_tui::app::subagent_tray::SubagentTrayAction::Steer { subagent_id, message } => {
+                                                                    let client = tick_client.clone();
+                                                                    let subagent_id_c = subagent_id.clone();
+                                                                    let msg_c = message.clone();
+                                                                    if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id) {
+                                                                        t.push_output(format!("[STEERING GUIDANCE]: {message}"));
+                                                                    }
+                                                                    app.show_toast(format!("Steering guidance sent to {subagent_id}"), cade_tui::ToastLevel::Success);
+                                                                    let _ = app.draw();
+                                                                    tokio::spawn(async move {
+                                                                        let body = serde_json::json!({
+                                                                            "action": "steer",
+                                                                            "id": subagent_id_c,
+                                                                            "message": msg_c,
+                                                                        });
+                                                                        let _ = client.raw_post(&format!("/subagents/{subagent_id_c}/steer"), &body).await;
+                                                                    });
+                                                                }
+                                                                cade_tui::app::subagent_tray::SubagentTrayAction::HotSwapModel { subagent_id, model } => {
+                                                                    let client = tick_client.clone();
+                                                                    let subagent_id_c = subagent_id.clone();
+                                                                    let model_c = model.clone();
+                                                                    if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id) {
+                                                                        t.push_output(format!("[MODEL HOT-SWAP]: {model}"));
+                                                                    }
+                                                                    app.show_toast(format!("Model hot-swap to {model} for {subagent_id}"), cade_tui::ToastLevel::Info);
+                                                                    let _ = app.draw();
+                                                                    tokio::spawn(async move {
+                                                                        let body = serde_json::json!({
+                                                                            "action": "hot_swap",
+                                                                            "id": subagent_id_c,
+                                                                            "model": model_c,
+                                                                        });
+                                                                        let _ = client.raw_post(&format!("/subagents/{subagent_id_c}/model"), &body).await;
+                                                                    });
+                                                                }
+                                                                cade_tui::app::subagent_tray::SubagentTrayAction::PauseResume { subagent_id } => {
+                                                                    let client = tick_client.clone();
+                                                                    let subagent_id_c = subagent_id.clone();
+                                                                    app.show_toast(format!("Pause/Resume signal sent to {subagent_id}"), cade_tui::ToastLevel::Info);
+                                                                    let _ = app.draw();
+                                                                    tokio::spawn(async move {
+                                                                        let body = serde_json::json!({
+                                                                            "action": "pause_resume",
+                                                                            "id": subagent_id_c,
+                                                                        });
+                                                                        let _ = client.raw_post(&format!("/subagents/{subagent_id_c}/pause"), &body).await;
+                                                                    });
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                                 (KeyCode::Tab, _) if app.editor.is_empty() => {

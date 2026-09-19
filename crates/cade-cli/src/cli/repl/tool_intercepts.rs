@@ -88,6 +88,125 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
 }
 
 impl Repl {
+    pub(crate) async fn dispatch_subagent_tray_action(
+        &self,
+        action: cade_tui::app::subagent_tray::SubagentTrayAction,
+    ) {
+        use cade_agent::subagents::SubagentSingleRunner;
+        use cade_tui::app::subagent_tray::SubagentTrayAction;
+        match action {
+            SubagentTrayAction::None => {}
+            SubagentTrayAction::Kill { subagent_id } => {
+                let cancel_res = self.cancel_subagent(&subagent_id).await;
+                {
+                    let mut app = self.app.lock();
+                    if let Some(t) = app
+                        .subagent_trackers
+                        .iter_mut()
+                        .find(|t| t.task_id == subagent_id)
+                    {
+                        t.status = cade_tui::subagent_tracker::SubagentStatus::Failed {
+                            finished_at: std::time::Instant::now(),
+                            error: "Killed from Control Tray".into(),
+                        };
+                    }
+                    app.show_toast(
+                        format!("Subagent {subagent_id} killed"),
+                        cade_tui::ToastLevel::Info,
+                    );
+                    app.draw_dirty = true;
+                    let _ = app.draw();
+                }
+                if let Err(e) = cancel_res {
+                    tracing::debug!("Local subagent cancel fallback for {subagent_id}: {e}");
+                    let _ = self
+                        .client
+                        .raw_post(
+                            &format!("/subagents/{subagent_id}/cancel"),
+                            &serde_json::json!({ "action": "cancel", "id": subagent_id }),
+                        )
+                        .await;
+                }
+            }
+            SubagentTrayAction::Steer {
+                subagent_id,
+                message,
+            } => {
+                {
+                    let mut app = self.app.lock();
+                    if let Some(t) = app
+                        .subagent_trackers
+                        .iter_mut()
+                        .find(|t| t.task_id == subagent_id)
+                    {
+                        t.push_output(format!("[STEERING GUIDANCE]: {message}"));
+                    }
+                    app.show_toast(
+                        format!("Steering guidance sent to {subagent_id}"),
+                        cade_tui::ToastLevel::Success,
+                    );
+                    app.draw_dirty = true;
+                    let _ = app.draw();
+                }
+                let body = serde_json::json!({
+                    "action": "steer",
+                    "id": subagent_id,
+                    "message": message,
+                });
+                let _ = self
+                    .client
+                    .raw_post(&format!("/subagents/{subagent_id}/steer"), &body)
+                    .await;
+            }
+            SubagentTrayAction::HotSwapModel { subagent_id, model } => {
+                {
+                    let mut app = self.app.lock();
+                    if let Some(t) = app
+                        .subagent_trackers
+                        .iter_mut()
+                        .find(|t| t.task_id == subagent_id)
+                    {
+                        t.push_output(format!("[MODEL HOT-SWAP]: {model}"));
+                    }
+                    app.show_toast(
+                        format!("Model hot-swap to {model} for {subagent_id}"),
+                        cade_tui::ToastLevel::Info,
+                    );
+                    app.draw_dirty = true;
+                    let _ = app.draw();
+                }
+                let body = serde_json::json!({
+                    "action": "hot_swap",
+                    "id": subagent_id,
+                    "model": model,
+                });
+                let _ = self
+                    .client
+                    .raw_post(&format!("/subagents/{subagent_id}/model"), &body)
+                    .await;
+            }
+            SubagentTrayAction::PauseResume { subagent_id } => {
+                {
+                    let mut app = self.app.lock();
+                    app.show_toast(
+                        format!("Pause/Resume signal sent to {subagent_id}"),
+                        cade_tui::ToastLevel::Info,
+                    );
+                    app.draw_dirty = true;
+                    let _ = app.draw();
+                }
+                let body = serde_json::json!({
+                    "action": "pause_resume",
+                    "id": subagent_id,
+                });
+                let _ = self
+                    .client
+                    .raw_post(&format!("/subagents/{subagent_id}/pause"), &body)
+                    .await;
+            }
+        }
+    }
+
     pub(crate) async fn handle_subagent_single_inner(
         &self,
         call_id: &str,
@@ -263,10 +382,9 @@ impl Repl {
 
                 let mut cancel_rx = {
                     let (tx, rx) = tokio::sync::mpsc::channel(1);
-                    cancellations_c
-                        .lock()
-                        .await
-                        .insert(sub_agent_id.clone(), tx);
+                    let mut map = cancellations_c.lock().await;
+                    map.insert(sub_agent_id.clone(), tx.clone());
+                    map.insert(task_id_c.clone(), tx);
                     rx
                 };
 
@@ -277,14 +395,18 @@ impl Repl {
                         >,
                     >,
                     id: String,
+                    task_id: String,
                 }
                 impl<'a> Drop for CancelGuard<'a> {
                     fn drop(&mut self) {
                         let map = self.map.clone();
                         let id = self.id.clone();
+                        let task_id = self.task_id.clone();
                         if let Ok(handle) = tokio::runtime::Handle::try_current() {
                             handle.spawn(async move {
-                                map.lock().await.remove(&id);
+                                let mut m = map.lock().await;
+                                m.remove(&id);
+                                m.remove(&task_id);
                             });
                         }
                     }
@@ -292,6 +414,7 @@ impl Repl {
                 let _cancel_guard = CancelGuard {
                     map: &cancellations_c,
                     id: sub_agent_id.clone(),
+                    task_id: task_id_c.clone(),
                 };
 
                 let run_headless_fut = crate::cli::headless::run_headless(
@@ -539,5 +662,47 @@ impl Repl {
                 ui_resource_uri: None,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, mpsc};
+
+    #[tokio::test]
+    async fn test_dual_key_cancellation_map() {
+        let cancellations: Arc<Mutex<HashMap<String, mpsc::Sender<()>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let (tx, mut rx) = mpsc::channel(1);
+
+        let sub_agent_id = "subagent-agent-123".to_string();
+        let task_id = "task-abc456".to_string();
+
+        {
+            let mut map = cancellations.lock().await;
+            map.insert(sub_agent_id.clone(), tx.clone());
+            map.insert(task_id.clone(), tx);
+        }
+
+        // Cancel via task_id
+        let tx_opt = {
+            let map = cancellations.lock().await;
+            map.get(&task_id).cloned()
+        };
+        assert!(tx_opt.is_some());
+        let _ = tx_opt.unwrap().send(()).await;
+
+        // Verify receiver catches cancellation
+        assert_eq!(rx.recv().await, Some(()));
+
+        // Clean up
+        {
+            let mut map = cancellations.lock().await;
+            map.remove(&sub_agent_id);
+            map.remove(&task_id);
+        }
+        assert!(cancellations.lock().await.is_empty());
     }
 }

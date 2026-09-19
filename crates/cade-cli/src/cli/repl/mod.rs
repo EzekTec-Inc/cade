@@ -1043,6 +1043,15 @@ impl Repl {
             };
             let input = input.trim().to_string();
 
+            if let Some(json) = input.strip_prefix("__SUBAGENT_TRAY_ACTION__") {
+                if let Ok(action) =
+                    serde_json::from_str::<cade_tui::app::subagent_tray::SubagentTrayAction>(json)
+                {
+                    self.dispatch_subagent_tray_action(action).await;
+                }
+                continue;
+            }
+
             if input == "__MCP_READY__" {
                 if let Some(mut rx) = self.mcp_rx.take() {
                     if let Ok(mgr) = rx.try_recv() {
@@ -1315,14 +1324,22 @@ impl Repl {
 
         let agent_id = self.agent_id();
         let agent_name = self.agent_name();
-        let in_tok = self.session_input_tokens.load(std::sync::atomic::Ordering::SeqCst);
-        let out_tok = self.session_output_tokens.load(std::sync::atomic::Ordering::SeqCst);
+        let in_tok = self
+            .session_input_tokens
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let out_tok = self
+            .session_output_tokens
+            .load(std::sync::atomic::Ordering::SeqCst);
 
         use std::io::Write;
         let mut stdout = std::io::stdout();
         let _ = writeln!(stdout);
         let _ = writeln!(stdout, "\x1b[38;2;140;140;140mSession ended.\x1b[0m");
-        let _ = writeln!(stdout, "  \x1b[1mAgent:\x1b[0m   {} ({})", agent_id, agent_name);
+        let _ = writeln!(
+            stdout,
+            "  \x1b[1mAgent:\x1b[0m   {} ({})",
+            agent_id, agent_name
+        );
         if in_tok > 0 || out_tok > 0 {
             let _ = writeln!(
                 stdout,

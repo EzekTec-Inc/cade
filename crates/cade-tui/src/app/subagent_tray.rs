@@ -6,15 +6,28 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
+use serde::{Deserialize, Serialize};
+
 /// Actions triggered from the Subagent Control Tray.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SubagentTrayAction {
     #[default]
     None,
-    Steer { subagent_id: String, message: String },
-    HotSwapModel { subagent_id: String, model: String },
-    PauseResume { subagent_id: String },
-    Kill { subagent_id: String },
+    Steer {
+        subagent_id: String,
+        message: String,
+    },
+    HotSwapModel {
+        subagent_id: String,
+        model: String,
+    },
+    PauseResume {
+        subagent_id: String,
+    },
+    Kill {
+        subagent_id: String,
+    },
 }
 
 /// Persistent state for the dockable Subagent Control Tray in `cade-tui`.
@@ -324,7 +337,8 @@ impl SubagentTrayState {
 
                 let mut transcript_lines = vec![header_line];
                 for line_text in t.transcript.iter().skip(start_idx).take(visible_height) {
-                    transcript_lines.push(Line::from(Span::styled(line_text, colors.text_primary())));
+                    transcript_lines
+                        .push(Line::from(Span::styled(line_text, colors.text_primary())));
                 }
 
                 let p = Paragraph::new(transcript_lines)
@@ -346,7 +360,11 @@ impl SubagentTrayState {
         // C. Normal List View with Action Inputs
         let show_input_row = self.steer_input.is_some() || self.model_input.is_some();
         let constraints = if show_input_row {
-            vec![Constraint::Min(3), Constraint::Length(3), Constraint::Length(1)]
+            vec![
+                Constraint::Min(3),
+                Constraint::Length(3),
+                Constraint::Length(1),
+            ]
         } else {
             vec![Constraint::Min(3), Constraint::Length(1)]
         };
@@ -389,12 +407,13 @@ impl SubagentTrayState {
                     .map(|tool| format!(" · tool: {tool}"))
                     .unwrap_or_default();
 
-                let row2 = Line::from(vec![
-                    Span::styled(
-                        format!("    {elapsed}s · {} tools · ~{approx_tokens}k tok{tool_str}", t.tool_calls),
-                        colors.text_muted(),
+                let row2 = Line::from(vec![Span::styled(
+                    format!(
+                        "    {elapsed}s · {} tools · ~{approx_tokens}k tok{tool_str}",
+                        t.tool_calls
                     ),
-                ]);
+                    colors.text_muted(),
+                )]);
 
                 ListItem::new(vec![row1, row2]).style(if is_selected {
                     colors.selected_bg_style()
@@ -518,5 +537,73 @@ mod tests {
                 message: "focus".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_tray_hotswap_pause_kill_actions() {
+        let mut state = SubagentTrayState::new();
+        state.is_visible = true;
+        state.is_focused = true;
+
+        let trackers = vec![dummy_tracker("worker-1"), dummy_tracker("worker-2")];
+
+        // Press 'x' to kill selected subagent
+        state.handle_key(KeyEvent::from(KeyCode::Char('x')), &trackers);
+        assert_eq!(
+            state.take_pending_action(),
+            SubagentTrayAction::Kill {
+                subagent_id: "worker-1".to_string(),
+            }
+        );
+
+        // Press Space to pause/resume
+        state.handle_key(KeyEvent::from(KeyCode::Char(' ')), &trackers);
+        assert_eq!(
+            state.take_pending_action(),
+            SubagentTrayAction::PauseResume {
+                subagent_id: "worker-1".to_string(),
+            }
+        );
+
+        // Press 'm' to start model hot-swap
+        state.handle_key(KeyEvent::from(KeyCode::Char('m')), &trackers);
+        assert!(state.model_input.is_some());
+        state.handle_key(KeyEvent::from(KeyCode::Enter), &trackers);
+        assert_eq!(state.model_input, None);
+        assert_eq!(
+            state.take_pending_action(),
+            SubagentTrayAction::HotSwapModel {
+                subagent_id: "worker-1".to_string(),
+                model: "gemini/gemini-2.0-flash".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_subagent_tray_action_serde_roundtrip() {
+        let actions = vec![
+            SubagentTrayAction::None,
+            SubagentTrayAction::Kill {
+                subagent_id: "worker-1".to_string(),
+            },
+            SubagentTrayAction::PauseResume {
+                subagent_id: "worker-2".to_string(),
+            },
+            SubagentTrayAction::Steer {
+                subagent_id: "worker-3".to_string(),
+                message: "look at tests".to_string(),
+            },
+            SubagentTrayAction::HotSwapModel {
+                subagent_id: "worker-4".to_string(),
+                model: "claude-3-5-sonnet".to_string(),
+            },
+        ];
+
+        for action in actions {
+            let json = serde_json::to_string(&action).expect("should serialize");
+            let decoded: SubagentTrayAction =
+                serde_json::from_str(&json).expect("should deserialize");
+            assert_eq!(action, decoded);
+        }
     }
 }

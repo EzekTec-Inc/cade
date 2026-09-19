@@ -366,8 +366,14 @@ impl TuiApp {
         if self.subagent_tray.is_visible && self.subagent_tray.is_focused {
             let trackers = self.subagent_trackers.clone();
             if self.subagent_tray.handle_key(k, &trackers) {
+                let action = self.subagent_tray.take_pending_action();
                 self.draw_dirty = true;
                 let _ = self.draw();
+                if action != crate::app::subagent_tray::SubagentTrayAction::None
+                    && let Ok(json) = serde_json::to_string(&action)
+                {
+                    return Ok(Some(Some(format!("__SUBAGENT_TRAY_ACTION__{json}"))));
+                }
                 return Ok(None);
             }
         }
@@ -482,7 +488,9 @@ impl TuiApp {
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(None));
             }
-            KeyCode::Char('l') | KeyCode::Char('L') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('l') | KeyCode::Char('L')
+                if k.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 let _ = self.terminal.clear();
                 self.draw_dirty = true;
                 self.draw()?;
