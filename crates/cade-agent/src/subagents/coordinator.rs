@@ -172,6 +172,11 @@ impl SubagentCoordinator {
                         .trim()
                         .to_string();
                     if name.is_empty() {
+                        // If 'config.name' is missing but 'task' or 'prompt' is present with 'agent',
+                        // the caller intended to execute the subagent rather than define one on disk.
+                        if args.get("task").is_some() || args.get("prompt").is_some() {
+                            return runner.run_single(call_id, args, false).await;
+                        }
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
@@ -657,7 +662,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'tasks' array is required for 'tasks' action".to_string(),
+                            output: "error: 'tasks' array is required for 'tasks' action"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -684,7 +690,10 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: format!("Resumed subagent '{}' with guidance: {}", subagent_id, message),
+                            output: format!(
+                                "Resumed subagent '{}' with guidance: {}",
+                                subagent_id, message
+                            ),
                             is_error: false,
                             ui_resource_uri: None,
                         });
@@ -728,7 +737,8 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'id' and 'model' are required for model hot-swap".to_string(),
+                            output: "error: 'id' and 'model' are required for model hot-swap"
+                                .to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
@@ -741,6 +751,9 @@ impl SubagentCoordinator {
                         is_error: false,
                         ui_resource_uri: None,
                     });
+                }
+                "run" | "single" | "execute" => {
+                    return runner.run_single(call_id, args, false).await;
                 }
                 other => {
                     return Ok(ToolResult {
@@ -1026,7 +1039,10 @@ mod tests {
         let res = SubagentCoordinator::coordinate(&runner, "call_1", &args)
             .await
             .expect("coordinate tasks");
-        assert!(!res.is_error, "tasks action should succeed without unsupported action error");
+        assert!(
+            !res.is_error,
+            "tasks action should succeed without unsupported action error"
+        );
         assert!(res.output.contains("task 1"));
         assert!(res.output.contains("task 2"));
     }
@@ -1074,5 +1090,61 @@ mod tests {
         assert!(!res.is_error);
         assert!(res.output.contains("agent-123"));
         assert!(res.output.contains("anthropic/claude-3-7-sonnet"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_run_and_single_actions() {
+        let runner = MockRunner;
+
+        // action: "run"
+        let run_args = json!({
+            "action": "run",
+            "agent": "scout",
+            "task": "check branch state"
+        });
+        let res = SubagentCoordinator::coordinate(&runner, "call_run", &run_args)
+            .await
+            .expect("coordinate run");
+        assert!(!res.is_error);
+        assert!(res.output.contains("check branch state"));
+
+        // action: "single"
+        let single_args = json!({
+            "action": "single",
+            "agent": "scout",
+            "task": "inspect latest commit"
+        });
+        let res2 = SubagentCoordinator::coordinate(&runner, "call_single", &single_args)
+            .await
+            .expect("coordinate single");
+        assert!(!res2.is_error);
+        assert!(res2.output.contains("inspect latest commit"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_create_fallback_to_single_when_task_present() {
+        let runner = MockRunner;
+
+        // action: "create" with task present (e.g. from LLM or supervisor adapter)
+        let create_task_args = json!({
+            "action": "create",
+            "agent": "scout",
+            "task": "smoke test git"
+        });
+        let res = SubagentCoordinator::coordinate(&runner, "call_fallback", &create_task_args)
+            .await
+            .expect("coordinate fallback");
+        assert!(!res.is_error);
+        assert!(res.output.contains("smoke test git"));
+
+        // action: "create" without task and without config.name should still return error
+        let empty_create_args = json!({
+            "action": "create"
+        });
+        let res2 = SubagentCoordinator::coordinate(&runner, "call_err", &empty_create_args)
+            .await
+            .expect("coordinate create error");
+        assert!(res2.is_error);
+        assert!(res2.output.contains("error: 'config.name' is required"));
     }
 }
