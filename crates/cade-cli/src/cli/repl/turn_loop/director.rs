@@ -1,0 +1,341 @@
+//! Deep `TurnDirector` module encapsulating REPL turn execution,
+//! 16ms redraw cadence, terminal keyboard interception, cancellation,
+//! and streaming event synchronization.
+
+use std::io;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use super::super::Repl;
+use super::now_epoch_ms;
+use crate::error::Result;
+use cade_tui::RenderLine;
+
+/// Outcome of an executed REPL agent turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed {
+        summary: String,
+        elapsed_secs: u64,
+        token_usage: Option<u64>,
+    },
+    Cancelled,
+    Error(String),
+}
+
+/// The deep execution engine governing a single REPL conversation turn.
+pub struct TurnDirector<'a> {
+    repl: &'a mut Repl,
+}
+
+impl<'a> TurnDirector<'a> {
+    pub fn new(repl: &'a mut Repl) -> Self {
+        Self { repl }
+    }
+
+    /// Execute the full interactive agent turn: drives the 16ms redraw ticker,
+    /// polls terminal event interrupts (F5, Ctrl+W, Ctrl+L, resize, cancel, paste),
+    /// consumes the SSE event stream, and returns the structured outcome.
+    pub async fn execute_turn(
+        &mut self,
+        stdout: &mut io::Stdout,
+        effective_input: &str,
+        turn_start: Instant,
+        out_tok_before: u64,
+    ) -> Result<TurnOutcome> {
+        // -- Thinking animation
+        let bar_text = {
+            let mut app = self.repl.app.lock();
+            app.scroll_to_bottom();
+            app.start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)")
+        };
+
+        let tick_app = self.repl.app.clone();
+        let tick_cancel = self.repl.cancel_turn.clone();
+        let tick_tokens = self.repl.session_output_tokens.clone();
+        let tick_base = out_tok_before;
+        let tick_start = turn_start;
+        let tick_bar = bar_text.clone();
+        let tick_queued_steering = self.repl.queued_steering.clone();
+        let tick_queued_followup = self.repl.queued_followup.clone();
+        let tick_modal_close_ms = self.repl.last_modal_close_ms.clone();
+        let tick_permissions = self.repl.permissions.clone();
+
+        let tick_handle = tokio::spawn(async move {
+            use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+            use futures::StreamExt;
+            let mut reader = EventStream::new();
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(16)) => {
+                        let secs = tick_start.elapsed().as_secs();
+                        let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
+                        {
+                            let cur = tick_bar.lock().clone();
+                            if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
+                                *tick_bar.lock() =
+                                    format!("assessing… (Ctrl+c to interrupt · {secs}s · {toks}↑)");
+                            } else if cur.starts_with('●') {
+                                let base = if let Some(idx) = cur.find(" (Ctrl+c") {
+                                    &cur[..idx]
+                                } else {
+                                    &cur
+                                };
+                                *tick_bar.lock() = format!("{base} (Ctrl+c to interrupt · {secs}s)");
+                            }
+                        }
+                        if let Some(mut app) = tick_app.try_lock()
+                            && (app.draw_dirty || app.thinking.is_some() || app.toast.is_some()) {
+                                let _ = app.draw();
+                            }
+                    }
+                    Some(Ok(evt)) = reader.next() => {
+                        let needs_question_key = matches!(&evt, Event::Key(crossterm::event::KeyEvent { kind: KeyEventKind::Press, .. }));
+
+                        if needs_question_key {
+                            if let Event::Key(k) = evt {
+                                loop {
+                                    if let Some(mut app) = tick_app.try_lock() {
+                                        let has_async_overlay = app.overlays.last().is_some_and(|o| o.id() == "active_question" || o.id() == "password");
+                                        if has_async_overlay {
+                                            if let Some(top) = app.overlays.last_mut() {
+                                                let res = top.handle_input(k);
+                                                if matches!(res, cade_tui::overlay_component::OverlayInputResult::Dismiss) {
+                                                    app.overlays.pop();
+                                                    app.draw_dirty = true;
+                                                    let _ = app.draw();
+                                                } else if matches!(res, cade_tui::overlay_component::OverlayInputResult::Consumed) {
+                                                    app.draw_dirty = true;
+                                                    let _ = app.draw();
+                                                }
+                                            }
+                                        } else {
+                                            match (k.code, k.modifiers) {
+                                                (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                                                | (KeyCode::Char('C'), KeyModifiers::CONTROL) => {
+                                                    app.editor.expand_pastes();
+                                                    let msg = app.editor.text().trim().to_string();
+                                                    if !msg.is_empty() {
+                                                        *tick_queued_steering.lock() = Some(msg);
+                                                        app.editor.clear();
+                                                        app.editor.set_cursor_pos(0);
+                                                        app.set_last_status(None);
+                                                        let _ = app.draw();
+                                                    }
+                                                    tick_cancel.store(true, Ordering::SeqCst);
+                                                    app.set_last_status(Some("Cancelling...".to_string()));
+                                                    let _ = app.draw();
+                                                }
+                                                (KeyCode::Esc, _) => {
+                                                    let esc_now_ms = now_epoch_ms();
+                                                    let esc_last_close = tick_modal_close_ms.load(Ordering::SeqCst);
+                                                    let esc_post_modal = esc_last_close > 0 && esc_now_ms.saturating_sub(esc_last_close) < 500;
+                                                    if !esc_post_modal && tick_start.elapsed().as_millis() >= 200 && !app.editor.is_empty() {
+                                                        app.editor.clear();
+                                                        app.editor.set_cursor_pos(0);
+                                                        app.set_last_status(None);
+                                                        let _ = app.draw();
+                                                    }
+                                                }
+                                                (KeyCode::Char('v') | KeyCode::Char('V'), m)
+                                                    if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                                                {
+                                                    if app.paste_from_clipboard() {
+                                                        let _ = app.draw();
+                                                    }
+                                                }
+                                                (KeyCode::Char('t'), KeyModifiers::CONTROL)
+                                                | (KeyCode::Char('\x14'), _) => {
+                                                    if let Some(plan) = &mut app.active_plan {
+                                                        plan.is_visible = !plan.is_visible;
+                                                        app.draw_dirty = true;
+                                                        let _ = app.draw();
+                                                    }
+                                                }
+                                                (KeyCode::Char('l') | KeyCode::Char('L'), KeyModifiers::CONTROL)
+                                                | (KeyCode::Char('\x0c'), _) => {
+                                                    let _ = app.terminal.clear();
+                                                    app.draw_dirty = true;
+                                                    let _ = app.draw();
+                                                }
+                                                (KeyCode::F(5), _) => {
+                                                    app.toggle_subagent_tray();
+                                                    let _ = app.draw();
+                                                }
+                                                (KeyCode::Char('w') | KeyCode::Char('W'), KeyModifiers::CONTROL) => {
+                                                    app.toggle_subagent_tray_focus();
+                                                    let _ = app.draw();
+                                                }
+                                                _ if app.subagent_tray.is_visible && app.subagent_tray.is_focused => {
+                                                    let trackers = app.subagent_trackers.clone();
+                                                    if app.subagent_tray.handle_key(k, &trackers) {
+                                                        let _ = app.draw();
+                                                    }
+                                                }
+                                                (KeyCode::Tab, _) if app.editor.is_empty() => {
+                                                    let next_mode = cade_tui::app::cycle_mode(app.mode);
+                                                    app.update_mode(next_mode);
+                                                    tick_permissions.set_mode(next_mode);
+                                                    let _ = app.draw();
+                                                }
+                                                (KeyCode::BackTab, _) => {
+                                                    let next_mode = cade_tui::app::cycle_mode_back(app.mode);
+                                                    app.update_mode(next_mode);
+                                                    tick_permissions.set_mode(next_mode);
+                                                    let _ = app.draw();
+                                                }
+                                                (KeyCode::Enter, m) if m == KeyModifiers::CONTROL => {
+                                                    app.editor.expand_pastes();
+                                                    let msg = app.editor.text().trim().to_string();
+                                                    if !msg.is_empty() {
+                                                        *tick_queued_steering.lock() = Some(msg);
+                                                        app.editor.clear();
+                                                        app.editor.set_cursor_pos(0);
+                                                        app.set_last_status(None);
+                                                        let _ = app.draw();
+                                                        tick_cancel.store(true, Ordering::SeqCst);
+                                                    }
+                                                }
+                                                (KeyCode::Enter, _) => {
+                                                    app.editor.expand_pastes();
+                                                    let msg = app.editor.text().trim().to_string();
+                                                    if !msg.is_empty() {
+                                                        tick_queued_followup.lock().push_back(msg);
+                                                        app.editor.clear();
+                                                        app.editor.set_cursor_pos(0);
+                                                        app.set_last_status(None);
+                                                        let _ = app.draw();
+                                                    }
+                                                }
+                                                (KeyCode::Char(_), _) | (KeyCode::Backspace, _) | (KeyCode::Delete, _) | (KeyCode::Left, _) | (KeyCode::Right, _) | (KeyCode::Home, _) | (KeyCode::End, _) | (KeyCode::Up, _) | (KeyCode::Down, _) => {
+                                                    let w = app.last_input_width;
+                                                    app.editor.handle_input(k, w);
+                                                    let _ = app.draw();
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                                }
+                            }
+                        } else if let Some(mut app) = tick_app.try_lock() {
+                            match evt {
+                                Event::Mouse(m) => {
+                                    let _ = app.handle_message_area_mouse_event(m);
+                                }
+                                Event::Paste(text) => {
+                                    app.handle_bracketed_paste_text(&text);
+                                    let _ = app.draw();
+                                }
+                                Event::Resize(_w, _h) => {
+                                    let _ = app.handle_resize();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let stream_res = self.repl.stream_turn(
+            stdout,
+            effective_input,
+            false,
+            "",
+            "",
+            "",
+            false,
+            None,
+            Some(bar_text),
+        ).await;
+
+        let is_cancelled = self.repl.cancel_turn.load(Ordering::SeqCst);
+        self.repl.cancel_turn.store(false, Ordering::SeqCst);
+
+        if is_cancelled {
+            let aid = self.repl.agent_id();
+            let _ = self.repl.app.lock().push(RenderLine::SystemMsg(format!(
+                "Turn detached via Ctrl+C. Agent: {aid} | Run persisting in background."
+            )));
+            let _ = self.repl.app.lock().push(RenderLine::SystemMsg(
+                "Press Ctrl+C again or type /exit to end session.".to_string(),
+            ));
+        }
+
+        // Blank line after every agent turn for visual block separation
+        let _ = self.repl.app.lock().push(RenderLine::Blank);
+
+        // Stop thinking animation
+        tick_handle.abort();
+        let _ = tick_handle.await;
+        let secs = self.repl.app.lock().stop_thinking();
+        {
+            let mut stats = self.repl.session_stats.lock();
+            stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
+        }
+
+        {
+            let mut app = self.repl.app.lock();
+            app.stop_thinking();
+            app.set_last_status(None);
+            if app.follow {
+                app.scroll_to_bottom();
+            }
+            let _ = app.draw();
+        }
+
+        if is_cancelled {
+            return Ok(TurnOutcome::Cancelled);
+        }
+
+        match stream_res {
+            Ok(msgs) => {
+                let summary = msgs
+                    .iter()
+                    .rfind(|m| m.msg_type() == "assistant_message")
+                    .and_then(|m| m.data["content"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let token_usage = Some(self.repl.session_output_tokens.load(Ordering::SeqCst));
+                Ok(TurnOutcome::Completed {
+                    summary,
+                    elapsed_secs: secs,
+                    token_usage,
+                })
+            }
+            Err(e) => Ok(TurnOutcome::Error(e.to_string())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_turn_outcome_variants() {
+        let completed = TurnOutcome::Completed {
+            summary: "Finished turn successfully".to_string(),
+            elapsed_secs: 5,
+            token_usage: Some(150),
+        };
+        assert_eq!(
+            completed,
+            TurnOutcome::Completed {
+                summary: "Finished turn successfully".to_string(),
+                elapsed_secs: 5,
+                token_usage: Some(150),
+            }
+        );
+
+        let cancelled = TurnOutcome::Cancelled;
+        assert_eq!(cancelled, TurnOutcome::Cancelled);
+
+        let error = TurnOutcome::Error("Network timeout".to_string());
+        assert_eq!(error, TurnOutcome::Error("Network timeout".to_string()));
+    }
+}
