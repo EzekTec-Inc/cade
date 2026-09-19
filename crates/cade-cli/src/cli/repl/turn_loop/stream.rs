@@ -291,6 +291,7 @@ impl Repl {
                             mode_label,
                         );
                         app.footer_extra = Some(metrics);
+                        app.session_cost_usd = total_cost;
                     }
                     "system_notice" => {
                         // Phase 3: server-side overflow recovery (and
@@ -506,6 +507,14 @@ impl Repl {
         if saved_run_id.is_some() || saved_seq_id.is_some() {
             let mut s = self.session.lock();
             let _ = s.set_run(saved_run_id, saved_seq_id);
+        }
+
+        // Keep TUI session cost in sync with computed stats
+        {
+            let (total_cost, _) = self.session_stats.lock().compute_cost();
+            let mut app = self.app.lock();
+            app.session_cost_usd = total_cost;
+            let _ = app.draw();
         }
 
         Ok(messages)

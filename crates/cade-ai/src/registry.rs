@@ -361,4 +361,44 @@ mod tests {
         assert!((p.cache_read - 0.1).abs() < 1e-9); // 0.5 * 0.2 = 0.1
         assert!((p.cache_write - 0.05).abs() < 1e-9); // 0.5 * 0.1 = 0.05
     }
+
+    #[test]
+    fn pricing_resolves_dated_openai_snapshots() {
+        let registry = ModelRegistry::new();
+        let dated = registry.pricing_for_model("openai/gpt-4o-2024-08-06");
+        let base = registry.pricing_for_model("openai/gpt-4o");
+        assert_eq!(dated, base);
+        assert_eq!(dated.input, 2.5);
+        assert_eq!(dated.output, 10.0);
+
+        let o3_mini_dated = registry.pricing_for_model("openai/o3-mini-2025-01-31");
+        let o3_mini_base = registry.pricing_for_model("openai/o3-mini");
+        assert_eq!(o3_mini_dated, o3_mini_base);
+        assert_eq!(o3_mini_dated.input, 1.1);
+
+        let o1_dated = registry.pricing_for_model("openai/o1-2024-12-17");
+        let o1_base = registry.pricing_for_model("openai/o1");
+        assert_eq!(o1_dated, o1_base);
+        assert_eq!(o1_dated.input, 15.0);
+    }
+
+    #[test]
+    fn pricing_resolves_newly_added_openai_models() {
+        let registry = ModelRegistry::new();
+        let gpt4_turbo = registry.pricing_for_model("openai/gpt-4-turbo");
+        assert_eq!(gpt4_turbo.input, 10.0);
+        assert_eq!(gpt4_turbo.output, 30.0);
+
+        let gpt4 = registry.pricing_for_model("openai/gpt-4");
+        assert_eq!(gpt4.input, 30.0);
+        assert_eq!(gpt4.output, 60.0);
+
+        let chatgpt_latest = registry.pricing_for_model("openai/chatgpt-4o-latest");
+        assert_eq!(chatgpt_latest.input, 5.0);
+        assert_eq!(chatgpt_latest.output, 15.0);
+
+        let o1_mini = registry.pricing_for_model("openai/o1-mini");
+        assert_eq!(o1_mini.input, 1.1);
+        assert_eq!(o1_mini.output, 4.4);
+    }
 }

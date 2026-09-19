@@ -1526,3 +1526,39 @@ fn build_tools_preserves_plan_and_meta_tools_under_heavy_load() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_parse_token_usage_standard_and_responses_api() {
+    // 1. Standard Chat Completions usage payload
+    let chat_usage = json!({
+        "prompt_tokens": 150,
+        "completion_tokens": 75,
+        "total_tokens": 225,
+        "prompt_tokens_details": {
+            "cached_tokens": 50
+        }
+    });
+    let tu = parse_token_usage(&chat_usage, "openai/gpt-4o-2024-08-06")
+        .expect("should parse chat usage");
+    assert_eq!(tu.input_tokens, 100); // 150 - 50 cached
+    assert_eq!(tu.output_tokens, 75);
+    assert_eq!(tu.cache_read_tokens, 50);
+    assert_eq!(tu.cache_write_tokens, 0);
+    // Verified snapshot stripping in model name:
+    assert_eq!(tu.model, "openai/gpt-4o");
+
+    // 2. Responses API usage payload (uses input_tokens, output_tokens, and input_token_details)
+    let responses_usage = json!({
+        "input_tokens": 200,
+        "output_tokens": 90,
+        "input_token_details": {
+            "cached_tokens": 80
+        }
+    });
+    let tu_resp = parse_token_usage(&responses_usage, "gpt-5-2025-01-01")
+        .expect("should parse responses API usage");
+    assert_eq!(tu_resp.input_tokens, 120); // 200 - 80 cached
+    assert_eq!(tu_resp.output_tokens, 90);
+    assert_eq!(tu_resp.cache_read_tokens, 80);
+    assert_eq!(tu_resp.model, "openai/gpt-5");
+}

@@ -402,8 +402,14 @@ pub(super) async fn execute_turn_tools(
                     .await;
                 }
             } else if tool_name == "UpdatePlan" {
-                let step_id = arguments.get("step_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                let done = arguments.get("done").and_then(|v| v.as_bool()).unwrap_or(true);
+                let step_id = arguments
+                    .get("step_id")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let done = arguments
+                    .get("done")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
 
                 emit_tool_progress(
                     &state.db,

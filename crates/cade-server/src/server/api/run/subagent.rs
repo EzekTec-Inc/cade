@@ -902,9 +902,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let model = cfg
         .resolve_model(def_opt)
         .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            cade_ai::catalogue::select_fast_subagent_model(&parent_model, None)
-        });
+        .unwrap_or_else(|| cade_ai::catalogue::select_fast_subagent_model(&parent_model, None));
 
     emitter
         .emit_started(&subagent_id, &task_preview, &cfg.mode, &model)
@@ -1229,7 +1227,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
         }
     });
 
-    session = session.with_event_emitter(cade_agent::subagents::SubagentEventEmitter::new(Some(session_evt_tx)));
+    session = session.with_event_emitter(cade_agent::subagents::SubagentEventEmitter::new(Some(
+        session_evt_tx,
+    )));
 
     let root_path = if let Some(ref tw) = temp_workspace {
         tw.path().to_path_buf()
@@ -1723,7 +1723,9 @@ pub(crate) fn build_failover_chain(
     ];
 
     for &(prov, model_id) in FAST_PROVIDER_MODELS {
-        if available_providers.iter().any(|p| p.eq_ignore_ascii_case(prov))
+        if available_providers
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(prov))
             && !seen.contains(model_id)
         {
             chain.push(model_id.to_string());
@@ -1753,8 +1755,8 @@ pub(crate) fn is_failover_worthy_error(err_str: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_filter_subagent_tools_constitutional_inheritance() {
@@ -1910,15 +1912,29 @@ mod tests {
         assert_eq!(chain[1], "anthropic/claude-sonnet-4");
         assert!(chain.contains(&"openai/gpt-4o-mini".to_string()));
         // Deduplicated
-        assert_eq!(chain.iter().filter(|m| *m == "gemini/gemini-2.0-flash").count(), 1);
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|m| *m == "gemini/gemini-2.0-flash")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn test_is_failover_worthy_error() {
         assert!(super::is_failover_worthy_error("HTTP 404 Not Found"));
-        assert!(super::is_failover_worthy_error("HTTP 429 Rate limit exceeded"));
-        assert!(super::is_failover_worthy_error("Your credit balance is too low to access the Anthropic API"));
-        assert!(super::is_failover_worthy_error("insufficient_quota error from provider"));
-        assert!(!super::is_failover_worthy_error("Invalid json syntax in tool call"));
+        assert!(super::is_failover_worthy_error(
+            "HTTP 429 Rate limit exceeded"
+        ));
+        assert!(super::is_failover_worthy_error(
+            "Your credit balance is too low to access the Anthropic API"
+        ));
+        assert!(super::is_failover_worthy_error(
+            "insufficient_quota error from provider"
+        ));
+        assert!(!super::is_failover_worthy_error(
+            "Invalid json syntax in tool call"
+        ));
     }
 }

@@ -250,23 +250,51 @@ impl ModelEntry {
     }
 }
 
+pub(crate) fn strip_model_snapshot_suffix(id: &str) -> &str {
+    // Check -YYYY-MM-DD (11 chars: '-' + 4 digits + '-' + 2 digits + '-' + 2 digits)
+    if id.len() > 11 {
+        let suffix = &id[id.len() - 11..];
+        let bytes = suffix.as_bytes();
+        if bytes[0] == b'-'
+            && bytes[1..5].iter().all(u8::is_ascii_digit)
+            && bytes[5] == b'-'
+            && bytes[6..8].iter().all(u8::is_ascii_digit)
+            && bytes[8] == b'-'
+            && bytes[9..11].iter().all(u8::is_ascii_digit)
+        {
+            return &id[..id.len() - 11];
+        }
+    }
+    // Check -MMDD (5 chars: '-' + 4 digits, e.g. -0613, -0125)
+    if id.len() > 5 {
+        let suffix = &id[id.len() - 5..];
+        let bytes = suffix.as_bytes();
+        if bytes[0] == b'-' && bytes[1..5].iter().all(u8::is_ascii_digit) {
+            return &id[..id.len() - 5];
+        }
+    }
+    id
+}
+
 pub fn normalize_model_id_for_lookup(model_id: &str) -> String {
     let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    if id.contains('/') {
-        return model_id.to_string();
+    let id_stripped = strip_model_snapshot_suffix(id);
+
+    if id_stripped.contains('/') {
+        return id_stripped.to_string();
     }
 
-    let lower = id.to_ascii_lowercase();
+    let lower = id_stripped.to_ascii_lowercase();
     if lower.starts_with("gpt-")
         || lower.starts_with("chatgpt")
         || lower.starts_with("o1")
         || lower.starts_with("o3")
         || lower.starts_with("o4")
     {
-        return format!("openai/{id}");
+        return format!("openai/{id_stripped}");
     }
 
-    model_id.to_string()
+    id_stripped.to_string()
 }
 
 fn parse_cade_model_id(model_id: &str) -> Option<(String, String)> {
@@ -418,7 +446,11 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
 /// Inspect environment variables to detect which LLM providers have keys configured.
 pub fn available_env_providers() -> Vec<String> {
     let mut provs = Vec::new();
-    let has_val = |k: &str| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false);
+    let has_val = |k: &str| {
+        std::env::var(k)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
 
     if has_val("GOOGLE_API_KEY") || has_val("GEMINI_API_KEY") {
         provs.push("gemini".to_string());
@@ -458,7 +490,10 @@ pub fn select_fast_subagent_model(
     }
 
     let default_provider = fast_default.split('/').next().unwrap_or(&fast_default);
-    if providers.iter().any(|p| p.eq_ignore_ascii_case(default_provider)) {
+    if providers
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(default_provider))
+    {
         return fast_default;
     }
 

@@ -29,8 +29,25 @@
     "pricing": { "input": 75.0, "output": 150.0, "cache_read": 37.5, "cache_write": 0.0 }
   },
   {
+    "contains_any": ["chatgpt-4o-latest"],
+    "pricing": { "input": 5.0, "output": 15.0, "cache_read": 1.25, "cache_write": 0.0 }
+  },
+  {
     "contains_any": ["gpt-4o"],
     "pricing": { "input": 2.5, "output": 10.0, "cache_read": 1.25, "cache_write": 0.0 }
+  },
+  {
+    "contains_any": ["gpt-4-turbo", "gpt-4-1106", "gpt-4-0125"],
+    "pricing": { "input": 10.0, "output": 30.0, "cache_read": 5.0, "cache_write": 0.0 }
+  },
+  {
+    "contains_any": ["gpt-4", "gpt-4-0613", "gpt-4-0314"],
+    "not_contains_any": ["turbo", "mini", "4o", "4.1", "4.5", "5"],
+    "pricing": { "input": 30.0, "output": 60.0, "cache_read": 0.0, "cache_write": 0.0 }
+  },
+  {
+    "contains_any": ["o1-mini"],
+    "pricing": { "input": 1.1, "output": 4.4, "cache_read": 0.55, "cache_write": 0.0 }
   },
   {
     "contains_any": ["o4-mini", "o3-mini"],
@@ -66,12 +83,12 @@
     "pricing": { "input": 1.75, "output": 14.0, "cache_read": 0.875, "cache_write": 0.0 }
   },
   {
-    "contains_any": ["/o3"],
+    "contains_any": ["/o3", "o3-", "openai/o3"],
     "not_contains_any": ["mini"],
     "pricing": { "input": 10.0, "output": 40.0, "cache_read": 2.5, "cache_write": 0.0 }
   },
   {
-    "contains_any": ["/o1"],
+    "contains_any": ["/o1", "o1-", "openai/o1"],
     "not_contains_any": ["mini"],
     "pricing": { "input": 15.0, "output": 60.0, "cache_read": 3.75, "cache_write": 0.0 }
   },

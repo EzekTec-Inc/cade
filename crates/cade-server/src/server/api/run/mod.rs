@@ -792,6 +792,34 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             break;
         }
 
+        // ── Persist assistant message ─────────────────────────────────
+        let tool_calls_json: Vec<Value> = tool_calls
+            .iter()
+            .filter_map(|tc| serde_json::to_value(tc).ok())
+            .collect();
+        let has_text = !text_acc.is_empty();
+        let has_tools = !tool_calls.is_empty();
+
+        // If provider or gateway omitted usage chunk, compute a fallback token estimate
+        // so usage_statistics and costing are never silently lost.
+        if turn_usage.input_tokens == 0 && turn_usage.output_tokens == 0 && (has_text || has_tools)
+        {
+            let est_out = ((text_acc.len()
+                + tool_calls
+                    .iter()
+                    .map(|t| t.arguments.to_string().len())
+                    .sum::<usize>())
+                / 4)
+            .max(1) as u32;
+            let est_in =
+                (req.messages.iter().map(|m| m.content.len()).sum::<usize>() / 4).max(1) as u32;
+            turn_usage.input_tokens = est_in;
+            turn_usage.output_tokens = est_out;
+            if turn_usage.model.is_empty() {
+                turn_usage.model = req.model.clone();
+            }
+        }
+
         if turn_usage.input_tokens > 0
             || turn_usage.output_tokens > 0
             || turn_usage.cache_read_tokens > 0
@@ -815,14 +843,6 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             }))
             .await;
         }
-
-        // ── Persist assistant message ─────────────────────────────────
-        let tool_calls_json: Vec<Value> = tool_calls
-            .iter()
-            .filter_map(|tc| serde_json::to_value(tc).ok())
-            .collect();
-        let has_text = !text_acc.is_empty();
-        let has_tools = !tool_calls.is_empty();
         if has_text || has_tools {
             persist(
                 &state2,

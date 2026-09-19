@@ -88,6 +88,7 @@ pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage
         .unwrap_or(u32::MAX);
     let cache_tok = usage["prompt_tokens_details"]["cached_tokens"]
         .as_u64()
+        .or_else(|| usage["input_token_details"]["cached_tokens"].as_u64())
         .or_else(|| usage["input_tokens_details"]["cached_tokens"].as_u64())
         .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
         .unwrap_or(0)
@@ -289,10 +290,7 @@ fn has_tag(schema: &Value, target_tag: &str) -> bool {
     schema
         .get("tags")
         .and_then(Value::as_array)
-        .map(|tags| {
-            tags.iter()
-                .any(|tag| tag.as_str() == Some(target_tag))
-        })
+        .map(|tags| tags.iter().any(|tag| tag.as_str() == Some(target_tag)))
         .unwrap_or(false)
 }
 
@@ -310,9 +308,7 @@ fn is_core_server_tool(schema: &Value) -> bool {
 
 fn tool_server_key(schema: &Value) -> &str {
     schema_str(schema, "server_key")
-        .or_else(|| {
-            tool_name(schema).and_then(|n| n.split_once("__").map(|(prefix, _)| prefix))
-        })
+        .or_else(|| tool_name(schema).and_then(|n| n.split_once("__").map(|(prefix, _)| prefix)))
         .unwrap_or("")
 }
 
@@ -331,7 +327,10 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
     // 2. Tier 1: Core MCP Servers (Server-Aware Fair Round-Robin Allocation)
     let mut core_by_server: std::collections::BTreeMap<&str, Vec<&Value>> =
         std::collections::BTreeMap::new();
-    for schema in schemas.iter().filter(|s| !is_meta_tool(s) && is_core_server_tool(s)) {
+    for schema in schemas
+        .iter()
+        .filter(|s| !is_meta_tool(s) && is_core_server_tool(s))
+    {
         let key = tool_server_key(schema);
         core_by_server.entry(key).or_default().push(schema);
     }
@@ -445,7 +444,11 @@ impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("OPENAI_BASE_URL").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| {
+                std::env::var("OPENAI_BASE_URL")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
             .unwrap_or_else(|| OPENAI_URL.to_string());
 
         let client = if base.contains("openrouter.ai") {
@@ -837,6 +840,7 @@ impl OpenAiProvider {
         });
         if stream {
             body["stream"] = true.into();
+            body["stream_options"] = json!({ "include_usage": true });
         }
         if let Some(effort) = req
             .reasoning_effort
@@ -1083,8 +1087,13 @@ impl LlmProvider for OpenAiProvider {
                         }
 
                         // Usage chunk: may arrive in any chunk, including the separate
-                        // empty-choices chunk OpenAI sends after finish_reason.
-                        if let Some(usage) = v.get("usage").filter(|u| !u.is_null())
+                        // empty-choices chunk OpenAI sends after finish_reason, or inside
+                        // response.done in the Responses API.
+                        let usage_opt = v
+                            .get("usage")
+                            .or_else(|| v.get("response").and_then(|r| r.get("usage")))
+                            .filter(|u| !u.is_null());
+                        if let Some(usage) = usage_opt
                             && let Some(tu) = parse_token_usage(usage, &req_model)
                         {
                             yield Ok(StreamChunk::Usage(tu));
