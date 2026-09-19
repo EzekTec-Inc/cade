@@ -840,7 +840,6 @@ impl OpenAiProvider {
         });
         if stream {
             body["stream"] = true.into();
-            body["stream_options"] = json!({ "include_usage": true });
         }
         if let Some(effort) = req
             .reasoning_effort
