@@ -141,25 +141,199 @@ pub fn LiveView() -> Element {
                     }
                 }
 
-                // 2. Active Run & Telemetry Row
-                div { class: "grid grid-cols-1 md:grid-cols-3 gap-6",
-                    div { class: "p-5 rounded-xl border border-slate-800 bg-[#0c101d] space-y-2",
-                        div { class: "text-xs font-mono text-slate-400 uppercase", "Active Session Status" }
-                        div { class: "text-xl font-extrabold text-slate-100 flex items-center space-x-2",
-                            if runs().iter().any(|r| r["status"].as_str() == Some("running")) {
-                                span { class: "text-emerald-400", "● Executing Turn" }
-                            } else {
-                                span { class: "text-slate-400", "○ Idle" }
-                            }
+                // 2. Active Swarm & Subagent Workflows
+                div { class: "space-y-4",
+                    div { class: "flex items-center justify-between",
+                        div { class: "flex items-center space-x-2.5",
+                            h2 { class: "text-sm font-bold text-slate-200 uppercase tracking-wider", "Active Swarm & Subagent Workflows" }
+                            span { class: "text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/80 text-cyan-300 font-bold", "Real-Time Telemetry" }
                         }
                     }
-                    div { class: "p-5 rounded-xl border border-slate-800 bg-[#0c101d] space-y-2",
-                        div { class: "text-xs font-mono text-slate-400 uppercase", "Total Recorded Runs" }
-                        div { class: "text-xl font-extrabold text-cyan-400 font-mono", "{runs().len()}" }
-                    }
-                    div { class: "p-5 rounded-xl border border-slate-800 bg-[#0c101d] space-y-2",
-                        div { class: "text-xs font-mono text-slate-400 uppercase", "Pending Approvals" }
-                        div { class: "text-xl font-extrabold text-amber-400 font-mono", "{pending_approvals.len()}" }
+
+                    {
+                        let active_runs: Vec<_> = runs().into_iter().filter(|r| r["status"].as_str() == Some("running")).collect();
+                        if !active_runs.is_empty() {
+                            rsx! {
+                                div { class: "grid grid-cols-1 lg:grid-cols-2 gap-4",
+                                    for r in active_runs {
+                                        {
+                                            let r_id = r["id"].as_str().unwrap_or("").to_string();
+                                            let a_id = r["agent_id"].as_str().unwrap_or("").to_string();
+                                            let r_clone = r.clone();
+                                            let r_id_inspect = r_id.clone();
+                                            let r_id_steer = r_id.clone();
+                                            let r_id_swap = r_id.clone();
+                                            let r_id_cancel = r_id.clone();
+                                            let key = (state.api_key)();
+                                            let st = state;
+                                            let mut inline_steer = use_signal(String::new);
+
+                                            rsx! {
+                                                div { key: "{r_id}", class: "p-5 rounded-xl border border-cyan-500/40 bg-[#090e1a] shadow-[0_4px_20px_rgba(6,182,212,0.12)] flex flex-col justify-between space-y-4 font-mono text-xs",
+                                                    // Card Header
+                                                    div { class: "flex items-center justify-between border-b border-slate-800 pb-3",
+                                                        div { class: "flex items-center space-x-2",
+                                                            span { class: "w-2 h-2 rounded-full bg-emerald-400 animate-ping" }
+                                                            span { class: "text-xs font-bold text-slate-100 uppercase", "{r_id}" }
+                                                            span { class: "text-slate-500", "·" }
+                                                            span { class: "text-cyan-400 font-semibold", "{a_id}" }
+                                                        }
+                                                        span { class: "px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 border border-emerald-600 text-emerald-300", "● RUNNING" }
+                                                    }
+
+                                                    // Inline Steer Input
+                                                    div { class: "space-y-2.5",
+                                                        div { class: "flex items-center space-x-2",
+                                                            input {
+                                                                class: "flex-1 px-3 py-1.5 rounded-lg bg-[#121826] border border-slate-700 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-500",
+                                                                placeholder: "Quick steer instruction...",
+                                                                value: "{inline_steer}",
+                                                                oninput: move |e| inline_steer.set(e.value()),
+                                                            }
+                                                            button {
+                                                                class: "px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer transition-colors shadow",
+                                                                onclick: {
+                                                                    let id = r_id_steer.clone();
+                                                                    let k = key.clone();
+                                                                    let st_c = st;
+                                                                    move |_| {
+                                                                        let msg = (inline_steer)().clone();
+                                                                        let mut sig = inline_steer;
+                                                                        let k_inner = k.clone();
+                                                                        let id_inner = id.clone();
+                                                                        spawn(async move {
+                                                                            let client = crate::api::CadeApiClient::new(k_inner);
+                                                                            match client.steer_subagent(&id_inner, &msg).await {
+                                                                                Ok(_) => {
+                                                                                    add_toast(&st_c, ToastLevel::Success, "Steered", format!("Guidance sent to {id_inner}"));
+                                                                                    sig.set(String::new());
+                                                                                }
+                                                                                Err(e) => add_toast(&st_c, ToastLevel::Error, "Failed", e),
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                },
+                                                                "Steer"
+                                                            }
+                                                        }
+
+                                                        // Inline Model Dropdown & Action Buttons
+                                                        div { class: "flex items-center justify-between pt-1 gap-2",
+                                                            div { class: "flex items-center space-x-1.5 flex-1 min-w-0",
+                                                                span { class: "text-[10px] text-slate-500 uppercase", "Model:" }
+                                                                select {
+                                                                    class: "px-2 py-1 rounded bg-[#121826] border border-slate-700 text-amber-300 text-xs font-mono focus:outline-none focus:border-amber-500 flex-1 truncate cursor-pointer",
+                                                                    onchange: {
+                                                                        let id = r_id_swap.clone();
+                                                                        let k = key.clone();
+                                                                        let st_c = st;
+                                                                        move |e: Event<FormData>| {
+                                                                            let m = e.value();
+                                                                            let id_inner = id.clone();
+                                                                            let k_inner = k.clone();
+                                                                            spawn(async move {
+                                                                                let client = crate::api::CadeApiClient::new(k_inner);
+                                                                                match client.swap_subagent_model(&id_inner, &m).await {
+                                                                                    Ok(_) => add_toast(&st_c, ToastLevel::Success, "Model Swapped", format!("Swapped {id_inner} to {m}")),
+                                                                                    Err(e) => add_toast(&st_c, ToastLevel::Error, "Failed", e),
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    },
+                                                                    option { value: "gemini/gemini-2.0-flash", selected: true, "gemini-2.0-flash (Fast)" }
+                                                                    option { value: "anthropic/claude-haiku-4-5", "claude-haiku-4-5 (Fast)" }
+                                                                    option { value: "openai/o4-mini", "o4-mini (Fast)" }
+                                                                    option { value: "anthropic/claude-3-7-sonnet", "claude-3-7-sonnet (Deep)" }
+                                                                    option { value: "gemini/gemini-2.5-pro", "gemini-2.5-pro (Deep)" }
+                                                                }
+                                                            }
+
+                                                            div { class: "flex items-center space-x-2 shrink-0",
+                                                                button {
+                                                                    class: "px-3 py-1 rounded bg-cyan-900/80 hover:bg-cyan-700 text-cyan-100 border border-cyan-700/60 font-semibold cursor-pointer text-xs transition-colors",
+                                                                    onclick: {
+                                                                        let r_inner = r_clone.clone();
+                                                                        let r_id_in = r_id_inspect.clone();
+                                                                        let k_in = key.clone();
+                                                                        move |_| {
+                                                                            selected_run.set(Some(r_inner.clone()));
+                                                                            is_drawer_open.set(true);
+                                                                            let mut logs = drawer_logs;
+                                                                            let mut is_str = is_streaming_drawer;
+                                                                            logs.set(vec!["Following live run stream...".to_string()]);
+                                                                            let r_sub = r_id_in.clone();
+                                                                            let k_sub = k_in.clone();
+                                                                            spawn(async move {
+                                                                                is_str.set(true);
+                                                                                let _ = crate::api::stream_run(&k_sub, &r_sub, None, move |evt| {
+                                                                                    let mut list = logs();
+                                                                                    if let Some(c) = evt.content() {
+                                                                                        list.push(format!("[prose] {c}"));
+                                                                                    } else if let Some(t) = evt.tool_name() {
+                                                                                        list.push(format!("[tool] {t}"));
+                                                                                    } else if let Some(reasoning) = evt.reasoning() {
+                                                                                        list.push(format!("[thought] {reasoning}"));
+                                                                                    }
+                                                                                    if list.len() > 200 {
+                                                                                        list.remove(0);
+                                                                                    }
+                                                                                    logs.set(list);
+                                                                                }).await;
+                                                                                is_str.set(false);
+                                                                            });
+                                                                        }
+                                                                    },
+                                                                    "🔍 Stream"
+                                                                }
+                                                                button {
+                                                                    class: "px-3 py-1 rounded bg-rose-950/80 hover:bg-rose-800 text-rose-200 border border-rose-800/80 font-semibold cursor-pointer text-xs transition-colors",
+                                                                    onclick: {
+                                                                        let id = r_id_cancel.clone();
+                                                                        let k = key.clone();
+                                                                        let st_c = st;
+                                                                        move |_| {
+                                                                            let id_sub = id.clone();
+                                                                            let k_sub = k.clone();
+                                                                            spawn(async move {
+                                                                                let client = crate::api::CadeApiClient::new(k_sub);
+                                                                                match client.cancel_run(&id_sub).await {
+                                                                                    Ok(_) => add_toast(&st_c, ToastLevel::Warning, "Cancelled", format!("Run {id_sub} cancelled")),
+                                                                                    Err(e) => add_toast(&st_c, ToastLevel::Error, "Failed", e),
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    },
+                                                                    "✕ Cancel"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            rsx! {
+                                div { class: "grid grid-cols-1 md:grid-cols-3 gap-6",
+                                    div { class: "p-5 rounded-xl border border-slate-800 bg-[#0c101d] space-y-2",
+                                        div { class: "text-xs font-mono text-slate-400 uppercase", "Active Session Status" }
+                                        div { class: "text-xl font-extrabold text-slate-400 flex items-center space-x-2 font-mono",
+                                            span { "○ Idle (Ready)" }
+                                        }
+                                    }
+                                    div { class: "p-5 rounded-xl border border-slate-800 bg-[#0c101d] space-y-2",
+                                        div { class: "text-xs font-mono text-slate-400 uppercase", "Total Recorded Runs" }
+                                        div { class: "text-xl font-extrabold text-cyan-400 font-mono", "{runs().len()}" }
+                                    }
+                                    div { class: "p-5 rounded-xl border border-slate-800 bg-[#0c101d] space-y-2",
+                                        div { class: "text-xs font-mono text-slate-400 uppercase", "Pending Approvals" }
+                                        div { class: "text-xl font-extrabold text-amber-400 font-mono", "{pending_approvals.len()}" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -200,10 +374,47 @@ pub fn LiveView() -> Element {
                                             };
 
                                             rsx! {
-                                                tr { key: "{rid}", class: "hover:bg-[#111625]/50 transition-colors",
-                                                    td { class: "px-6 py-4 font-bold text-slate-200", "{rid}" }
+                                                tr {
+                                                    key: "{rid}",
+                                                    class: if selected_run().as_ref().and_then(|sel| sel["id"].as_str()) == Some(&rid) {
+                                                        "cursor-pointer bg-cyan-950/40 ring-1 ring-cyan-500/50 transition-all font-mono"
+                                                    } else {
+                                                        "cursor-pointer hover:bg-slate-800/60 transition-all font-mono"
+                                                    },
+                                                    onclick: {
+                                                        let r_clone = r.clone();
+                                                        let rid_c = rid.clone();
+                                                        move |_| {
+                                                            selected_run.set(Some(r_clone.clone()));
+                                                            is_drawer_open.set(true);
+                                                            let key_c = (state.api_key)();
+                                                            let mut logs = drawer_logs;
+                                                            let mut is_str = is_streaming_drawer;
+                                                            logs.set(vec!["Following live run stream...".to_string()]);
+                                                            let rid_sub = rid_c.clone();
+                                                            spawn(async move {
+                                                                is_str.set(true);
+                                                                let _ = crate::api::stream_run(&key_c, &rid_sub, None, move |evt| {
+                                                                    let mut list = logs();
+                                                                    if let Some(c) = evt.content() {
+                                                                        list.push(format!("[prose] {c}"));
+                                                                    } else if let Some(t) = evt.tool_name() {
+                                                                        list.push(format!("[tool] {t}"));
+                                                                    } else if let Some(r) = evt.reasoning() {
+                                                                        list.push(format!("[thought] {r}"));
+                                                                    }
+                                                                    if list.len() > 250 {
+                                                                        list.remove(0);
+                                                                    }
+                                                                    logs.set(list);
+                                                                }).await;
+                                                                is_str.set(false);
+                                                            });
+                                                        }
+                                                    },
+                                                    td { class: "px-6 py-4 font-bold text-slate-200 group-hover:text-cyan-300", "{rid}" }
                                                     td { class: "px-6 py-4",
-                                                        span { class: "px-2.5 py-1 rounded-full text-[11px] font-bold border {status_color} inline-flex items-center space-x-1.5",
+                                                        span { class: "px-2.5 py-1 rounded-full text-[11px] font-bold border {status_color} inline-flex items-center space-x-1.5 shadow-sm",
                                                             if is_running {
                                                                 span { class: "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" }
                                                             }
@@ -214,47 +425,17 @@ pub fn LiveView() -> Element {
                                                     td { class: "px-6 py-4 text-slate-400", "{created}" }
                                                     td { class: "px-6 py-4 text-right space-x-2",
                                                         button {
-                                                            class: "px-3 py-1 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-700/50 text-xs font-semibold cursor-pointer transition-colors",
-                                                            onclick: {
-                                                                let r_clone = r.clone();
-                                                                let rid_c = rid.clone();
-                                                                move |_| {
-                                                                    selected_run.set(Some(r_clone.clone()));
-                                                                    is_drawer_open.set(true);
-                                                                    let key_c = (state.api_key)();
-                                                                    let mut logs = drawer_logs;
-                                                                    let mut is_str = is_streaming_drawer;
-                                                                    logs.set(vec!["Following live run stream...".to_string()]);
-                                                                    let rid_sub = rid_c.clone();
-                                                                    spawn(async move {
-                                                                        is_str.set(true);
-                                                                        let _ = crate::api::stream_run(&key_c, &rid_sub, None, move |evt| {
-                                                                            let mut list = logs();
-                                                                            if let Some(c) = evt.content() {
-                                                                                list.push(format!("[prose] {c}"));
-                                                                            } else if let Some(t) = evt.tool_name() {
-                                                                                list.push(format!("[tool] {t}"));
-                                                                            } else if let Some(r) = evt.reasoning() {
-                                                                                list.push(format!("[thought] {r}"));
-                                                                            }
-                                                                            if list.len() > 200 {
-                                                                                list.remove(0);
-                                                                            }
-                                                                            logs.set(list);
-                                                                        }).await;
-                                                                        is_str.set(false);
-                                                                    });
-                                                                }
-                                                            },
-                                                            "Inspect"
+                                                            class: "px-3 py-1 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 border border-cyan-700/50 text-xs font-semibold cursor-pointer transition-colors",
+                                                            "🔍 Inspect"
                                                         }
                                                         button {
                                                             class: "px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition-colors",
-                                                            onclick: move |_| {
+                                                            onclick: move |e| {
+                                                                e.stop_propagation();
                                                                 let mut page = state.active_page;
                                                                 page.set(SelectedPage::Chat);
                                                             },
-                                                            "View Chat"
+                                                            "💬 Chat"
                                                         }
                                                     }
                                                 }
@@ -321,7 +502,7 @@ pub fn LiveView() -> Element {
                                             oninput: move |e| steer_input.set(e.value()),
                                         }
                                         button {
-                                            class: "px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold cursor-pointer transition-colors shadow",
+                                            class: "px-3.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold cursor-pointer transition-colors shadow",
                                             onclick: move |_| {
                                                 let id = run_id_steer.clone();
                                                 let msg = (steer_input)().clone();
@@ -339,21 +520,43 @@ pub fn LiveView() -> Element {
                                                     }
                                                 });
                                             },
-                                            "Steer"
+                                            "Send Guidance"
+                                        }
+                                    }
+
+                                    // Quick guidance presets
+                                    div { class: "flex items-center flex-wrap gap-1.5 pt-1",
+                                        for preset in &["Focus on tests", "Skip file exploration", "Summarize progress", "Conclude task cleanly"] {
+                                            {
+                                                let preset_txt = preset.to_string();
+                                                let mut input_sig = steer_input;
+                                                rsx! {
+                                                    button {
+                                                        class: "px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-[10px] text-slate-300 border border-slate-700/60 cursor-pointer transition-colors",
+                                                        onclick: move |_| input_sig.set(preset_txt.clone()),
+                                                        "+ {preset}"
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
 
                                 div { class: "space-y-1.5",
-                                    label { class: "text-[10px] uppercase text-slate-400 font-bold", "Model Hot-Swap" }
+                                    label { class: "text-[10px] uppercase text-slate-400 font-bold", "Model Hot-Swap (Next Turn)" }
                                     div { class: "flex items-center space-x-2",
-                                        input {
-                                            class: "flex-1 px-3 py-1.5 rounded-lg bg-[#141926] border border-slate-700 text-slate-100 font-mono focus:outline-none focus:border-amber-500",
+                                        select {
+                                            class: "flex-1 px-3 py-1.5 rounded-lg bg-[#141926] border border-slate-700 text-amber-300 font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer",
                                             value: "{model_input}",
-                                            oninput: move |e| model_input.set(e.value()),
+                                            onchange: move |e: Event<FormData>| model_input.set(e.value()),
+                                            option { value: "gemini/gemini-2.0-flash", "gemini-2.0-flash (Fast · Default)" }
+                                            option { value: "anthropic/claude-haiku-4-5", "claude-haiku-4-5 (Fast)" }
+                                            option { value: "openai/o4-mini", "o4-mini (Fast)" }
+                                            option { value: "anthropic/claude-3-7-sonnet", "claude-3-7-sonnet (Deep Reasoning)" }
+                                            option { value: "gemini/gemini-2.5-pro", "gemini-2.5-pro (Deep Reasoning)" }
                                         }
                                         button {
-                                            class: "px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold cursor-pointer transition-colors shadow",
+                                            class: "px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold cursor-pointer transition-colors shadow",
                                             onclick: move |_| {
                                                 let id = run_id_swap.clone();
                                                 let m = (model_input)().clone();
@@ -405,9 +608,34 @@ pub fn LiveView() -> Element {
                                     }
                                 }
                             }
-                            div { class: "flex-1 overflow-y-auto p-4 bg-[#050811] space-y-1.5 font-mono text-slate-300 select-text",
+                            div { class: "flex-1 overflow-y-auto p-4 bg-[#050811] space-y-1.5 font-mono text-xs select-text",
                                 for (idx, line) in drawer_logs().iter().enumerate() {
-                                    div { key: "{idx}", class: "text-[11px] break-words whitespace-pre-wrap leading-relaxed", "{line}" }
+                                    {
+                                        if line.starts_with("[thought]") {
+                                            let text = line.strip_prefix("[thought] ").unwrap_or(line);
+                                            rsx! {
+                                                div { key: "{idx}", class: "text-[11px] text-amber-300/90 italic bg-amber-950/20 border border-amber-900/30 rounded p-1.5 break-words whitespace-pre-wrap leading-relaxed",
+                                                    span { class: "font-bold font-sans not-italic text-amber-400 mr-1.5 uppercase text-[9px]", "Thinking:" }
+                                                    "{text}"
+                                                }
+                                            }
+                                        } else if line.starts_with("[tool]") {
+                                            let text = line.strip_prefix("[tool] ").unwrap_or(line);
+                                            rsx! {
+                                                div { key: "{idx}", class: "text-[11px] text-cyan-300 bg-cyan-950/30 border border-cyan-800/40 rounded p-1.5 break-words font-semibold",
+                                                    span { class: "text-cyan-400 mr-1.5 uppercase text-[9px] font-bold", "Tool Call:" }
+                                                    "{text}"
+                                                }
+                                            }
+                                        } else {
+                                            let text = line.strip_prefix("[prose] ").unwrap_or(line);
+                                            rsx! {
+                                                div { key: "{idx}", class: "text-[11px] text-slate-200 break-words whitespace-pre-wrap leading-relaxed py-0.5",
+                                                    "{text}"
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -72,6 +72,37 @@ pub fn ChatView() -> Element {
                     }
                 }
 
+                // Active Subagents Banner
+                {
+                    let running_runs: Vec<_> = (state.runs)().into_iter().filter(|r| r["status"].as_str() == Some("running")).collect();
+                    if !running_runs.is_empty() {
+                        let count = running_runs.len();
+                        let first_id = running_runs[0]["id"].as_str().unwrap_or("").to_string();
+                        rsx! {
+                            div { class: "px-6 py-2 bg-gradient-to-r from-cyan-950/70 via-[#0a1124] to-[#040711] border-b border-cyan-800/40 flex items-center justify-between font-mono text-xs text-cyan-200 shrink-0 select-none",
+                                div { class: "flex items-center space-x-2 truncate",
+                                    span { class: "w-2 h-2 rounded-full bg-emerald-400 animate-ping" }
+                                    span { class: "font-bold text-slate-100", "Autonomous Subagent Active:" }
+                                    span { class: "text-cyan-300 font-semibold truncate", "{first_id}" }
+                                    if count > 1 {
+                                        span { class: "text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/60 text-cyan-300 border border-cyan-700/60 font-bold", "+{count - 1} more" }
+                                    }
+                                }
+                                button {
+                                    class: "px-3 py-1 rounded bg-cyan-800/60 hover:bg-cyan-700 text-cyan-100 text-xs font-semibold border border-cyan-600/50 cursor-pointer transition-colors shrink-0",
+                                    onclick: move |_| {
+                                        let mut page = state.active_page;
+                                        page.set(crate::types::SelectedPage::Live);
+                                    },
+                                    "Inspect Activity →"
+                                }
+                            }
+                        }
+                    } else {
+                        rsx! {}
+                    }
+                }
+
                 messages_panel { messages: state.messages, agent_name: agent_name.clone() }
 
                 input_area {
@@ -99,6 +130,50 @@ pub fn ChatView() -> Element {
                         span { class: "px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-mono font-bold", "{(state.pending_approvals)().len()}" }
                     }
                 }
+                div { class: "space-y-2 border-t border-slate-800/80 pt-4",
+                    div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between",
+                        span { "Active Subagents" }
+                        {
+                            let running_cnt = (state.runs)().iter().filter(|r| r["status"].as_str() == Some("running")).count();
+                            if running_cnt > 0 {
+                                rsx! {
+                                    span { class: "px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-mono font-bold animate-pulse", "{running_cnt} active" }
+                                }
+                            } else {
+                                rsx! {
+                                    span { class: "text-[10px] text-slate-600 font-mono", "0 active" }
+                                }
+                            }
+                        }
+                    }
+
+                    for r in (state.runs)().iter().filter(|r| r["status"].as_str() == Some("running")).take(3) {
+                        {
+                            let rid = r["id"].as_str().unwrap_or("").to_string();
+                            let aid = r["agent_id"].as_str().unwrap_or("").to_string();
+                            rsx! {
+                                div { key: "{rid}", class: "p-2.5 rounded-lg border border-cyan-500/30 bg-[#0c101d] space-y-1 font-mono text-xs",
+                                    div { class: "flex items-center justify-between",
+                                        div { class: "flex items-center space-x-1.5 truncate",
+                                            span { class: "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" }
+                                            span { class: "text-[11px] font-bold text-slate-200 truncate", "{aid}" }
+                                        }
+                                        button {
+                                            class: "text-[10px] text-cyan-400 hover:text-cyan-200 cursor-pointer underline",
+                                            onclick: move |_| {
+                                                let mut page = state.active_page;
+                                                page.set(crate::types::SelectedPage::Live);
+                                            },
+                                            "Inspect"
+                                        }
+                                    }
+                                    div { class: "text-[10px] text-slate-500 truncate", "ID: {rid}" }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 div { class: "space-y-2 border-t border-slate-800/80 pt-4 flex-1",
                     div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider", "Modified Files" }
                     div { class: "text-xs font-mono text-slate-500 italic p-3 rounded bg-[#0c101d] border border-slate-800/60", "No modified files in session" }
