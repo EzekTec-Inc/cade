@@ -6,6 +6,8 @@ use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
 use super::super::Repl;
 use super::now_epoch_ms;
 use crate::error::Result;
@@ -21,6 +23,73 @@ pub enum TurnOutcome {
     },
     Cancelled,
     Error(String),
+}
+
+/// Terminal hotkeys the turn loop owns while an agent is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnHotkey {
+    Cancel,
+    ToggleReasoning,
+    ClearAndRedraw,
+    ToggleSubagentTray,
+    ToggleSubagentTrayFocus,
+}
+
+/// Event categories the turn loop translates from Crossterm input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnInputEvent {
+    Key,
+    Resize,
+    Mouse,
+    Paste,
+    Other,
+}
+
+fn route_turn_hotkey(key: KeyEvent) -> Option<TurnHotkey> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c' | 'C'), KeyModifiers::CONTROL) => Some(TurnHotkey::Cancel),
+        (KeyCode::Char('t'), KeyModifiers::CONTROL) | (KeyCode::Char('\x14'), _) => {
+            Some(TurnHotkey::ToggleReasoning)
+        }
+        (KeyCode::Char('l' | 'L'), KeyModifiers::CONTROL) | (KeyCode::Char('\x0c'), _) => {
+            Some(TurnHotkey::ClearAndRedraw)
+        }
+        (KeyCode::F(5), _) => Some(TurnHotkey::ToggleSubagentTray),
+        (KeyCode::Char('w' | 'W'), KeyModifiers::CONTROL) => {
+            Some(TurnHotkey::ToggleSubagentTrayFocus)
+        }
+        _ => None,
+    }
+}
+
+fn translate_turn_event(event: &Event) -> TurnInputEvent {
+    match event {
+        Event::Key(_) => TurnInputEvent::Key,
+        Event::Resize(_, _) => TurnInputEvent::Resize,
+        Event::Mouse(_) => TurnInputEvent::Mouse,
+        Event::Paste(_) => TurnInputEvent::Paste,
+        _ => TurnInputEvent::Other,
+    }
+}
+
+fn resolve_turn_outcome(
+    is_cancelled: bool,
+    stream_error: Option<String>,
+    summary: String,
+    elapsed_secs: u64,
+    token_usage: Option<u64>,
+) -> TurnOutcome {
+    if is_cancelled {
+        TurnOutcome::Cancelled
+    } else if let Some(error) = stream_error {
+        TurnOutcome::Error(error)
+    } else {
+        TurnOutcome::Completed {
+            summary,
+            elapsed_secs,
+            token_usage,
+        }
+    }
 }
 
 /// The deep execution engine governing a single REPL conversation turn.
@@ -90,7 +159,8 @@ impl<'a> TurnDirector<'a> {
                             }
                     }
                     Some(Ok(evt)) = reader.next() => {
-                        let needs_question_key = matches!(&evt, Event::Key(crossterm::event::KeyEvent { kind: KeyEventKind::Press, .. }));
+                        let needs_question_key = matches!(translate_turn_event(&evt), TurnInputEvent::Key)
+                            && matches!(&evt, Event::Key(KeyEvent { kind: KeyEventKind::Press, .. }));
 
                         if needs_question_key {
                             if let Event::Key(k) = evt {
@@ -111,8 +181,7 @@ impl<'a> TurnDirector<'a> {
                                             }
                                         } else {
                                             match (k.code, k.modifiers) {
-                                                (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                                                | (KeyCode::Char('C'), KeyModifiers::CONTROL) => {
+                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::Cancel) => {
                                                     app.editor.expand_pastes();
                                                     let msg = app.editor.text().trim().to_string();
                                                     if !msg.is_empty() {
@@ -144,25 +213,23 @@ impl<'a> TurnDirector<'a> {
                                                         let _ = app.draw();
                                                     }
                                                 }
-                                                (KeyCode::Char('t'), KeyModifiers::CONTROL)
-                                                | (KeyCode::Char('\x14'), _) => {
+                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleReasoning) => {
                                                     if let Some(plan) = &mut app.active_plan {
                                                         plan.is_visible = !plan.is_visible;
                                                         app.draw_dirty = true;
                                                         let _ = app.draw();
                                                     }
                                                 }
-                                                (KeyCode::Char('l') | KeyCode::Char('L'), KeyModifiers::CONTROL)
-                                                | (KeyCode::Char('\x0c'), _) => {
+                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ClearAndRedraw) => {
                                                     let _ = app.terminal.clear();
                                                     app.draw_dirty = true;
                                                     let _ = app.draw();
                                                 }
-                                                (KeyCode::F(5), _) => {
+                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleSubagentTray) => {
                                                     app.toggle_subagent_tray();
                                                     let _ = app.draw();
                                                 }
-                                                (KeyCode::Char('w') | KeyCode::Char('W'), KeyModifiers::CONTROL) => {
+                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleSubagentTrayFocus) => {
                                                     app.toggle_subagent_tray_focus();
                                                     let _ = app.draw();
                                                 }
@@ -240,17 +307,20 @@ impl<'a> TurnDirector<'a> {
             }
         });
 
-        let stream_res = self.repl.stream_turn(
-            stdout,
-            effective_input,
-            false,
-            "",
-            "",
-            "",
-            false,
-            None,
-            Some(bar_text),
-        ).await;
+        let stream_res = self
+            .repl
+            .stream_turn(
+                stdout,
+                effective_input,
+                false,
+                "",
+                "",
+                "",
+                false,
+                None,
+                Some(bar_text),
+            )
+            .await;
 
         let is_cancelled = self.repl.cancel_turn.load(Ordering::SeqCst);
         self.repl.cancel_turn.store(false, Ordering::SeqCst);
@@ -287,42 +357,43 @@ impl<'a> TurnDirector<'a> {
             let _ = app.draw();
         }
 
-        if is_cancelled {
-            return Ok(TurnOutcome::Cancelled);
-        }
-
-        match stream_res {
-            Ok(msgs) => {
-                let summary = msgs
-                    .iter()
+        let stream_error = stream_res.as_ref().err().map(ToString::to_string);
+        let summary = stream_res
+            .as_ref()
+            .ok()
+            .and_then(|msgs| {
+                msgs.iter()
                     .rfind(|m| m.msg_type() == "assistant_message")
                     .and_then(|m| m.data["content"].as_str())
-                    .unwrap_or("")
-                    .to_string();
+            })
+            .unwrap_or("")
+            .to_string();
+        let token_usage = Some(self.repl.session_output_tokens.load(Ordering::SeqCst));
 
-                let token_usage = Some(self.repl.session_output_tokens.load(Ordering::SeqCst));
-                Ok(TurnOutcome::Completed {
-                    summary,
-                    elapsed_secs: secs,
-                    token_usage,
-                })
-            }
-            Err(e) => Ok(TurnOutcome::Error(e.to_string())),
-        }
+        Ok(resolve_turn_outcome(
+            is_cancelled,
+            stream_error,
+            summary,
+            secs,
+            token_usage,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
 
     #[test]
-    fn test_turn_outcome_variants() {
-        let completed = TurnOutcome::Completed {
-            summary: "Finished turn successfully".to_string(),
-            elapsed_secs: 5,
-            token_usage: Some(150),
-        };
+    fn resolves_completed_cancelled_and_error_turns() {
+        let completed = resolve_turn_outcome(
+            false,
+            None,
+            "Finished turn successfully".to_string(),
+            5,
+            Some(150),
+        );
         assert_eq!(
             completed,
             TurnOutcome::Completed {
@@ -332,10 +403,81 @@ mod tests {
             }
         );
 
-        let cancelled = TurnOutcome::Cancelled;
+        let cancelled = resolve_turn_outcome(
+            true,
+            Some("ignored after cancellation".to_string()),
+            String::new(),
+            5,
+            Some(150),
+        );
         assert_eq!(cancelled, TurnOutcome::Cancelled);
 
-        let error = TurnOutcome::Error("Network timeout".to_string());
+        let error = resolve_turn_outcome(
+            false,
+            Some("Network timeout".to_string()),
+            String::new(),
+            5,
+            None,
+        );
         assert_eq!(error, TurnOutcome::Error("Network timeout".to_string()));
+    }
+
+    #[test]
+    fn translates_terminal_events_without_terminal_access() {
+        let cases = [
+            (
+                Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+                TurnInputEvent::Key,
+            ),
+            (Event::Resize(120, 40), TurnInputEvent::Resize),
+            (
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: 0,
+                    row: 0,
+                    modifiers: KeyModifiers::NONE,
+                }),
+                TurnInputEvent::Mouse,
+            ),
+            (Event::Paste("steer".to_string()), TurnInputEvent::Paste),
+        ];
+
+        for (event, expected) in cases {
+            assert_eq!(translate_turn_event(&event), expected);
+        }
+    }
+
+    #[test]
+    fn routes_active_turn_hotkeys_without_terminal_access() {
+        let cases = [
+            (
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                TurnHotkey::Cancel,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+                TurnHotkey::ToggleReasoning,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+                TurnHotkey::ClearAndRedraw,
+            ),
+            (
+                KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+                TurnHotkey::ToggleSubagentTray,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+                TurnHotkey::ToggleSubagentTrayFocus,
+            ),
+        ];
+
+        for (key, expected) in cases {
+            assert_eq!(route_turn_hotkey(key), Some(expected));
+        }
+        assert_eq!(
+            route_turn_hotkey(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            None,
+        );
     }
 }
