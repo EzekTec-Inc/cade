@@ -11,6 +11,7 @@ pub mod logs_page;
 pub mod markdown;
 pub mod memory;
 pub mod models_page;
+pub mod plugins;
 pub mod providers;
 pub mod settings;
 pub mod sidebar;
