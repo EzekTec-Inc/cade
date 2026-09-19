@@ -13,6 +13,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+use cade_plugin::{NativePluginEngine, PluginEngine};
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -37,33 +38,43 @@ pub struct InstallPluginPayload {
     pub agent_id: Option<String>,
 }
 
-/// `GET /v1/plugins` — list all installed WASM plugins.
+/// `GET /v1/plugins` — list the canonical manifest-derived Plugin inventory.
 pub async fn list_plugins_handler(State(_state): State<AppState>) -> Response {
-    let dir = plugins_dir();
-    let mut plugins = Vec::new();
-
-    if dir.is_dir()
-        && let Ok(entries) = std::fs::read_dir(&dir)
-    {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown");
-                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                plugins.push(json!({
-                    "id": stem,
-                    "name": stem,
-                    "path": path.to_string_lossy(),
-                    "size_bytes": size,
-                    "format": "wasm",
-                    "status": "active",
-                }));
-            }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let engine = NativePluginEngine::from_default_dirs(&cwd);
+    let reports = match engine.load_all() {
+        Ok(reports) => reports,
+        Err(error) => {
+            tracing::error!(%error, "failed to load PluginEngine inventory");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load plugin inventory",
+            );
         }
-    }
+    };
+    let tools = engine.list_tools();
+    let plugins = reports
+        .into_iter()
+        .map(|report| {
+            let exported_tools = tools
+                .iter()
+                .filter(|tool| tool.plugin_name == report.name)
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            json!({
+                "id": report.id,
+                "name": report.name,
+                "version": report.version,
+                "scope": report.scope,
+                "status": report.status,
+                "diagnostic": report.diagnostic,
+                "tools_count": report.tools_count,
+                "skills_count": report.skills_count,
+                "mcp_servers_count": report.mcp_servers_count,
+                "exported_tools": exported_tools,
+            })
+        })
+        .collect::<Vec<_>>();
 
     Json(json!({ "plugins": plugins, "count": plugins.len() })).into_response()
 }

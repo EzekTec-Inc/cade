@@ -8,6 +8,18 @@ use tokio::process::Command;
 
 use crate::manifest::PluginManifest;
 
+/// Manifest-backed plugin inventory entry exposed through `PluginEngine`.
+#[derive(Debug, Clone)]
+pub struct PluginInventoryEntry {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub scope: String,
+    pub tools_count: usize,
+    pub skills_count: usize,
+    pub mcp_servers_count: usize,
+}
+
 // region:    --- Types
 
 /// A resolved plugin tool ready for dispatch.
@@ -126,6 +138,38 @@ impl PluginRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()
+    }
+
+    /// Manifest-backed plugin inventory sorted by stable plugin identifier.
+    pub fn inventory(&self, project_dir: &Path) -> Vec<PluginInventoryEntry> {
+        let mut entries = self
+            .plugins
+            .iter()
+            .map(|plugin| PluginInventoryEntry {
+                id: plugin
+                    .root
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                name: plugin.manifest.name.clone(),
+                version: plugin
+                    .manifest
+                    .version
+                    .clone()
+                    .unwrap_or_else(|| "0.0.0".to_string()),
+                scope: if plugin.root.starts_with(project_dir) {
+                    "project".to_string()
+                } else {
+                    "global".to_string()
+                },
+                tools_count: plugin.manifest.tools.len(),
+                skills_count: plugin.manifest.skills.len(),
+                mcp_servers_count: plugin.manifest.mcp_servers.len(),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
+        entries
     }
 
     /// All tool JSON schemas contributed by loaded plugins.

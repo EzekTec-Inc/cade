@@ -21,6 +21,10 @@ pub struct PluginReport {
     pub id: String,
     pub name: String,
     pub version: String,
+    pub scope: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
     pub tools_count: usize,
     pub skills_count: usize,
     pub mcp_servers_count: usize,
@@ -87,15 +91,26 @@ impl NativePluginEngine {
 impl PluginEngine for NativePluginEngine {
     fn load_all(&self) -> Result<Vec<PluginReport>> {
         let fresh_registry = PluginRegistry::discover(&self.search_dirs);
-        let schemas = fresh_registry.all_tool_schemas();
-        let reports = vec![PluginReport {
-            id: "all-plugins".to_string(),
-            name: "Active Plugins".to_string(),
-            version: "1.0.0".to_string(),
-            tools_count: schemas.len(),
-            skills_count: 0,
-            mcp_servers_count: 0,
-        }];
+        let project_dir = self
+            .search_dirs
+            .first()
+            .map(PathBuf::as_path)
+            .unwrap_or(self.primary_install_dir.as_path());
+        let reports = fresh_registry
+            .inventory(project_dir)
+            .into_iter()
+            .map(|plugin| PluginReport {
+                id: plugin.id,
+                name: plugin.name,
+                version: plugin.version,
+                scope: plugin.scope,
+                status: "active".to_string(),
+                diagnostic: None,
+                tools_count: plugin.tools_count,
+                skills_count: plugin.skills_count,
+                mcp_servers_count: plugin.mcp_servers_count,
+            })
+            .collect();
         *self.registry.write() = fresh_registry;
         Ok(reports)
     }
@@ -111,6 +126,9 @@ impl PluginEngine for NativePluginEngine {
             id: plugin_id.to_string(),
             name: manifest.name,
             version: manifest.version.unwrap_or_else(|| "1.0.0".to_string()),
+            scope: "project".to_string(),
+            status: "active".to_string(),
+            diagnostic: None,
             tools_count: manifest.tools.len(),
             skills_count: manifest.skills.len(),
             mcp_servers_count: manifest.mcp_servers.len(),
@@ -170,6 +188,9 @@ impl Default for MockPluginEngine {
                 id: "test-plugin".to_string(),
                 name: "Test Plugin".to_string(),
                 version: "1.0.0".to_string(),
+                scope: "project".to_string(),
+                status: "active".to_string(),
+                diagnostic: None,
                 tools_count: 1,
                 skills_count: 0,
                 mcp_servers_count: 0,
