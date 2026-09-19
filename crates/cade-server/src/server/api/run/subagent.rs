@@ -593,6 +593,181 @@ pub(super) async fn handle_run_subagent_tool(
     executor.execute(args).await
 }
 
+struct ServerSubagentLlm<'a> {
+    state: &'a AppState,
+    subagent_id: String,
+    steer_rx: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>,
+}
+
+#[async_trait::async_trait]
+impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
+    async fn complete_turn(
+        &self,
+        model: &str,
+        system_prompt: &str,
+        messages: &[cade_agent::subagents::SubagentMessage],
+        tools: &[serde_json::Value],
+    ) -> Result<cade_agent::subagents::SubagentTurnResponse, String> {
+        let active_model = if let Some(new_m) = {
+            let mut map = get_hotswap_models().lock().unwrap();
+            map.remove(&self.subagent_id)
+        } {
+            tracing::info!(
+                subagent_id = %self.subagent_id,
+                from = %model,
+                to = %new_m,
+                "Subagent model hot-swapped mid-flight for next turn"
+            );
+            new_m
+        } else {
+            model.to_string()
+        };
+
+        let mut ai_messages = vec![cade_ai::LlmMessage {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+            cache_control: None,
+        }];
+
+        for m in messages {
+            let tool_calls = m.tool_calls.as_ref().map(|tcs| {
+                tcs.iter()
+                    .map(|tc| cade_ai::LlmToolCall {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        arguments: tc.arguments.clone(),
+                        thought_signature: None,
+                    })
+                    .collect()
+            });
+            ai_messages.push(cade_ai::LlmMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+                tool_calls,
+                tool_call_id: m.tool_call_id.clone(),
+                images: None,
+                cache_control: None,
+            });
+        }
+
+        // Drain any steering messages
+        let mut steer_msgs = Vec::new();
+        {
+            let mut rx = self.steer_rx.lock().await;
+            while let Ok(msg) = rx.try_recv() {
+                steer_msgs.push(msg);
+            }
+        }
+        if !steer_msgs.is_empty() {
+            let steering_content = format!(
+                "[Supervisor Steering Guidance]:\n\n{}",
+                steer_msgs.join("\n\n")
+            );
+            ai_messages.push(cade_ai::LlmMessage {
+                role: "user".to_string(),
+                content: steering_content,
+                tool_calls: None,
+                tool_call_id: None,
+                images: None,
+                cache_control: None,
+            });
+        }
+
+        let req = cade_ai::CompletionRequest {
+            model: active_model.clone(),
+            messages: ai_messages,
+            tools: tools.to_vec(),
+            max_tokens: 8192,
+            reasoning_effort: None,
+        };
+
+        let resp = self
+            .state
+            .llm
+            .complete(&req)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let tool_calls = resp
+            .tool_calls
+            .into_iter()
+            .map(|tc| cade_agent::subagents::SubagentToolCall {
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+            })
+            .collect();
+
+        let tokens_used = resp
+            .content
+            .as_deref()
+            .map(|t| cade_ai::count_tokens(&active_model, t))
+            .unwrap_or(0) as u64;
+
+        Ok(cade_agent::subagents::SubagentTurnResponse {
+            content: resp.content,
+            tool_calls,
+            tokens_used,
+        })
+    }
+}
+
+struct ServerSubagentTools<'a> {
+    state: &'a AppState,
+    subagent_id: String,
+    allowed_paths: Option<Vec<String>>,
+    parent_agent_id: String,
+}
+
+#[async_trait::async_trait]
+impl<'a> cade_agent::subagents::SubagentToolExecutor for ServerSubagentTools<'a> {
+    async fn execute_tool(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+        execution_path: &std::path::Path,
+    ) -> Result<String, String> {
+        let storage_backend = std::sync::Arc::new(super::storage_impl::ServerStorageBackend {
+            state: self.state.clone(),
+        });
+        let mut runtime = cade_agent::tools::runtime::ToolRuntime::new(
+            storage_backend,
+            std::sync::Arc::clone(&self.state.mcp),
+            self.subagent_id.clone(),
+            execution_path.to_path_buf(),
+        );
+        runtime.allowed_paths = self.allowed_paths.clone();
+
+        if let Some(executed) = runtime
+            .execute(tool_call_id.to_string(), tool_name, arguments)
+            .await
+        {
+            if !executed.is_error
+                && cade_agent::tools::manager::is_file_edit_tool(tool_name)
+                && let Some(path) = arguments["path"]
+                    .as_str()
+                    .or_else(|| arguments["file_path"].as_str())
+            {
+                super::record_recent_edit_db(&self.state.db, &self.parent_agent_id, path);
+            }
+
+            if executed.is_error {
+                Err(executed.output)
+            } else {
+                Ok(executed.output)
+            }
+        } else {
+            Err(format!(
+                "Tool '{tool_name}' requires interactive TUI context and is not supported in subagent background loop."
+            ))
+        }
+    }
+}
+
 pub(super) async fn handle_run_subagent_tool_inner(
     state: &AppState,
     parent_agent_id: &str,
@@ -602,7 +777,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::subagents::SubagentConfig;
     use cade_agent::tools::manager::ToolResult;
-    use cade_ai::LlmMessage;
 
     // -- Parse + validate args through shared SubagentConfig -----------------
     let cfg = SubagentConfig::from_args(args);
@@ -725,7 +899,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         .map(|a| a.model)
         .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
 
-    let mut model = cfg
+    let model = cfg
         .resolve_model(def_opt)
         .map(|s| s.to_string())
         .unwrap_or_else(|| {
@@ -808,25 +982,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
 
     let system_prompt_full = format!("{system_prompt}{seed_section}{parent_context}");
 
-    let messages_init = vec![
-        LlmMessage {
-            role: "system".to_string(),
-            content: system_prompt_full,
-            tool_calls: None,
-            tool_call_id: None,
-            images: None,
-            cache_control: None,
-        },
-        LlmMessage {
-            role: "user".to_string(),
-            content: prompt.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: None,
-            cache_control: None,
-        },
-    ];
-
     // ── Subagent agentic loop (Approach C) ──────────────────────────────
     //
     // Iterates LLM → tool dispatch → LLM with tool result, up to
@@ -891,17 +1046,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         filtered
     };
 
-    let mut messages = messages_init;
-    let mut last_text = String::new();
-    let mut llm_err: Option<String> = None;
-    let next_depth = cfg.depth + 1;
     let allowed_paths = cfg.resolve_allowed_paths(def_opt);
-
-    // G1/REC-2: Deep DoomLoopDetector for stagnation protection (ADR 17)
-    let mut doom_loop_detector = cade_agent::agent::DoomLoopDetector::default();
-
-    // G5: Per-call dedup cache — maps fingerprint → first iter it was seen.
-    let mut tool_dedup: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
 
     // Create a lightweight ephemeral DB row for the subagent so its
     // meta-tool calls (update_memory, load_skill, etc.) are scoped to
@@ -948,7 +1093,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     );
 
     // Setup cancellation channel
-    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
+    let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::channel(1);
     {
         let mut cancellations = state.subagent_cancellations.write().await;
         cancellations.insert(subagent_id.clone(), cancel_tx);
@@ -981,7 +1126,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     };
 
     // Setup steering channel
-    let (steer_tx, mut steer_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (steer_tx, steer_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     {
         let mut queues = get_steering_queues().lock().unwrap();
         queues.insert(subagent_id.clone(), steer_tx);
@@ -1001,468 +1146,152 @@ pub(super) async fn handle_run_subagent_tool_inner(
         subagent_id: subagent_id.clone(),
     };
 
-    // Wall-clock timeout guard (REC-1, pre-existing).
-    let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
-    let mut cumulative_tokens = 0u64;
-    let loop_result = tokio::time::timeout(timeout_dur, async {
-        for iter in 0..max_iters {
-            // Check for dynamic model hot-swap requested for this subagent
-            if let Some(new_m) = {
-                let mut map = get_hotswap_models().lock().unwrap();
-                map.remove(&subagent_id)
-            } && new_m != model {
-                tracing::info!(
-                    subagent_id = %subagent_id,
-                    from = %model,
-                    to = %new_m,
-                    "Subagent model hot-swapped mid-flight for next turn"
-                );
-                model = new_m;
-            }
+    let llm_executor = ServerSubagentLlm {
+        state,
+        subagent_id: subagent_id.clone(),
+        steer_rx: std::sync::Arc::new(tokio::sync::Mutex::new(steer_rx)),
+    };
+    let tools_executor = ServerSubagentTools {
+        state,
+        subagent_id: subagent_id.clone(),
+        allowed_paths: allowed_paths.clone(),
+        parent_agent_id: parent_agent_id.to_string(),
+    };
 
-            // Consume any queued steering messages
-            let mut steer_msgs = Vec::new();
-            while let Ok(msg) = steer_rx.try_recv() {
-                steer_msgs.push(msg);
-            }
-            if !steer_msgs.is_empty() {
-                let steering_content = format!(
-                    "[Supervisor Steering Guidance]:\n\n{}",
-                    steer_msgs.join("\n\n")
-                );
-                messages.push(cade_ai::LlmMessage {
-                    role: "user".to_string(),
-                    content: steering_content,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    images: None,
-                    cache_control: None,
-                });
-            }
-            // Guard input messages against model's context window limit
-            let context_limit = cade_ai::catalogue::context_window_for_model(&model);
-            let mut iter_input_tokens = 0usize;
-            for m in &messages {
-                if !m.content.is_empty() {
-                    iter_input_tokens += cade_ai::count_tokens(&model, &m.content);
-                }
-                if let Some(tcs) = &m.tool_calls {
-                    for tc in tcs {
-                        let json = tc.arguments.to_string();
-                        if !json.is_empty() {
-                            iter_input_tokens += cade_ai::count_tokens(&model, &json);
-                        }
-                    }
-                }
-            }
-            if iter_input_tokens > context_limit as usize {
-                llm_err = Some(format!(
-                    "error: subagent input prompt exceeded model context window ({} > {})",
-                    iter_input_tokens, context_limit
-                ));
-                break;
-            }
+    let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id)
+        .with_max_iters(max_iters)
+        .with_max_tokens_budget(cfg.max_tokens_budget);
 
-            let llm_req = cade_ai::CompletionRequest {
-                model: model.clone(),
-                messages: messages.clone(),
-                tools: parent_tool_schemas.clone(),
-                max_tokens: 8192,
-                reasoning_effort: None,
-            };
-
-            let providers = cade_ai::catalogue::available_env_providers();
-            let candidate_chain = build_failover_chain(&model, &parent_model, &providers);
-
-            let mut resp_opt = None;
-            for candidate in candidate_chain {
-                let mut req = llm_req.clone();
-                req.model = candidate.clone();
-
-                let cancelled = tokio::select! {
-                    res = state.llm.complete(&req) => {
-                        match res {
-                            Ok(r) => {
-                                if candidate != model {
-                                    tracing::info!(
-                                        subagent_id = %subagent_id,
-                                        from = %model,
-                                        to = %candidate,
-                                        "Subagent successfully failed over to candidate model"
-                                    );
-                                    model = candidate;
-                                }
-                                resp_opt = Some(r);
-                                llm_err = None;
-                                break;
-                            }
-                            Err(e) => {
-                                let e_str = e.to_string();
-                                if is_failover_worthy_error(&e_str) {
-                                    tracing::warn!(
-                                        subagent_id = %subagent_id,
-                                        candidate = %candidate,
-                                        error = %e_str,
-                                        "Subagent model candidate failed, attempting next provider in failover chain"
-                                    );
-                                    llm_err = Some(format!("Model {candidate} failed: {e_str}"));
-                                    false
-                                } else {
-                                    llm_err = Some(e_str);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    _ = cancel_rx.recv() => {
-                        llm_err = Some("Task cancelled by parent".to_string());
-                        true
-                    }
-                };
-
-                if cancelled {
-                    break;
-                }
-            }
-
-            let resp = match resp_opt {
-                Some(r) => r,
-                None => break,
-            };
-
-            if let Some(budget) = cfg.max_tokens_budget {
-                if let Some(t) = &resp.content
-                    && !t.is_empty() {
-                        cumulative_tokens += cade_ai::count_tokens(&model, t) as u64;
-                    }
-                for tc in &resp.tool_calls {
-                    let json = tc.arguments.to_string();
-                    if !json.is_empty() {
-                        cumulative_tokens += cade_ai::count_tokens(&model, &json) as u64;
-                    }
-                }
-                if cumulative_tokens > budget {
-                    llm_err = Some(format!(
-                        "error: subagent token budget exceeded ({} > {})",
-                        cumulative_tokens, budget
-                    ));
-                    break;
-                }
-            }
-
-            // Accumulate the assistant's prose across iterations.
-            if let Some(t) = &resp.content
-                && !t.is_empty()
-            {
-                if !last_text.is_empty() {
-                    last_text.push_str("\n\n");
-                }
-                last_text.push_str(t);
-            }
-
-            // REC-4/G4: `finish` tool = canonical clean exit.
-            // Natural text-only response = implicit done (honour the model's
-            // stopping instinct rather than punishing it).
-            if resp.tool_calls.is_empty() {
-                break;
-            }
-
-            // Check for `finish` tool call first — handle before dispatch.
-            if let Some(finish_tc) = resp.tool_calls.iter().find(|tc| tc.name == "finish" || tc.name == "finish_task") {
-                let summary = finish_tc.arguments["summary"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-                let status = finish_tc.arguments["status"]
-                    .as_str()
-                    .unwrap_or("done")
-                    .to_string();
-                let findings: Vec<String> = finish_tc.arguments["findings"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                if !last_text.is_empty() {
-                    last_text.push_str("\n\n");
-                }
-                last_text.push_str(&summary);
-                if !findings.is_empty() {
-                    last_text.push_str("\n\nFindings:\n");
-                    for f in &findings {
-                        last_text.push_str(&format!("- {f}\n"));
-                    }
-                }
-
-                if status == "error" {
-                    llm_err = Some(format!("Subagent finished with status=error: {summary}"));
-                }
-
-                // G8/REC-5: Emit finish iter event.
-                let iter_ev = serde_json::json!({
-                    "message_type": "subagent_iter",
-                    "subagent_id": subagent_id,
-                    "iter": iter,
-                    "tool": "finish",
-                    "status": status,
-                });
-                let _ = emitter.raw_sse_tx()
-                    .send(Ok(super::runtime::RunEventEnvelope { data: iter_ev.to_string() }))
-                    .await;
-
-                break;
-            }
-
-            let mut stagnation_detected = false;
-            let mut stagnated_intervention_message = String::new();
-
-            // G8/REC-5: Emit per-iteration observability event for each tool call.
-            for tc in &resp.tool_calls {
-                use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
-                tc.name.hash(&mut h);
-                tc.arguments.to_string().hash(&mut h);
-                let fp = h.finish();
-
-                let iter_ev = serde_json::json!({
-                    "message_type": "subagent_iter",
-                    "subagent_id": subagent_id,
-                    "iter": iter,
-                    "tool": tc.name,
-                    "args_hash": format!("{fp:x}"),
-                });
-                let _ = emitter.raw_sse_tx()
-                    .send(Ok(super::runtime::RunEventEnvelope { data: iter_ev.to_string() }))
-                    .await;
-
-                // G5: Per-call dedup — warn if same fingerprint seen before.
-                if let Some(first_seen) = tool_dedup.get(&fp) {
-                    tracing::debug!(
-                        subagent_id = %subagent_id,
-                        tool = %tc.name,
-                        iter,
-                        first_seen,
-                        "duplicate tool call fingerprint detected"
-                    );
-                } else {
-                    tool_dedup.insert(fp, iter);
-                }
-
-                // G1/REC-2: Stagnation detection using deep DoomLoopDetector module (ADR 17)
-                if let cade_agent::agent::StagnationResult::Stagnated {
-                    tool_name,
-                    repeat_count,
-                    intervention_message,
-                } = doom_loop_detector.record_call(&tc.name, &tc.arguments) {
-                    tracing::warn!(
-                        "Stagnation detected for subagent {}: tool '{}' called with identical arguments {} times. Injecting intervention.",
-                        subagent_id, tool_name, repeat_count
-                    );
-                    stagnation_detected = true;
-                    stagnated_intervention_message = intervention_message;
-                    break;
-                }
-            }
-
-            messages.push(LlmMessage {
-                role: "assistant".to_string(),
-                content: resp.content.clone().unwrap_or_default(),
-                tool_calls: Some(resp.tool_calls.clone()),
-                tool_call_id: None,
-                images: None, cache_control: None,
-            });
-
-            if stagnation_detected {
-                for tc in &resp.tool_calls {
-                    messages.push(LlmMessage {
-                        role: "tool".to_string(),
-                        content: stagnated_intervention_message.clone(),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        images: None, cache_control: None,
+    // Event forwarder from SubagentSession to SSE stream
+    let (session_evt_tx, mut session_evt_rx) = tokio::sync::mpsc::channel(128);
+    let raw_sse = emitter.raw_sse_tx();
+    let s_id_c = subagent_id.clone();
+    let max_it = max_iters;
+    tokio::spawn(async move {
+        while let Some(evt) = session_evt_rx.recv().await {
+            match evt {
+                cade_agent::subagents::SubagentEvent::TurnStarted { turn, .. } => {
+                    let iter_ev = serde_json::json!({
+                        "message_type": "subagent_iter",
+                        "subagent_id": s_id_c,
+                        "iter": turn,
+                        "max_iters": max_it,
                     });
+                    let _ = raw_sse
+                        .send(Ok(super::runtime::RunEventEnvelope {
+                            data: iter_ev.to_string(),
+                        }))
+                        .await;
                 }
-                continue; // Skip actual tool execution, let the model process the intervention
-            }
-
-            for tc in &resp.tool_calls {
-                let mut permission_denied = false;
-                let mut permission_error_msg = String::new();
-
-                if tc.name != "run_subagent" && tc.name != "finish" {
-                    let is_yolo = std::env::var("CADE_YOLO").map(|v| v == "true").unwrap_or(false)
-                        || cfg!(test);
-                    if !is_yolo {
-                        use cade_core::permissions::{PermissionManager, PermissionMode, SecurityAuthority, Verdict};
-
-                        let perm_mode = match cfg.mode.as_str() {
-                            "plan" | "recall" => PermissionMode::Plan,
-                            "accept-edits" | "acceptEdits" => PermissionMode::AcceptEdits,
-                            _ => PermissionMode::Default,
-                        };
-                        let manager = PermissionManager::new(perm_mode);
-
-                        let service = HeadlessQueueAdapter {
-                            db: state.db.clone(),
-                            parent_agent_id: parent_agent_id.to_string(),
-                            subagent_id: subagent_id.clone(),
-                        };
-
-                        let authority = SecurityAuthority::new(manager, std::sync::Arc::new(service));
-                        let is_mcp_write = tc.name.contains("__");
-
-                        match authority.authorize(&tc.name, &tc.arguments, is_mcp_write).await {
-                            Ok(Verdict::Allow) => {}
-                            Ok(Verdict::Deny(reason)) => {
-                                permission_denied = true;
-                                permission_error_msg = reason;
-                            }
-                            Ok(Verdict::Ask(_)) => {
-                                // Handled internally by authority/service
-                            }
-                            Err(e) => {
-                                permission_denied = true;
-                                permission_error_msg = e;
-                            }
-                        }
-                    }
+                cade_agent::subagents::SubagentEvent::OutputChunk { text } => {
+                    let out_ev = serde_json::json!({
+                        "message_type": "subagent_output",
+                        "subagent_id": s_id_c,
+                        "chunk": text,
+                    });
+                    let _ = raw_sse
+                        .send(Ok(super::runtime::RunEventEnvelope {
+                            data: out_ev.to_string(),
+                        }))
+                        .await;
                 }
-
-                let tool_result = if permission_denied {
-                    cade_agent::tools::manager::ToolResult {
-                        tool_call_id: tc.id.clone(),
-                        tool_name: tc.name.clone(),
-                        output: if permission_error_msg.is_empty() {
-                            format!("Permission Denied: User denied execution of tool '{}'.", tc.name)
-                        } else {
-                            permission_error_msg
-                        },
-                        is_error: true,
-                        ui_resource_uri: None,
-                    }
-                } else if tc.name == "run_subagent" {
-                    let mut nested_args = tc.arguments.clone();
-                    if let Some(obj) = nested_args.as_object_mut() {
-                        obj.insert(
-                            "_subagent_depth".to_string(),
-                            serde_json::Value::from(next_depth as u64),
-                        );
-                    }
-                    // RC6-NOTE: Box::pin is retained because the inner future
-                    // is not Send (non-Send state across await points).  The
-                    // recursion depth is hard-capped at CADE_SUBAGENT_MAX_DEPTH
-                    // (default 3), and the runtime thread stack is 8 MB (Fix 1),
-                    // so this cannot overflow.
-                    Box::pin(handle_run_subagent_tool(
-                        state,
-                        parent_agent_id,
-                        &tc.id,
-                        &nested_args,
-                        emitter.raw_sse_tx(),
-                    ))
-                    .await
-                } else {
-                    let storage_backend = std::sync::Arc::new(super::storage_impl::ServerStorageBackend { state: state.clone() });
-                    let run_dir = if let Some(ref tw) = temp_workspace {
-                        tw.path().to_path_buf()
-                    } else {
-                        std::env::current_dir().unwrap_or_default()
-                    };
-                    let mut runtime = cade_agent::tools::runtime::ToolRuntime::new(
-                        storage_backend,
-                        std::sync::Arc::clone(&state.mcp),
-                        subagent_id.clone(),
-                        run_dir,
-                    );
-                    runtime.allowed_paths = allowed_paths.clone();
-
-                    if let Some(executed) = runtime.execute(tc.id.clone(), &tc.name, &tc.arguments).await {
-                        cade_agent::tools::manager::ToolResult {
-                            tool_call_id: executed.tool_call_id,
-                            tool_name: executed.tool_name,
-                            output: executed.output,
-                            is_error: executed.is_error,
-                            ui_resource_uri: executed.ui_resource_uri,
-                        }
-                    } else {
-                        cade_agent::tools::manager::ToolResult {
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.name.clone(),
-                            output: format!("Tool '{}' requires interactive TUI context and is not supported in subagent background loop.", tc.name),
-                            is_error: true,
-ui_resource_uri: None,
-                        }
-                    }
-                };
-
-                if !tool_result.is_error
-                    && cade_agent::tools::manager::is_file_edit_tool(&tc.name)
-                    && let Some(path) = tc.arguments["path"]
-                        .as_str()
-                        .or_else(|| tc.arguments["file_path"].as_str())
-                {
-                    super::record_recent_edit_db(&state.db, parent_agent_id, path);
+                cade_agent::subagents::SubagentEvent::ToolExecuting { tool_name, .. } => {
+                    let tool_ev = serde_json::json!({
+                        "message_type": "subagent_tool_start",
+                        "subagent_id": s_id_c,
+                        "tool": tool_name,
+                    });
+                    let _ = raw_sse
+                        .send(Ok(super::runtime::RunEventEnvelope {
+                            data: tool_ev.to_string(),
+                        }))
+                        .await;
                 }
-
-                messages.push(LlmMessage {
-                    role: "tool".to_string(),
-                    content: tool_result.output.clone(),
-                    tool_calls: None,
-                    tool_call_id: Some(tool_result.tool_call_id.clone()),
-                    images: None, cache_control: None,
-                });
-            }
-
-            if iter == max_iters - 1 {
-                if !last_text.is_empty() {
-                    break;
+                cade_agent::subagents::SubagentEvent::ToolCompleted {
+                    tool_name,
+                    is_error,
+                    ..
+                } => {
+                    let tool_ev = serde_json::json!({
+                        "message_type": "subagent_tool_end",
+                        "subagent_id": s_id_c,
+                        "tool": tool_name,
+                        "is_error": is_error,
+                    });
+                    let _ = raw_sse
+                        .send(Ok(super::runtime::RunEventEnvelope {
+                            data: tool_ev.to_string(),
+                        }))
+                        .await;
                 }
-                llm_err = Some("Subagent exceeded maximum iteration limit without converging.".to_string());
-                break;
+                _ => {}
             }
         }
-    })
-    .await;
+    });
 
-    // REC-1: If the timeout fired, record it as an LLM error.
-    if loop_result.is_err() {
-        llm_err = Some(format!(
-            "Subagent wall-clock timeout after {}s. The task was terminated to free resources.",
-            subagent_timeout_secs()
-        ));
-    }
+    session = session.with_event_emitter(cade_agent::subagents::SubagentEventEmitter::new(Some(session_evt_tx)));
+
+    let root_path = if let Some(ref tw) = temp_workspace {
+        tw.path().to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
+
+    let available_providers = cade_ai::catalogue::available_env_providers();
+    let failover_candidates = build_failover_chain(&model, &parent_model, &available_providers);
+    let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
+    let loop_res = tokio::time::timeout(
+        timeout_dur,
+        session.run_autonomous_loop(
+            &llm_executor,
+            &tools_executor,
+            model,
+            system_prompt_full,
+            prompt.clone(),
+            parent_tool_schemas,
+            failover_candidates,
+            &root_path,
+        ),
+    )
+    .await;
 
     let elapsed = start_time.elapsed().as_secs() as u32;
 
-    // G7: Release semaphore permit explicitly before write-back so the slot
-    // is freed as early as possible.  The permit's Drop impl is a no-op after
-    // this — still safe on panic because OwnedSemaphorePermit::drop() handles it.
+    // Release semaphore permit explicitly before write-back
     drop(permit);
 
-    // A15 + REC-2: Explicitly run write-back + delete via the guard.
+    // Explicitly run write-back + delete via the guard
     let writeback_count = ephemeral_guard.write_back_and_delete_async(state).await;
 
-    let (output, is_error) = match llm_err {
-        Some(e) => (format!("Subagent error: {e}"), true),
-        None => {
-            if let Some(ref tw) = temp_workspace {
-                if let Err(e) = tw.merge_back().await {
-                    tracing::warn!(
-                        "Failed to copy back isolated files for subagent [{}]: {e}",
-                        subagent_id
-                    );
-                } else {
-                    tracing::info!(
-                        "Successfully merged isolated files back for subagent [{}]",
-                        subagent_id
-                    );
+    let (output, is_error) = match loop_res {
+        Err(_) => (
+            format!(
+                "Subagent wall-clock timeout after {}s. The task was terminated to free resources.",
+                subagent_timeout_secs()
+            ),
+            true,
+        ),
+        Ok(outcome) => match outcome {
+            cade_agent::subagents::SubagentOutcome::Done { summary, .. } => {
+                if let Some(ref tw) = temp_workspace {
+                    if let Err(e) = tw.merge_back().await {
+                        tracing::warn!(
+                            "Failed to copy back isolated files for subagent [{}]: {e}",
+                            subagent_id
+                        );
+                    } else {
+                        tracing::info!(
+                            "Successfully merged isolated files back for subagent [{}]",
+                            subagent_id
+                        );
+                    }
                 }
+                (summary, false)
             }
-            (last_text, false)
-        }
+            cade_agent::subagents::SubagentOutcome::Blocked { reason, .. } => (reason, true),
+            cade_agent::subagents::SubagentOutcome::Failed { error } => (error, true),
+            cade_agent::subagents::SubagentOutcome::Exhausted { reason, .. } => (reason, true),
+        },
     };
 
     let result_preview: String = output.chars().take(200).collect();
@@ -1781,6 +1610,7 @@ pub(super) async fn smart_memory_merge(
     }
 }
 
+#[allow(dead_code)]
 pub struct HeadlessQueueAdapter {
     pub db: cade_store::sqlite::Db,
     pub parent_agent_id: String,
@@ -1905,6 +1735,7 @@ pub(crate) fn build_failover_chain(
 }
 
 /// Determine whether an error warrants trying the next candidate in the failover chain.
+#[allow(dead_code)]
 pub(crate) fn is_failover_worthy_error(err_str: &str) -> bool {
     let s = err_str.to_lowercase();
     s.contains("404")
