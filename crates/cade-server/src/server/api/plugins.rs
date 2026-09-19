@@ -13,6 +13,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+use cade_plugin::{NativePluginEngine, PluginEngine};
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -25,11 +26,6 @@ fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 
-fn plugins_dir() -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    cwd.join(".cade").join("plugins")
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstallPluginPayload {
     pub url: String,
@@ -37,128 +33,84 @@ pub struct InstallPluginPayload {
     pub agent_id: Option<String>,
 }
 
-/// `GET /v1/plugins` — list all installed WASM plugins.
+/// `GET /v1/plugins` — list the canonical manifest-derived Plugin inventory.
 pub async fn list_plugins_handler(State(_state): State<AppState>) -> Response {
-    let dir = plugins_dir();
-    let mut plugins = Vec::new();
-
-    if dir.is_dir()
-        && let Ok(entries) = std::fs::read_dir(&dir)
-    {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown");
-                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                plugins.push(json!({
-                    "id": stem,
-                    "name": stem,
-                    "path": path.to_string_lossy(),
-                    "size_bytes": size,
-                    "format": "wasm",
-                    "status": "active",
-                }));
-            }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let engine = NativePluginEngine::from_default_dirs(&cwd);
+    let reports = match engine.load_all() {
+        Ok(reports) => reports,
+        Err(error) => {
+            tracing::error!(%error, "failed to load PluginEngine inventory");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load plugin inventory",
+            );
         }
-    }
+    };
+    let tools = engine.list_tools();
+    let plugins = reports
+        .into_iter()
+        .map(|report| {
+            let exported_tools = tools
+                .iter()
+                .filter(|tool| tool.plugin_name == report.name)
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            json!({
+                "id": report.id,
+                "name": report.name,
+                "version": report.version,
+                "scope": report.scope,
+                "status": report.status,
+                "diagnostic": report.diagnostic,
+                "tools_count": report.tools_count,
+                "skills_count": report.skills_count,
+                "mcp_servers_count": report.mcp_servers_count,
+                "exported_tools": exported_tools,
+            })
+        })
+        .collect::<Vec<_>>();
 
     Json(json!({ "plugins": plugins, "count": plugins.len() })).into_response()
 }
 
-/// `POST /v1/plugins/install` — install a plugin package into `.cade/plugins/`.
+/// `POST /v1/plugins/install` — install a validated Plugin package through `PluginEngine`.
 pub async fn install_plugin_handler(
     State(state): State<AppState>,
     Json(payload): Json<InstallPluginPayload>,
 ) -> Response {
-    let dir = plugins_dir();
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Failed to create plugins directory: {e}"),
-        );
-    }
-
     let plugin_id = payload.plugin_id.unwrap_or_else(|| {
         StdPath::new(&payload.url)
             .file_stem()
-            .and_then(|s| s.to_str())
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
             .unwrap_or("plugin")
             .to_string()
     });
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let engine = NativePluginEngine::from_default_dirs(&cwd);
 
-    let target_path = dir.join(format!("{plugin_id}.wasm"));
-
-    // If source is an existing local file, copy it directly
-    let source_path = StdPath::new(&payload.url);
-    if source_path.is_file() {
-        if let Err(e) = std::fs::copy(source_path, &target_path) {
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Failed to copy plugin file: {e}"),
+    match engine.install(&payload.url, &plugin_id).await {
+        Ok(report) => {
+            crate::server::api::agents::publish_global_event(
+                Some(&state.db),
+                "plugin_installed",
+                json!({
+                    "plugin_id": report.id,
+                    "scope": report.scope,
+                    "status": report.status,
+                }),
             );
+            Json(json!({ "status": "installed", "plugin": report })).into_response()
         }
-    } else if payload.url.starts_with("http://") || payload.url.starts_with("https://") {
-        // HTTP download
-        match reqwest::get(&payload.url).await {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    return err(
-                        StatusCode::BAD_GATEWAY,
-                        &format!("Plugin download failed with HTTP {}", resp.status()),
-                    );
-                }
-                match resp.bytes().await {
-                    Ok(bytes) => {
-                        if let Err(e) = std::fs::write(&target_path, bytes) {
-                            return err(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                &format!("Failed to write plugin to disk: {e}"),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        return err(
-                            StatusCode::BAD_GATEWAY,
-                            &format!("Failed to read response body: {e}"),
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                return err(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("Failed to connect to plugin URL: {e}"),
-                );
-            }
-        }
-    } else {
-        // Raw or mock payload: create minimal valid stub file for validation
-        if let Err(e) = std::fs::write(&target_path, b"\x00asm\x01\x00\x00\x00") {
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Failed to write stub plugin: {e}"),
-            );
+        Err(error) => {
+            tracing::warn!(%error, plugin_id, "PluginEngine installation failed");
+            err(
+                StatusCode::BAD_REQUEST,
+                "Plugin installation failed during validation or activation",
+            )
         }
     }
-
-    crate::server::api::agents::publish_global_event(
-        Some(&state.db),
-        "plugin_installed",
-        json!({
-            "plugin_id": plugin_id,
-            "path": target_path.to_string_lossy(),
-        }),
-    );
-
-    Json(json!({
-        "status": "installed",
-        "plugin_id": plugin_id,
-        "path": target_path.to_string_lossy(),
-    }))
-    .into_response()
 }
 
 /// `DELETE /v1/plugins/:id` — uninstall a plugin by ID.
@@ -166,25 +118,30 @@ pub async fn uninstall_plugin_handler(
     State(state): State<AppState>,
     Path(plugin_id): Path<String>,
 ) -> Response {
-    let dir = plugins_dir();
-    let target_path = dir.join(format!("{plugin_id}.wasm"));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let engine = NativePluginEngine::from_default_dirs(&cwd);
 
-    if target_path.exists()
-        && let Err(e) = std::fs::remove_file(&target_path)
-    {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Failed to delete plugin file: {e}"),
-        );
+    match engine.uninstall(&plugin_id) {
+        Ok(report) => {
+            crate::server::api::agents::publish_global_event(
+                Some(&state.db),
+                "plugin_removed",
+                json!({
+                    "plugin_id": report.id,
+                    "scope": report.scope,
+                    "status": report.status,
+                }),
+            );
+            Json(json!({ "status": "removed", "plugin": report })).into_response()
+        }
+        Err(error) if error.to_string().contains("Unknown plugin:") => {
+            err(StatusCode::NOT_FOUND, "Unknown plugin")
+        }
+        Err(error) => {
+            tracing::error!(%error, plugin_id, "PluginEngine removal failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Plugin removal failed")
+        }
     }
-
-    crate::server::api::agents::publish_global_event(
-        Some(&state.db),
-        "plugin_uninstalled",
-        json!({ "plugin_id": plugin_id }),
-    );
-
-    Json(json!({ "status": "uninstalled", "plugin_id": plugin_id })).into_response()
 }
 
 /// `GET /v1/plugins/events` — live SSE stream of plugin lifecycle events.
@@ -202,6 +159,8 @@ pub async fn stream_plugin_events_handler(
 
 #[cfg(test)]
 mod tests {
+    use cade_plugin::{NativePluginEngine, PluginEngine};
+
     #[tokio::test]
     async fn test_plugins_dir_and_stub_installation() {
         let temp = tempfile::tempdir().unwrap();
@@ -210,5 +169,59 @@ mod tests {
 
         assert!(plugin_path.is_file());
         assert_eq!(plugin_path.file_stem().unwrap(), "my-test-plugin");
+    }
+
+    #[tokio::test]
+    async fn test_native_plugin_engine_inventory_and_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp
+            .path()
+            .join(".cade")
+            .join("plugins")
+            .join("demo-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+
+        // Create tool schema in tools/
+        let tools_dir = plugin_dir.join("tools");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        let schema_path = tools_dir.join("demo_tool.json");
+        std::fs::write(
+            &schema_path,
+            serde_json::json!({
+                "name": "demo_tool",
+                "description": "A demo plugin tool",
+                "parameters": {"type": "object"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Create cade-plugin.json
+        let manifest_path = plugin_dir.join("cade-plugin.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({
+                "name": "Demo Plugin",
+                "version": "1.2.3",
+                "tools": [{"schema": "tools/demo_tool.json"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let engine = NativePluginEngine::from_default_dirs(temp.path());
+        let reports = engine.load_all().expect("load_all should succeed");
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].id, "demo-plugin");
+        assert_eq!(reports[0].name, "Demo Plugin");
+        assert_eq!(reports[0].version, "1.2.3");
+        assert_eq!(reports[0].scope, "project");
+        assert_eq!(reports[0].tools_count, 1);
+
+        let tools = engine.list_tools();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "demo_tool");
+        assert_eq!(tools[0].plugin_name, "Demo Plugin");
     }
 }

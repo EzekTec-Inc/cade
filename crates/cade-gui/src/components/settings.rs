@@ -142,6 +142,8 @@ pub fn SettingsView() -> Element {
                     }
                 }
 
+                crate::components::plugins::PluginSettings {}
+
                 div { class: "space-y-3",
                     h2 { class: "text-sm font-semibold text-slate-100", "Authentication" }
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-6 space-y-3",

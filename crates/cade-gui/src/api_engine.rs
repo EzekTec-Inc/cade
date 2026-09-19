@@ -82,10 +82,17 @@ pub enum ResourceMutation {
     CancelWorkflowRun {
         run_id: String,
     },
+    InstallPlugin {
+        url: String,
+        plugin_id: String,
+    },
+    UninstallPlugin {
+        plugin_id: String,
+    },
 }
 
 /// Unified, deep resource engine for managing API communication and reactive caching.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ApiClientEngine {
     api_client: Memo<CadeApiClient>,
 }
@@ -188,6 +195,20 @@ impl ApiClientEngine {
         }
     }
 
+    /// Fetch canonical PluginEngine inventory.
+    pub async fn fetch_plugins(&self) -> ResourceState<Vec<serde_json::Value>> {
+        let client = self.client();
+        match api_request("GET", "/v1/plugins", None, &client.api_key).await {
+            Ok(response) => match serde_json::from_str::<serde_json::Value>(&response) {
+                Ok(value) => {
+                    ResourceState::Ready(value["plugins"].as_array().cloned().unwrap_or_default())
+                }
+                Err(error) => ResourceState::Error(error.to_string()),
+            },
+            Err(error) => ResourceState::Error(error),
+        }
+    }
+
     /// Execute a resource mutation atomically.
     pub async fn mutate(&self, mutation: ResourceMutation) -> Result<String, String> {
         let client = self.client();
@@ -279,6 +300,27 @@ impl ApiClientEngine {
                 let path = format!("/v1/workflows/runs/{run_id}/cancel");
                 api_request("POST", &path, None, api_key).await?;
                 Ok(run_id)
+            }
+            ResourceMutation::InstallPlugin { url, plugin_id } => {
+                let body = serde_json::json!({ "url": url, "plugin_id": plugin_id });
+                let response = api_request(
+                    "POST",
+                    "/v1/plugins/install",
+                    Some(&body.to_string()),
+                    api_key,
+                )
+                .await?;
+                let value: serde_json::Value =
+                    serde_json::from_str(&response).map_err(|error| error.to_string())?;
+                Ok(value["plugin"]["id"]
+                    .as_str()
+                    .unwrap_or("plugin")
+                    .to_string())
+            }
+            ResourceMutation::UninstallPlugin { plugin_id } => {
+                let path = format!("/v1/plugins/{plugin_id}");
+                api_request("DELETE", &path, None, api_key).await?;
+                Ok(plugin_id)
             }
         }
     }

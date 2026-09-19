@@ -57,12 +57,15 @@ The subagent incorporates this guidance on its next iteration cycle.
 In `cade-gui` (`LiveView`), clicking any running run or subagent opens a slide-over drawer from the right displaying live streaming output (`stream_run`), token burn graphs, and quick action controls (Steer, Change Model, Approve/Deny, Cancel).
 
 ### 7. First-Class Server Plugin Engine
-Implement complete plugin lifecycle endpoints on `cade-server`:
-- `POST /v1/plugins/install` — Installs `.wasm` plugin package into `.cade/plugins/`.
-- `GET /v1/plugins` — Lists installed plugins, exported tools, and statuses.
-- `DELETE /v1/plugins/{id}` — Uninstalls a plugin.
-- `GET /v1/plugins/events` — SSE stream for plugin lifecycle and execution events.
-Exposed in `cade-tui` via `/plugin` and in `cade-gui` via a dedicated Plugins management view.
+
+The Server exposes the canonical PluginEngine lifecycle API:
+
+- `GET /v1/plugins` — returns manifest-derived installed-plugin inventory.
+- `POST /v1/plugins/install` — downloads and installs a plugin package into the current project's `.cade/plugins/` directory.
+- `DELETE /v1/plugins/{id}` — removes a project-local plugin by stable identifier.
+- `GET /v1/plugins/events` — provides the Server-Sent Events connection point for lifecycle events.
+
+The TUI exposes this through `/plugin list`, `/plugin install <url> <id>`, and `/plugin uninstall <id>`. The GUI includes a Plugins section under Settings with inventory refresh, install, and project-plugin removal controls. See [`docs/plugin-development.md`](../plugin-development.md) for the package and API contract.
 
 ## Consequences
 

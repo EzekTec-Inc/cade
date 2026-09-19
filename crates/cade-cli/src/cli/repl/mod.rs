@@ -18,6 +18,7 @@ pub mod commands_mode;
 pub mod commands_model;
 pub mod commands_newagent;
 pub mod commands_permissions;
+pub mod commands_plugin;
 pub mod commands_pricing;
 pub mod commands_providers;
 pub mod commands_resume;

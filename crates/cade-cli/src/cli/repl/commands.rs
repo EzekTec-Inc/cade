@@ -501,6 +501,9 @@ impl Repl {
             SlashCmd::Marketplace => {
                 return self.cmd_marketplace().await;
             }
+            SlashCmd::Plugin(args) => {
+                return self.cmd_plugin(args).await;
+            }
             SlashCmd::Clear => {
                 return self.cmd_clear().await;
             }
