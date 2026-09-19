@@ -86,6 +86,7 @@ pub async fn list_tools(
 
     // Dynamically append live capability definitions from CapabilityMesh seam (ADR-0020)
     use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
+    use cade_plugin::PluginEngine;
     let cap_cx = CapabilityExecutionContext::new("api");
     let mesh_schemas = state.mcp.active_catalog(&cap_cx).await;
     for cap_s in mesh_schemas {
@@ -97,6 +98,26 @@ pub async fn list_tools(
         tools.push(json!({
             "id": format!("tool-mesh-{}", name),
             "name": name,
+            "description": description
+        }));
+    }
+
+    // Dynamically append live plugin tools from PluginEngine (Candidate 3)
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let plugin_engine = cade_plugin::NativePluginEngine::from_default_dirs(&cwd);
+    let _ = plugin_engine.load_all();
+    for pt in plugin_engine.list_tools() {
+        if pt.name.is_empty() || tools.iter().any(|t| t["name"].as_str() == Some(&pt.name)) {
+            continue;
+        }
+        let description = pt
+            .schema
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(String::from);
+        tools.push(json!({
+            "id": format!("tool-plugin-{}", pt.name),
+            "name": pt.name,
             "description": description
         }));
     }

@@ -159,6 +159,8 @@ pub async fn stream_plugin_events_handler(
 
 #[cfg(test)]
 mod tests {
+    use cade_plugin::{NativePluginEngine, PluginEngine};
+
     #[tokio::test]
     async fn test_plugins_dir_and_stub_installation() {
         let temp = tempfile::tempdir().unwrap();
@@ -167,5 +169,59 @@ mod tests {
 
         assert!(plugin_path.is_file());
         assert_eq!(plugin_path.file_stem().unwrap(), "my-test-plugin");
+    }
+
+    #[tokio::test]
+    async fn test_native_plugin_engine_inventory_and_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp
+            .path()
+            .join(".cade")
+            .join("plugins")
+            .join("demo-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+
+        // Create tool schema in tools/
+        let tools_dir = plugin_dir.join("tools");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        let schema_path = tools_dir.join("demo_tool.json");
+        std::fs::write(
+            &schema_path,
+            serde_json::json!({
+                "name": "demo_tool",
+                "description": "A demo plugin tool",
+                "parameters": {"type": "object"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Create cade-plugin.json
+        let manifest_path = plugin_dir.join("cade-plugin.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({
+                "name": "Demo Plugin",
+                "version": "1.2.3",
+                "tools": [{"schema": "tools/demo_tool.json"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let engine = NativePluginEngine::from_default_dirs(temp.path());
+        let reports = engine.load_all().expect("load_all should succeed");
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].id, "demo-plugin");
+        assert_eq!(reports[0].name, "Demo Plugin");
+        assert_eq!(reports[0].version, "1.2.3");
+        assert_eq!(reports[0].scope, "project");
+        assert_eq!(reports[0].tools_count, 1);
+
+        let tools = engine.list_tools();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "demo_tool");
+        assert_eq!(tools[0].plugin_name, "Demo Plugin");
     }
 }
