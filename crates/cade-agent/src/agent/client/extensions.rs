@@ -62,6 +62,23 @@ impl HttpTransport {
         Ok(resp.json().await?)
     }
 
+    /// DELETE /v1{path} and return parsed JSON.
+    pub async fn raw_delete(&self, path: &str) -> Result<serde_json::Value> {
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "DELETE {path} failed {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
     pub async fn list_tools(&self) -> Result<Vec<ToolDef>> {
         let resp = self
             .client
@@ -213,7 +230,9 @@ impl HttpTransport {
             .await?;
         if !resp.status().is_success() {
             let txt = resp.text().await.unwrap_or_default();
-            return Err(crate::Error::custom(format!("install_plugin failed: {txt}")));
+            return Err(crate::Error::custom(format!(
+                "install_plugin failed: {txt}"
+            )));
         }
         let v: serde_json::Value = resp.json().await?;
         Ok(v["status"].as_str().unwrap_or("installed").to_string())

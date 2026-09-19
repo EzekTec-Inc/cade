@@ -586,6 +586,8 @@ pub(crate) enum SlashCmd {
 
     /// Browse the plugin marketplace.
     Marketplace,
+    /// Manage PluginEngine inventory and lifecycle.
+    Plugin(Option<String>),
     /// Reload Lua UI plugins.
     Reload,
     /// Check for and apply CADE updates.
@@ -644,6 +646,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "deny" => Some(SlashCmd::Deny(arg.unwrap_or_default())),
         "steer" => Some(SlashCmd::Steer(arg.unwrap_or_default())),
         "marketplace" | "plugins" => Some(SlashCmd::Marketplace),
+        "plugin" => Some(SlashCmd::Plugin(arg)),
         "reload" => Some(SlashCmd::Reload),
         "update" => Some(SlashCmd::Update),
         "trust" => Some(SlashCmd::Trust),
