@@ -206,6 +206,6 @@ opt-level = 1
 
 [profile.release]
 opt-level       = 3
-lto             = "thin"
+lto             = "off"   # Workaround for LLVM 22 SelectionDAG foldMaskedMerge SIGSEGV
 strip           = true
 panic           = "unwind"
