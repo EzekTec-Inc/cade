@@ -20,7 +20,7 @@ pub fn PluginSettings() -> Element {
         spawn(async move { plugins.set(engine.fetch_plugins().await) });
     };
     let effect_load_plugins = load_plugins.clone();
-    use_effect(move || effect_load_plugins());
+    use_effect(effect_load_plugins);
 
     let content = match plugins() {
         ResourceState::Loading => rsx! {

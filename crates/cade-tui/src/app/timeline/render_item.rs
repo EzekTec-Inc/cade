@@ -15,9 +15,7 @@ pub(crate) fn render_separator_item(
     )));
 }
 
-use super::tool_presentation::{
-    render_tool_activity_pill, resolve_tool_presentation, TreeBranch,
-};
+use super::tool_presentation::{TreeBranch, render_tool_activity_pill, resolve_tool_presentation};
 
 pub(crate) fn render_blank_item(out: &mut Vec<Line<'static>>) {
     out.push(Line::from(""));
@@ -427,19 +425,16 @@ pub(crate) fn render_tool_call_item(
             .collect::<String>()
             .as_str(),
     );
-    let mut left_spans: Vec<Span<'static>> = vec![Span::styled(
-        tree_connector,
-        colors.border_muted(),
-    )];
+    let mut left_spans: Vec<Span<'static>> =
+        vec![Span::styled(tree_connector, colors.border_muted())];
     left_spans.extend(pill_spans);
 
     // Clean 2-space margin between pill and argument preview
     let margin_str = if preview.is_empty() { "" } else { "  " };
     left_spans.push(Span::styled(margin_str, colors.text_dim()));
 
-    let prefix_width = UnicodeWidthStr::width(tree_connector)
-        + pill_width
-        + UnicodeWidthStr::width(margin_str);
+    let prefix_width =
+        UnicodeWidthStr::width(tree_connector) + pill_width + UnicodeWidthStr::width(margin_str);
     let budget = width.saturating_sub(prefix_width + 4);
     let args_str = if preview.is_empty() {
         String::new()
@@ -651,10 +646,7 @@ pub(crate) fn render_tool_result_item(
                 format!("+{remaining} lines hidden · ctrl+o to expand")
             };
             out.push(Line::from(vec![
-                Span::styled(
-                    branch.continuation_rail(),
-                    colors.border_muted(),
-                ),
+                Span::styled(branch.continuation_rail(), colors.border_muted()),
                 Span::styled(
                     format!("[{hint}]"),
                     Style::default()
@@ -1188,8 +1180,17 @@ mod tests {
     fn test_render_tool_result_item_single_line() {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
-        render_tool_result_item(false, "OK", TreeBranch::Terminal, 80, false, &mut out, &colors, false);
-        assert!(out.len() >= 1);
+        render_tool_result_item(
+            false,
+            "OK",
+            TreeBranch::Terminal,
+            80,
+            false,
+            &mut out,
+            &colors,
+            false,
+        );
+        assert!(!out.is_empty());
         let text = out[0].to_string();
         assert!(text.contains("OK"), "expected 'OK', got {text:?}");
         assert!(text.contains("   "), "terminal result uses indented prefix");
@@ -1199,10 +1200,22 @@ mod tests {
     fn test_render_tool_result_item_continuation_rail() {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
-        render_tool_result_item(false, "OK", TreeBranch::Intermediate, 80, false, &mut out, &colors, false);
-        assert!(out.len() >= 1);
+        render_tool_result_item(
+            false,
+            "OK",
+            TreeBranch::Intermediate,
+            80,
+            false,
+            &mut out,
+            &colors,
+            false,
+        );
+        assert!(!out.is_empty());
         let text = out[0].to_string();
-        assert!(text.contains("│  "), "intermediate result uses continuation rail");
+        assert!(
+            text.contains("│  "),
+            "intermediate result uses continuation rail"
+        );
     }
 
     #[test]
@@ -1221,7 +1234,10 @@ mod tests {
             false,
         );
         let text = out[0].to_string();
-        assert!(text.contains("├─ "), "intermediate tool call should use ├─ connector, got {text:?}");
+        assert!(
+            text.contains("├─ "),
+            "intermediate tool call should use ├─ connector, got {text:?}"
+        );
         assert!(text.contains("Search codebase"), "got {text:?}");
         assert!(!text.contains("[search_for_pattern]"), "got {text:?}");
         assert!(text.contains("Event::Resize"), "got {text:?}");
@@ -1239,7 +1255,10 @@ mod tests {
             false,
         );
         let text_term = out_term[0].to_string();
-        assert!(text_term.contains("└─ "), "terminal tool call should use └─ connector, got {text_term:?}");
+        assert!(
+            text_term.contains("└─ "),
+            "terminal tool call should use └─ connector, got {text_term:?}"
+        );
     }
 
     #[test]
@@ -1266,7 +1285,16 @@ mod tests {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
         let content = "Compiling cade-tui v0.2.6\nFinished dev profile\n1 warning emitted";
-        render_tool_result_item(false, content, TreeBranch::Terminal, 80, false, &mut out, &colors, false);
+        render_tool_result_item(
+            false,
+            content,
+            TreeBranch::Terminal,
+            80,
+            false,
+            &mut out,
+            &colors,
+            false,
+        );
         assert!(
             out.len() >= 2,
             "collapsed multiline should be 1 summary line plus trailing spacer"
@@ -1280,7 +1308,11 @@ mod tests {
             text.contains("ctrl+o to expand"),
             "expected expand hint, got {text:?}"
         );
-        assert_eq!(out.last().unwrap().to_string(), "", "trailing spacer expected");
+        assert_eq!(
+            out.last().unwrap().to_string(),
+            "",
+            "trailing spacer expected"
+        );
     }
 
     #[test]
@@ -1288,7 +1320,16 @@ mod tests {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
         let content = "Compiling cade-tui v0.2.6\nFinished dev profile\n1 warning emitted";
-        render_tool_result_item(false, content, TreeBranch::Terminal, 80, true, &mut out, &colors, false);
+        render_tool_result_item(
+            false,
+            content,
+            TreeBranch::Terminal,
+            80,
+            true,
+            &mut out,
+            &colors,
+            false,
+        );
         assert!(out.len() >= 6);
         let header = out[0].to_string();
         assert!(
@@ -1304,7 +1345,11 @@ mod tests {
             footer.contains("╰─"),
             "expected closing border, got {footer:?}"
         );
-        assert_eq!(out.last().unwrap().to_string(), "", "trailing spacer expected");
+        assert_eq!(
+            out.last().unwrap().to_string(),
+            "",
+            "trailing spacer expected"
+        );
     }
 
     #[test]
@@ -1312,7 +1357,16 @@ mod tests {
         let colors = ThemeColors::default();
         let mut out = Vec::new();
         let content = "error[E0308]: mismatched types\nexpected Color, found Style";
-        render_tool_result_item(true, content, TreeBranch::Terminal, 80, false, &mut out, &colors, false);
+        render_tool_result_item(
+            true,
+            content,
+            TreeBranch::Terminal,
+            80,
+            false,
+            &mut out,
+            &colors,
+            false,
+        );
         assert!(out.len() >= 2, "errors must remain visible, not folded");
     }
 

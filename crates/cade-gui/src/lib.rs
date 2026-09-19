@@ -313,10 +313,10 @@ fn App() -> Element {
                                     if let Some(curr) = selected()
                                         && curr.id == r_agent_id
                                     {
-                                        if let Some(ref cid) = r_conv_id {
-                                            if active_conversation().as_ref() != Some(cid) {
-                                                active_conversation.set(Some(cid.clone()));
-                                            }
+                                        if let Some(ref cid) = r_conv_id
+                                            && active_conversation().as_ref() != Some(cid)
+                                        {
+                                            active_conversation.set(Some(cid.clone()));
                                         }
 
                                         if active_stream_id() != Some(run_id.clone()) {
@@ -379,13 +379,13 @@ fn App() -> Element {
                                 // 1. Update status in runs list
                                 let mut r_list = runs();
                                 for r in r_list.iter_mut() {
-                                    if r["id"].as_str() == Some(run_id) {
-                                        if let Some(obj) = r.as_object_mut() {
-                                            obj.insert(
-                                                "status".to_string(),
-                                                serde_json::json!(r_status),
-                                            );
-                                        }
+                                    if r["id"].as_str() == Some(run_id)
+                                        && let Some(obj) = r.as_object_mut()
+                                    {
+                                        obj.insert(
+                                            "status".to_string(),
+                                            serde_json::json!(r_status),
+                                        );
                                     }
                                 }
                                 runs.set(r_list);
