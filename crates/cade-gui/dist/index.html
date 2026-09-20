@@ -26,8 +26,9 @@
     inset: 0;
   }
   .cade-loader {
-    width: 100%;
-    height: 100%;
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -36,6 +37,7 @@
     background: #0f1115;
     color: #9ca3af;
     font-size: 14px;
+    transition: opacity 0.25s ease-out;
   }
   .cade-spinner {
     width: 32px;
@@ -67,23 +69,38 @@
 </script>
 
 <script type="module">
-import init, * as bindings from '/dashboard/cade-gui-c10319d19a6f6ec9.js';
-const wasm = await init({ module_or_path: '/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm' });
+try {
+  import init, * as bindings from '/dashboard/cade-gui-c10319d19a6f6ec9.js';
+  const wasm = await init({ module_or_path: '/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm' });
+  window.wasmBindings = bindings;
+  dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
-
-window.wasmBindings = bindings;
-
-
-dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
-
+  // Cleanly dismiss the pre-WASM loading overlay
+  const loader = document.getElementById("cade-loader");
+  if (loader) {
+    loader.style.opacity = "0";
+    setTimeout(() => loader.remove(), 250);
+  }
+} catch (err) {
+  console.error("Failed to load CADE GUI WASM:", err);
+  const loader = document.getElementById("cade-loader");
+  if (loader) {
+    loader.innerHTML = `
+      <div style="font-size: 32px; margin-bottom: 12px;">⚠️</div>
+      <div style="font-weight: 600; color: #ef4444; font-size: 16px; margin-bottom: 8px;">Failed to initialize CADE Dashboard</div>
+      <div style="color: #9ca3af; font-size: 13px; max-width: 480px; text-align: center; word-break: break-word;">${err.message || err}</div>
+      <button onclick="location.reload()" style="margin-top: 16px; background: #ff7c5c; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 500;">Reload</button>
+    `;
+  }
+}
 </script>
 <link rel="modulepreload" href="/dashboard/cade-gui-c10319d19a6f6ec9.js" crossorigin="anonymous" integrity="sha384-DZrNfJSWnM19d+RoJxVIRXi9htJiZ9tgB5uV301xXaQTqo9V8/md/ng4F+zpSU8W"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-80f311471938c35d/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-Nif9IKEK7jDtr+Nt8Bt3dnT4GGjA+Ep0kN+xNiaynv0xNWAMuVQ0NWY8qxY7P0Ge"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="preload" href="/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm" crossorigin="anonymous" integrity="sha384-kWxr+wKkDrTYXKKdX2NH/db3+7Ra3cCtyxlOCiuT2n3utVXhwQ5azMf8kz2baEkX" as="fetch" type="application/wasm"></head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
-<div id="cade_gui_canvas" class="h-screen w-screen flex">
-  <div class="cade-loader">
-    <div class="cade-spinner"></div>
-    <div style="font-weight: 500; color: #e5e7eb;">Loading CADE Dashboard…</div>
-  </div>
+<div id="cade-loader" class="cade-loader">
+  <div class="cade-spinner"></div>
+  <div style="font-weight: 500; color: #e5e7eb;">Loading CADE Dashboard…</div>
 </div>
+<div id="cade_gui_canvas" class="h-screen w-screen flex"></div>
+</body>
 </body>
 </html>

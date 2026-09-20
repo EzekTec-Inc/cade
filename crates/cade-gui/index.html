@@ -26,8 +26,9 @@
     inset: 0;
   }
   .cade-loader {
-    width: 100%;
-    height: 100%;
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -36,6 +37,7 @@
     background: #0f1115;
     color: #9ca3af;
     font-size: 14px;
+    transition: opacity 0.25s ease-out;
   }
   .cade-spinner {
     width: 32px;
@@ -68,11 +70,10 @@
 <link data-trunk rel="rust" data-wasm-opt="0" />
 </head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
-<div id="cade_gui_canvas" class="h-screen w-screen flex">
-  <div class="cade-loader">
-    <div class="cade-spinner"></div>
-    <div style="font-weight: 500; color: #e5e7eb;">Loading CADE Dashboard…</div>
-  </div>
+<div id="cade-loader" class="cade-loader">
+  <div class="cade-spinner"></div>
+  <div style="font-weight: 500; color: #e5e7eb;">Loading CADE Dashboard…</div>
 </div>
+<div id="cade_gui_canvas" class="h-screen w-screen flex"></div>
 </body>
 </html>
