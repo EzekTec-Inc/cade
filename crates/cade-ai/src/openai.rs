@@ -109,6 +109,96 @@ pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage
     }
 }
 
+/// Parse a single SSE JSON event from OpenAI's modern Responses API (`/v1/responses`).
+pub(crate) fn parse_responses_api_chunk(
+    v: &Value,
+    tool_map: &mut std::collections::BTreeMap<usize, (String, String, String)>,
+    req_model: &str,
+) -> Vec<StreamChunk> {
+    let mut chunks = Vec::new();
+    if let Some(event_type) = v.get("type").and_then(Value::as_str) {
+        match event_type {
+            "response.output_item.added" => {
+                let item = &v["item"];
+                if item["type"].as_str() == Some("function_call") {
+                    let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                    let entry = tool_map
+                        .entry(idx)
+                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+                    if let Some(call_id) = item["call_id"].as_str().or_else(|| item["id"].as_str())
+                    {
+                        entry.0 = call_id.to_string();
+                    }
+                    if let Some(name) = item["name"].as_str() {
+                        entry.1 = name.to_string();
+                    }
+                    if let Some(args) = item["arguments"].as_str() {
+                        entry.2.push_str(args);
+                    }
+                }
+            }
+            "response.output_item.done" => {
+                let item = &v["item"];
+                if item["type"].as_str() == Some("function_call") {
+                    let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                    if let Some((id, name, args_str)) = tool_map.remove(&idx)
+                        && !name.is_empty()
+                    {
+                        let args = serde_json::from_str(&args_str).unwrap_or_default();
+                        chunks.push(StreamChunk::ToolCall(LlmToolCall {
+                            id,
+                            name,
+                            arguments: args,
+                            thought_signature: None,
+                        }));
+                    }
+                }
+            }
+            "response.function_call_arguments.delta" => {
+                let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                let entry = tool_map
+                    .entry(idx)
+                    .or_insert_with(|| (String::new(), String::new(), String::new()));
+                if let Some(delta_args) = v["delta"].as_str() {
+                    entry.2.push_str(delta_args);
+                }
+            }
+            "response.text.delta" | "response.output_text.delta" => {
+                if let Some(txt) = v["delta"].as_str()
+                    && !txt.is_empty()
+                {
+                    chunks.push(StreamChunk::Text(txt.to_string()));
+                }
+            }
+            "response.reasoning.delta" => {
+                if let Some(res) = v["delta"].as_str()
+                    && !res.is_empty()
+                {
+                    chunks.push(StreamChunk::Reasoning(res.to_string()));
+                }
+            }
+            "response.done" => {
+                if let Some(status) = v["response"]["status"].as_str() {
+                    chunks.push(StreamChunk::FinishReason(status.to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let usage_opt = v
+        .get("usage")
+        .or_else(|| v.get("response").and_then(|r| r.get("usage")))
+        .filter(|u| !u.is_null());
+    if let Some(usage) = usage_opt
+        && let Some(tu) = parse_token_usage(usage, req_model)
+    {
+        chunks.push(StreamChunk::Usage(tu));
+    }
+
+    chunks
+}
+
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
 ///
 /// Handles two response shapes:
@@ -1026,76 +1116,27 @@ impl LlmProvider for OpenAiProvider {
                             }
                         }
                         // 2. Modern Responses API / Realtime wire events
-                        else if let Some(event_type) = v.get("type").and_then(Value::as_str) {
-                            match event_type {
-                                "response.output_item.added" => {
-                                    let item = &v["item"];
-                                    if item["type"].as_str() == Some("function_call") {
-                                        let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                                        let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                                        if let Some(call_id) = item["call_id"].as_str().or_else(|| item["id"].as_str()) {
-                                            entry.0 = call_id.to_string();
-                                        }
-                                        if let Some(name) = item["name"].as_str() {
-                                            entry.1 = name.to_string();
-                                        }
-                                        if let Some(args) = item["arguments"].as_str() {
-                                            entry.2.push_str(args);
-                                        }
-                                    }
-                                }
-                                "response.output_item.done" => {
-                                    let item = &v["item"];
-                                    if item["type"].as_str() == Some("function_call") {
-                                        let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                                        if let Some((id, name, args_str)) = tool_map.remove(&idx)
-                                            && !name.is_empty()
-                                        {
-                                            let args = serde_json::from_str(&args_str).unwrap_or_default();
-                                            yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
-                                        }
-                                    }
-                                }
-                                "response.function_call_arguments.delta" => {
-                                    let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                                    let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                                    if let Some(delta_args) = v["delta"].as_str() {
-                                        entry.2.push_str(delta_args);
-                                    }
-                                }
-                                "response.text.delta" | "response.output_text.delta" => {
-                                    if let Some(txt) = v["delta"].as_str() && !txt.is_empty() {
-                                        yield Ok(StreamChunk::Text(txt.to_string()));
-                                    }
-                                }
-                                "response.reasoning.delta" => {
-                                    if let Some(res) = v["delta"].as_str() && !res.is_empty() {
-                                        yield Ok(StreamChunk::Reasoning(res.to_string()));
-                                    }
-                                }
-                                "response.done" => {
-                                    if let Some(status) = v["response"]["status"].as_str()
-                                        && !finish_emitted
-                                    {
-                                        yield Ok(StreamChunk::FinishReason(status.to_string()));
+                        else if v.get("type").is_some() {
+                            let resp_chunks =
+                                parse_responses_api_chunk(&v, &mut tool_map, &req_model);
+                            for c in resp_chunks {
+                                if let StreamChunk::FinishReason(_) = &c {
+                                    if !finish_emitted {
                                         finish_emitted = true;
+                                        yield Ok(c);
                                     }
+                                } else {
+                                    yield Ok(c);
                                 }
-                                _ => {}
                             }
-                        }
-
-                        // Usage chunk: may arrive in any chunk, including the separate
-                        // empty-choices chunk OpenAI sends after finish_reason, or inside
-                        // response.done in the Responses API.
-                        let usage_opt = v
-                            .get("usage")
-                            .or_else(|| v.get("response").and_then(|r| r.get("usage")))
-                            .filter(|u| !u.is_null());
-                        if let Some(usage) = usage_opt
-                            && let Some(tu) = parse_token_usage(usage, &req_model)
-                        {
-                            yield Ok(StreamChunk::Usage(tu));
+                        } else {
+                            // Standard Chat Completions usage chunk (empty choices, top-level usage)
+                            let usage_opt = v.get("usage").filter(|u| !u.is_null());
+                            if let Some(usage) = usage_opt
+                                && let Some(tu) = parse_token_usage(usage, &req_model)
+                            {
+                                yield Ok(StreamChunk::Usage(tu));
+                            }
                         }
                     }
                         }

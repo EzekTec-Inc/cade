@@ -41,6 +41,7 @@ pub struct SubagentTrayState {
     pub steer_input: Option<String>,
     pub model_input: Option<String>,
     pub pending_action: SubagentTrayAction,
+    pub last_area: std::cell::Cell<ratatui::layout::Rect>,
 }
 
 impl SubagentTrayState {
@@ -222,6 +223,82 @@ impl SubagentTrayState {
         }
     }
 
+    pub fn handle_mouse(
+        &mut self,
+        mouse: crossterm::event::MouseEvent,
+        trackers: &[SubagentTracker],
+    ) -> bool {
+        let area = self.last_area.get();
+        if !self.is_visible || area.width < 10 || area.height < 5 {
+            return false;
+        }
+
+        // Check if mouse event is inside the tray area
+        if mouse.column < area.x
+            || mouse.column >= area.x + area.width
+            || mouse.row < area.y
+            || mouse.row >= area.y + area.height
+        {
+            return false;
+        }
+
+        use crossterm::event::{MouseButton, MouseEventKind};
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.viewing_transcript {
+                    self.transcript_scroll = self.transcript_scroll.saturating_add(3);
+                    return true;
+                } else if self.selected > 0 {
+                    self.selected -= 1;
+                    return true;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.viewing_transcript {
+                    self.transcript_scroll = self.transcript_scroll.saturating_sub(3);
+                    return true;
+                } else if !trackers.is_empty() && self.selected + 1 < trackers.len() {
+                    self.selected += 1;
+                    return true;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.is_focused = true;
+                if self.viewing_transcript {
+                    let inner_y = area.y + 1;
+                    let inner_height = area.height.saturating_sub(2);
+                    if mouse.row == inner_y || mouse.row >= inner_y + inner_height.saturating_sub(1)
+                    {
+                        self.viewing_transcript = false;
+                        return true;
+                    }
+                    return true;
+                }
+
+                if trackers.is_empty() {
+                    return true;
+                }
+
+                let inner_y = area.y + 1;
+                if mouse.row >= inner_y {
+                    let relative_row = (mouse.row - inner_y) as usize;
+                    let clicked_index = relative_row / 2;
+                    if clicked_index < trackers.len() {
+                        if self.selected == clicked_index {
+                            self.viewing_transcript = true;
+                            self.transcript_scroll = 0;
+                        } else {
+                            self.selected = clicked_index;
+                        }
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
     pub fn render(
         &self,
         frame: &mut Frame,
@@ -229,6 +306,7 @@ impl SubagentTrayState {
         trackers: &[SubagentTracker],
         colors: &crate::colors::ThemeColors,
     ) {
+        self.last_area.set(area);
         if !self.is_visible || area.width < 10 || area.height < 5 {
             return;
         }
@@ -605,5 +683,61 @@ mod tests {
                 serde_json::from_str(&json).expect("should deserialize");
             assert_eq!(action, decoded);
         }
+    }
+
+    #[test]
+    fn test_tray_mouse_interactions() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Rect;
+
+        let mut state = SubagentTrayState::new();
+        state.is_visible = true;
+        state.last_area.set(Rect::new(50, 0, 40, 20));
+
+        let trackers = vec![dummy_tracker("worker-1"), dummy_tracker("worker-2")];
+
+        // 1. Mouse click outside tray area returns false
+        let outside = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(!state.handle_mouse(outside, &trackers));
+
+        // 2. Mouse click inside on second tracker (inner_y = 1, row 3 -> relative row 2 -> index 1)
+        let click_second = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 55,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(state.handle_mouse(click_second, &trackers));
+        assert_eq!(state.selected, 1);
+        assert!(!state.viewing_transcript);
+
+        // 3. Re-clicking the selected tracker drills down into transcript
+        assert!(state.handle_mouse(click_second, &trackers));
+        assert!(state.viewing_transcript);
+        assert_eq!(state.transcript_scroll, 0);
+
+        // 4. Mouse wheel in transcript view scrolls transcript
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 55,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(state.handle_mouse(scroll_up, &trackers));
+        assert_eq!(state.transcript_scroll, 3);
+
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 55,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(state.handle_mouse(scroll_down, &trackers));
+        assert_eq!(state.transcript_scroll, 0);
     }
 }

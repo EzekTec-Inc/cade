@@ -1562,3 +1562,123 @@ fn test_parse_token_usage_standard_and_responses_api() {
     assert_eq!(tu_resp.cache_read_tokens, 80);
     assert_eq!(tu_resp.model, "openai/gpt-5");
 }
+
+#[test]
+fn test_parse_responses_api_multi_tool_stream() {
+    use std::collections::BTreeMap;
+
+    let mut tool_map: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+
+    // 1. Tool 0 added: read_file
+    let item_0 = json!({
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+            "type": "function_call",
+            "call_id": "call_read_1",
+            "name": "read_file",
+            "arguments": ""
+        }
+    });
+    let c1 = parse_responses_api_chunk(&item_0, &mut tool_map, "gpt-5");
+    assert!(c1.is_empty());
+    assert_eq!(tool_map.len(), 1);
+
+    // 2. Tool 0 delta: arguments chunk 1
+    let delta_1 = json!({
+        "type": "response.function_call_arguments.delta",
+        "output_index": 0,
+        "delta": "{\"path\": \""
+    });
+    let c2 = parse_responses_api_chunk(&delta_1, &mut tool_map, "gpt-5");
+    assert!(c2.is_empty());
+
+    // 3. Tool 0 delta: arguments chunk 2
+    let delta_2 = json!({
+        "type": "response.function_call_arguments.delta",
+        "output_index": 0,
+        "delta": "src/lib.rs\"}"
+    });
+    let c3 = parse_responses_api_chunk(&delta_2, &mut tool_map, "gpt-5");
+    assert!(c3.is_empty());
+
+    // 4. Tool 0 done: yields StreamChunk::ToolCall with parsed arguments
+    let done_0 = json!({
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "function_call",
+            "call_id": "call_read_1"
+        }
+    });
+    let c4 = parse_responses_api_chunk(&done_0, &mut tool_map, "gpt-5");
+    assert_eq!(c4.len(), 1);
+    match &c4[0] {
+        StreamChunk::ToolCall(tc) => {
+            assert_eq!(tc.id, "call_read_1");
+            assert_eq!(tc.name, "read_file");
+            assert_eq!(tc.arguments["path"], "src/lib.rs");
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
+    assert!(tool_map.is_empty());
+
+    // 5. Tool 1 added: bash
+    let item_1 = json!({
+        "type": "response.output_item.added",
+        "output_index": 1,
+        "item": {
+            "type": "function_call",
+            "call_id": "call_bash_2",
+            "name": "bash",
+            "arguments": "{\"command\":\"cargo check\"}"
+        }
+    });
+    let _ = parse_responses_api_chunk(&item_1, &mut tool_map, "gpt-5");
+
+    let done_1 = json!({
+        "type": "response.output_item.done",
+        "output_index": 1,
+        "item": {
+            "type": "function_call",
+            "call_id": "call_bash_2"
+        }
+    });
+    let c5 = parse_responses_api_chunk(&done_1, &mut tool_map, "gpt-5");
+    assert_eq!(c5.len(), 1);
+    match &c5[0] {
+        StreamChunk::ToolCall(tc) => {
+            assert_eq!(tc.id, "call_bash_2");
+            assert_eq!(tc.name, "bash");
+            assert_eq!(tc.arguments["command"], "cargo check");
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
+
+    // 6. response.done with status and usage
+    let resp_done = json!({
+        "type": "response.done",
+        "response": {
+            "status": "completed",
+            "usage": {
+                "input_tokens": 300,
+                "output_tokens": 120,
+                "input_token_details": {
+                    "cached_tokens": 50
+                }
+            }
+        }
+    });
+    let c6 = parse_responses_api_chunk(&resp_done, &mut tool_map, "gpt-5");
+    assert_eq!(c6.len(), 2);
+    assert!(matches!(&c6[0], StreamChunk::FinishReason(r) if r == "completed"));
+    match &c6[1] {
+        StreamChunk::Usage(u) => {
+            assert_eq!(u.input_tokens, 250);
+            assert_eq!(u.output_tokens, 120);
+            assert_eq!(u.cache_read_tokens, 50);
+            assert_eq!(u.model, "openai/gpt-5");
+        }
+        other => panic!("expected Usage, got {other:?}"),
+    }
+}

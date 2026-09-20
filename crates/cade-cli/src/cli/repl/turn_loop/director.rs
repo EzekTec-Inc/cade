@@ -76,7 +76,7 @@ fn translate_turn_event(event: &Event) -> TurnInputEvent {
     }
 }
 
-fn resolve_turn_outcome(
+pub(crate) fn resolve_turn_outcome(
     is_cancelled: bool,
     stream_error: Option<String>,
     summary: String,
@@ -634,5 +634,42 @@ mod tests {
             trackers[0].status,
             SubagentStatus::Completed { .. }
         ));
+    }
+
+    #[test]
+    fn test_resolve_turn_outcome_matrix() {
+        // 1. Clean completion
+        let outcome = resolve_turn_outcome(false, None, "Turn summary".to_string(), 5, Some(120));
+        assert_eq!(
+            outcome,
+            TurnOutcome::Completed {
+                summary: "Turn summary".to_string(),
+                elapsed_secs: 5,
+                token_usage: Some(120),
+            }
+        );
+
+        // 2. Cancellation takes precedence over stream error
+        let cancelled_with_err = resolve_turn_outcome(
+            true,
+            Some("stream broken".to_string()),
+            "Partial summary".to_string(),
+            2,
+            None,
+        );
+        assert_eq!(cancelled_with_err, TurnOutcome::Cancelled);
+
+        // 3. Error without cancellation returns TurnOutcome::Error
+        let error_outcome = resolve_turn_outcome(
+            false,
+            Some("connection refused".to_string()),
+            "".to_string(),
+            1,
+            None,
+        );
+        assert_eq!(
+            error_outcome,
+            TurnOutcome::Error("connection refused".to_string())
+        );
     }
 }

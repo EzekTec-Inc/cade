@@ -235,6 +235,15 @@ impl TuiApp {
             return Ok(true);
         }
 
+        if self.subagent_tray.is_visible {
+            let trackers = self.subagent_trackers.clone();
+            if self.subagent_tray.handle_mouse(m, &trackers) {
+                self.draw_dirty = true;
+                self.draw()?;
+                return Ok(true);
+            }
+        }
+
         let is_inside_messages = m.column >= self.messages_area.x
             && m.column < self.messages_area.x + self.messages_area.width
             && m.row >= self.messages_area.y

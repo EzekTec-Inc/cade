@@ -90,6 +90,15 @@ pub async fn call_mcp_tool(
     State(state): State<AppState>,
     Json(body): Json<CallMcpToolRequest>,
 ) -> Result<Json<CallMcpToolResponse>, (StatusCode, Json<Value>)> {
+    if body.name.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Tool name cannot be empty"
+            })),
+        ));
+    }
+
     match state.mcp.call_tool(&body.name, &body.arguments).await {
         Some(Ok((output, is_error, ui_resource_uri))) => Ok(Json(CallMcpToolResponse {
             output,
@@ -243,5 +252,45 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_call_mcp_tool_empty_name_returns_bad_request() {
+        let state = test_state();
+        let app = router(state);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/mcp/call")
+            .header("Authorization", "Bearer test_tok")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"name":"","arguments":{}}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json_val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json_val["error"], "Tool name cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn test_call_mcp_tool_whitespace_name_returns_bad_request() {
+        let state = test_state();
+        let app = router(state);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/mcp/call")
+            .header("Authorization", "Bearer test_tok")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"name":"   ","arguments":{}}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
