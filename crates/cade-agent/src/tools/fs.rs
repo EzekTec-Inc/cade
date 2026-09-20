@@ -429,7 +429,7 @@ impl ApplyPatchTool {
                 .arg("--version")
                 .output()
                 .await;
-            if probe.is_err() || !probe.unwrap().status.success() {
+            if !probe.as_ref().is_ok_and(|p| p.status.success()) {
                 return Err(crate::Error::custom(
                     "apply_patch: the `patch` utility was not found. \
                      Install Git for Windows (includes `patch`) or use WSL."

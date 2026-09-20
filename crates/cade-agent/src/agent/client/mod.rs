@@ -69,6 +69,19 @@ impl CadeMessage {
             .unwrap_or("")
     }
 
+    /// Construct a system notice message.
+    pub fn system_notice(message: impl Into<String>) -> Self {
+        let msg = message.into();
+        Self {
+            id: None,
+            message_type: Some("system_notice".to_string()),
+            data: serde_json::json!({
+                "message_type": "system_notice",
+                "message": msg,
+            }),
+        }
+    }
+
     /// Extract tool call info from a tool_call_message.
     /// Returns `(tool_call_id, tool_name, arguments_value)`.
     pub fn as_tool_call(&self) -> Option<(String, String, Value)> {

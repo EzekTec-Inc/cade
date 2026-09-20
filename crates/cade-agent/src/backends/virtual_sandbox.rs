@@ -131,8 +131,12 @@ impl ExecutionBackend for VirtualSandboxBackend {
             .spawn()
             .map_err(|e| crate::Error::custom(format!("Failed to spawn sandbox shell: {e}")))?;
 
-        let mut stdout_stream = child.stdout.take().unwrap();
-        let mut stderr_stream = child.stderr.take().unwrap();
+        let mut stdout_stream = child.stdout.take().ok_or_else(|| {
+            crate::Error::custom("failed to capture sandbox child stdout".to_string())
+        })?;
+        let mut stderr_stream = child.stderr.take().ok_or_else(|| {
+            crate::Error::custom("failed to capture sandbox child stderr".to_string())
+        })?;
 
         let stdout_handle = tokio::spawn(async move {
             let mut buf = Vec::new();

@@ -186,10 +186,9 @@ pub async fn stream_http_handler(
         .header(header::CONTENT_TYPE, content_type)
         .body(body)
         .unwrap_or_else(|e| {
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("failed to build response: {e}")))
-                .unwrap()
+            let mut res = Response::new(Body::from(format!("failed to build response: {e}")));
+            *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            res
         })
 }
 

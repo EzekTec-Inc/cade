@@ -366,6 +366,10 @@ impl HttpTransport {
         let mut attempt: u64 = 0;
 
         loop {
+            if attempt == 0 {
+                on_event(&CadeMessage::system_notice("Reconnecting to stream..."));
+            }
+
             // Honour a user cancellation request while offline: fire the
             // durable cancel endpoint so the server stops work, then surface
             // cancellation like the live path does.
@@ -427,6 +431,10 @@ impl HttpTransport {
                     // Transient network/HTTP failure — back off and retry.
                     // Keep the previous last_seq; the durable log has it all.
                     tracing::debug!(run_id = %run_id, %error, "run stream replay failed, retrying");
+                    on_event(&CadeMessage::system_notice(format!(
+                        "Stream disconnected, reconnecting (attempt {})...",
+                        attempt + 1
+                    )));
                 }
             }
 

@@ -127,8 +127,9 @@ impl ExecutionBackend for DockerBackend {
         let src = format!("{}:/workspace/{}", container_id, path.to_string_lossy());
 
         // Run docker cp
+        let temp_path_str = temp_file.path().to_string_lossy();
         let out = Command::new("docker")
-            .args(["cp", &src, temp_file.path().to_str().unwrap()])
+            .args(["cp", &src, temp_path_str.as_ref()])
             .output()
             .await
             .map_err(|e| crate::Error::custom(format!("docker cp failed: {e}")))?;
@@ -153,8 +154,9 @@ impl ExecutionBackend for DockerBackend {
         let dest = format!("{}:/workspace/{}", container_id, path.to_string_lossy());
 
         // Run docker cp
+        let temp_path_str = temp_file.path().to_string_lossy();
         let out = Command::new("docker")
-            .args(["cp", temp_file.path().to_str().unwrap(), &dest])
+            .args(["cp", temp_path_str.as_ref(), &dest])
             .output()
             .await
             .map_err(|e| crate::Error::custom(format!("docker cp failed: {e}")))?;

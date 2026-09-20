@@ -672,4 +672,56 @@ mod tests {
             TurnOutcome::Error("connection refused".to_string())
         );
     }
+
+    #[test]
+    fn test_turn_loop_sse_message_flow() {
+        use cade_agent::agent::client::CadeMessage;
+
+        // 1. System notice construction and type verification
+        let notice = CadeMessage::system_notice("Reconnecting to stream...");
+        assert_eq!(notice.msg_type(), "system_notice");
+        assert_eq!(notice.data["message"], "Reconnecting to stream...");
+
+        // 2. Tool call message parsing
+        let tool_msg = serde_json::from_value::<CadeMessage>(serde_json::json!({
+            "message_type": "tool_call_message",
+            "tool_call": {
+                "id": "call_123",
+                "name": "bash",
+                "arguments": "{\"command\":\"cargo check\"}"
+            }
+        }))
+        .expect("parse tool call message");
+        assert_eq!(tool_msg.msg_type(), "tool_call_message");
+        let (id, name, args) = tool_msg.as_tool_call().expect("as_tool_call");
+        assert_eq!(id, "call_123");
+        assert_eq!(name, "bash");
+        assert_eq!(args["command"], "cargo check");
+
+        // 3. Usage statistics payload
+        let usage_msg = serde_json::from_value::<CadeMessage>(serde_json::json!({
+            "message_type": "usage_statistics",
+            "input_tokens": 150,
+            "output_tokens": 80,
+            "cache_read_tokens": 30,
+            "cache_write_tokens": 0,
+            "model": "claude-sonnet-4"
+        }))
+        .expect("parse usage message");
+        assert_eq!(usage_msg.msg_type(), "usage_statistics");
+        assert_eq!(usage_msg.data["input_tokens"], 150);
+        assert_eq!(usage_msg.data["output_tokens"], 80);
+
+        // 4. Clean turn outcome
+        let outcome =
+            resolve_turn_outcome(false, None, "All steps verified".to_string(), 3, Some(230));
+        assert_eq!(
+            outcome,
+            TurnOutcome::Completed {
+                summary: "All steps verified".to_string(),
+                elapsed_secs: 3,
+                token_usage: Some(230),
+            }
+        );
+    }
 }

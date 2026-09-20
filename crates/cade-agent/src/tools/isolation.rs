@@ -216,7 +216,7 @@ impl IsolatedWorkspace {
                     let temp_bytes = std::fs::read(path)?;
                     let host_bytes_opt = std::fs::read(&dest_path).ok();
 
-                    if host_bytes_opt.is_none() || host_bytes_opt.unwrap() != temp_bytes {
+                    if host_bytes_opt.as_deref() != Some(&temp_bytes) {
                         if let Some(parent) = dest_path.parent() {
                             std::fs::create_dir_all(parent)?;
                         }

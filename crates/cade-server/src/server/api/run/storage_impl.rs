@@ -322,7 +322,7 @@ impl StorageBackend for ServerStorageBackend {
         let id = format!("art-{}", uuid::Uuid::new_v4());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         let size_bytes = content.len() as i64;
 
@@ -488,7 +488,7 @@ impl StorageBackend for ServerStorageBackend {
         let id = format!("cp-{}", uuid::Uuid::new_v4());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         let conn = self
             .state
@@ -546,7 +546,9 @@ impl StorageBackend for ServerStorageBackend {
             .db
             .get()
             .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT id, label, description, created_at, git_commit_hash, parent_id FROM checkpoints WHERE id = ?1 AND agent_id = ?2").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, label, description, created_at, git_commit_hash, parent_id FROM checkpoints WHERE id = ?1 AND agent_id = ?2")
+            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
         let row = stmt
             .query_row(rusqlite::params![checkpoint_id, agent_id], |r| {
                 Ok(serde_json::json!({

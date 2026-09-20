@@ -252,12 +252,7 @@ impl StorageBackend for HttpTransport {
             .await
     }
 
-    async fn install_plugin(
-        &self,
-        agent_id: &str,
-        url: &str,
-        plugin_id: &str,
-    ) -> Result<String> {
+    async fn install_plugin(&self, agent_id: &str, url: &str, plugin_id: &str) -> Result<String> {
         self.install_plugin(agent_id, url, plugin_id).await
     }
 

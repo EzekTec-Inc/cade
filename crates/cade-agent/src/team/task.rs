@@ -92,7 +92,8 @@ impl TaskList {
         t.dependencies = deps;
         self.tasks.push(t);
         self.update_blocked_statuses();
-        self.tasks.last().unwrap()
+        let idx = self.tasks.len() - 1;
+        &self.tasks[idx]
     }
     pub fn get_task(&self, id: &str) -> Option<&Task> {
         self.tasks.iter().find(|t| t.id == id)
