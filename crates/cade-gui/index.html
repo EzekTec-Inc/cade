@@ -6,13 +6,47 @@
 <title>CADE Dashboard</title>
 <style>
   :root { color-scheme: dark; }
-  body {
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-    background: #0f1115;
-    color: #e5e7eb;
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    width: 100vw;
+    height: 100vh;
     margin: 0;
     padding: 0;
     overflow: hidden;
+    background: #0f1115;
+    color: #e5e7eb;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #cade_gui_canvas {
+    width: 100vw;
+    height: 100vh;
+    min-height: 100vh;
+    display: flex;
+    position: absolute;
+    inset: 0;
+  }
+  .cade-loader {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: #0f1115;
+    color: #9ca3af;
+    font-size: 14px;
+  }
+  .cade-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #272833;
+    border-top-color: #ff7c5c;
+    border-radius: 50%;
+    animation: cade-spin 0.8s linear infinite;
+  }
+  @keyframes cade-spin {
+    to { transform: rotate(360deg); }
   }
 </style>
 <!-- Add Tailwind CSS for pixel-perfect design matching CADE -->
@@ -34,6 +68,11 @@
 <link data-trunk rel="rust" data-wasm-opt="0" />
 </head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
-<div id="cade_gui_canvas" class="h-screen w-screen flex"></div>
+<div id="cade_gui_canvas" class="h-screen w-screen flex">
+  <div class="cade-loader">
+    <div class="cade-spinner"></div>
+    <div style="font-weight: 500; color: #e5e7eb;">Loading CADE Dashboard…</div>
+  </div>
+</div>
 </body>
 </html>

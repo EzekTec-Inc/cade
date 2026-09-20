@@ -16,7 +16,7 @@ use std::borrow::Cow;
 #[allow_missing = "true"]
 struct RawDistAssets;
 
-const FALLBACK_INDEX_HTML: &[u8] = include_bytes!("../../../../cade-gui/index.html");
+const FALLBACK_INDEX_HTML: &[u8] = include_bytes!("../../../../cade-gui/dist/index.html");
 
 /// An embedded dashboard asset containing the asset's binary content.
 pub struct DashboardAsset {
