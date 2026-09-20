@@ -68,6 +68,34 @@
   }
 </script>
 <link data-trunk rel="rust" data-wasm-opt="0" />
+<script>
+  function dismissLoader() {
+    var loader = document.getElementById("cade-loader");
+    if (loader && !loader.dataset.dismissed) {
+      loader.dataset.dismissed = "true";
+      loader.style.opacity = "0";
+      setTimeout(function() { loader.remove(); }, 250);
+    }
+  }
+  window.addEventListener("TrunkApplicationStarted", dismissLoader);
+  var checkInterval = setInterval(function() {
+    var canvas = document.getElementById("cade_gui_canvas");
+    if (canvas && canvas.children.length > 0) {
+      clearInterval(checkInterval);
+      dismissLoader();
+    }
+  }, 100);
+  window.addEventListener("error", function(e) {
+    var loader = document.getElementById("cade-loader");
+    if (loader && !loader.dataset.dismissed && !loader.dataset.error) {
+      loader.dataset.error = "true";
+      loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
+        '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">CADE GUI Error</div>' +
+        '<div style="color:#9ca3af;font-size:13px;max-width:480px;text-align:center;word-break:break-word;">' + (e.message || e) + '</div>' +
+        '<button onclick="location.reload()" style="margin-top:16px;background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>';
+    }
+  });
+</script>
 </head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
 <div id="cade-loader" class="cade-loader">
