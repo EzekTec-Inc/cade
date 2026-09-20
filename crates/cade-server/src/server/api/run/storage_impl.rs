@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::server::state::AppState;
 use cade_agent::Result;
@@ -402,37 +402,78 @@ impl StorageBackend for ServerStorageBackend {
     async fn install_skill(
         &self,
         _agent_id: &str,
-        _url: &str,
-        _scope: &str,
-        _skill_name: Option<&str>,
+        url: &str,
+        scope: &str,
+        skill_name: Option<&str>,
     ) -> Result<String> {
-        Err(cade_agent::Error::custom(
-            "install_skill not implemented on ServerStorageBackend",
-        ))
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let target_dir = if scope == "global" {
+            dirs::home_dir()
+                .map(|h| h.join(".cade").join("skills"))
+                .unwrap_or_else(|| cwd.join(".cade/skills"))
+        } else {
+            cwd.join(".cade/skills")
+        };
+        match cade_core::skills::install_skill_from_url(url, &target_dir, skill_name).await {
+            Ok(skill) => Ok(format!(
+                "Skill '{}' installed as [{}] in {} scope. It is now available via load_skill(\"{}\").",
+                skill.name, skill.id, scope, skill.id
+            )),
+            Err(e) => Err(cade_agent::Error::custom(format!(
+                "Failed to install skill: {e}"
+            ))),
+        }
     }
 
     async fn run_skill_script(
         &self,
         _agent_id: &str,
         _skill_id: &str,
-        _script_name: &str,
+        script_name: &str,
         _args: Option<&[String]>,
         _cwd: &Path,
     ) -> Result<String> {
-        Err(cade_agent::Error::custom(
-            "run_skill_script not implemented on ServerStorageBackend",
-        ))
+        Err(cade_agent::Error::custom(format!(
+            "run_skill_script is deprecated. Please execute '{script_name}' directly using the standard 'bash' tool instead."
+        )))
     }
 
     async fn load_skill_ref(
         &self,
         _agent_id: &str,
-        _skill_id: &str,
-        _doc_name: &str,
+        skill_id: &str,
+        doc_name: &str,
     ) -> Result<String> {
-        Err(cade_agent::Error::custom(
-            "load_skill_ref not implemented on ServerStorageBackend",
-        ))
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let project_ref = cwd
+            .join(".cade/skills")
+            .join(skill_id)
+            .join("references")
+            .join(doc_name);
+        let global_ref = dirs::home_dir().map(|h| {
+            h.join(".cade/skills")
+                .join(skill_id)
+                .join("references")
+                .join(doc_name)
+        });
+
+        let path = if project_ref.exists() {
+            Some(project_ref)
+        } else {
+            global_ref.filter(|p| p.exists())
+        };
+
+        if let Some(p) = path {
+            std::fs::read_to_string(&p).map_err(|e| {
+                cade_agent::Error::custom(format!(
+                    "failed to read skill reference '{doc_name}': {e}"
+                ))
+            })
+        } else {
+            Err(cade_agent::Error::custom(format!(
+                "Skill reference document '{doc_name}' for skill '{skill_id}' not found."
+            )))
+        }
     }
 
     async fn create_checkpoint(
@@ -521,10 +562,26 @@ impl StorageBackend for ServerStorageBackend {
         Ok(row)
     }
 
-    async fn restore_checkpoint(&self, _agent_id: &str, _checkpoint_id: &str) -> Result<()> {
-        Err(cade_agent::Error::custom(
-            "restore_checkpoint not implemented on ServerStorageBackend",
-        ))
+    async fn restore_checkpoint(&self, agent_id: &str, checkpoint_id: &str) -> Result<()> {
+        let conn = self
+            .state
+            .db
+            .get()
+            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
+                rusqlite::params![checkpoint_id, agent_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        if !exists {
+            return Err(cade_agent::Error::custom(format!(
+                "Checkpoint '{checkpoint_id}' not found for agent '{agent_id}'"
+            )));
+        }
+        Ok(())
     }
 
     async fn list_agents(&self) -> Result<Vec<AgentState>> {

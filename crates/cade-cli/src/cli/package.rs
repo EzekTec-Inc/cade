@@ -144,11 +144,69 @@ pub async fn cmd_update(agent_dir: &Path) -> Result<()> {
         println!("No packages to update.");
         return Ok(());
     }
-    println!("Checking for updates…");
-    // For now, just print what's installed. Full update logic (git pull, npm update)
-    // can be added when package provenance tracking is implemented.
-    cmd_list(agent_dir)?;
-    println!("(Full update support coming soon.)");
+    println!("Checking for package updates…");
+    let entries: Vec<_> = std::fs::read_dir(&packages_dir)
+        .map_err(|e| crate::Error::custom(format!("read packages dir: {e}")))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+
+    if entries.is_empty() {
+        println!("No packages installed.");
+        return Ok(());
+    }
+
+    let mut checked_count = 0;
+    for entry in entries {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let display_name = match load_manifest(&path) {
+            Ok(m) if !m.name.is_empty() => format!("{} ({})", m.name, name),
+            _ => name.to_string(),
+        };
+
+        if path.join(".git").exists() {
+            print!("  Updating {} via git pull… ", display_name);
+            let out = tokio::process::Command::new("git")
+                .arg("pull")
+                .current_dir(&path)
+                .output()
+                .await;
+            match out {
+                Ok(o) if o.status.success() => {
+                    println!("✓ up to date");
+                    checked_count += 1;
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    println!("✗ failed: {}", err.trim());
+                }
+                Err(e) => println!("✗ error: {e}"),
+            }
+        } else if path.join("package.json").exists() {
+            print!("  Updating {} via npm update… ", display_name);
+            let out = tokio::process::Command::new("npm")
+                .arg("update")
+                .current_dir(&path)
+                .output()
+                .await;
+            match out {
+                Ok(o) if o.status.success() => {
+                    println!("✓ updated");
+                    checked_count += 1;
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    println!("✗ failed: {}", err.trim());
+                }
+                Err(e) => println!("✗ error: {e}"),
+            }
+        } else {
+            println!("  {} (local directory, no upstream remote)", display_name);
+            checked_count += 1;
+        }
+    }
+    println!("Package update check finished ({checked_count} packages checked).");
     Ok(())
 }
 

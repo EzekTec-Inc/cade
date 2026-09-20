@@ -15,7 +15,6 @@ pub mod plugins;
 pub mod providers;
 pub mod settings;
 pub mod sidebar;
-pub mod stubs;
 pub mod swarm;
 pub mod toast;
 pub mod tools_page;
