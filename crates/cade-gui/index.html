@@ -73,11 +73,15 @@
     }
   }
 </script>
-<link data-trunk rel="rust" data-wasm-opt="0" />
 <script>
   window.__cade_diag = [];
+  window.cadeLog = function(msg) {
+    var line = "[" + new Date().toISOString().slice(11, 19) + "] " + msg;
+    window.__cade_diag.push(line);
+    console.log("[CADE]", msg);
+  };
   function cadeLog(msg) {
-    window.__cade_diag.push("[" + new Date().toISOString().slice(11, 19) + "] " + msg);
+    window.cadeLog(msg);
   }
   function dismissLoader() {
     var loader = document.getElementById("cade-loader");
@@ -108,14 +112,14 @@
     }
   }
   window.addEventListener("TrunkApplicationStarted", function() {
-    cadeLog("TrunkApplicationStarted caught by window listener.");
+    window.cadeLog("TrunkApplicationStarted caught by window listener.");
     dismissLoader();
   });
   var checkInterval = setInterval(function() {
     var canvas = document.getElementById("cade_gui_canvas");
     if (canvas && canvas.children.length > 0) {
       clearInterval(checkInterval);
-      cadeLog("Canvas children detected (" + canvas.children.length + "). Dismissing loader.");
+      window.cadeLog("Canvas children detected (" + canvas.children.length + "). Dismissing loader.");
       dismissLoader();
     }
   }, 100);
@@ -124,15 +128,16 @@
   }, 10000);
   window.addEventListener("unhandledrejection", function(e) {
     var reason = e.reason ? (e.reason.stack || e.reason.message || e.reason.toString()) : e.toString();
-    cadeLog("Unhandled promise rejection: " + reason);
+    window.cadeLog("Unhandled promise rejection: " + reason);
     reportCadeError("WebAssembly / Script Error", "An unhandled promise rejection occurred during dashboard startup:");
   });
   window.addEventListener("error", function(e) {
     var msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
-    cadeLog("Runtime error: " + msg);
+    window.cadeLog("Runtime error: " + msg);
     reportCadeError("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
   });
 </script>
+<link data-trunk rel="rust" data-wasm-opt="0" />
 </head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
 <div id="cade-loader" class="cade-loader">
