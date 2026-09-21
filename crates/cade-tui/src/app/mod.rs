@@ -6,8 +6,8 @@ pub mod help_overlay;
 pub mod input;
 pub mod layout;
 pub mod leader;
-pub mod pager_overlay;
 pub mod notifier;
+pub mod pager_overlay;
 pub mod password;
 pub mod permission_overlay;
 pub mod prompt_stash;
@@ -23,11 +23,15 @@ pub(crate) use timeline::*;
 pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
     use regex::Regex;
     use std::sync::OnceLock;
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?is)[\w\d]*>thought\s*CRITICAL INSTRUCTION 1:.*?CRITICAL INSTRUCTION 2:.*?(?:task at hand\.)(?:[^\n]*?task at hand\.)?\s*").unwrap()
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let re_opt = RE.get_or_init(|| {
+        Regex::new(r"(?is)[\w\d]*>thought\s*CRITICAL INSTRUCTION 1:.*?CRITICAL INSTRUCTION 2:.*?(?:task at hand\.)(?:[^\n]*?task at hand\.)?\s*").ok()
     });
-    re.replace_all(text, "")
+    if let Some(re) = re_opt.as_ref() {
+        re.replace_all(text, "")
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// Resolve the session cost cap (in USD) for the sidebar budget gauge.
@@ -825,9 +829,10 @@ impl PlanState {
 use regex::Regex;
 use std::sync::OnceLock;
 
-fn done_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").expect("valid regex"))
+fn done_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").ok())
+        .as_ref()
 }
 
 #[allow(dead_code)]
@@ -2317,7 +2322,8 @@ impl TuiApp {
         }
 
         if let Some((title, content)) = found {
-            self.overlays.push(Box::new(pager_overlay::PagerOverlay::new(title, content)));
+            self.overlays
+                .push(Box::new(pager_overlay::PagerOverlay::new(title, content)));
             self.draw_dirty = true;
         } else {
             self.show_toast("No tool outputs available to page", ToastLevel::Info);

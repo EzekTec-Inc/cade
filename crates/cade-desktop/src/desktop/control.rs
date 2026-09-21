@@ -128,7 +128,7 @@ impl DesktopControl {
             "shift" => Key::Shift,
             "alt" => Key::Alt,
             "meta" | "super" | "win" => Key::Meta,
-            k if k.len() == 1 => Key::Unicode(k.chars().next().unwrap()),
+            k if k.len() == 1 => Key::Unicode(k.chars().next().unwrap_or(' ')),
             _ => return Err(Error::custom(format!("Unsupported key: {key}"))),
         };
 

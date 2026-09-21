@@ -233,6 +233,26 @@ async fn snippets_fallback_route_returns_200() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn dashboard_assets_dynamic_dev_loading() {
+    // -- Setup & Fixtures
+    let tmp = tempfile::tempdir().ok();
+    assert!(tmp.is_some());
+    let tmp = tmp.unwrap();
+    let dev_file = tmp.path().join("test-dev-asset.txt");
+    assert!(std::fs::write(&dev_file, b"dynamic dev asset content").is_ok());
+
+    // -- Exec
+    let asset = super::DashboardAssets::get_with_base_dir("test-dev-asset.txt", Some(tmp.path()));
+
+    // -- Check
+    assert!(asset.is_some());
+    assert_eq!(
+        asset.as_ref().map(|a| a.data.as_ref()),
+        Some(&b"dynamic dev asset content"[..])
+    );
+}
+
 // ── Asset serving ───────────────────────────────────────────────────
 
 /// Requesting a non-existent asset returns 404, not 500.

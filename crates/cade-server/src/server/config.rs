@@ -140,7 +140,7 @@ pub fn detect_provider() -> (LlmProviderKind, String) {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:8284".parse().expect("valid socket addr"),
+            addr: std::net::SocketAddr::from(([127, 0, 0, 1], 8284)),
             db_path: ":memory:".to_string(),
             llm_provider: LlmProviderKind::Ollama,
             default_model: "llama3.2".to_string(),

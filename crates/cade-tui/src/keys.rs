@@ -230,8 +230,9 @@ impl KeyChord {
             return None;
         }
 
-        let code = if key_part.chars().count() == 1 {
-            let ch = key_part.chars().next().unwrap();
+        let code = if let Some(ch) = key_part.chars().next()
+            && key_part.chars().count() == 1
+        {
             if ch.is_uppercase() {
                 modifiers.insert(KeyModifiers::SHIFT);
                 KeyCode::Char(ch)

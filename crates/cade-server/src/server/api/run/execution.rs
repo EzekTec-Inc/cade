@@ -11,8 +11,10 @@ use std::sync::Arc;
 fn substitute_step_arguments(args: &mut Value, step_results: &[ToolResult]) {
     match args {
         Value::String(s) => {
-            let re = regex::Regex::new(r#"\$steps\.(\d+)\.output"#).unwrap();
-            if let Some(caps) = re.captures(s)
+            static RE: std::sync::LazyLock<Option<regex::Regex>> =
+                std::sync::LazyLock::new(|| regex::Regex::new(r#"\$steps\.(\d+)\.output"#).ok());
+            if let Some(re) = RE.as_ref()
+                && let Some(caps) = re.captures(s)
                 && let Some(index_match) = caps.get(1)
                 && let Ok(index) = index_match.as_str().parse::<usize>()
                 && let Some(prev_result) = step_results.get(index)

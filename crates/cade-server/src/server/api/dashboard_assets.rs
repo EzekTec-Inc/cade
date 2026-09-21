@@ -32,12 +32,53 @@ pub struct DashboardAssets;
 
 impl DashboardAssets {
     /// Retrieve an asset by relative path.
+    ///
+    /// If `CADE_DEV=1` or `CADE_DASHBOARD_DIR` is set in the environment,
+    /// dynamic loading from the filesystem is checked first. This enables
+    /// rapid GUI iteration without recompiling the release server binary.
     pub fn get(file_path: &str) -> Option<DashboardAsset> {
+        Self::get_with_base_dir(file_path, None)
+    }
+
+    /// Retrieve an asset by relative path, optionally checking a custom base directory first.
+    pub fn get_with_base_dir(
+        file_path: &str,
+        override_dir: Option<&std::path::Path>,
+    ) -> Option<DashboardAsset> {
+        // 1. Check explicit override or development-mode filesystem overrides
+        let dev_enabled = override_dir.is_some()
+            || std::env::var("CADE_DEV")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false)
+            || std::env::var("CADE_DASHBOARD_DIR").is_ok();
+
+        if dev_enabled {
+            let base_dir = if let Some(dir) = override_dir {
+                dir.to_path_buf()
+            } else if let Ok(dir) = std::env::var("CADE_DASHBOARD_DIR") {
+                std::path::PathBuf::from(dir)
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    .join("crates/cade-gui/dist")
+            };
+
+            let candidate = base_dir.join(file_path);
+            if candidate.is_file()
+                && let Ok(bytes) = std::fs::read(&candidate)
+            {
+                return Some(DashboardAsset {
+                    data: Cow::Owned(bytes),
+                });
+            }
+        }
+
+        // 2. Embedded assets compiled into binary via rust-embed
         if let Some(file) = RawDistAssets::get(file_path) {
             return Some(DashboardAsset { data: file.data });
         }
 
-        // Fallback for index.html when dist/ is missing or empty
+        // 3. Fallback for index.html when dist/ is missing or empty
         if file_path == "index.html" {
             return Some(DashboardAsset {
                 data: Cow::Borrowed(FALLBACK_INDEX_HTML),

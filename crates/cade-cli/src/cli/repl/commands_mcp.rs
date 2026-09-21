@@ -66,7 +66,7 @@ impl Repl {
                     let mut app = self.app.lock();
                     let text = format!(
                         "/mcp-save\n{}",
-                        serde_json::to_string_pretty(&tmpl).unwrap()
+                        serde_json::to_string_pretty(&tmpl).unwrap_or_else(|_| "{}".to_string())
                     );
                     app.editor.set_text(text.clone());
                     app.editor.set_cursor_pos(text.len());
@@ -83,7 +83,7 @@ impl Repl {
                     let mut app = self.app.lock();
                     let text = format!(
                         "/mcp-save\n{}",
-                        serde_json::to_string_pretty(&tmpl).unwrap()
+                        serde_json::to_string_pretty(&tmpl).unwrap_or_else(|_| "{}".to_string())
                     );
                     app.editor.set_text(text.clone());
                     app.editor.set_cursor_pos(text.len());

@@ -79,13 +79,15 @@ impl TuiApp {
         // compatibility with any in-flight conversations.
         if let Some(plan) = &mut self.active_plan {
             let mut changed = false;
-            for caps in done_regex().captures_iter(&self.streaming_text) {
-                if let Ok(id) = caps[1].parse::<usize>()
-                    && let Some(step) = plan.steps.iter_mut().find(|s| s.id == id)
-                    && !step.is_done
-                {
-                    step.is_done = true;
-                    changed = true;
+            if let Some(re) = done_regex() {
+                for caps in re.captures_iter(&self.streaming_text) {
+                    if let Ok(id) = caps[1].parse::<usize>()
+                        && let Some(step) = plan.steps.iter_mut().find(|s| s.id == id)
+                        && !step.is_done
+                    {
+                        step.is_done = true;
+                        changed = true;
+                    }
                 }
             }
             if changed {

@@ -60,7 +60,7 @@ pub async fn create_block(
 
     let info = sqlite::get_block_by_id(&state.db, &block_id)
         .map_err(|e| server_err(e.to_string()))?
-        .expect("just-created block must exist");
+        .ok_or_else(|| server_err("just-created block not found".to_string()))?;
 
     Ok((StatusCode::CREATED, Json(block_to_json(&info))))
 }
@@ -143,7 +143,7 @@ pub async fn update_block(
 
     let updated = sqlite::get_block_by_id(&state.db, &block_id)
         .map_err(|e| server_err(e.to_string()))?
-        .expect("just-updated block must exist");
+        .ok_or_else(|| server_err("just-updated block not found".to_string()))?;
     Ok(Json(block_to_json(&updated)))
 }
 

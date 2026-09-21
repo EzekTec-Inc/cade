@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 fn get_writeback_lock(parent_agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     let locks_map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = locks_map.lock().unwrap();
+    let mut guard = locks_map.lock().unwrap_or_else(|e| e.into_inner());
     guard
         .entry(parent_agent_id.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -25,7 +25,9 @@ fn get_steering_queues()
 }
 
 pub fn steer_subagent(subagent_id: &str, message: String) -> bool {
-    let queues = get_steering_queues().lock().unwrap();
+    let queues = get_steering_queues()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(tx) = queues.get(subagent_id) {
         tx.send(message).is_ok()
     } else {
@@ -41,7 +43,9 @@ fn get_hotswap_models() -> &'static Mutex<HashMap<String, String>> {
 
 /// Request a dynamic model hot-swap for an active subagent, taking effect on its next iteration turn.
 pub fn swap_subagent_model(subagent_id: &str, new_model: String) -> bool {
-    let mut models = get_hotswap_models().lock().unwrap();
+    let mut models = get_hotswap_models()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     models.insert(subagent_id.to_string(), new_model);
     true
 }

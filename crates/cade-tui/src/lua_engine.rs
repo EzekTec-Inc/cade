@@ -67,7 +67,7 @@ impl LuaEngine {
 
         let colors_ref = active_colors.clone();
         let get_style_fn = lua.create_function(move |lua_ctx, token: String| {
-            let colors = colors_ref.lock().expect("active_colors lock").clone();
+            let colors = colors_ref.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let style = resolve_token_to_style(&colors, &token);
             style_to_lua_table(lua_ctx, style)
         })?;
@@ -78,7 +78,7 @@ impl LuaEngine {
             tracing::info!("[Lua] execute_slash_command: {}", cmd);
             cmd_q
                 .lock()
-                .expect("LuaEngine command_queue")
+                .unwrap_or_else(|e| e.into_inner())
                 .push_back(cmd);
             Ok(())
         })?;
@@ -91,7 +91,7 @@ impl LuaEngine {
                 tracing::info!("[Lua] call_tool: {} with args {}", name, args_json);
                 tool_q
                     .lock()
-                    .expect("LuaEngine tool_queue")
+                    .unwrap_or_else(|e| e.into_inner())
                     .push_back((name, args_json));
                 Ok(())
             })?;
@@ -627,7 +627,10 @@ mod additional_tests {
         "#,
             )
             .eval()?;
-        assert!(has_style, "CADE_UI.get_style must return a valid style table");
+        assert!(
+            has_style,
+            "CADE_UI.get_style must return a valid style table"
+        );
 
         let has_bg: bool = engine
             .lua
@@ -638,7 +641,10 @@ mod additional_tests {
         "#,
             )
             .eval()?;
-        assert!(has_bg, "CADE_UI.get_style('bg.base') must return a valid style table");
+        assert!(
+            has_bg,
+            "CADE_UI.get_style('bg.base') must return a valid style table"
+        );
 
         // Verify extended semantic tokens for syntax and diff
         let code_keyword: bool = engine
@@ -652,7 +658,10 @@ mod additional_tests {
         "#,
             )
             .eval()?;
-        assert!(code_keyword, "CADE_UI.get_style must support syntax, diff, and status tokens");
+        assert!(
+            code_keyword,
+            "CADE_UI.get_style must support syntax, diff, and status tokens"
+        );
 
         // Verify theme switching updates CADE_UI.get_style
         let toml_custom = r##"

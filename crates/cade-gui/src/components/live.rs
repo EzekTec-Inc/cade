@@ -450,9 +450,8 @@ pub fn LiveView() -> Element {
             }
 
             // 4. Slide-Over Drawer for Subagent/Run Action & Stream
-            if is_drawer_open() && selected_run().is_some() {
+            if is_drawer_open() && let Some(run_val) = selected_run() {
                 {
-                    let run_val = selected_run().unwrap();
                     let run_id = run_val["id"].as_str().unwrap_or("").to_string();
                     let status = run_val["status"].as_str().unwrap_or("unknown").to_string();
                     let agent_id = run_val["agent_id"].as_str().unwrap_or("").to_string();

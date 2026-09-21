@@ -467,12 +467,12 @@ impl TuiApp {
                 let has_queued_cmd = !lua
                     .command_queue
                     .lock()
-                    .expect("LuaEngine command_queue")
+                    .unwrap_or_else(|e| e.into_inner())
                     .is_empty()
                     || !lua
                         .tool_queue
                         .lock()
-                        .expect("LuaEngine tool_queue")
+                        .unwrap_or_else(|e| e.into_inner())
                         .is_empty();
                 self.draw_dirty = true;
                 let _ = self.draw();
@@ -852,7 +852,10 @@ impl TuiApp {
                         let suggestion = crate::autocomplete::common_prefix(&matches);
                         let final_suggestion = if suggestion == input_text {
                             // If common prefix is already the input, just take the most recent full match to let them cycle
-                            matches.last().unwrap().clone()
+                            matches
+                                .last()
+                                .cloned()
+                                .unwrap_or_else(|| suggestion.clone())
                         } else {
                             suggestion
                         };

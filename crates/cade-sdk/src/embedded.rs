@@ -306,7 +306,7 @@ impl StorageBackend for EmbeddedStorageBackend {
         let id = format!("art-{}", uuid::Uuid::new_v4());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         let size_bytes = content.len() as i64;
 
@@ -403,7 +403,7 @@ impl StorageBackend for EmbeddedStorageBackend {
         let id = format!("cp-{}", uuid::Uuid::new_v4());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         let conn = self
             .db

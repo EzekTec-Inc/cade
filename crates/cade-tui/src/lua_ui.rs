@@ -266,7 +266,7 @@ impl SlotComponent for LuaUiSlot {
                         args.insert("state".to_string(), serde_json::Value::Bool(new_state));
                         self.event_queue
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .push_back((id.clone(), serde_json::Value::Object(args)));
                     } else {
                         // Treat as general button click / generic action trigger
@@ -281,7 +281,7 @@ impl SlotComponent for LuaUiSlot {
                         );
                         self.event_queue
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .push_back((id.clone(), serde_json::Value::Object(args)));
                     }
                     true
@@ -304,7 +304,7 @@ impl SlotComponent for LuaUiSlot {
                         );
                         self.event_queue
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .push_back((id.clone(), serde_json::Value::Object(args)));
                         true
                     } else {
@@ -329,7 +329,7 @@ impl SlotComponent for LuaUiSlot {
                         );
                         self.event_queue
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .push_back((id.clone(), serde_json::Value::Object(args)));
                         true
                     } else {
@@ -369,7 +369,7 @@ impl SlotComponent for LuaUiSlot {
                     );
                     self.event_queue
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|e| e.into_inner())
                         .push_back((id.clone(), serde_json::Value::Object(args)));
                     return true;
                 }
@@ -484,7 +484,9 @@ fn render_widget(
             {
                 style = style.fg(c);
             }
-            let p = Paragraph::new(time_str).style(style).alignment(Alignment::Right);
+            let p = Paragraph::new(time_str)
+                .style(style)
+                .alignment(Alignment::Right);
             frame.render_widget(p, area);
         }
         LuaWidget::Gauge {
@@ -498,7 +500,11 @@ fn render_widget(
                 colors.c_primary()
             };
             let mut gauge = Gauge::default()
-                .block(Block::default().borders(Borders::ALL).border_style(colors.border_muted()))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(colors.border_muted()),
+                )
                 .gauge_style(Style::default().fg(gauge_fg).bg(colors.c_bg_surface0()))
                 .ratio((*ratio).clamp(0.0, 1.0));
             if let Some(l) = label {

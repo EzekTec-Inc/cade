@@ -39,7 +39,7 @@ impl FileLockManager {
     pub async fn acquire_lock(&self, path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
         let key = Self::normalize_key(path);
         let lock = {
-            let mut guard = self.locks.lock().unwrap();
+            let mut guard = self.locks.lock().unwrap_or_else(|e| e.into_inner());
             guard
                 .entry(key)
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))

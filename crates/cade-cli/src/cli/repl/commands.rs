@@ -793,13 +793,13 @@ impl Repl {
         match self.client.raw_get("/approvals").await {
             Ok(v) => {
                 let approvals = v["approvals"].as_array();
-                if approvals.is_none() || approvals.unwrap().is_empty() {
+                let Some(approvals) = approvals.filter(|a| !a.is_empty()) else {
                     self.tui_dim("  No pending approvals found.".to_string());
                     return Ok(false);
-                }
+                };
                 self.tui_blank();
                 self.tui_hdr("  Pending approvals queue:");
-                for app in approvals.unwrap() {
+                for app in approvals {
                     let id = app["id"].as_str().unwrap_or("?");
                     let subagent = app["subagent_id"].as_str().unwrap_or("?");
                     let tool = app["tool_name"].as_str().unwrap_or("?");

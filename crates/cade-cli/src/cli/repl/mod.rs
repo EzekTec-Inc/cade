@@ -938,7 +938,7 @@ impl Repl {
                     && let Some(cmd) = lua
                         .command_queue
                         .lock()
-                        .expect("LuaEngine command_queue")
+                        .unwrap_or_else(|e| e.into_inner())
                         .pop_front()
                 {
                     pending_input = Some(cmd);
@@ -949,7 +949,7 @@ impl Repl {
             {
                 let app = self.app.lock();
                 if let Some(lua) = &app.lua_engine {
-                    let mut t_q = lua.tool_queue.lock().expect("LuaEngine tool_queue");
+                    let mut t_q = lua.tool_queue.lock().unwrap_or_else(|e| e.into_inner());
                     while let Some((tool_name, args)) = t_q.pop_front() {
                         let mcp = self.mcp.clone();
                         let hooks = self.hooks.clone();
@@ -984,7 +984,7 @@ impl Repl {
                             });
                             ui_event_q
                                 .lock()
-                                .expect("LuaEngine ui_event_queue")
+                                .unwrap_or_else(|e| e.into_inner())
                                 .push_back(("tool_complete".to_string(), payload));
                         });
                     }
@@ -996,7 +996,7 @@ impl Repl {
                 let mut app = self.app.lock();
                 let mut ui_events = Vec::new();
                 if let Some(lua) = &app.lua_engine {
-                    let mut eq = lua.ui_event_queue.lock().expect("LuaEngine ui_event_queue");
+                    let mut eq = lua.ui_event_queue.lock().unwrap_or_else(|e| e.into_inner());
                     ui_events.extend(eq.drain(..));
                 }
 

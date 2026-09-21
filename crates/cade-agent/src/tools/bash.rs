@@ -66,8 +66,14 @@ impl BashTool {
         .map_err(|_| crate::Error::custom(format!("Command timed out after {timeout_secs}s")))?
         .map_err(|e| crate::Error::custom(format!("Failed to spawn bash: {e}")))?;
 
-        let stdout = child.stdout.take().expect("stdout piped");
-        let stderr = child.stderr.take().expect("stderr piped");
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| crate::Error::custom("failed to capture stdout pipe"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| crate::Error::custom("failed to capture stderr pipe"))?;
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 

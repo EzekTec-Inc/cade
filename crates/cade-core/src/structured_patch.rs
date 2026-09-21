@@ -131,12 +131,9 @@ fn ensure_path_and_set(root: &mut Value, segments: &[String], value: Value) -> R
     let mut current = root;
     for seg in parents {
         current = match current {
-            Value::Object(map) => {
-                if !map.contains_key(seg.as_str()) {
-                    map.insert(seg.clone(), Value::Object(serde_json::Map::new()));
-                }
-                map.get_mut(seg.as_str()).unwrap()
-            }
+            Value::Object(map) => map
+                .entry(seg.clone())
+                .or_insert_with(|| Value::Object(serde_json::Map::new())),
             Value::Array(arr) => {
                 let idx = parse_array_index(seg, arr.len())?;
                 arr.get_mut(idx)

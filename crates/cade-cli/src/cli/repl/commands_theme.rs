@@ -21,8 +21,8 @@ impl Repl {
                 .lock()
                 .global_path()
                 .parent()
-                .unwrap()
-                .to_path_buf();
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
 
             // Built-ins + on-disk themes, merged via the canonical helper
             // so the picker list cannot drift from other surfaces.
@@ -43,8 +43,8 @@ impl Repl {
                 .lock()
                 .global_path()
                 .parent()
-                .unwrap()
-                .to_path_buf();
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
 
             let current_name = self
                 .settings
@@ -107,7 +107,10 @@ impl Repl {
             }
             let target_file = target_dir.join(format!("{theme_name}.toml"));
             if target_file.exists() {
-                self.tui_err(format!("  ✗ Theme file already exists: {}", target_file.display()));
+                self.tui_err(format!(
+                    "  ✗ Theme file already exists: {}",
+                    target_file.display()
+                ));
                 return Ok(false);
             }
             let template = cade_core::resources::REFERENCE_THEME_TOML
@@ -116,21 +119,27 @@ impl Repl {
                 self.tui_err(format!("  ✗ Failed to write theme file: {e}"));
                 return Ok(false);
             }
-            self.tui_ok(format!("  ✓ Starter theme initialized at {}", target_file.display()));
+            self.tui_ok(format!(
+                "  ✓ Starter theme initialized at {}",
+                target_file.display()
+            ));
             self.tui_ok(format!("    Apply with `/theme {theme_name}` or validate with `/theme validate {theme_name}`"));
             return Ok(false);
         }
 
         // -- `/theme validate [name_or_path]`
         if new_theme == "validate" || new_theme.starts_with("validate ") {
-            let target = new_theme.strip_prefix("validate ").map(|s| s.trim()).unwrap_or("");
+            let target = new_theme
+                .strip_prefix("validate ")
+                .map(|s| s.trim())
+                .unwrap_or("");
             let agent_dir = self
                 .settings
                 .lock()
                 .global_path()
                 .parent()
-                .unwrap()
-                .to_path_buf();
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
             let resolver = cade_core::resources::ThemeResolver::new(&self.cwd, &agent_dir);
 
             let report = if target.is_empty() {
@@ -180,14 +189,17 @@ impl Repl {
 
         // -- `/theme inspect [name]`
         if new_theme == "inspect" || new_theme.starts_with("inspect ") {
-            let target = new_theme.strip_prefix("inspect ").map(|s| s.trim()).unwrap_or("");
+            let target = new_theme
+                .strip_prefix("inspect ")
+                .map(|s| s.trim())
+                .unwrap_or("");
             let agent_dir = self
                 .settings
                 .lock()
                 .global_path()
                 .parent()
-                .unwrap()
-                .to_path_buf();
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
             let resolver = cade_core::resources::ThemeResolver::new(&self.cwd, &agent_dir);
 
             let inspect_name = if target.is_empty() {
@@ -236,13 +248,28 @@ impl Repl {
             for token in inspected {
                 match token {
                     cade_core::resources::ThemeToken::Exact { token, r, g, b } => {
-                        self.tui_ok(format!("  {:<20} #{:02x}{:02x}{:02x}  (exact match)", token, r, g, b));
+                        self.tui_ok(format!(
+                            "  {:<20} #{:02x}{:02x}{:02x}  (exact match)",
+                            token, r, g, b
+                        ));
                     }
-                    cade_core::resources::ThemeToken::Fallback { requested, resolved_token, r, g, b } => {
-                        self.tui_ok(format!("  {:<20} #{:02x}{:02x}{:02x}  (derived from {})", requested, r, g, b, resolved_token));
+                    cade_core::resources::ThemeToken::Fallback {
+                        requested,
+                        resolved_token,
+                        r,
+                        g,
+                        b,
+                    } => {
+                        self.tui_ok(format!(
+                            "  {:<20} #{:02x}{:02x}{:02x}  (derived from {})",
+                            requested, r, g, b, resolved_token
+                        ));
                     }
                     cade_core::resources::ThemeToken::Missing { requested } => {
-                        self.tui_err(format!("  {:<20} [MISSING - using hardcoded default]", requested));
+                        self.tui_err(format!(
+                            "  {:<20} [MISSING - using hardcoded default]",
+                            requested
+                        ));
                     }
                 }
             }
@@ -260,8 +287,8 @@ impl Repl {
                     .lock()
                     .global_path()
                     .parent()
-                    .unwrap()
-                    .to_path_buf();
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
                 let discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
                 if let Some(t) = discovered.iter().find(|t| t.meta.name == name) {
                     (t.clone(), t.meta.name.clone())
@@ -274,7 +301,7 @@ impl Repl {
                             || n.display_name.to_lowercase().contains(&name_lower)
                     }) {
                         (
-                            cade_core::resources::get_theme(&bn.name).unwrap(),
+                            cade_core::resources::get_theme(&bn.name).unwrap_or_default(),
                             bn.name.to_string(),
                         )
                     } else if let Some(t) = discovered

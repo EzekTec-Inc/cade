@@ -62,8 +62,10 @@ use tokio::sync::RwLock;
 /// test helper share a single source of truth instead of duplicating
 /// the literal `NonZeroUsize::new(20).unwrap()` 14 times across the
 /// crate (see `state::tests::context_cache_capacity_is_nonzero`).
-pub const CONTEXT_CACHE_CAPACITY: NonZeroUsize =
-    NonZeroUsize::new(20).expect("CONTEXT_CACHE_CAPACITY must be > 0; literal is non-zero");
+pub const CONTEXT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(20) {
+    Some(n) => n,
+    None => unreachable!(),
+};
 
 /// Re-export so call-sites in api/ can do `use crate::server::state::McpManager`.
 pub use cade_agent::mcp::McpManager;
