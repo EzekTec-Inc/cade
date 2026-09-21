@@ -121,7 +121,9 @@ impl Repl {
             }
             super::TurnOutcome::Error(err) => {
                 self.turn_active.store(false, Ordering::SeqCst);
-                self.app.lock().set_last_status(Some(format!("Error: {err}")));
+                self.app
+                    .lock()
+                    .set_last_status(Some(format!("Error: {err}")));
                 return Ok(());
             }
             super::TurnOutcome::Completed { .. } => {}

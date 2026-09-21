@@ -229,11 +229,9 @@ pub(crate) fn render_frame(
 
     let (content_area, subagent_tray_area) = if let Some(tray) = ctx.subagent_tray {
         if tray.is_visible && main_area.width >= 100 {
-            let split = Layout::horizontal([
-                Constraint::Percentage(65),
-                Constraint::Percentage(35),
-            ])
-            .split(main_area);
+            let split =
+                Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)])
+                    .split(main_area);
             (split[0], Some(split[1]))
         } else {
             (main_area, None)
@@ -395,9 +393,7 @@ pub(crate) fn render_frame(
     }
 
     // -- Parallel & Subagent Concurrent Task Matrix (active when tray is closed)
-    if !subagent_trackers.is_empty()
-        && ctx.subagent_tray.map(|t| !t.is_visible).unwrap_or(true)
-    {
+    if !subagent_trackers.is_empty() && ctx.subagent_tray.map(|t| !t.is_visible).unwrap_or(true) {
         render_subagent_task_matrix(frame, content_area, subagent_trackers, colors);
     }
 
@@ -945,21 +941,42 @@ fn render_subagent_task_matrix(
         let (glyph, glyph_color) = match tracker.status {
             crate::subagent_tracker::SubagentStatus::Running => ("● ", colors.c_warning()),
             crate::subagent_tracker::SubagentStatus::Completed { .. } => ("✓ ", colors.c_success()),
-            crate::subagent_tracker::SubagentStatus::Failed { .. } => ("✗ ", colors.c_diff_removed()),
+            crate::subagent_tracker::SubagentStatus::Failed { .. } => {
+                ("✗ ", colors.c_diff_removed())
+            }
         };
 
         let elapsed = tracker.started.elapsed().as_secs();
         let tag = format!("[{}: {}]", tracker.task_id, tracker.mode);
 
         let mut spans = vec![
-            Span::styled(glyph, Style::default().fg(glyph_color).add_modifier(Modifier::BOLD)),
-            Span::styled(tag, Style::default().fg(colors.c_text_primary()).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" · {elapsed}s · {} tools", tracker.tool_calls), colors.text_dim()),
+            Span::styled(
+                glyph,
+                Style::default()
+                    .fg(glyph_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                tag,
+                Style::default()
+                    .fg(colors.c_text_primary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" · {elapsed}s · {} tools", tracker.tool_calls),
+                colors.text_dim(),
+            ),
         ];
 
         if let Some(ref tool) = tracker.current_tool {
-            spans.push(Span::styled(format!(" · {tool}"), Style::default().fg(colors.c_warning())));
-        } else if matches!(tracker.status, crate::subagent_tracker::SubagentStatus::Completed { .. }) {
+            spans.push(Span::styled(
+                format!(" · {tool}"),
+                Style::default().fg(colors.c_warning()),
+            ));
+        } else if matches!(
+            tracker.status,
+            crate::subagent_tracker::SubagentStatus::Completed { .. }
+        ) {
             spans.push(Span::styled(" · done", colors.text_dim()));
         }
 

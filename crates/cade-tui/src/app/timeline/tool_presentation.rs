@@ -232,7 +232,10 @@ mod tests {
             .collect::<String>();
         assert!(text.starts_with("\u{e0b6}"), "left rounded cap expected");
         assert!(text.contains(" Run command "), "inner padding expected");
-        assert!(text.ends_with("\u{e0b4}"), "right rounded cap expected with no shadow");
+        assert!(
+            text.ends_with("\u{e0b4}"),
+            "right rounded cap expected with no shadow"
+        );
         assert!(!text.contains("\u{2590}"), "shadow should be removed");
     }
 
@@ -240,9 +243,14 @@ mod tests {
     fn test_pill_contrast_ratio_meets_guidelines() {
         let dark_theme = ThemeColors::default();
         let fg = pick_high_contrast_fg(dark_theme.c_primary(), &dark_theme);
-        if let (Some(bg_rgb), Some(fg_rgb)) = (color_to_rgb(dark_theme.c_primary()), color_to_rgb(fg)) {
+        if let (Some(bg_rgb), Some(fg_rgb)) =
+            (color_to_rgb(dark_theme.c_primary()), color_to_rgb(fg))
+        {
             let ratio = cade_core::resources::calculate_contrast_ratio(fg_rgb, bg_rgb);
-            assert!(ratio >= 3.0, "contrast ratio {ratio} should meet readability threshold");
+            assert!(
+                ratio >= 3.0,
+                "contrast ratio {ratio} should meet readability threshold"
+            );
         }
     }
 

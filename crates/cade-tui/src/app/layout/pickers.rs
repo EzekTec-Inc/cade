@@ -405,10 +405,9 @@ fn render_theme_preview(
     let inner = preview_block.inner(area);
     frame.render_widget(preview_block, area);
 
-    let contrast_ratio = if let (Some(fg), Some(bg)) = (
-        theme.try_color("text.primary"),
-        theme.try_color("bg.base"),
-    ) {
+    let contrast_ratio = if let (Some(fg), Some(bg)) =
+        (theme.try_color("text.primary"), theme.try_color("bg.base"))
+    {
         cade_core::resources::calculate_contrast_ratio((fg.r, fg.g, fg.b), (bg.r, bg.g, bg.b))
     } else {
         4.5
@@ -545,11 +544,16 @@ mod tests {
         "##;
         let theme = opaline::load_from_str(toml, None).unwrap();
         let swatches = theme_swatches(&theme);
-        assert_eq!(swatches.len(), 5, "theme_swatches should produce 5 color spans");
+        assert_eq!(
+            swatches.len(),
+            5,
+            "theme_swatches should produce 5 color spans"
+        );
 
         let fg = theme.try_color("text.primary").unwrap();
         let bg = theme.try_color("bg.base").unwrap();
-        let ratio = cade_core::resources::calculate_contrast_ratio((fg.r, fg.g, fg.b), (bg.r, bg.g, bg.b));
+        let ratio =
+            cade_core::resources::calculate_contrast_ratio((fg.r, fg.g, fg.b), (bg.r, bg.g, bg.b));
         assert!(ratio >= 4.5, "contrast ratio should be WCAG AA compliant");
     }
 }

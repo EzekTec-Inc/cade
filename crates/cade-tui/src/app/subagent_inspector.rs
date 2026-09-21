@@ -170,12 +170,7 @@ impl SubagentInspectorOverlay {
         } else {
             " Subagent Control Tray [Overlay] (d: dock · Esc: close) "
         };
-        let inner = render_overlay_shell(
-            frame,
-            area,
-            title,
-            colors,
-        );
+        let inner = render_overlay_shell(frame, area, title, colors);
 
         let items: Vec<ListItem> = self
             .trackers
@@ -362,24 +357,59 @@ mod tests {
         let mut o = SubagentInspectorOverlay::new(vec![tracker("task-42", "worker", &[])]);
 
         // 's' triggers steer action
-        assert_eq!(o.handle_input(key(KeyCode::Char('s'))), OverlayInputResult::Consumed);
-        assert_eq!(o.take_pending_action(), SubagentTrayAction::Steer { subagent_id: "task-42".into() });
+        assert_eq!(
+            o.handle_input(key(KeyCode::Char('s'))),
+            OverlayInputResult::Consumed
+        );
+        assert_eq!(
+            o.take_pending_action(),
+            SubagentTrayAction::Steer {
+                subagent_id: "task-42".into()
+            }
+        );
 
         // 'm' triggers model hot-swap
-        assert_eq!(o.handle_input(key(KeyCode::Char('m'))), OverlayInputResult::Consumed);
-        assert_eq!(o.take_pending_action(), SubagentTrayAction::HotSwapModel { subagent_id: "task-42".into() });
+        assert_eq!(
+            o.handle_input(key(KeyCode::Char('m'))),
+            OverlayInputResult::Consumed
+        );
+        assert_eq!(
+            o.take_pending_action(),
+            SubagentTrayAction::HotSwapModel {
+                subagent_id: "task-42".into()
+            }
+        );
 
         // Space triggers pause/resume
-        assert_eq!(o.handle_input(key(KeyCode::Char(' '))), OverlayInputResult::Consumed);
-        assert_eq!(o.take_pending_action(), SubagentTrayAction::PauseResume { subagent_id: "task-42".into() });
+        assert_eq!(
+            o.handle_input(key(KeyCode::Char(' '))),
+            OverlayInputResult::Consumed
+        );
+        assert_eq!(
+            o.take_pending_action(),
+            SubagentTrayAction::PauseResume {
+                subagent_id: "task-42".into()
+            }
+        );
 
         // 'x' triggers kill
-        assert_eq!(o.handle_input(key(KeyCode::Char('x'))), OverlayInputResult::Consumed);
-        assert_eq!(o.take_pending_action(), SubagentTrayAction::Kill { subagent_id: "task-42".into() });
+        assert_eq!(
+            o.handle_input(key(KeyCode::Char('x'))),
+            OverlayInputResult::Consumed
+        );
+        assert_eq!(
+            o.take_pending_action(),
+            SubagentTrayAction::Kill {
+                subagent_id: "task-42".into()
+            }
+        );
 
         // 'd' toggles docking
         assert!(!o.is_docked());
-        assert_eq!(o.handle_input(key(KeyCode::Char('d'))), OverlayInputResult::Consumed);
+        assert_eq!(
+            o.handle_input(key(KeyCode::Char('d'))),
+            OverlayInputResult::Consumed
+        );
         assert!(o.is_docked());
     }
 }

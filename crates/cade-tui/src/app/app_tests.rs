@@ -1060,14 +1060,26 @@ fn test_plan_update_json_event_payload_conformance() {
     });
 
     let plan_obj = payload.get("plan").expect("must contain plan");
-    let steps_arr = plan_obj.get("steps").and_then(|v| v.as_array()).expect("steps array");
+    let steps_arr = plan_obj
+        .get("steps")
+        .and_then(|v| v.as_array())
+        .expect("steps array");
     assert_eq!(steps_arr.len(), 2);
 
-    let step1_desc = steps_arr[0].get("description").and_then(|v| v.as_str()).unwrap();
-    let step1_done = steps_arr[0].get("is_done").and_then(|v| v.as_bool()).unwrap();
+    let step1_desc = steps_arr[0]
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap();
+    let step1_done = steps_arr[0]
+        .get("is_done")
+        .and_then(|v| v.as_bool())
+        .unwrap();
     assert_eq!(step1_desc, "Step 1");
     assert!(!step1_done);
 
-    let step2_done = steps_arr[1].get("is_done").and_then(|v| v.as_bool()).unwrap();
+    let step2_done = steps_arr[1]
+        .get("is_done")
+        .and_then(|v| v.as_bool())
+        .unwrap();
     assert!(step2_done);
 }

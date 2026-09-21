@@ -73,7 +73,6 @@
     }
   }
 </script>
-
 <script>
   window.__cade_diag = [];
   window.cadeLog = function(msg) {
@@ -140,39 +139,17 @@
 </script>
 
 <script type="module">
-window.cadeLog?.("Starting WASM loader module...");
-import init, * as bindings from '/dashboard/cade-gui-c10319d19a6f6ec9.js';
-window.wasmBindings = bindings;
-window.cadeLog?.("JS bindings loaded.");
+import init, * as bindings from '/dashboard/cade-gui-d978dbded6704a4f.js';
+const wasm = await init({ module_or_path: '/dashboard/cade-gui-d978dbded6704a4f_bg.wasm' });
 
-try {
-  window.cadeLog?.("Attempting WebAssembly.instantiateStreaming on /dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm");
-  const wasm = await init({ module_or_path: '/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm' });
-  window.cadeLog?.("Streaming WASM instantiation succeeded.");
-  dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { wasm } }));
-  dismissLoader();
-} catch (streamErr) {
-  try {
-    window.cadeLog?.("Streaming instantiation failed: " + (streamErr.message || streamErr) + "; trying raw arrayBuffer fallback...");
-    const resp = await fetch('/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm');
-    if (!resp.ok) {
-      throw new Error("Failed to fetch WASM binary: HTTP " + resp.status + " " + resp.statusText);
-    }
-    const bytes = await resp.arrayBuffer();
-    window.cadeLog?.("Fetched " + bytes.byteLength + " bytes of WASM. Compiling WebAssembly.Module...");
-    const compiled = await WebAssembly.compile(bytes);
-    const wasm = await init({ module_or_path: compiled });
-    window.cadeLog?.("ArrayBuffer fallback WASM instantiation succeeded.");
-    dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { wasm } }));
-    dismissLoader();
-  } catch (err) {
-    const errDetail = err.stack || err.message || err.toString();
-    window.cadeLog?.("Fatal WASM startup error: " + errDetail);
-    reportCadeError("WebAssembly Initialization Failed", "Could not load or compile the dashboard WebAssembly bundle:");
-  }
-}
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
 </script>
-<link rel="modulepreload" href="/dashboard/cade-gui-c10319d19a6f6ec9.js" crossorigin="anonymous" integrity="sha384-DZrNfJSWnM19d+RoJxVIRXi9htJiZ9tgB5uV301xXaQTqo9V8/md/ng4F+zpSU8W"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-80f311471938c35d/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-Nif9IKEK7jDtr+Nt8Bt3dnT4GGjA+Ep0kN+xNiaynv0xNWAMuVQ0NWY8qxY7P0Ge"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="preload" href="/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm" crossorigin="anonymous" integrity="sha384-kWxr+wKkDrTYXKKdX2NH/db3+7Ra3cCtyxlOCiuT2n3utVXhwQ5azMf8kz2baEkX" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/dashboard/cade-gui-d978dbded6704a4f.js" crossorigin="anonymous" integrity="sha384-uvq8mt2L31+qm/k3y5UQAKCgmBRzELtegJIY1C9Ks6TPu6N3eflAOvxDELeWTuAn"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-80f311471938c35d/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-Nif9IKEK7jDtr+Nt8Bt3dnT4GGjA+Ep0kN+xNiaynv0xNWAMuVQ0NWY8qxY7P0Ge"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="preload" href="/dashboard/cade-gui-d978dbded6704a4f_bg.wasm" crossorigin="anonymous" integrity="sha384-tisU7XuzjvtcgF2FtFOC+Eq75YCmSVrrGs6pvsES/Wrk6IMi3Td6R65MMBkKKMiD" as="fetch" type="application/wasm"></head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
 <div id="cade-loader" class="cade-loader">
   <div class="cade-spinner"></div>

@@ -101,10 +101,16 @@ impl OverlayComponent for PagerOverlay {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD))
+            .border_style(
+                Style::default()
+                    .fg(colors.c_primary())
+                    .add_modifier(Modifier::BOLD),
+            )
             .title(Span::styled(
                 title_span,
-                Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(colors.c_primary())
+                    .add_modifier(Modifier::BOLD),
             ));
 
         let inner_area = block.inner(modal_area);
@@ -181,7 +187,9 @@ impl OverlayComponent for PagerOverlay {
             Line::from(vec![
                 Span::styled(
                     " Search: ",
-                    Style::default().fg(colors.c_primary()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(colors.c_primary())
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("{}_", self.search_query),
@@ -193,31 +201,29 @@ impl OverlayComponent for PagerOverlay {
                 ),
             ])
         } else if !self.search_matches.is_empty() {
-            Line::from(vec![
-                Span::styled(
-                    format!(
-                        " Match {}/{} for \"{}\" [n/N: next/prev] │ Line {}/{}",
-                        self.current_match_idx + 1,
-                        self.search_matches.len(),
-                        self.search_query,
-                        self.scroll + 1,
-                        total_lines
-                    ),
-                    Style::default().fg(colors.c_primary()),
+            Line::from(vec![Span::styled(
+                format!(
+                    " Match {}/{} for \"{}\" [n/N: next/prev] │ Line {}/{}",
+                    self.current_match_idx + 1,
+                    self.search_matches.len(),
+                    self.search_query,
+                    self.scroll + 1,
+                    total_lines
                 ),
-            ])
+                Style::default().fg(colors.c_primary()),
+            )])
         } else {
-            Line::from(vec![
-                Span::styled(
-                    format!(
-                        " Line {}/{} ({}%) · Press / to search · y to copy all",
-                        self.scroll + 1,
-                        total_lines,
-                        ((self.scroll + 1) * 100).checked_div(total_lines).unwrap_or(100)
-                    ),
-                    Style::default().fg(colors.c_text_muted()),
+            Line::from(vec![Span::styled(
+                format!(
+                    " Line {}/{} ({}%) · Press / to search · y to copy all",
+                    self.scroll + 1,
+                    total_lines,
+                    ((self.scroll + 1) * 100)
+                        .checked_div(total_lines)
+                        .unwrap_or(100)
                 ),
-            ])
+                Style::default().fg(colors.c_text_muted()),
+            )])
         };
 
         frame.render_widget(Paragraph::new(footer_line), footer_rect);
@@ -293,7 +299,8 @@ impl OverlayComponent for PagerOverlay {
             }
             KeyCode::Char('n') => {
                 if !self.search_matches.is_empty() {
-                    self.current_match_idx = (self.current_match_idx + 1) % self.search_matches.len();
+                    self.current_match_idx =
+                        (self.current_match_idx + 1) % self.search_matches.len();
                     self.jump_to_current_match(25);
                 }
                 OverlayInputResult::Consumed
@@ -322,7 +329,9 @@ impl OverlayComponent for PagerOverlay {
     }
 
     fn take_result(&mut self) -> Option<Box<dyn Any>> {
-        self.copy_requested.take().map(|c| Box::new(c) as Box<dyn Any>)
+        self.copy_requested
+            .take()
+            .map(|c| Box::new(c) as Box<dyn Any>)
     }
 }
 

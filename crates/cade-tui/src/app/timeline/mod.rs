@@ -248,29 +248,15 @@ impl<'a> TimelineItem<'a> {
                 name,
                 preview,
                 branch,
-            } => render_tool_call_item(
-                name,
-                preview,
-                *branch,
-                width,
-                expand_all,
-                out,
-                colors,
-                nerd,
-            ),
+            } => {
+                render_tool_call_item(name, preview, *branch, width, expand_all, out, colors, nerd)
+            }
             Self::ToolResult {
                 is_error,
                 content,
                 branch,
             } => render_tool_result_item(
-                *is_error,
-                content,
-                *branch,
-                width,
-                expand_all,
-                out,
-                colors,
-                nerd,
+                *is_error, content, *branch, width, expand_all, out, colors, nerd,
             ),
             Self::LiveOutput {
                 lines,

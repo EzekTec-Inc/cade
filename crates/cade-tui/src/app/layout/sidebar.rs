@@ -184,7 +184,9 @@ pub(crate) fn render_sidebar(
                 Span::styled(" proxy   ", colors.text_muted()),
                 Span::styled(
                     proxy_status,
-                    Style::default().fg(colors.c_success()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(colors.c_success())
+                        .add_modifier(Modifier::BOLD),
                 ),
             ])
         } else {
@@ -230,7 +232,10 @@ pub(crate) fn render_sidebar(
                             .fg(colors.c_success())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!(" ({} tok)", metrics.tokens_streamed), colors.text_dim()),
+                    Span::styled(
+                        format!(" ({} tok)", metrics.tokens_streamed),
+                        colors.text_dim(),
+                    ),
                 ])
             } else {
                 Line::from("")
