@@ -37,7 +37,12 @@
     background: #0f1115;
     color: #9ca3af;
     font-size: 14px;
-    transition: opacity 0.25s ease-out;
+  }
+  #cade-loader[data-dismissed="true"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
   }
   .cade-spinner {
     width: 32px;
@@ -69,31 +74,62 @@
 </script>
 <link data-trunk rel="rust" data-wasm-opt="0" />
 <script>
+  window.__cade_diag = [];
+  function cadeLog(msg) {
+    window.__cade_diag.push("[" + new Date().toISOString().slice(11, 19) + "] " + msg);
+  }
   function dismissLoader() {
     var loader = document.getElementById("cade-loader");
-    if (loader && !loader.dataset.dismissed) {
+    if (loader) {
       loader.dataset.dismissed = "true";
-      loader.style.opacity = "0";
-      setTimeout(function() { loader.remove(); }, 250);
+      loader.style.display = "none";
+      loader.style.visibility = "hidden";
+      loader.style.pointerEvents = "none";
+      try { loader.remove(); } catch (e) {}
     }
   }
-  window.addEventListener("TrunkApplicationStarted", dismissLoader);
+  function reportCadeError(title, detail) {
+    var loader = document.getElementById("cade-loader");
+    if (loader && !loader.dataset.dismissed && !loader.dataset.error) {
+      loader.dataset.error = "true";
+      loader.style.display = "flex";
+      loader.style.visibility = "visible";
+      loader.style.pointerEvents = "auto";
+      var diagText = (window.__cade_diag && window.__cade_diag.length > 0) ? window.__cade_diag.join("\n") : "No diagnostic logs captured.";
+      loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
+        '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">' + title + '</div>' +
+        '<div style="color:#9ca3af;font-size:13px;max-width:520px;text-align:center;margin-bottom:12px;">' + detail + '</div>' +
+        '<pre style="background:#16171d;color:#f87171;padding:12px;border-radius:8px;font-size:11px;max-width:560px;max-height:160px;overflow:auto;text-align:left;white-space:pre-wrap;border:1px solid #272833;margin-bottom:16px;">' + diagText + '</pre>' +
+        '<div style="display:flex;gap:12px;">' +
+        '<button onclick="location.reload()" style="background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>' +
+        '<button onclick="location.href=location.pathname+\'?_t=\'+Date.now()" style="background:#272833;color:#e5e7eb;border:1px solid #3f3f46;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Bypass Cache & Reload</button>' +
+        '</div>';
+    }
+  }
+  window.addEventListener("TrunkApplicationStarted", function() {
+    cadeLog("TrunkApplicationStarted caught by window listener.");
+    dismissLoader();
+  });
   var checkInterval = setInterval(function() {
     var canvas = document.getElementById("cade_gui_canvas");
     if (canvas && canvas.children.length > 0) {
       clearInterval(checkInterval);
+      cadeLog("Canvas children detected (" + canvas.children.length + "). Dismissing loader.");
       dismissLoader();
     }
   }, 100);
+  window.setTimeout(function() {
+    reportCadeError("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 10 seconds. Diagnostic details:");
+  }, 10000);
+  window.addEventListener("unhandledrejection", function(e) {
+    var reason = e.reason ? (e.reason.stack || e.reason.message || e.reason.toString()) : e.toString();
+    cadeLog("Unhandled promise rejection: " + reason);
+    reportCadeError("WebAssembly / Script Error", "An unhandled promise rejection occurred during dashboard startup:");
+  });
   window.addEventListener("error", function(e) {
-    var loader = document.getElementById("cade-loader");
-    if (loader && !loader.dataset.dismissed && !loader.dataset.error) {
-      loader.dataset.error = "true";
-      loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
-        '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">CADE GUI Error</div>' +
-        '<div style="color:#9ca3af;font-size:13px;max-width:480px;text-align:center;word-break:break-word;">' + (e.message || e) + '</div>' +
-        '<button onclick="location.reload()" style="margin-top:16px;background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>';
-    }
+    var msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
+    cadeLog("Runtime error: " + msg);
+    reportCadeError("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
   });
 </script>
 </head>

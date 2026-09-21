@@ -37,7 +37,12 @@
     background: #0f1115;
     color: #9ca3af;
     font-size: 14px;
-    transition: opacity 0.25s ease-out;
+  }
+  #cade-loader[data-dismissed="true"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
   }
   .cade-spinner {
     width: 32px;
@@ -80,34 +85,65 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
 <script>
+  window.__cade_diag = [];
+  function cadeLog(msg) {
+    window.__cade_diag.push("[" + new Date().toISOString().slice(11, 19) + "] " + msg);
+  }
   function dismissLoader() {
     var loader = document.getElementById("cade-loader");
-    if (loader && !loader.dataset.dismissed) {
+    if (loader) {
       loader.dataset.dismissed = "true";
-      loader.style.opacity = "0";
-      setTimeout(function() { loader.remove(); }, 250);
+      loader.style.display = "none";
+      loader.style.visibility = "hidden";
+      loader.style.pointerEvents = "none";
+      try { loader.remove(); } catch (e) {}
     }
   }
-  window.addEventListener("TrunkApplicationStarted", dismissLoader);
+  function reportCadeError(title, detail) {
+    var loader = document.getElementById("cade-loader");
+    if (loader && !loader.dataset.dismissed && !loader.dataset.error) {
+      loader.dataset.error = "true";
+      loader.style.display = "flex";
+      loader.style.visibility = "visible";
+      loader.style.pointerEvents = "auto";
+      var diagText = (window.__cade_diag && window.__cade_diag.length > 0) ? window.__cade_diag.join("\n") : "No diagnostic logs captured.";
+      loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
+        '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">' + title + '</div>' +
+        '<div style="color:#9ca3af;font-size:13px;max-width:520px;text-align:center;margin-bottom:12px;">' + detail + '</div>' +
+        '<pre style="background:#16171d;color:#f87171;padding:12px;border-radius:8px;font-size:11px;max-width:560px;max-height:160px;overflow:auto;text-align:left;white-space:pre-wrap;border:1px solid #272833;margin-bottom:16px;">' + diagText + '</pre>' +
+        '<div style="display:flex;gap:12px;">' +
+        '<button onclick="location.reload()" style="background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>' +
+        '<button onclick="location.href=location.pathname+\'?_t=\'+Date.now()" style="background:#272833;color:#e5e7eb;border:1px solid #3f3f46;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Bypass Cache & Reload</button>' +
+        '</div>';
+    }
+  }
+  window.addEventListener("TrunkApplicationStarted", function() {
+    cadeLog("TrunkApplicationStarted caught by window listener.");
+    dismissLoader();
+  });
   var checkInterval = setInterval(function() {
     var canvas = document.getElementById("cade_gui_canvas");
     if (canvas && canvas.children.length > 0) {
       clearInterval(checkInterval);
+      cadeLog("Canvas children detected (" + canvas.children.length + "). Dismissing loader.");
       dismissLoader();
     }
   }, 100);
+  window.setTimeout(function() {
+    reportCadeError("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 10 seconds. Diagnostic details:");
+  }, 10000);
+  window.addEventListener("unhandledrejection", function(e) {
+    var reason = e.reason ? (e.reason.stack || e.reason.message || e.reason.toString()) : e.toString();
+    cadeLog("Unhandled promise rejection: " + reason);
+    reportCadeError("WebAssembly / Script Error", "An unhandled promise rejection occurred during dashboard startup:");
+  });
   window.addEventListener("error", function(e) {
-    var loader = document.getElementById("cade-loader");
-    if (loader && !loader.dataset.dismissed && !loader.dataset.error) {
-      loader.dataset.error = "true";
-      loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
-        '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">CADE GUI Error</div>' +
-        '<div style="color:#9ca3af;font-size:13px;max-width:480px;text-align:center;word-break:break-word;">' + (e.message || e) + '</div>' +
-        '<button onclick="location.reload()" style="margin-top:16px;background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>';
-    }
+    var msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
+    cadeLog("Runtime error: " + msg);
+    reportCadeError("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
   });
 </script>
-<link rel="modulepreload" href="/dashboard/cade-gui-c10319d19a6f6ec9.js" crossorigin="anonymous" integrity="sha384-DZrNfJSWnM19d+RoJxVIRXi9htJiZ9tgB5uV301xXaQTqo9V8/md/ng4F+zpSU8W"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-80f311471938c35d/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-Nif9IKEK7jDtr+Nt8Bt3dnT4GGjA+Ep0kN+xNiaynv0xNWAMuVQ0NWY8qxY7P0Ge"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="preload" href="/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm" crossorigin="anonymous" integrity="sha384-kWxr+wKkDrTYXKKdX2NH/db3+7Ra3cCtyxlOCiuT2n3utVXhwQ5azMf8kz2baEkX" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/dashboard/cade-gui-c10319d19a6f6ec9.js" crossorigin="anonymous" integrity="sha384-DZrNfJSWnM19d+RoJxVIRXi9htJiZ9tgB5uV301xXaQTqo9V8/md/ng4F+zpSU8W"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-80f311471938c35d/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/inline0.js" crossorigin="anonymous" integrity="sha384-Nif9IKEK7jDtr+Nt8Bt3dnT4GGjA+Ep0kN+xNiaynv0xNWAMuVQ0NWY8qxY7P0Ge"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-7e2aed97ebee2c55/src/js/eval.js" crossorigin="anonymous" integrity="sha384-ks/r+y1kY4du0z2hvNElbl2lGiYIMKyoewBMNJVdOl1CNoiOC+EC5U+GTT5bdpZ9"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-10186f9fcc0b4418/inline1.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="preload" href="/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm" crossorigin="anonymous" integrity="sha384-kWxr+wKkDrTYXKKdX2NH/db3+7Ra3cCtyxlOCiuT2n3utVXhwQ5azMf8kz2baEkX" as="fetch" type="application/wasm"></head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
 <div id="cade-loader" class="cade-loader">
   <div class="cade-spinner"></div>

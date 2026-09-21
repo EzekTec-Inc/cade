@@ -196,6 +196,27 @@ async fn dashboard_index_html_has_no_cache_header() {
     assert_eq!(cc, "no-cache", "index.html must be no-cache");
 }
 
+/// Dashboard JS/WASM files must revalidate because embedded release builds
+/// may preserve a filename across rebuilds.
+#[tokio::test]
+async fn dashboard_assets_revalidate_instead_of_being_immutable() {
+    let app = make_app(make_state(None));
+    let asset_path = super::DashboardAssets::iter()
+        .find(|path| path != "index.html")
+        .expect("there must be at least one non-index dashboard asset");
+    let req = Request::builder()
+        .uri(format!("/dashboard/{asset_path}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let cache_control = resp
+        .headers()
+        .get("cache-control")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(cache_control, "no-cache");
+}
+
 // ── Asset serving ───────────────────────────────────────────────────
 
 /// Requesting a non-existent asset returns 404, not 500.

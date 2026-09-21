@@ -44,14 +44,11 @@ fn serve_embedded(path: &str) -> Response {
     match DashboardAssets::get(path) {
         Some(file) => {
             let mime = mime_for(path);
-            // Cache-bust files with a hash in their name (trunk adds hashes).
-            // index.html must be revalidated on every request so browsers pick
-            // up new asset hashes after a rebuild.
-            let cache = if path == "index.html" {
-                "no-cache"
-            } else {
-                "public, max-age=31536000, immutable"
-            };
+            // GUI asset filenames are supplied by Trunk, but embedded release
+            // builds can retain an earlier filename across rebuilds. Revalidate
+            // every response so a browser never combines stale JS/WASM with the
+            // current dashboard index.
+            let cache = "no-cache";
             (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, cache)],
