@@ -135,6 +135,8 @@ pub fn router(state: AppState) -> Router {
                 .route("/{*path}", get(dashboard::get_dashboard_asset))
                 .layer(tower_http::compression::CompressionLayer::new()),
         )
+        // Public fallback for child snippet imports resolving against root /snippets/*
+        .route("/snippets/{*path}", get(dashboard::get_dashboard_asset))
         // Real context-window stats (D2)
         .route(
             "/v1/agents/{id}/context",

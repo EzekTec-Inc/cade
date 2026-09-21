@@ -78,6 +78,7 @@ fn make_app(state: AppState) -> Router {
     Router::new()
         .route("/dashboard", get(super::get_dashboard))
         .route("/dashboard/{*path}", get(super::get_dashboard_asset))
+        .route("/snippets/{*path}", get(super::get_dashboard_asset))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
 }
@@ -215,6 +216,21 @@ async fn dashboard_assets_revalidate_instead_of_being_immutable() {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     assert_eq!(cache_control, "no-cache");
+}
+
+#[tokio::test]
+async fn snippets_fallback_route_returns_200() {
+    let app = make_app(make_state(None));
+    let snippet_path = super::DashboardAssets::iter()
+        .find(|path| path.starts_with("snippets/"))
+        .expect("there must be at least one snippet asset");
+    let relative = snippet_path.strip_prefix("snippets/").unwrap();
+    let req = Request::builder()
+        .uri(format!("/snippets/{relative}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 // ── Asset serving ───────────────────────────────────────────────────

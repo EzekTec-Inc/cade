@@ -65,9 +65,15 @@ pub async fn get_dashboard() -> Response {
     serve_embedded("index.html")
 }
 
-/// `GET /dashboard/*path` — serves JS, WASM, and other trunk-built assets.
+/// `GET /dashboard/*path` or `GET /snippets/*path` — serves JS, WASM, snippets, and other trunk-built assets.
 pub async fn get_dashboard_asset(Path(path): Path<String>) -> Response {
-    serve_embedded(&path)
+    let res = serve_embedded(&path);
+    if res.status() == StatusCode::NOT_FOUND {
+        let with_snippets = format!("snippets/{path}");
+        serve_embedded(&with_snippets)
+    } else {
+        res
+    }
 }
 
 #[cfg(test)]

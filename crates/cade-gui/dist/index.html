@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CADE Dashboard</title>
+<base href="/dashboard/">
 <style>
   :root { color-scheme: dark; }
   *, *::before, *::after { box-sizing: border-box; }
@@ -74,14 +75,37 @@
 </script>
 
 <script type="module">
+cadeLog("Starting WASM loader module...");
 import init, * as bindings from '/dashboard/cade-gui-c10319d19a6f6ec9.js';
-const wasm = await init({ module_or_path: '/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm' });
-
-
 window.wasmBindings = bindings;
+cadeLog("JS bindings loaded.");
 
-
-dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+try {
+  cadeLog("Attempting WebAssembly.instantiateStreaming on /dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm");
+  const wasm = await init({ module_or_path: '/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm' });
+  cadeLog("Streaming WASM instantiation succeeded.");
+  dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { wasm } }));
+  dismissLoader();
+} catch (streamErr) {
+  try {
+    cadeLog("Streaming instantiation failed: " + (streamErr.message || streamErr) + "; trying raw arrayBuffer fallback...");
+    const resp = await fetch('/dashboard/cade-gui-c10319d19a6f6ec9_bg.wasm');
+    if (!resp.ok) {
+      throw new Error("Failed to fetch WASM binary: HTTP " + resp.status + " " + resp.statusText);
+    }
+    const bytes = await resp.arrayBuffer();
+    cadeLog("Fetched " + bytes.byteLength + " bytes of WASM. Compiling WebAssembly.Module...");
+    const compiled = await WebAssembly.compile(bytes);
+    const wasm = await init({ module_or_path: compiled });
+    cadeLog("ArrayBuffer fallback WASM instantiation succeeded.");
+    dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { wasm } }));
+    dismissLoader();
+  } catch (err) {
+    const errDetail = err.stack || err.message || err.toString();
+    cadeLog("Fatal WASM startup error: " + errDetail);
+    reportCadeError("WebAssembly Initialization Failed", "Could not load or compile the dashboard WebAssembly bundle:");
+  }
+}
 
 </script>
 <script>
