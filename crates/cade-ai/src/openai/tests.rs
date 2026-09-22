@@ -1682,3 +1682,194 @@ fn test_parse_responses_api_multi_tool_stream() {
         other => panic!("expected Usage, got {other:?}"),
     }
 }
+
+#[test]
+fn test_openai_model_capabilities_classification() {
+    // -- Setup & Fixtures
+    use super::{ApiProtocol, OpenAiModelCapabilities, ReasoningStrategy, TokenParameter};
+
+    // -- Exec & Check: GPT-6 family
+    let gpt6 = OpenAiModelCapabilities::for_model("openai/gpt-6-sol");
+    assert!(gpt6.is_frontier);
+    assert_eq!(gpt6.default_protocol, ApiProtocol::Responses);
+    assert_eq!(gpt6.token_parameter, TokenParameter::MaxCompletionTokens);
+    assert_eq!(
+        gpt6.reasoning_strategy,
+        ReasoningStrategy::NestedReasoningObject
+    );
+
+    // -- Exec & Check: GPT-5 family
+    let gpt5 = OpenAiModelCapabilities::for_model("openai/gpt-5.6-luna");
+    assert!(gpt5.is_frontier);
+    assert_eq!(gpt5.default_protocol, ApiProtocol::Responses);
+    assert_eq!(gpt5.token_parameter, TokenParameter::MaxCompletionTokens);
+    assert_eq!(
+        gpt5.reasoning_strategy,
+        ReasoningStrategy::NestedReasoningObject
+    );
+
+    // -- Exec & Check: o-series (o1, o3, o4)
+    let o3 = OpenAiModelCapabilities::for_model("openai/o3-mini");
+    assert!(!o3.is_frontier);
+    assert_eq!(o3.default_protocol, ApiProtocol::ChatCompletions);
+    assert_eq!(o3.token_parameter, TokenParameter::MaxCompletionTokens);
+    assert_eq!(
+        o3.reasoning_strategy,
+        ReasoningStrategy::TopLevelReasoningEffort
+    );
+
+    // -- Exec & Check: Standard legacy chat models (gpt-4o, gpt-4o-mini)
+    let gpt4o = OpenAiModelCapabilities::for_model("openai/gpt-4o-2024-08-06");
+    assert!(!gpt4o.is_frontier);
+    assert_eq!(gpt4o.default_protocol, ApiProtocol::ChatCompletions);
+    assert_eq!(gpt4o.token_parameter, TokenParameter::MaxTokens);
+    assert_eq!(gpt4o.reasoning_strategy, ReasoningStrategy::None);
+}
+
+#[test]
+fn gpt6_sol_with_tools_and_reasoning_uses_responses_api_shape() -> Result<()> {
+    // -- Setup & Fixtures
+    let provider = OpenAiProvider::new("test-key".into(), None);
+    let req = CompletionRequest {
+        model: "openai/gpt-6-sol".into(),
+        messages: vec![crate::LlmMessage {
+            role: "user".into(),
+            content: "Please inspect code".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![json!({
+            "name": "sample_tool",
+            "description": "Sample tool",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }
+        })],
+        max_tokens: 4096,
+        reasoning_effort: Some("medium".into()),
+    };
+
+    // -- Exec & Check
+    assert!(
+        requires_responses_api_for_tools_with_reasoning(&req),
+        "GPT-6 with tools and reasoning must route to Responses API"
+    );
+    assert_eq!(
+        provider.resolve_endpoint_for_request(&req),
+        "https://api.openai.com/v1/responses"
+    );
+
+    let body = provider.build_body(&req, true);
+    assert_eq!(body["model"], "gpt-6-sol");
+    assert!(
+        body.get("messages").is_none(),
+        "Responses API must use 'input', not 'messages'"
+    );
+    assert!(
+        body.get("max_completion_tokens").is_none(),
+        "Responses API must use 'max_output_tokens'"
+    );
+    assert_eq!(body["max_output_tokens"], 4096);
+    assert_eq!(body["reasoning"]["effort"], "medium");
+    assert!(
+        body.get("reasoning_effort").is_none(),
+        "Responses API must not send top-level chat reasoning_effort"
+    );
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["name"], "sample_tool");
+
+    Ok(())
+}
+
+#[test]
+fn gpt4o_with_tools_uses_chat_completions_shape() -> Result<()> {
+    // -- Setup & Fixtures
+    let provider = OpenAiProvider::new("test-key".into(), None);
+    let req = CompletionRequest {
+        model: "openai/gpt-4o".into(),
+        messages: vec![crate::LlmMessage {
+            role: "user".into(),
+            content: "Hello".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![json!({
+            "name": "sample_tool",
+            "description": "Sample tool",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }
+        })],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    // -- Exec & Check
+    assert!(
+        !requires_responses_api_for_tools_with_reasoning(&req),
+        "GPT-4o must NOT route to Responses API"
+    );
+    assert_eq!(
+        provider.resolve_endpoint_for_request(&req),
+        "https://api.openai.com/v1/chat/completions"
+    );
+
+    let body = provider.build_body(&req, true);
+    assert_eq!(body["model"], "gpt-4o");
+    assert!(body.get("messages").is_some());
+    assert!(body.get("max_tokens").is_some());
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["function"]["name"], "sample_tool");
+
+    Ok(())
+}
+
+#[test]
+fn o3_with_reasoning_uses_chat_completions_shape() -> Result<()> {
+    // -- Setup & Fixtures
+    let provider = OpenAiProvider::new("test-key".into(), None);
+    let req = CompletionRequest {
+        model: "openai/o3-mini".into(),
+        messages: vec![crate::LlmMessage {
+            role: "user".into(),
+            content: "Solve puzzle".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![],
+        max_tokens: 4096,
+        reasoning_effort: Some("high".into()),
+    };
+
+    // -- Exec & Check
+    assert!(
+        !requires_responses_api_for_tools_with_reasoning(&req),
+        "o3-mini must route to chat/completions"
+    );
+    assert_eq!(
+        provider.resolve_endpoint_for_request(&req),
+        "https://api.openai.com/v1/chat/completions"
+    );
+
+    let body = provider.build_body(&req, true);
+    assert_eq!(body["model"], "o3-mini");
+    assert_eq!(body["max_completion_tokens"], 4096);
+    assert_eq!(body["reasoning_effort"], "high");
+    assert!(body.get("reasoning").is_none());
+
+    Ok(())
+}

@@ -16,19 +16,85 @@ use super::{
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
-/// Check if a model represents an unreleased/frontier preview model (e.g. gpt-5, gpt-5.5-pro, gpt-5.6).
+// region:    --- Model Capabilities
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiProtocol {
+    ChatCompletions,
+    Responses,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenParameter {
+    MaxTokens,
+    MaxCompletionTokens,
+    MaxOutputTokens,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningStrategy {
+    None,
+    TopLevelReasoningEffort,
+    NestedReasoningObject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenAiModelCapabilities {
+    pub default_protocol: ApiProtocol,
+    pub token_parameter: TokenParameter,
+    pub reasoning_strategy: ReasoningStrategy,
+    pub is_frontier: bool,
+}
+
+impl OpenAiModelCapabilities {
+    pub fn for_model(model: &str) -> Self {
+        let bare = bare_model(model).to_lowercase();
+
+        // GPT-5 and GPT-6 families: Frontier reasoning models requiring /v1/responses for function tools
+        if bare.starts_with("gpt-6") || bare.starts_with("gpt-5") {
+            Self {
+                default_protocol: ApiProtocol::Responses,
+                token_parameter: TokenParameter::MaxCompletionTokens,
+                reasoning_strategy: ReasoningStrategy::NestedReasoningObject,
+                is_frontier: true,
+            }
+        // O-series reasoning models (o1, o3, o4)
+        } else if bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4") {
+            Self {
+                default_protocol: ApiProtocol::ChatCompletions,
+                token_parameter: TokenParameter::MaxCompletionTokens,
+                reasoning_strategy: ReasoningStrategy::TopLevelReasoningEffort,
+                is_frontier: false,
+            }
+        // GPT-4.5
+        } else if bare.starts_with("gpt-4.5") {
+            Self {
+                default_protocol: ApiProtocol::ChatCompletions,
+                token_parameter: TokenParameter::MaxCompletionTokens,
+                reasoning_strategy: ReasoningStrategy::None,
+                is_frontier: false,
+            }
+        // Standard legacy models (gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo, etc.)
+        } else {
+            Self {
+                default_protocol: ApiProtocol::ChatCompletions,
+                token_parameter: TokenParameter::MaxTokens,
+                reasoning_strategy: ReasoningStrategy::None,
+                is_frontier: false,
+            }
+        }
+    }
+}
+
+// endregion: --- Model Capabilities
+
+/// Check if a model represents an unreleased/frontier preview model (e.g. gpt-5, gpt-5.5-pro, gpt-5.6, gpt-6).
 pub(crate) fn is_frontier_preview_model(model: &str) -> bool {
-    let bare = bare_model(model).to_lowercase();
-    bare.starts_with("gpt-5")
+    OpenAiModelCapabilities::for_model(model).is_frontier
 }
 
 fn needs_max_completion_tokens(model: &str) -> bool {
-    let bare = bare_model(model).to_lowercase();
-    bare.starts_with("gpt-4.5")
-        || bare.starts_with("gpt-5")
-        || bare.starts_with("o1")
-        || bare.starts_with("o3")
-        || bare.starts_with("o4")
+    OpenAiModelCapabilities::for_model(model).token_parameter == TokenParameter::MaxCompletionTokens
 }
 
 fn is_o_series(model: &str) -> bool {
@@ -39,10 +105,11 @@ fn is_o_series(model: &str) -> bool {
         || bare.starts_with("gpt-5.5-pro")
         || bare.starts_with("gpt-5.6")
         || bare.starts_with("gpt-5")
+        || bare.starts_with("gpt-6")
 }
 
 fn requires_responses_api_for_tools_with_reasoning(req: &CompletionRequest) -> bool {
-    is_frontier_preview_model(&req.model) && !req.tools.is_empty()
+    OpenAiModelCapabilities::for_model(&req.model).is_frontier && !req.tools.is_empty()
 }
 
 fn map_reasoning_effort(effort: &str) -> Option<&'static str> {
