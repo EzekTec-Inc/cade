@@ -45,10 +45,20 @@ pub fn WorkflowView() -> Element {
         running.set(true);
         out.set(Some(format!("Dispatching pipeline '{wf_name}'...")));
         spawn(async move {
-            match engine.dispatch_workflow_run(&wf_name, serde_json::json!({})).await {
+            match engine
+                .dispatch_workflow_run(&wf_name, serde_json::json!({}))
+                .await
+            {
                 Ok(run_id) => {
-                    add_toast(&st, ToastLevel::Success, "Pipeline Dispatched", format!("Run ID: {run_id}"));
-                    out.set(Some(format!("✓ Dispatched '{wf_name}' -> Active Run ID: {run_id}")));
+                    add_toast(
+                        &st,
+                        ToastLevel::Success,
+                        "Pipeline Dispatched",
+                        format!("Run ID: {run_id}"),
+                    );
+                    out.set(Some(format!(
+                        "✓ Dispatched '{wf_name}' -> Active Run ID: {run_id}"
+                    )));
                     let updated = engine.fetch_workflows().await;
                     w_res.set(updated);
                 }

@@ -74,68 +74,147 @@
   }
 </script>
 <script>
-  window.__cade_diag = [];
-  window.cadeLog = function(msg) {
-    var line = "[" + new Date().toISOString().slice(11, 19) + "] " + msg;
+(function() {
+  var STARTUP_TIMEOUT_MS = 10000;
+  var POLL_INTERVAL_MS = 100;
+  var pollTimer = null;
+  var timeoutTimer = null;
+
+  window.__CADE_GUI_READY = false;
+  window.__cade_diag = window.__cade_diag || [];
+
+  function log(message) {
+    var line = "[" + new Date().toISOString().slice(11, 19) + "] " + message;
     window.__cade_diag.push(line);
-    console.log("[CADE]", msg);
-  };
-  function cadeLog(msg) {
-    window.cadeLog(msg);
+    console.log("[CADE]", message);
   }
+
+  function loaderElement() {
+    return document.getElementById("cade-loader");
+  }
+
+  function stopWatchdogs() {
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (timeoutTimer !== null) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
+  }
+
   function dismissLoader() {
-    var loader = document.getElementById("cade-loader");
-    if (loader) {
-      loader.dataset.dismissed = "true";
-      loader.style.display = "none";
-      loader.style.visibility = "hidden";
-      loader.style.pointerEvents = "none";
-      try { loader.remove(); } catch (e) {}
+    var loader = loaderElement();
+    if (!loader) {
+      return;
+    }
+    loader.dataset.dismissed = "true";
+    loader.style.display = "none";
+    loader.style.visibility = "hidden";
+    loader.style.pointerEvents = "none";
+    try {
+      loader.remove();
+    } catch (e) {
+      // Older browsers may not support remove(); hidden state above is enough.
     }
   }
-  function reportCadeError(title, detail) {
-    var loader = document.getElementById("cade-loader");
-    if (loader && !loader.dataset.dismissed && !loader.dataset.error) {
-      loader.dataset.error = "true";
-      loader.style.display = "flex";
-      loader.style.visibility = "visible";
-      loader.style.pointerEvents = "auto";
-      var diagText = (window.__cade_diag && window.__cade_diag.length > 0) ? window.__cade_diag.join("\n") : "No diagnostic logs captured.";
-      loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
-        '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">' + title + '</div>' +
-        '<div style="color:#9ca3af;font-size:13px;max-width:520px;text-align:center;margin-bottom:12px;">' + detail + '</div>' +
-        '<pre style="background:#16171d;color:#f87171;padding:12px;border-radius:8px;font-size:11px;max-width:560px;max-height:160px;overflow:auto;text-align:left;white-space:pre-wrap;border:1px solid #272833;margin-bottom:16px;">' + diagText + '</pre>' +
-        '<div style="display:flex;gap:12px;">' +
-        '<button onclick="location.reload()" style="background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>' +
-        '<button onclick="location.href=location.pathname+\'?_t=\'+Date.now()" style="background:#272833;color:#e5e7eb;border:1px solid #3f3f46;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Bypass Cache & Reload</button>' +
-        '</div>';
-    }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
-  window.addEventListener("TrunkApplicationStarted", function() {
-    window.cadeLog("TrunkApplicationStarted caught by window listener.");
+
+  function ready(reason) {
+    if (window.__CADE_GUI_READY) {
+      return;
+    }
+    window.__CADE_GUI_READY = true;
+    log(reason || "Dashboard marked ready.");
+    stopWatchdogs();
     dismissLoader();
-  });
-  var checkInterval = setInterval(function() {
-    var canvas = document.getElementById("cade_gui_canvas");
-    if (canvas && canvas.children.length > 0) {
-      clearInterval(checkInterval);
-      window.cadeLog("Canvas children detected (" + canvas.children.length + "). Dismissing loader.");
-      dismissLoader();
+  }
+
+  function error(title, detail) {
+    if (window.__CADE_GUI_READY) {
+      return;
     }
-  }, 100);
-  window.setTimeout(function() {
-    reportCadeError("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 10 seconds. Diagnostic details:");
-  }, 10000);
+    stopWatchdogs();
+    var loader = loaderElement();
+    if (!loader || loader.dataset.dismissed || loader.dataset.error) {
+      return;
+    }
+    loader.dataset.error = "true";
+    loader.style.display = "flex";
+    loader.style.visibility = "visible";
+    loader.style.pointerEvents = "auto";
+    var diagText = window.__cade_diag.length > 0
+      ? window.__cade_diag.join("\n")
+      : "No diagnostic logs captured.";
+    loader.innerHTML = '<div style="font-size:32px;margin-bottom:12px;">⚠️</div>' +
+      '<div style="font-weight:600;color:#ef4444;font-size:16px;margin-bottom:8px;">' + escapeHtml(title) + '</div>' +
+      '<div style="color:#9ca3af;font-size:13px;max-width:520px;text-align:center;margin-bottom:12px;">' + escapeHtml(detail) + '</div>' +
+      '<pre style="background:#16171d;color:#f87171;padding:12px;border-radius:8px;font-size:11px;max-width:560px;max-height:160px;overflow:auto;text-align:left;white-space:pre-wrap;border:1px solid #272833;margin-bottom:16px;">' + escapeHtml(diagText) + '</pre>' +
+      '<div style="display:flex;gap:12px;">' +
+      '<button onclick="location.reload()" style="background:#ff7c5c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Reload</button>' +
+      '<button onclick="location.href=location.pathname+String.fromCharCode(63,95,116,61)+Date.now()" style="background:#272833;color:#e5e7eb;border:1px solid #3f4350;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:500;">Bypass Cache & Reload</button>' +
+      '</div>';
+  }
+
+  function canvasHasMountedApp() {
+    var canvas = document.getElementById("cade_gui_canvas");
+    return !!(canvas && canvas.children.length > 0);
+  }
+
+  function checkReady() {
+    if (canvasHasMountedApp()) {
+      var canvas = document.getElementById("cade_gui_canvas");
+      ready("Canvas children detected (" + canvas.children.length + ").");
+      return true;
+    }
+    return false;
+  }
+
+  window.cadeDashboardStartup = {
+    ready: ready,
+    error: error,
+    log: log,
+    checkReady: checkReady
+  };
+  window.cadeLog = log;
+
+  log("Dashboard startup readiness module armed.");
+
+  window.addEventListener("TrunkApplicationStarted", function() {
+    log("TrunkApplicationStarted event received.");
+    if (!checkReady()) {
+      ready("TrunkApplicationStarted event received before canvas children were visible.");
+    }
+  });
+
+  pollTimer = window.setInterval(checkReady, POLL_INTERVAL_MS);
+  timeoutTimer = window.setTimeout(function() {
+    if (!window.__CADE_GUI_READY && !checkReady()) {
+      error("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 10 seconds. Diagnostic details:");
+    }
+  }, STARTUP_TIMEOUT_MS);
+
   window.addEventListener("unhandledrejection", function(e) {
     var reason = e.reason ? (e.reason.stack || e.reason.message || e.reason.toString()) : e.toString();
-    window.cadeLog("Unhandled promise rejection: " + reason);
-    reportCadeError("WebAssembly / Script Error", "An unhandled promise rejection occurred during dashboard startup:");
+    log("Unhandled promise rejection: " + reason);
+    error("WebAssembly / Script Error", "An unhandled promise rejection occurred during dashboard startup:");
   });
+
   window.addEventListener("error", function(e) {
     var msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
-    window.cadeLog("Runtime error: " + msg);
-    reportCadeError("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
+    log("Runtime error: " + msg);
+    error("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
   });
+})();
 </script>
 <link data-trunk rel="rust" data-wasm-opt="0" />
 </head>

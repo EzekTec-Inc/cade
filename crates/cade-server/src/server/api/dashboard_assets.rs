@@ -8,7 +8,7 @@
 //! `Cargo.toml` lives).
 
 use rust_embed::Embed;
-use std::borrow::Cow;
+use std::{borrow::Cow, path::Component};
 
 /// Embedded GUI assets compiled from `crates/cade-gui/dist/`.
 #[derive(Embed)]
@@ -45,6 +45,10 @@ impl DashboardAssets {
         file_path: &str,
         override_dir: Option<&std::path::Path>,
     ) -> Option<DashboardAsset> {
+        if !is_safe_asset_path(file_path) {
+            return None;
+        }
+
         // 1. Check explicit override or development-mode filesystem overrides
         let dev_enabled = override_dir.is_some()
             || std::env::var("CADE_DEV")
@@ -100,4 +104,14 @@ impl DashboardAssets {
 
         dist_iter.chain(fallback)
     }
+}
+
+fn is_safe_asset_path(file_path: &str) -> bool {
+    if file_path.is_empty() || file_path.contains('\0') || file_path.contains('\\') {
+        return false;
+    }
+
+    std::path::Path::new(file_path)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
 }

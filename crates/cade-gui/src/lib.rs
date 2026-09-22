@@ -2,6 +2,7 @@ pub mod api;
 pub mod api_engine;
 pub mod chat_session;
 pub mod components;
+pub mod startup;
 pub mod types;
 
 pub use api_engine::{ApiClientEngine, ResourceMutation, ResourceState};
@@ -20,6 +21,10 @@ pub fn start() {
 
 #[component]
 fn App() -> Element {
+    use_effect(|| {
+        crate::startup::mark_dashboard_ready("Dioxus root component mounted.");
+    });
+
     // ── Extract query parameters from window.location (Cross-Frontend Sync) ──
     let mut initial_key = String::new();
     let mut initial_agent_id = Option::<String>::None;

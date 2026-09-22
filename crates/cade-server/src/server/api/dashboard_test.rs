@@ -181,6 +181,40 @@ async fn dashboard_contains_canvas_with_expected_id() {
 
 /// The index.html sets `Cache-Control: no-cache` so browsers always
 /// fetch the latest asset hashes after a rebuild.
+
+#[tokio::test]
+async fn dashboard_startup_readiness_module_cancels_timeout_after_mount() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_str = std::str::from_utf8(&body).unwrap();
+
+    assert!(
+        body_str.contains("window.cadeDashboardStartup"),
+        "dashboard HTML must expose the small startup readiness interface"
+    );
+    assert!(
+        body_str.contains("window.__CADE_GUI_READY = false"),
+        "startup readiness must track whether the WASM app has mounted"
+    );
+    assert!(
+        body_str.contains("clearTimeout(timeoutTimer)"),
+        "readiness must cancel the startup timeout after mount"
+    );
+    assert!(
+        body_str.contains("if (!window.__CADE_GUI_READY && !checkReady())"),
+        "timeout must re-check readiness before showing the blocking overlay"
+    );
+    assert!(
+        body_str.contains("Canvas children detected"),
+        "DOM mount detection must mark the dashboard ready"
+    );
+}
+
 #[tokio::test]
 async fn dashboard_index_html_has_no_cache_header() {
     let app = make_app(make_state(None));
@@ -256,6 +290,60 @@ async fn dashboard_assets_dynamic_dev_loading() {
 // ── Asset serving ───────────────────────────────────────────────────
 
 /// Requesting a non-existent asset returns 404, not 500.
+
+#[test]
+fn dashboard_site_rejects_unsafe_asset_paths() {
+    for path in [
+        "",
+        ".",
+        "./",
+        "../Cargo.toml",
+        "snippets/../index.html",
+        "/etc/passwd",
+        "assets//app.js",
+        "assets\\app.js",
+        "assets\0app.js",
+    ] {
+        let response = super::DashboardSite::asset(path);
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "unsafe dashboard asset path should be rejected: {path:?}"
+        );
+    }
+}
+
+#[test]
+fn dashboard_assets_reject_path_traversal_even_with_dev_override() {
+    let base =
+        std::env::temp_dir().join(format!("cade-dashboard-assets-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("assets")).unwrap();
+    std::fs::write(base.join("assets/app.js"), b"console.log('ok');").unwrap();
+    std::fs::write(base.join("secret.txt"), b"do not serve").unwrap();
+
+    assert!(
+        super::DashboardAssets::get_with_base_dir("assets/app.js", Some(&base)).is_some(),
+        "safe relative dev asset should still be readable"
+    );
+
+    for path in [
+        "../secret.txt",
+        "assets/../secret.txt",
+        "/secret.txt",
+        "assets\\app.js",
+        "assets\0app.js",
+        "",
+    ] {
+        assert!(
+            super::DashboardAssets::get_with_base_dir(path, Some(&base)).is_none(),
+            "unsafe direct asset path should be rejected before filesystem access: {path:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn dashboard_missing_asset_returns_404() {
     let app = make_app(make_state(None));

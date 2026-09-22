@@ -116,8 +116,16 @@ pub fn ToolsView() -> Element {
     let filtered_tools: Vec<serde_json::Value> = tools_list
         .into_iter()
         .filter(|t| {
-            let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-            let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let name = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let desc = t
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
 
             let matches_query = query.is_empty() || name.contains(&query) || desc.contains(&query);
             let matches_category = match category.as_str() {
@@ -136,7 +144,12 @@ pub fn ToolsView() -> Element {
     let filtered_servers: Vec<serde_json::Value> = mcp_list
         .into_iter()
         .filter(|s| {
-            let name = s.get("name").or_else(|| s.get("key")).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let name = s
+                .get("name")
+                .or_else(|| s.get("key"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
             query.is_empty() || name.contains(&query)
         })
         .collect();

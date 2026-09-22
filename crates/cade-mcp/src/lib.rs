@@ -788,15 +788,61 @@ impl cade_core::capabilities::mesh::CapabilityMesh for McpManager {
 
 // region:    --- Content Extraction
 
-fn extract_content_text(content: &[rmcp::model::Annotated<RawContent>]) -> String {
-    content
-        .iter()
-        .filter_map(|c| match &c.raw {
-            RawContent::Text(t) => Some(t.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Deep module for extracting and normalizing textual content from arbitrary MCP tool results.
+///
+/// Interface:
+/// - Takes a slice of `Annotated<RawContent>`
+/// - Returns a clean, concatenated `String`
+///
+/// Implementation (Depth):
+/// - Extracts standard `RawContent::Text(t)`.
+/// - Extracts embedded text resources `RawContent::Resource(r)` (`TextResourceContents`).
+/// - Extracts resource links `RawContent::ResourceLink(l)` (`uri` / `name`).
+/// - Strips sampling fallback error headers (e.g. `[Sampling fell back to raw results...]`).
+pub fn extract_content_text(content: &[rmcp::model::Annotated<RawContent>]) -> String {
+    let mut parts = Vec::new();
+    for c in content {
+        match &c.raw {
+            RawContent::Text(t) => {
+                parts.push(clean_mcp_text(&t.text));
+            }
+            RawContent::Resource(r) => match &r.resource {
+                rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
+                    parts.push(clean_mcp_text(text));
+                }
+                rmcp::model::ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
+                    parts.push(format!(
+                        "[Binary Resource: {} ({})]",
+                        uri,
+                        mime_type.as_deref().unwrap_or("application/octet-stream")
+                    ));
+                }
+            },
+            RawContent::ResourceLink(l) => {
+                parts.push(format!("[Resource Link: {} ({})]", l.name, l.uri));
+            }
+            RawContent::Image(img) => {
+                parts.push(format!("[Image: {}]", img.mime_type));
+            }
+            RawContent::Audio(aud) => {
+                parts.push(format!("[Audio: {}]", aud.mime_type));
+            }
+        }
+    }
+    parts.join("\n")
+}
+
+/// Clean and normalize text from MCP tool results, stripping diagnostic fallback wrappers.
+pub fn clean_mcp_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.starts_with("[Sampling fell back to raw results") {
+        if let Some(pos) = trimmed.find("]\n\n") {
+            return trimmed[pos + 3..].trim().to_string();
+        } else if let Some(pos) = trimmed.find("]\n") {
+            return trimmed[pos + 2..].trim().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 // endregion: --- Content Extraction
@@ -836,5 +882,57 @@ mod tests {
         let slow = statuses.iter().find(|s| s.key == "slow_server").unwrap();
         assert_eq!(slow.status, "timeout");
         assert_eq!(slow.error.as_deref(), Some("Timed out after 10s"));
+    }
+
+    #[test]
+    fn test_extract_content_text_with_resources_and_sampling_cleanup() {
+        // -- Setup & Fixtures
+        use rmcp::model::{
+            Annotated, RawContent, RawEmbeddedResource, RawResource, ResourceContents,
+        };
+
+        let items = vec![
+            Annotated {
+                raw: RawContent::text(
+                    "[Sampling fell back to raw results due to error: MethodNotFound]\n\nResult row 1\nResult row 2",
+                ),
+                annotations: None,
+            },
+            Annotated {
+                raw: RawContent::Resource(RawEmbeddedResource {
+                    meta: None,
+                    resource: ResourceContents::text(
+                        "Attached document contents",
+                        "file:///doc.txt",
+                    ),
+                }),
+                annotations: None,
+            },
+            Annotated {
+                raw: RawContent::ResourceLink(RawResource {
+                    uri: "https://example.com/api".to_string(),
+                    name: "API Spec".to_string(),
+                    description: None,
+                    mime_type: None,
+                    meta: None,
+                    size: None,
+                    icons: None,
+                    title: None,
+                }),
+                annotations: None,
+            },
+        ];
+
+        // -- Exec
+        let text = extract_content_text(&items);
+
+        // -- Check
+        assert!(
+            !text.contains("Sampling fell back"),
+            "Sampling error headers must be stripped"
+        );
+        assert!(text.contains("Result row 1\nResult row 2"));
+        assert!(text.contains("Attached document contents"));
+        assert!(text.contains("[Resource Link: API Spec (https://example.com/api)]"));
     }
 }

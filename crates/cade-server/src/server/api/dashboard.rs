@@ -10,8 +10,9 @@
 //!   not interfere.
 //!
 //! Assets are embedded at compile time by `rust-embed` from the `cade-gui/dist/`
-//! directory (built by `trunk build`).  In debug builds, `rust-embed` reads
-//! from the filesystem so you can iterate on the GUI without recompiling.
+//! directory (built by `trunk build`). In development, `DashboardAssets` can
+//! also read the dist directory from disk so GUI edits do not require rebuilding
+//! `cade-server`.
 
 use axum::{
     extract::Path,
@@ -21,9 +22,67 @@ use axum::{
 
 use super::dashboard_assets::DashboardAssets;
 
+const CACHE_CONTROL_REVALIDATE: &str = "no-cache";
+const INDEX_ASSET: &str = "index.html";
+const SNIPPETS_PREFIX: &str = "snippets/";
+
+/// Deep module for serving the browser dashboard.
+///
+/// Interface: callers only choose `index()` or `asset(path)`. The implementation
+/// owns every route invariant: safe relative paths, `/snippets/*` fallback,
+/// MIME inference, cache policy, and conversion into Axum responses.
+pub(crate) struct DashboardSite;
+
+impl DashboardSite {
+    /// Serve the dashboard HTML shell.
+    pub(crate) fn index() -> Response {
+        Self::serve_asset(INDEX_ASSET, AssetLookup::Exact)
+    }
+
+    /// Serve a dashboard asset captured from `/dashboard/*path` or
+    /// `/snippets/*path`.
+    pub(crate) fn asset(path: &str) -> Response {
+        Self::serve_asset(path, AssetLookup::WithSnippetFallback)
+    }
+
+    fn serve_asset(path: &str, lookup: AssetLookup) -> Response {
+        let Some(path) = normalize_asset_path(path) else {
+            return not_found();
+        };
+
+        let asset = match lookup {
+            AssetLookup::Exact => DashboardAssets::get(path),
+            AssetLookup::WithSnippetFallback => DashboardAssets::get(path).or_else(|| {
+                path.strip_prefix(SNIPPETS_PREFIX)
+                    .is_none()
+                    .then(|| DashboardAssets::get(&format!("{SNIPPETS_PREFIX}{path}")))
+                    .flatten()
+            }),
+        };
+
+        match asset {
+            Some(file) => (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime_for(path)),
+                    (header::CACHE_CONTROL, CACHE_CONTROL_REVALIDATE),
+                ],
+                file.data.to_vec(),
+            )
+                .into_response(),
+            None => not_found(),
+        }
+    }
+}
+
+enum AssetLookup {
+    Exact,
+    WithSnippetFallback,
+}
+
 /// Infer a MIME type from a file extension.
 ///
-/// Covers the file types trunk produces.  Unknown extensions fall back to
+/// Covers the file types trunk produces. Unknown extensions fall back to
 /// `application/octet-stream`.
 fn mime_for(path: &str) -> &'static str {
     match path.rsplit('.').next() {
@@ -39,41 +98,39 @@ fn mime_for(path: &str) -> &'static str {
     }
 }
 
-/// Serve an embedded file or 404.
-fn serve_embedded(path: &str) -> Response {
-    match DashboardAssets::get(path) {
-        Some(file) => {
-            let mime = mime_for(path);
-            // GUI asset filenames are supplied by Trunk, but embedded release
-            // builds can retain an earlier filename across rebuilds. Revalidate
-            // every response so a browser never combines stale JS/WASM with the
-            // current dashboard index.
-            let cache = "no-cache";
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, cache)],
-                file.data.to_vec(),
-            )
-                .into_response()
-        }
-        None => (StatusCode::NOT_FOUND, "not found").into_response(),
+/// Return a safe dashboard asset path relative to `cade-gui/dist/`.
+///
+/// The public dashboard routes are unauthenticated, so path traversal and path
+/// syntax from other platforms must be rejected before reaching the asset layer.
+fn normalize_asset_path(path: &str) -> Option<&str> {
+    let path = path.trim_start_matches("./");
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.contains('\0')
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        None
+    } else {
+        Some(path)
     }
+}
+
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 /// `GET /dashboard` — serves the embedded `index.html`.
 pub async fn get_dashboard() -> Response {
-    serve_embedded("index.html")
+    DashboardSite::index()
 }
 
-/// `GET /dashboard/*path` or `GET /snippets/*path` — serves JS, WASM, snippets, and other trunk-built assets.
+/// `GET /dashboard/*path` or `GET /snippets/*path` — serves JS, WASM,
+/// snippets, and other trunk-built assets.
 pub async fn get_dashboard_asset(Path(path): Path<String>) -> Response {
-    let res = serve_embedded(&path);
-    if res.status() == StatusCode::NOT_FOUND {
-        let with_snippets = format!("snippets/{path}");
-        serve_embedded(&with_snippets)
-    } else {
-        res
-    }
+    DashboardSite::asset(&path)
 }
 
 #[cfg(test)]

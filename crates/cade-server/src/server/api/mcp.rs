@@ -25,6 +25,8 @@ pub struct CallMcpToolRequest {
     pub name: String,
     #[serde(default)]
     pub arguments: Value,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
 }
 
 /// Response payload for `POST /v1/mcp/call`.
@@ -99,7 +101,14 @@ pub async fn call_mcp_tool(
         ));
     }
 
-    match state.mcp.call_tool(&body.name, &body.arguments).await {
+    let cwd = match &body.workspace_dir {
+        Some(dir) if !dir.trim().is_empty() => std::path::PathBuf::from(dir),
+        _ => std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    };
+    let normalized_args =
+        cade_agent::tools::normalize_mcp_arguments(&body.name, &body.arguments, &cwd);
+
+    match state.mcp.call_tool(&body.name, &normalized_args).await {
         Some(Ok((output, is_error, ui_resource_uri))) => Ok(Json(CallMcpToolResponse {
             output,
             is_error,
@@ -292,5 +301,28 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_call_mcp_tool_normalizes_relative_paths() {
+        // -- Setup & Fixtures
+        let state = test_state();
+        let app = router(state);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/mcp/call")
+            .header("Authorization", "Bearer test_tok")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"name":"missing__tool","arguments":{"path":"."},"workspace_dir":"/custom/workspace"}"#,
+            ))
+            .unwrap();
+
+        // -- Exec
+        let resp = app.oneshot(req).await.unwrap();
+
+        // -- Check
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

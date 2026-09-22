@@ -33,7 +33,10 @@ pub fn ApiKeysView() -> Element {
                         &st,
                         ToastLevel::Success,
                         "Connection Verified",
-                        format!("Successfully authenticated. {} agents available.", agents.len()),
+                        format!(
+                            "Successfully authenticated. {} agents available.",
+                            agents.len()
+                        ),
                     );
                 }
                 Err(e) => {

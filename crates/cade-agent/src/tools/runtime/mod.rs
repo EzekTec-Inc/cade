@@ -239,17 +239,23 @@ impl ToolRuntime {
 
             // -- Everything else: native Rust tools + MCP (local or remote server)
             _ => {
+                let normalized_args =
+                    crate::tools::normalize_mcp_arguments(canonical, args, &self.cwd);
                 let r = dispatch(
                     tool_call_id.clone(),
                     canonical,
-                    args,
+                    &normalized_args,
                     &self.mcp,
                     self.allowed_paths.as_deref(),
                 )
                 .await;
                 if r.is_error && r.output.starts_with("Unknown tool:") {
                     // Try remote server-hosted MCP
-                    match self.storage.call_mcp_tool(canonical, args).await {
+                    match self
+                        .storage
+                        .call_mcp_tool(canonical, &normalized_args)
+                        .await
+                    {
                         Ok((out, err_flag, uri)) => {
                             ui_resource_uri = uri;
                             (out, err_flag)

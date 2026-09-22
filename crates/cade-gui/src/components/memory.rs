@@ -94,7 +94,12 @@ pub fn MemoryBlocksView() -> Element {
         spawn(async move {
             match api_client.create_knowledge_edge(&ent, &rel, &tgt).await {
                 Ok(_) => {
-                    add_toast(&st, ToastLevel::Success, "Knowledge Edge Created", format!("{ent} ➔ {rel} ➔ {tgt}"));
+                    add_toast(
+                        &st,
+                        ToastLevel::Success,
+                        "Knowledge Edge Created",
+                        format!("{ent} ➔ {rel} ➔ {tgt}"),
+                    );
                     e_input.set(String::new());
                     r_input.set(String::new());
                     t_input.set(String::new());
@@ -119,7 +124,12 @@ pub fn MemoryBlocksView() -> Element {
 
         spawn(async move {
             match api_client.delete_knowledge_edge(edge_id).await {
-                Ok(_) => add_toast(&st, ToastLevel::Info, "Knowledge Edge Removed", format!("Edge #{edge_id} deleted")),
+                Ok(_) => add_toast(
+                    &st,
+                    ToastLevel::Info,
+                    "Knowledge Edge Removed",
+                    format!("Edge #{edge_id} deleted"),
+                ),
                 Err(e) => {
                     add_toast(&st, ToastLevel::Error, "Failed to delete edge", e);
                     if let Ok(updated) = api_client.list_knowledge_edges(None, None).await {

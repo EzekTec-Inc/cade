@@ -418,7 +418,6 @@ pub async fn list_mcp_servers(api_key: &str) -> Result<Vec<serde_json::Value>, S
     Ok(arr)
 }
 
-
 /// List the registered tool catalog, including locally registered and mesh-backed tools.
 pub async fn list_registered_tools(api_key: &str) -> Result<Vec<serde_json::Value>, String> {
     let body = api_request("GET", "/v1/tools", None, api_key).await?;
@@ -473,7 +472,13 @@ pub async fn create_knowledge_edge(
         "relation": relation,
         "target": target,
     });
-    let body = api_request("POST", "/v1/knowledge/edges", Some(&payload.to_string()), api_key).await?;
+    let body = api_request(
+        "POST",
+        "/v1/knowledge/edges",
+        Some(&payload.to_string()),
+        api_key,
+    )
+    .await?;
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 
@@ -661,7 +666,6 @@ impl CadeApiClient {
         list_mcp_servers(&self.api_key).await
     }
 
-
     /// List every tool registered in CADE's database and capability mesh.
     pub async fn list_registered_tools(&self) -> Result<Vec<serde_json::Value>, String> {
         list_registered_tools(&self.api_key).await
@@ -692,7 +696,9 @@ impl CadeApiClient {
     }
 
     /// Fetch the complete multi-agent swarm topology, team hierarchies, and subagents.
-    pub async fn list_swarm_topology(&self) -> Result<cade_api_types::SwarmTopologyResponse, String> {
+    pub async fn list_swarm_topology(
+        &self,
+    ) -> Result<cade_api_types::SwarmTopologyResponse, String> {
         list_swarm_topology(&self.api_key).await
     }
 

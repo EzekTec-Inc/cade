@@ -733,8 +733,16 @@ impl HttpTransport {
         struct CallRequest<'a> {
             name: &'a str,
             arguments: &'a serde_json::Value,
+            workspace_dir: Option<String>,
         }
-        let body = CallRequest { name, arguments };
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
+        let body = CallRequest {
+            name,
+            arguments,
+            workspace_dir: cwd,
+        };
         let resp = self
             .client
             .post(self.url("/mcp/call"))

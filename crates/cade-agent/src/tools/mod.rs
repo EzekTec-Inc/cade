@@ -11,6 +11,7 @@ pub mod fs;
 pub mod git_checkpoint;
 pub mod isolation;
 pub mod manager;
+pub mod mcp_normalize;
 pub mod memory;
 pub mod meta;
 pub mod mutation_observer;
@@ -25,6 +26,7 @@ pub use isolation::IsolatedWorkspace;
 pub use manager::{
     ToolResult, all_schemas, dispatch, is_mcp_write_tool, schemas_for_names, schemas_for_toolset,
 };
+pub use mcp_normalize::normalize_mcp_arguments;
 pub use meta::{all_meta_schemas, register_meta_tools};
 pub use mutation_observer::{
     ChannelMutationObserver, FileMutationEvent, FileMutationObserver, MutationReceiver,

@@ -155,7 +155,8 @@ pub fn ArenaView() -> Element {
         }
         lns_sig.set(init_lanes);
 
-        let remaining = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(active_lanes.len()));
+        let remaining =
+            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(active_lanes.len()));
         for lane in active_lanes {
             let api_client = api.clone();
             let aid = lane.agent_id.clone();
