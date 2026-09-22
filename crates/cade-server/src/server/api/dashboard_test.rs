@@ -268,6 +268,23 @@ async fn snippets_fallback_route_returns_200() {
 }
 
 #[tokio::test]
+async fn dashboard_tailwind_asset_served_locally() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard/tailwind.js")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(content_type, "text/javascript");
+}
+
+#[tokio::test]
 async fn dashboard_assets_dynamic_dev_loading() {
     // -- Setup & Fixtures
     let tmp = tempfile::tempdir().ok();
