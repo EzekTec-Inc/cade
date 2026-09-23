@@ -297,6 +297,10 @@ pub async fn run_agent(
         Ok(input) => input,
         Err(response) => return response,
     };
+    let permission_mode = body
+        .get("permission_mode")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     let runtime = runtime::ServerAgentRuntime::new(state);
     let handle = runtime
@@ -304,6 +308,7 @@ pub async fn run_agent(
             agent_id,
             conversation_id,
             input,
+            permission_mode,
         })
         .await;
 
@@ -344,6 +349,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         run_id: run_id2,
         theme_command: theme_cmd,
         input,
+        permission_mode,
     } = request;
     let send_raw = |json_string: String| {
         let database = state2.db.clone();
@@ -867,10 +873,13 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         // avoiding redundant Arc::new + AppState clones per tool call.
         let turn_results = capability_executor
             .execute(
-                agent_id2.clone(),
-                conv_id2.clone(),
-                run_id2.clone(),
-                input.clone(),
+                runtime::TurnExecutionInput {
+                    agent_id: agent_id2.clone(),
+                    conversation_id: conv_id2.clone(),
+                    run_id: run_id2.clone(),
+                    input: input.clone(),
+                    permission_mode: permission_mode.clone(),
+                },
                 tool_calls,
                 tx.clone(),
             )

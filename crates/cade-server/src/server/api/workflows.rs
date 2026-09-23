@@ -294,6 +294,7 @@ pub async fn dispatch_workflow(
             agent_id: agent_id.clone(),
             conversation_id: None,
             input: prompt,
+            permission_mode: None,
         })
         .await;
     let execution_id = handle.run_id.clone();

@@ -208,6 +208,44 @@ impl HttpTransport {
             .await
     }
 
+    /// Start a server-owned run with an optional permission mode override and translate
+    /// a presentation cancellation flag into the runtime's durable cancellation command.
+    pub async fn start_run_cancellable_with_mode<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        conversation_id: Option<&str>,
+        permission_mode: Option<&str>,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let mut body = json!({ "input": input });
+        if let Some(conversation_id) = conversation_id {
+            body["conversation_id"] = conversation_id.into();
+        }
+        if let Some(permission_mode) = permission_mode {
+            body["permission_mode"] = permission_mode.into();
+        }
+        self.consume_run_stream(
+            EventSource::new(
+                self.client
+                    .post(self.url(&format!("/agents/{agent_id}/run")))
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body),
+            )
+            .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
+            agent_id,
+            conversation_id,
+            Vec::new(),
+            on_event,
+            cancel,
+        )
+        .await
+    }
+
     /// Start a server-owned run and translate a presentation cancellation flag
     /// into the runtime's durable cancellation command.
     pub async fn start_run_cancellable<F>(
@@ -221,21 +259,11 @@ impl HttpTransport {
     where
         F: Fn(&CadeMessage),
     {
-        let mut body = json!({ "input": input });
-        if let Some(conversation_id) = conversation_id {
-            body["conversation_id"] = conversation_id.into();
-        }
-        self.consume_run_stream(
-            EventSource::new(
-                self.client
-                    .post(self.url(&format!("/agents/{agent_id}/run")))
-                    .header("Authorization", format!("Bearer {}", self.api_key))
-                    .json(&body),
-            )
-            .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
+        self.start_run_cancellable_with_mode(
             agent_id,
+            input,
             conversation_id,
-            Vec::new(),
+            None,
             on_event,
             cancel,
         )

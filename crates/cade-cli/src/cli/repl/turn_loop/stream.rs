@@ -380,21 +380,78 @@ impl Repl {
                             let _ = app.draw();
                         }
                     }
-                    "approval_requested" => {
-                        let subagent = msg.data["subagent_id"].as_str().unwrap_or("subagent");
+                    "approval_requested" | "approval_required" => {
+                        let id = msg.data["id"].as_str().unwrap_or("");
                         let tool = msg.data["tool_name"].as_str().unwrap_or("tool");
-                        let text = format!(
-                            "⚠️ Background Subagent [{}] requests permission to run {}. Type /approvals to review.",
-                            subagent, tool
-                        );
+                        let reason = msg.data["reason"].as_str().unwrap_or("requires permission");
+                        let subagent = msg.data.get("subagent_id").and_then(|v| v.as_str());
+
+                        let text = if let Some(subagent_id) = subagent {
+                            format!(
+                                "⚠️ Background Subagent [{}] requests permission to run {}. Type /approvals to review.",
+                                subagent_id, tool
+                            )
+                        } else {
+                            format!(
+                                "⚠️ Permission Required for tool '{}': {}\n  Type /approve {} or /deny {}",
+                                tool, reason, id, id
+                            )
+                        };
+
                         let mut app = app_arc.lock();
                         app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
                         let _ = app.push(RenderLine::SystemMsg(text.clone()));
+                        if !id.is_empty() {
+                            app.set_last_status(Some(format!(
+                                "⚠️ Permission required: /approve {id} or /deny {id}"
+                            )));
+                        }
                         app.notify_if_unfocused(
                             cade_tui::app::notifier::AttentionCue::PermissionPrompt,
                             "Permission Required",
                             &text,
                         );
+                        app.draw_dirty = true;
+                        let _ = app.draw();
+                        // Ring terminal bell
+                        print!("\x07");
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
+                    "question_required" | "question_requested" => {
+                        let id = msg.data["id"].as_str().unwrap_or("").to_string();
+                        let questions_val = msg
+                            .data
+                            .get("questions")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+                        let text = format!(
+                            "❓ Agent has a clarifying question for you (ID: {id}). Type /approve {id} to answer."
+                        );
+
+                        let mut app = app_arc.lock();
+                        app.show_toast(text.clone(), crate::ui::ToastLevel::Info);
+                        let _ = app.push(RenderLine::SystemMsg(text.clone()));
+                        if let Some(arr) = questions_val.as_array() {
+                            for q in arr {
+                                if let Some(q_text) = q.get("question").and_then(|v| v.as_str()) {
+                                    let _ =
+                                        app.push(RenderLine::SystemMsg(format!("  • {q_text}")));
+                                }
+                            }
+                        }
+                        if !id.is_empty() {
+                            app.set_last_status(Some(format!(
+                                "❓ Question pending: /approve {id} or /deny {id}"
+                            )));
+                        }
+                        app.notify_if_unfocused(
+                            cade_tui::app::notifier::AttentionCue::PermissionPrompt,
+                            "Clarifying Question",
+                            &text,
+                        );
+                        app.draw_dirty = true;
+                        let _ = app.draw();
                         // Ring terminal bell
                         print!("\x07");
                         use std::io::Write;
@@ -527,9 +584,17 @@ impl Repl {
             tool_output,
             ephemeral,
         );
+        let mode_str = self.permissions.mode().to_string();
         let messages = match self
             .client
-            .start_run_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel))
+            .start_run_cancellable_with_mode(
+                &agent_id,
+                input,
+                conv_ref,
+                Some(&mode_str),
+                on_event,
+                Some(cancel),
+            )
             .await
         {
             Ok(messages) => messages,

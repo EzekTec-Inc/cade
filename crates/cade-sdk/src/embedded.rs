@@ -816,6 +816,7 @@ impl EmbeddedSession {
                 agent_id: self.agent_id.clone(),
                 conversation_id: Some(conversation_id),
                 input: text.to_string(),
+                permission_mode: None,
             })
             .await;
 

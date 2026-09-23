@@ -30,6 +30,28 @@ pub struct AskQuestion {
     pub multi_select: bool,
 }
 
+// -- Interaction Delegate
+
+#[async_trait::async_trait]
+pub trait InteractionDelegate: Send + Sync {
+    async fn ask_question(&self, questions: &[AskQuestion]) -> Result<HashMap<String, String>>;
+}
+
+pub struct NonInteractiveDelegate;
+
+#[async_trait::async_trait]
+impl InteractionDelegate for NonInteractiveDelegate {
+    async fn ask_question(&self, questions: &[AskQuestion]) -> Result<HashMap<String, String>> {
+        let mut answers = HashMap::new();
+        for q in questions {
+            if let Some(opt) = q.options.first() {
+                answers.insert(q.header.clone(), opt.label.clone());
+            }
+        }
+        Ok(answers)
+    }
+}
+
 // -- AskUserQuestionTool
 
 pub struct AskUserQuestionTool;

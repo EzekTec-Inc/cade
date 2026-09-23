@@ -30,7 +30,17 @@ pub async fn action_approval(
     Json(payload): Json<ActionPayload>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let status = match payload.action.as_str() {
-        "approve" => "approved".to_string(),
+        "approve" => {
+            if let Some(fb) = &payload.feedback {
+                if !fb.trim().is_empty() {
+                    format!("approved:{}", fb.trim())
+                } else {
+                    "approved".to_string()
+                }
+            } else {
+                "approved".to_string()
+            }
+        }
         "deny" => {
             if let Some(fb) = &payload.feedback {
                 if !fb.trim().is_empty() {

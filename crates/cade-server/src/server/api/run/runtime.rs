@@ -36,15 +36,22 @@ pub(crate) trait ContextBuilder: Send + Sync {
     ) -> Result<RunContext, String>;
 }
 
+/// Execution parameters for one turn's tool execution.
+#[derive(Debug, Clone)]
+pub(crate) struct TurnExecutionInput {
+    pub agent_id: String,
+    pub conversation_id: Option<String>,
+    pub run_id: String,
+    pub input: String,
+    pub permission_mode: Option<String>,
+}
+
 /// Deep module used by the runtime to execute all tool calls for one turn.
 #[async_trait]
 pub(crate) trait CapabilityExecutor: Send + Sync {
     async fn execute(
         &self,
-        agent_id: String,
-        conversation_id: Option<String>,
-        run_id: String,
-        input: String,
+        input: TurnExecutionInput,
         tool_calls: Vec<LlmToolCall>,
         events: SseTx,
     ) -> Vec<(ToolResult, Value)>;
@@ -82,23 +89,11 @@ struct ServerCapabilityExecutor {
 impl CapabilityExecutor for ServerCapabilityExecutor {
     async fn execute(
         &self,
-        agent_id: String,
-        conversation_id: Option<String>,
-        run_id: String,
-        input: String,
+        input: TurnExecutionInput,
         tool_calls: Vec<LlmToolCall>,
         events: SseTx,
     ) -> Vec<(ToolResult, Value)> {
-        execution::execute_turn_tools(
-            self.state.clone(),
-            agent_id,
-            conversation_id,
-            run_id,
-            input,
-            tool_calls,
-            events,
-        )
-        .await
+        execution::execute_turn_tools(self.state.clone(), input, tool_calls, events).await
     }
 }
 
@@ -108,6 +103,7 @@ pub struct RunRequest {
     pub agent_id: String,
     pub conversation_id: Option<String>,
     pub input: String,
+    pub permission_mode: Option<String>,
 }
 
 /// Internal loop input derived from an accepted runtime request.
@@ -117,6 +113,7 @@ pub(crate) struct LoopRequest {
     pub run_id: String,
     pub theme_command: Option<String>,
     pub input: String,
+    pub permission_mode: Option<String>,
 }
 
 /// Ordered run event envelope emitted by the canonical runtime.
@@ -221,6 +218,7 @@ impl ServerAgentRuntime {
                 run_id: run_id.clone(),
                 theme_command: theme_cmd,
                 input: request.input,
+                permission_mode: request.permission_mode,
             },
             events,
             self.context_builder.clone(),

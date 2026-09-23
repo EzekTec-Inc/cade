@@ -244,10 +244,7 @@ async fn cancelled_run_persists_a_terminal_cancelled_event() -> Result<(), Strin
     impl runtime::CapabilityExecutor for NeverCapabilityExecutor {
         async fn execute(
             &self,
-            _agent_id: String,
-            _conversation_id: Option<String>,
-            _run_id: String,
-            _input: String,
+            _input: runtime::TurnExecutionInput,
             _tool_calls: Vec<LlmToolCall>,
             _events: SseTx,
         ) -> Vec<(cade_agent::tools::manager::ToolResult, Value)> {
@@ -286,6 +283,7 @@ async fn cancelled_run_persists_a_terminal_cancelled_event() -> Result<(), Strin
             run_id: run.id.clone(),
             theme_command: None,
             input: "ignored".to_owned(),
+            permission_mode: None,
         },
         sender,
         std::sync::Arc::new(NeverContextBuilder),
@@ -1414,10 +1412,7 @@ mod runtime_contract_tests {
     impl CapabilityExecutor for RecordingCapabilityExecutor {
         async fn execute(
             &self,
-            _agent_id: String,
-            _conversation_id: Option<String>,
-            _run_id: String,
-            _input: String,
+            _input: runtime::TurnExecutionInput,
             _tool_calls: Vec<LlmToolCall>,
             _events: SseTx,
         ) -> Vec<(ToolResult, Value)> {
@@ -1503,10 +1498,7 @@ mod runtime_contract_tests {
     impl CapabilityExecutor for ToolResultCapabilityExecutor {
         async fn execute(
             &self,
-            _agent_id: String,
-            _conversation_id: Option<String>,
-            _run_id: String,
-            _input: String,
+            _input: runtime::TurnExecutionInput,
             tool_calls: Vec<LlmToolCall>,
             _events: SseTx,
         ) -> Vec<(ToolResult, Value)> {
@@ -1567,6 +1559,7 @@ mod runtime_contract_tests {
                 agent_id: "agent-capability".to_owned(),
                 conversation_id: None,
                 input: "use a tool".to_owned(),
+                permission_mode: None,
             })
             .await;
         while handle.events.recv().await.is_some() {}
@@ -1682,6 +1675,7 @@ mod runtime_contract_tests {
                 agent_id: agent_id.to_owned(),
                 conversation_id: None,
                 input: "repeat forever".to_owned(),
+                permission_mode: None,
             })
             .await;
         let mut events = handle.events;
@@ -1784,6 +1778,7 @@ mod runtime_contract_tests {
                 agent_id: "agent-context".to_owned(),
                 conversation_id: None,
                 input: "hello".to_owned(),
+                permission_mode: None,
             })
             .await;
         while handle.events.recv().await.is_some() {}
@@ -1823,6 +1818,7 @@ mod runtime_contract_tests {
                 agent_id: "agent-x".to_owned(),
                 conversation_id: None,
                 input: "hello".to_owned(),
+                permission_mode: None,
             })
             .await;
 
@@ -1963,10 +1959,13 @@ mod advanced_execution_tests {
 
         let results = execute_turn_tools(
             state,
-            "test-agent".to_string(),
-            Some("test-conv".to_string()),
-            "run-test-sequence".to_string(),
-            "read Cargo.toml and run a sequence".to_string(),
+            runtime::TurnExecutionInput {
+                agent_id: "test-agent".to_string(),
+                conversation_id: Some("test-conv".to_string()),
+                run_id: "run-test-sequence".to_string(),
+                input: "read Cargo.toml and run a sequence".to_string(),
+                permission_mode: None,
+            },
             tool_calls,
             tx,
         )
@@ -2007,5 +2006,211 @@ mod advanced_execution_tests {
         assert_eq!(TeamMode::from_str("tasks"), Some(TeamMode::Tasks));
         assert_eq!(TeamMode::from_str("coordinate"), Some(TeamMode::Coordinate));
         assert_eq!(TeamMode::from_str("broadcast"), Some(TeamMode::Broadcast));
+    }
+
+    #[tokio::test]
+    async fn test_turn_tools_enforces_plan_mode_and_denies_writes() {
+        // -- Setup & Fixtures
+        let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let tool_calls = vec![LlmToolCall {
+            id: "tc-write-plan".to_string(),
+            name: "write_file".to_string(),
+            arguments: json!({
+                "path": "file.txt",
+                "content": "should be blocked in plan mode"
+            }),
+            thought_signature: None,
+        }];
+
+        // -- Exec: Execute with permission_mode: Some("plan".to_string())
+        let results = execute_turn_tools(
+            state,
+            runtime::TurnExecutionInput {
+                agent_id: "agent-plan".to_string(),
+                conversation_id: None,
+                run_id: "run-plan-mode".to_string(),
+                input: "try writing in plan mode".to_string(),
+                permission_mode: Some("plan".to_string()),
+            },
+            tool_calls,
+            tx,
+        )
+        .await;
+
+        // -- Check
+        assert_eq!(results.len(), 1);
+        let (result, _) = &results[0];
+        assert!(result.is_error, "write_file must be blocked in Plan mode");
+        assert!(
+            result.output.contains("Blocked")
+                || result.output.contains("permission")
+                || result.output.contains("plan")
+                || result.output.contains("Plan"),
+            "Error output must explain why write_file was blocked: {}",
+            result.output
+        );
+    }
+
+    #[tokio::test]
+    async fn test_turn_tools_enforces_default_mode_execution() {
+        // -- Setup & Fixtures
+        let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let tool_calls = vec![LlmToolCall {
+            id: "tc-default-mode".to_string(),
+            name: "read_file".to_string(),
+            arguments: json!({
+                "path": "Cargo.toml",
+            }),
+            thought_signature: None,
+        }];
+
+        // -- Exec: Execute with permission_mode: Some("default".to_string())
+        let results = execute_turn_tools(
+            state,
+            runtime::TurnExecutionInput {
+                agent_id: "agent-default".to_string(),
+                conversation_id: None,
+                run_id: "run-default-mode".to_string(),
+                input: "read in default mode".to_string(),
+                permission_mode: Some("default".to_string()),
+            },
+            tool_calls,
+            tx,
+        )
+        .await;
+
+        // -- Check: Read-only tool proceeds in Default mode
+        assert_eq!(results.len(), 1);
+        let (result, _) = &results[0];
+        assert!(
+            !result.is_error,
+            "read_file should succeed in Default mode: {}",
+            result.output
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sse_approval_delegate_yield_and_approve() {
+        // -- Setup & Fixtures
+        use crate::server::api::run::execution::SseApprovalDelegate;
+        use cade_agent::tools::ApprovalDelegate;
+
+        let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+        let delegate = SseApprovalDelegate {
+            db: state.db.clone(),
+            agent_id: "agent-approval-test".to_string(),
+            tx,
+        };
+
+        // Spawn approval request in background
+        let handle = tokio::spawn(async move {
+            delegate
+                .request_approval(
+                    "tc-approve-1",
+                    "bash",
+                    &json!({ "command": "cargo build" }),
+                    "requires confirmation",
+                )
+                .await
+        });
+
+        // -- Check: Active turn receives approval_required SSE event
+        let event = rx
+            .recv()
+            .await
+            .expect("must receive approval_required SSE event");
+        let env = event.expect("infallible event envelope");
+        let payload: Value = serde_json::from_str(&env.data).expect("valid json");
+        assert_eq!(payload["type"], "approval_required");
+        let approval_id = payload["id"].as_str().expect("id must be string");
+
+        // -- Exec: User approves the request via database status change (same as POST /v1/approvals/:id/action)
+        cade_store::sqlite::set_approval_status(&state.db, approval_id, "approved")
+            .expect("must set approval status");
+
+        // -- Check: Delegate unblocks and returns Ok(true)
+        let result = handle
+            .await
+            .expect("task must join")
+            .expect("approval result");
+        assert!(result, "approved request must return Ok(true)");
+    }
+
+    #[tokio::test]
+    async fn test_ask_user_question_yields_event_and_resumes_with_answers() {
+        // -- Setup & Fixtures
+        let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+        let tool_calls = vec![LlmToolCall {
+            id: "tc-question-1".to_string(),
+            name: "ask_user_question".to_string(),
+            arguments: json!({
+                "questions": [
+                    {
+                        "header": "Database",
+                        "question": "Which database engine should we adopt?",
+                        "options": [
+                            { "label": "PostgreSQL", "description": "Relational DB" },
+                            { "label": "SQLite", "description": "Embedded DB" }
+                        ],
+                        "multiSelect": false
+                    }
+                ]
+            }),
+            thought_signature: None,
+        }];
+
+        let state_c = state.clone();
+        // -- Exec: Execute turn tool in background
+        let handle = tokio::spawn(async move {
+            execute_turn_tools(
+                state_c,
+                runtime::TurnExecutionInput {
+                    agent_id: "agent-question-test".to_string(),
+                    conversation_id: None,
+                    run_id: "run-question".to_string(),
+                    input: "ask user".to_string(),
+                    permission_mode: None,
+                },
+                tool_calls,
+                tx,
+            )
+            .await
+        });
+
+        // -- Check: Active turn receives question_required SSE event
+        let event = rx
+            .recv()
+            .await
+            .expect("must receive question_required SSE event");
+        let env = event.expect("infallible event envelope");
+        let payload: Value = serde_json::from_str(&env.data).expect("valid json");
+        assert_eq!(payload["type"], "question_required");
+        let question_id = payload["id"].as_str().expect("id must be string");
+
+        // -- Exec: User answers the question via status update with feedback
+        let answer_feedback = "approved:{\"Database\":\"PostgreSQL\"}";
+        cade_store::sqlite::set_approval_status(&state.db, question_id, answer_feedback)
+            .expect("must set approval status with answers");
+
+        // -- Check: Tool execution unblocks and returns formatted answer
+        let results = handle.await.expect("task must join");
+        assert_eq!(results.len(), 1);
+        let (result, _) = &results[0];
+        assert!(!result.is_error, "ask_user_question should succeed");
+        assert!(
+            result.output.contains("PostgreSQL"),
+            "tool output must contain the user's selected answer: {}",
+            result.output
+        );
     }
 }

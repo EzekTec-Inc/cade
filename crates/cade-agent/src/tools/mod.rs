@@ -21,7 +21,9 @@ pub mod runtime;
 pub mod search;
 pub mod traits;
 
-pub use ask::AskUserQuestionTool;
+pub use ask::{
+    AskOption, AskQuestion, AskUserQuestionTool, InteractionDelegate, NonInteractiveDelegate,
+};
 pub use isolation::IsolatedWorkspace;
 pub use manager::{
     ToolResult, all_schemas, dispatch, is_mcp_write_tool, schemas_for_names, schemas_for_toolset,

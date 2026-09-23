@@ -151,16 +151,249 @@ async fn emit_tool_progress(
         .await;
 }
 
-pub(super) async fn execute_turn_tools(
+fn parse_permission_mode(mode_str: &str) -> Option<cade_core::permissions::PermissionMode> {
+    match mode_str.to_ascii_lowercase().replace('-', "_").as_str() {
+        "default" => Some(cade_core::permissions::PermissionMode::Default),
+        "accept_edits" | "acceptedits" => Some(cade_core::permissions::PermissionMode::AcceptEdits),
+        "plan" => Some(cade_core::permissions::PermissionMode::Plan),
+        "bypass_permissions" | "bypasspermissions" | "bypass" => {
+            Some(cade_core::permissions::PermissionMode::BypassPermissions)
+        }
+        _ => None,
+    }
+}
+
+pub(super) struct SseApprovalDelegate {
+    pub(super) db: cade_store::sqlite::Db,
+    pub(super) agent_id: String,
+    pub(super) tx: SseTx,
+}
+
+#[async_trait::async_trait]
+impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
+    async fn request_approval(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &Value,
+        reason: &str,
+    ) -> cade_agent::Result<bool> {
+        let approval_id = format!("app-{}", uuid::Uuid::new_v4());
+        let args_str = arguments.to_string();
+
+        if let Err(e) = cade_store::sqlite::create_pending_approval(
+            &self.db,
+            &approval_id,
+            &self.agent_id,
+            None,
+            tool_name,
+            &args_str,
+        ) {
+            tracing::warn!("Failed to create pending approval in database: {e}");
+            return Ok(false);
+        }
+
+        crate::server::api::agents::publish_global_event(
+            Some(&self.db),
+            "approval_required",
+            json!({
+                "id": approval_id,
+                "agent_id": self.agent_id,
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "reason": reason,
+            }),
+        );
+
+        let event_payload = json!({
+            "type": "approval_required",
+            "id": approval_id,
+            "agent_id": self.agent_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "reason": reason,
+        });
+        let _ = self
+            .tx
+            .send(Ok(super::runtime::RunEventEnvelope {
+                data: event_payload.to_string(),
+            }))
+            .await;
+
+        let timeout_secs = 600;
+        let start_time = std::time::Instant::now();
+        let mut poll_interval = std::time::Duration::from_millis(150);
+
+        loop {
+            if start_time.elapsed().as_secs() > timeout_secs {
+                return Err(cade_agent::Error::custom(
+                    "Approval request timed out after 10 minutes.",
+                ));
+            }
+
+            if let Ok(Some(status)) =
+                cade_store::sqlite::get_approval_status(&self.db, &approval_id)
+            {
+                if status == "approved" {
+                    return Ok(true);
+                } else if status == "denied" {
+                    return Ok(false);
+                } else if let Some(feedback) = status.strip_prefix("denied:") {
+                    return Err(cade_agent::Error::custom(format!(
+                        "Permission Denied: {feedback}"
+                    )));
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+            poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
+        }
+    }
+}
+
+async fn handle_ask_user_question(
     state: AppState,
     agent_id: String,
-    _conv_id: Option<String>,
-    run_id: String,
-    _input: String,
+    tool_call_id: String,
+    arguments: Value,
+    tx: SseTx,
+) -> ToolResult {
+    use cade_agent::tools::InteractionDelegate;
+
+    let questions = match cade_agent::tools::AskUserQuestionTool::parse_questions(&arguments) {
+        Ok(q) => q,
+        Err(e) => {
+            return ToolResult {
+                tool_call_id,
+                tool_name: "ask_user_question".to_string(),
+                output: format!("Invalid question parameters: {e}"),
+                is_error: true,
+                ui_resource_uri: None,
+            };
+        }
+    };
+
+    let question_id = format!("q-{}", uuid::Uuid::new_v4());
+    let args_str = arguments.to_string();
+
+    if let Err(e) = cade_store::sqlite::create_pending_approval(
+        &state.db,
+        &question_id,
+        &agent_id,
+        None,
+        "ask_user_question",
+        &args_str,
+    ) {
+        tracing::warn!("Failed to create pending question in database: {e}");
+        return ToolResult {
+            tool_call_id,
+            tool_name: "ask_user_question".to_string(),
+            output: format!("Database error: {e}"),
+            is_error: true,
+            ui_resource_uri: None,
+        };
+    }
+
+    crate::server::api::agents::publish_global_event(
+        Some(&state.db),
+        "question_required",
+        json!({
+            "id": question_id,
+            "agent_id": agent_id,
+            "tool_call_id": tool_call_id,
+            "questions": arguments.get("questions").unwrap_or(&json!([])),
+        }),
+    );
+
+    let event_payload = json!({
+        "type": "question_required",
+        "id": question_id,
+        "agent_id": agent_id,
+        "tool_call_id": tool_call_id,
+        "questions": arguments.get("questions").unwrap_or(&json!([])),
+    });
+    let _ = tx
+        .send(Ok(super::runtime::RunEventEnvelope {
+            data: event_payload.to_string(),
+        }))
+        .await;
+
+    let timeout_secs = 600;
+    let start_time = std::time::Instant::now();
+    let mut poll_interval = std::time::Duration::from_millis(150);
+
+    loop {
+        if start_time.elapsed().as_secs() > timeout_secs {
+            return ToolResult {
+                tool_call_id,
+                tool_name: "ask_user_question".to_string(),
+                output: "User did not answer questions (timed out after 10 minutes).".to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            };
+        }
+
+        if let Ok(Some(status)) = cade_store::sqlite::get_approval_status(&state.db, &question_id) {
+            if status == "approved" {
+                let default_answer = cade_agent::tools::NonInteractiveDelegate;
+                let answers = default_answer
+                    .ask_question(&questions)
+                    .await
+                    .unwrap_or_default();
+                let output = cade_agent::tools::AskUserQuestionTool::format_result(&answers);
+                return ToolResult {
+                    tool_call_id,
+                    tool_name: "ask_user_question".to_string(),
+                    output,
+                    is_error: false,
+                    ui_resource_uri: None,
+                };
+            } else if let Some(feedback) = status.strip_prefix("approved:") {
+                let output = if let Ok(parsed) =
+                    serde_json::from_str::<std::collections::HashMap<String, String>>(feedback)
+                {
+                    cade_agent::tools::AskUserQuestionTool::format_result(&parsed)
+                } else {
+                    format!(
+                        "User has answered your questions: {feedback}. You can now continue with the user's answers in mind."
+                    )
+                };
+                return ToolResult {
+                    tool_call_id,
+                    tool_name: "ask_user_question".to_string(),
+                    output,
+                    is_error: false,
+                    ui_resource_uri: None,
+                };
+            } else if status == "denied" || status.starts_with("denied:") {
+                return ToolResult {
+                    tool_call_id,
+                    tool_name: "ask_user_question".to_string(),
+                    output: "User cancelled the question prompt without answering.".to_string(),
+                    is_error: true,
+                    ui_resource_uri: None,
+                };
+            }
+        }
+
+        tokio::time::sleep(poll_interval).await;
+        poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
+    }
+}
+
+pub(super) async fn execute_turn_tools(
+    state: AppState,
+    turn_input: super::runtime::TurnExecutionInput,
     tool_calls: Vec<LlmToolCall>,
     tx: SseTx,
 ) -> Vec<(ToolResult, Value)> {
     let mut turn_results: Vec<(ToolResult, Value)> = Vec::new();
+    let agent_id = turn_input.agent_id;
+    let run_id = turn_input.run_id;
+    let permission_mode_override = turn_input.permission_mode;
+    let _ = (&turn_input.conversation_id, &turn_input.input);
 
     let runtime = Arc::new(ToolRuntime::new(
         Arc::new(storage_impl::ServerStorageBackend {
@@ -172,27 +405,63 @@ pub(super) async fn execute_turn_tools(
     ));
 
     let cwd = std::env::current_dir().unwrap_or_default();
-    let hooks = if let Ok(settings) = cade_core::settings::SettingsManager::new(&cwd) {
-        Arc::new(cade_core::hooks::HookEngine::new(
+    let (hooks, permissions) = if let Ok(settings) = cade_core::settings::SettingsManager::new(&cwd)
+    {
+        let h = Arc::new(cade_core::hooks::HookEngine::new(
             settings.merged_hooks(),
             cwd.clone(),
             agent_id.clone(),
-        ))
+        ));
+        let perm_settings = settings.permission_settings();
+        let p = cade_core::permissions::PermissionManager::new_with_strict_bash(
+            cade_core::permissions::PermissionMode::Default,
+            perm_settings.strict_bash,
+        );
+        for rule_str in &perm_settings.allow {
+            if let Some(rule) = cade_core::permissions::PermissionRule::parse(rule_str) {
+                p.add_allow_rule(rule);
+            }
+        }
+        for rule_str in &perm_settings.deny {
+            if let Some(rule) = cade_core::permissions::PermissionRule::parse(rule_str) {
+                p.add_deny_rule(rule);
+            }
+        }
+        (h, p)
     } else {
-        Arc::new(cade_core::hooks::HookEngine::new(
+        let h = Arc::new(cade_core::hooks::HookEngine::new(
             cade_core::settings::HooksConfig::default(),
             cwd.clone(),
             agent_id.clone(),
-        ))
+        ));
+        let p = cade_core::permissions::PermissionManager::new(
+            cade_core::permissions::PermissionMode::Default,
+        );
+        (h, p)
     };
-    let permissions = cade_core::permissions::PermissionManager::new(
-        cade_core::permissions::PermissionMode::Default,
-    );
+
+    if let Some(mode_str) = permission_mode_override
+        && let Some(mode) = parse_permission_mode(&mode_str)
+    {
+        permissions.set_mode(mode);
+    }
+
+    let approval_delegate: Arc<dyn cade_agent::tools::ApprovalDelegate> =
+        if permissions.mode() == cade_core::permissions::PermissionMode::BypassPermissions {
+            Arc::new(cade_agent::tools::AutoApprovalDelegate)
+        } else {
+            Arc::new(SseApprovalDelegate {
+                db: state.db.clone(),
+                agent_id: agent_id.clone(),
+                tx: tx.clone(),
+            })
+        };
+
     let pipeline = Arc::new(cade_agent::tools::ToolPipeline::new(
         runtime.clone(),
         permissions,
         hooks,
-        Arc::new(cade_agent::tools::AutoApprovalDelegate),
+        approval_delegate,
     ));
 
     for tc in tool_calls {
@@ -301,6 +570,23 @@ pub(super) async fn execute_turn_tools(
             handle.await.unwrap_or_else(|e| ToolResult {
                 tool_call_id: tool_call_id.clone(),
                 tool_name: "run_team".to_string(),
+                output: format!("Task join error: {e}"),
+                is_error: true,
+                ui_resource_uri: None,
+            })
+        } else if tool_name == "ask_user_question" {
+            let state_c = state.clone();
+            let agent_id_c = agent_id.clone();
+            let tool_call_id_c = tool_call_id.clone();
+            let arguments_c = arguments.clone();
+            let tx_c = tx.clone();
+            let handle = tokio::spawn(async move {
+                handle_ask_user_question(state_c, agent_id_c, tool_call_id_c, arguments_c, tx_c)
+                    .await
+            });
+            handle.await.unwrap_or_else(|e| ToolResult {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: "ask_user_question".to_string(),
                 output: format!("Task join error: {e}"),
                 is_error: true,
                 ui_resource_uri: None,
