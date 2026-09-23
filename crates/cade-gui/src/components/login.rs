@@ -39,7 +39,12 @@ pub fn LoginScreen() -> Element {
             div { class: "flex flex-col items-center space-y-6 max-w-md w-full px-8",
                 // Brand
                 div { class: "flex items-center space-x-3 mb-4",
-                    svg { class: "w-8 h-8 text-white fill-current", view_box: "0 0 24 24",
+                    svg {
+                        class: "w-8 h-8 text-white fill-current shrink-0",
+                        view_box: "0 0 24 24",
+                        width: "32",
+                        height: "32",
+                        style: "width: 32px; height: 32px; min-width: 32px; min-height: 32px; flex-shrink: 0;",
                         rect { x: "4", y: "4", width: "16", height: "16", rx: "3", fill: "#ff7c5c" }
                         rect { x: "8", y: "8", width: "8", height: "8", rx: "1.5", fill: "#0f1115" }
                     }

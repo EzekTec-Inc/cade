@@ -53,11 +53,19 @@
     border-radius: 50%;
     animation: cade-spin 0.8s linear infinite;
   }
+  svg.w-8 {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
+    flex-shrink: 0 !important;
+  }
   @keyframes cade-spin {
     to { transform: rotate(360deg); }
   }
 </style>
 <!-- Pre-compiled offline Tailwind CSS (zero external CDN dependencies) -->
+<link data-trunk rel="copy-file" href="tailwind.js" />
 <script src="/dashboard/tailwind.js"></script>
 <script>
   tailwind.config = {
