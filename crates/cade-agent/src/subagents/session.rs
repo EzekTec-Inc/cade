@@ -600,7 +600,9 @@ impl SubagentSession {
                 Some(r) => r,
                 None => {
                     let err_msg = last_error.unwrap_or_else(|| "LLM execution failed".to_string());
-                    return self.finalize_outcome(SubagentOutcome::Failed { error: err_msg }).await;
+                    return self
+                        .finalize_outcome(SubagentOutcome::Failed { error: err_msg })
+                        .await;
                 }
             };
 
@@ -617,7 +619,8 @@ impl SubagentSession {
                     .await;
             }
 
-            self.record_turn(resp.tokens_used, resp.tool_calls.len()).await;
+            self.record_turn(resp.tokens_used, resp.tool_calls.len())
+                .await;
 
             // 6. Check budget limits
             if let Some(reason) = self.is_budget_exhausted() {
@@ -760,8 +763,7 @@ mod tests {
             "prompt": "Large prompt...",
             "max_tokens_budget": 5000
         }));
-        let mut session = SubagentSession::new(config, "parent-1")
-            .with_max_iters(10);
+        let mut session = SubagentSession::new(config, "parent-1").with_max_iters(10);
 
         // Before any generations, budget is not exhausted regardless of prompt size
         assert!(session.is_budget_exhausted().is_none());
@@ -997,10 +999,7 @@ mod tests {
             .await;
 
         assert!(outcome.is_success());
-        assert_eq!(
-            outcome.summary_text(),
-            "Task finished without tool calls"
-        );
+        assert_eq!(outcome.summary_text(), "Task finished without tool calls");
     }
 
     #[tokio::test]
@@ -1066,7 +1065,10 @@ mod tests {
                 Path::new("."),
             )
             .await;
-        assert_eq!(outcome2.summary_text(), "Finished successfully via finish_task");
+        assert_eq!(
+            outcome2.summary_text(),
+            "Finished successfully via finish_task"
+        );
     }
 
     #[tokio::test]
@@ -1128,7 +1130,15 @@ mod tests {
         // Verify that steering guidance was injected with priority envelope
         let messages = llm.observed_messages.lock().unwrap();
         let turn_0_msgs = &messages[0];
-        assert!(turn_0_msgs.iter().any(|m| m.content.contains("[Supervisor Steering Guidance]")));
-        assert!(turn_0_msgs.iter().any(|m| m.content.contains("Focus strictly on test assertion")));
+        assert!(
+            turn_0_msgs
+                .iter()
+                .any(|m| m.content.contains("[Supervisor Steering Guidance]"))
+        );
+        assert!(
+            turn_0_msgs
+                .iter()
+                .any(|m| m.content.contains("Focus strictly on test assertion"))
+        );
     }
 }

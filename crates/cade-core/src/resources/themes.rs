@@ -76,12 +76,7 @@ pub fn get_theme(name: &str) -> Option<opaline::Theme> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeToken {
     /// Token was explicitly defined and matched in the theme.
-    Exact {
-        token: String,
-        r: u8,
-        g: u8,
-        b: u8,
-    },
+    Exact { token: String, r: u8, g: u8, b: u8 },
     /// Primary token was missing; resolved through a documented fallback token.
     Fallback {
         requested: String,
@@ -91,9 +86,7 @@ pub enum ThemeToken {
         b: u8,
     },
     /// Neither primary nor any fallback token was defined in the theme.
-    Missing {
-        requested: String,
-    },
+    Missing { requested: String },
 }
 
 impl ThemeToken {
@@ -247,7 +240,9 @@ impl ThemeResolver {
             ThemeValidationReport {
                 name: name_or_path.to_string(),
                 is_valid: false,
-                errors: vec![format!("Theme '{name_or_path}' not found in project, global, or built-in registry")],
+                errors: vec![format!(
+                    "Theme '{name_or_path}' not found in project, global, or built-in registry"
+                )],
                 warnings: Vec::new(),
                 defined_tokens: 0,
                 missing_recommended_tokens: Vec::new(),
@@ -618,7 +613,10 @@ mod tests {
     fn test_reference_theme_is_valid_and_complete() {
         let report = validate_theme_str(REFERENCE_THEME_TOML);
         assert!(report.is_valid, "reference theme should be valid");
-        assert!(report.errors.is_empty(), "reference theme should have 0 errors");
+        assert!(
+            report.errors.is_empty(),
+            "reference theme should have 0 errors"
+        );
         assert_eq!(
             report.defined_tokens,
             CANONICAL_RECOMMENDED_ROLES.len(),
@@ -652,6 +650,10 @@ mod tests {
         assert!(!report.warnings.is_empty());
         assert!(!report.contrast_warnings.is_empty());
         assert!(report.contrast_warnings[0].contains("Low contrast"));
-        assert!(report.missing_recommended_tokens.contains(&"accent.primary".to_string()));
+        assert!(
+            report
+                .missing_recommended_tokens
+                .contains(&"accent.primary".to_string())
+        );
     }
 }

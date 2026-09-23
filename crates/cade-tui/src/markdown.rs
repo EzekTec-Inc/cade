@@ -1048,8 +1048,7 @@ pub fn parse_markdown_lines_with_theme(
 
     // Flush unclosed in-flight code block at EOF (Phase 10: Syntax-Aware In-Flight Code Fence Framing)
     if in_code_block {
-        let prefix_span =
-            Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
+        let prefix_span = Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
         let border_w = if max_width > 2 {
             max_width.saturating_sub(INDENT.len()).max(8)
         } else {

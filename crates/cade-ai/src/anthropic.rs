@@ -99,9 +99,11 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
-        let base = base_url
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok().filter(|s| !s.trim().is_empty()));
+        let base = base_url.filter(|s| !s.trim().is_empty()).or_else(|| {
+            std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        });
 
         Self {
             client: crate::utils::build_standard_http_client(),
@@ -965,15 +967,29 @@ mod tests {
     #[test]
     fn test_anthropic_provider_endpoint_resolution() {
         let p_default = AnthropicProvider::new("sk-test".into(), None);
-        assert_eq!(p_default.endpoint_url(), "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            p_default.endpoint_url(),
+            "https://api.anthropic.com/v1/messages"
+        );
 
-        let p_custom = AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787".into()));
+        let p_custom =
+            AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787".into()));
         assert_eq!(p_custom.endpoint_url(), "http://127.0.0.1:8787/v1/messages");
 
-        let p_custom_v1 = AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787/v1".into()));
-        assert_eq!(p_custom_v1.endpoint_url(), "http://127.0.0.1:8787/v1/messages");
+        let p_custom_v1 =
+            AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787/v1".into()));
+        assert_eq!(
+            p_custom_v1.endpoint_url(),
+            "http://127.0.0.1:8787/v1/messages"
+        );
 
-        let p_custom_messages = AnthropicProvider::new("sk-test".into(), Some("http://127.0.0.1:8787/v1/messages".into()));
-        assert_eq!(p_custom_messages.endpoint_url(), "http://127.0.0.1:8787/v1/messages");
+        let p_custom_messages = AnthropicProvider::new(
+            "sk-test".into(),
+            Some("http://127.0.0.1:8787/v1/messages".into()),
+        );
+        assert_eq!(
+            p_custom_messages.endpoint_url(),
+            "http://127.0.0.1:8787/v1/messages"
+        );
     }
 }

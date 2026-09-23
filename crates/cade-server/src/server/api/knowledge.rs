@@ -32,14 +32,38 @@ fn maybe_seed_default_triples(db: &cade_store::Db) {
         && existing.is_empty()
     {
         let defaults = [
-            ("CADE", "implements", "CapabilityMesh (Native + MCP + Skills)"),
-            ("EmbeddedSession", "links_to", "SQLite & LlmRouter in-process"),
-            ("Sleeptime", "consolidates_at", "70% Context Window Threshold"),
+            (
+                "CADE",
+                "implements",
+                "CapabilityMesh (Native + MCP + Skills)",
+            ),
+            (
+                "EmbeddedSession",
+                "links_to",
+                "SQLite & LlmRouter in-process",
+            ),
+            (
+                "Sleeptime",
+                "consolidates_at",
+                "70% Context Window Threshold",
+            ),
             ("TokenHeatmap", "allocates", "History vs Tool Reserve"),
-            ("CapabilityMesh", "satisfies", "ADR-0020 Unified Execution Seam"),
+            (
+                "CapabilityMesh",
+                "satisfies",
+                "ADR-0020 Unified Execution Seam",
+            ),
             ("SubagentRunner", "sandboxes_in", "Isolated Git Worktrees"),
-            ("HeadroomProxy", "optimizes", "Prompt Caching & Token Reduction"),
-            ("KnowledgeEngine", "federates", "FTS5 BM25 + Vector Cosine Hybrid Recall"),
+            (
+                "HeadroomProxy",
+                "optimizes",
+                "Prompt Caching & Token Reduction",
+            ),
+            (
+                "KnowledgeEngine",
+                "federates",
+                "FTS5 BM25 + Vector Cosine Hybrid Recall",
+            ),
         ];
 
         for (ent, rel, tgt) in defaults {

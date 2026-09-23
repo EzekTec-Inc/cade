@@ -138,8 +138,16 @@ impl GeminiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         let base = base_url
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("GEMINI_BASE_URL").ok().filter(|s| !s.trim().is_empty()))
-            .or_else(|| std::env::var("GOOGLE_AI_BASE_URL").ok().filter(|s| !s.trim().is_empty()));
+            .or_else(|| {
+                std::env::var("GEMINI_BASE_URL")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
+            .or_else(|| {
+                std::env::var("GOOGLE_AI_BASE_URL")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            });
         Self {
             client: crate::utils::build_standard_http_client(),
             api_key,
@@ -305,11 +313,7 @@ impl GeminiProvider {
             .map(|s| s.trim_end_matches('/'))
             .unwrap_or(GEMINI_BASE);
         // Strip provider prefix for URL construction
-        format!(
-            "{base}/{}:{action}&key={}",
-            bare_model(model),
-            self.api_key
-        )
+        format!("{base}/{}:{action}&key={}", bare_model(model), self.api_key)
     }
 
     /// Convert our messages to Gemini `contents` format

@@ -7,7 +7,7 @@ pub mod manifest;
 pub mod marketplace;
 pub mod registry;
 
-pub use dev::{init_plugin, pack_plugin, validate_plugin, PackedPlugin, PluginValidationReport};
+pub use dev::{PackedPlugin, PluginValidationReport, init_plugin, pack_plugin, validate_plugin};
 pub use engine::{MockPluginEngine, NativePluginEngine, PluginEngine, PluginReport};
 pub use error::{Error, Result};
 pub use manifest::PluginManifest;

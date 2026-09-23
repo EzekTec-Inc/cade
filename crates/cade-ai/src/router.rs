@@ -499,15 +499,21 @@ impl LlmRouter {
             "ollama" => {
                 let base = base_url
                     .filter(|s| !s.trim().is_empty())
-                    .or_else(|| std::env::var("OLLAMA_BASE_URL").ok().filter(|s| !s.trim().is_empty()))
+                    .or_else(|| {
+                        std::env::var("OLLAMA_BASE_URL")
+                            .ok()
+                            .filter(|s| !s.trim().is_empty())
+                    })
                     .unwrap_or_else(|| config.ollama_base_url.clone());
                 Some(Arc::new(ollama::OllamaProvider::new(base)))
             }
             "openai-compatible" => {
                 let key = api_key.clone().unwrap_or_default();
-                let url = base_url
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| std::env::var("OPENAI_COMPATIBLE_BASE_URL").ok().filter(|s| !s.trim().is_empty()))?;
+                let url = base_url.filter(|s| !s.trim().is_empty()).or_else(|| {
+                    std::env::var("OPENAI_COMPATIBLE_BASE_URL")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                })?;
                 Some(Arc::new(openai::OpenAiProvider::new(key, Some(url))))
             }
             _ => None,
