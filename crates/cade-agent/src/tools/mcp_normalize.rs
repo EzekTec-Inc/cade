@@ -121,9 +121,9 @@ fn resolve_to_absolute_string(raw: &str, workspace_dir: &Path) -> String {
 
     let p = Path::new(trimmed);
 
-    // 3. Already absolute
+    // 3. Already absolute: preserve intact without resolving system symlinks
     if p.is_absolute() {
-        return canonical_or_lossy(p);
+        return trimmed.to_string();
     }
 
     // 4. Relative to workspace directory
