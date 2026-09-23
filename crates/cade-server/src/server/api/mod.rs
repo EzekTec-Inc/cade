@@ -15,10 +15,10 @@ pub mod dashboard_assets;
 pub mod edit;
 pub mod evals;
 pub mod health;
+pub mod knowledge;
 pub mod mcp;
 pub mod memory_evidence;
 pub mod messages;
-pub mod knowledge;
 pub mod models;
 pub mod plugins;
 pub mod providers;
@@ -88,10 +88,7 @@ pub fn router(state: AppState) -> Router {
             post(run::swap_subagent_model_handler),
         )
         .route("/v1/plugins", get(plugins::list_plugins_handler))
-        .route(
-            "/v1/plugins/install",
-            post(plugins::install_plugin_handler),
-        )
+        .route("/v1/plugins/install", post(plugins::install_plugin_handler))
         .route(
             "/v1/plugins/{id}",
             delete(plugins::uninstall_plugin_handler),
@@ -193,10 +190,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/knowledge/edges",
             get(knowledge::list_edges).post(knowledge::create_edge),
         )
-        .route(
-            "/v1/knowledge/edges/{id}",
-            delete(knowledge::delete_edge),
-        )
+        .route("/v1/knowledge/edges/{id}", delete(knowledge::delete_edge))
         // Swarm Topology & Teams (PRD #128 / Issue #133)
         .route("/v1/teams", get(teams::get_swarm_topology_handler))
         .route("/v1/swarm/topology", get(teams::get_swarm_topology_handler))

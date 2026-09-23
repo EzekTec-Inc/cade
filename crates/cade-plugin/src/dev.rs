@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 use crate::manifest::PluginManifest;
 use crate::marketplace::compute_sha256;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginValidationReport {
@@ -208,8 +208,8 @@ pub fn pack_plugin(root: &Path, output_path: Option<&Path>) -> crate::Result<Pac
         std::fs::create_dir_all(parent)?;
     }
 
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::fs::File;
     use tar::Builder;
 
@@ -233,7 +233,10 @@ pub fn pack_plugin(root: &Path, output_path: Option<&Path>) -> crate::Result<Pac
         };
 
         let rel_str = rel.to_string_lossy();
-        if rel_str.starts_with(".git") || rel_str.starts_with("target") || rel_str.ends_with(".tar.gz") {
+        if rel_str.starts_with(".git")
+            || rel_str.starts_with("target")
+            || rel_str.ends_with(".tar.gz")
+        {
             continue;
         }
 
