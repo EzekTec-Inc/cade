@@ -162,7 +162,7 @@ mod tests {
         let normalized = normalize_mcp_arguments("cade-rag-mcp__semantic_search", &args, workspace);
 
         // -- Check
-        assert_eq!(normalized["path"], "/home/user/my-project");
+        assert_eq!(normalized["path"], workspace.to_string_lossy().as_ref());
         assert_eq!(normalized["query"], "authentication flow");
         Ok(())
     }
@@ -180,7 +180,10 @@ mod tests {
         let normalized = normalize_mcp_arguments("serena__read_file", &args, workspace);
 
         // -- Check
-        assert_eq!(normalized["path"], "/home/user/my-project/src/main.rs");
+        assert_eq!(
+            normalized["path"],
+            workspace.join("src/main.rs").to_string_lossy().as_ref()
+        );
         assert_eq!(normalized["limit"], 10);
         Ok(())
     }
@@ -220,9 +223,9 @@ mod tests {
             .as_array()
             .ok_or("paths should be array")?;
         assert_eq!(paths.len(), 3);
-        assert_eq!(paths[0], "/home/user/my-project");
-        assert_eq!(paths[1], "/home/user/my-project/src");
-        assert_eq!(paths[2], "/home/user/my-project/tests");
+        assert_eq!(paths[0], workspace.to_string_lossy().as_ref());
+        assert_eq!(paths[1], workspace.join("src").to_string_lossy().as_ref());
+        assert_eq!(paths[2], workspace.join("tests").to_string_lossy().as_ref());
         Ok(())
     }
 
