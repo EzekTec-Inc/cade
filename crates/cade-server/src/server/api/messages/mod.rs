@@ -518,6 +518,7 @@ pub async fn stream_message(
             agent_id,
             conversation_id: conv_id,
             input,
+            permission_mode: None,
         })
         .await;
 

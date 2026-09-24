@@ -62,6 +62,77 @@ Rather than relying on hardcoded lists of third-party servers (like `desktop-com
 6. **Provider Tool Capping & Priority Retention**: For model providers that enforce strict limits on total declared functions (such as OpenAI's 128-tool limit), CADE dynamically prioritizes tools carrying `x-cade: { core_server: true }` metadata or `core_mcp` database tags. All core MCP servers (e.g. `serena`, `headroom`, `cade-rag-mcp`) are dynamically preserved without any hardcoded tool prefixes or server names in the provider codebase.
 7. **Provider Schema Adaptation**: MCP tool schemas are normalized again at each provider adapter seam before request dispatch. The OpenAI adapter guarantees that every function schema has top-level `type: "object"`, removes unsupported top-level schema combinators (`oneOf`, `anyOf`, `allOf`, `enum`, `const`, `not`), preserves real parameter names that collide with JSON Schema metadata keys (such as an issue field named `title`), converts OpenAPI-style `nullable: true` to JSON Schema nullable types, and prunes `required` entries that do not exist in `properties`.
 
+## Deep MCP Execution Gate: Argument Normalization & Content Extraction
+
+When external tools execute, CADE routes all calls through a deep, unified execution gate (`McpArgumentNormalizer` in `crates/cade-agent` and `McpContentExtractor` in `crates/cade-mcp`):
+
+```mermaid
+flowchart TD
+    subgraph Caller [Client & Execution Runtime]
+        TUI[CADE TUI / Agent Turn]
+        REQ[Tool Call: name, args]
+    end
+
+    subgraph Gate [McpExecutionGate Seam]
+        NORM[McpArgumentNormalizer]
+        NORM_PATH[Path Canonicalizer:
+        - Resolves . and ./ to workspace root
+        - Expands ~ to user home directory
+        - Joins relative paths to workspace_dir
+        - Preserves existing absolute paths intact]
+        DISP[MCP Tool Dispatch:
+        - Local stdio peer
+        - Fallback: Remote Server POST /v1/mcp/call]
+        EXTRACT[McpContentExtractor:
+        - RawTextContent -> clean text
+        - TextResourceContents -> embedded document text
+        - BlobResourceContents -> descriptive binary marker
+        - ResourceLink -> link metadata marker
+        - clean_mcp_text -> strips sampling fallback headers]
+    end
+
+    subgraph Targets [Background MCP Server Processes]
+        RAG[cade-rag-mcp]
+        SERENA[serena]
+        OTHER[External MCP Servers]
+    end
+
+    TUI --> REQ
+    REQ --> NORM
+    NORM --> NORM_PATH
+    NORM_PATH --> DISP
+    DISP --> RAG
+    DISP --> SERENA
+    DISP --> OTHER
+    RAG --> EXTRACT
+    SERENA --> EXTRACT
+    OTHER --> EXTRACT
+    EXTRACT --> TUI
+```
+
+### 1. Workspace Path Normalization (`McpArgumentNormalizer`)
+
+Background daemon MCP processes (e.g. `cade-rag-mcp`, `serena`, or Docker containers) frequently run with a working directory different from the active user's workspace. If an LLM passes relative arguments such as `"path": "."` or `"path": "src/main.rs"`, unnormalized calls will fail with `Index not found` or query the wrong folder.
+
+`McpArgumentNormalizer` inspects known filesystem keys (`path`, `file_path`, `filePath`, `workspace_path`, `dir`, `cwd`, `root`, `destination`, `source`, `target`, `paths`) and automatically resolves them against the active workspace:
+
+| Parameter Passed by LLM | Workspace Root | Value Forwarded to MCP Server |
+|---|---|---|
+| `{"path": "."}` | `/home/user/app` | `{"path": "/home/user/app"}` |
+| `{"path": "./src"}` | `/home/user/app` | `{"path": "/home/user/app/src"}` |
+| `{"path": "~/data"}` | `/home/user/app` | `{"path": "/home/user/data"}` |
+| `{"paths": [".", "tests"]}` | `/home/user/app` | `{"paths": ["/home/user/app", "/home/user/app/tests"]}` |
+| `{"path": "/etc/hosts"}` | `/home/user/app` | `{"path": "/etc/hosts"}` (Preserved intact) |
+
+### 2. Multi-Format Content Extraction (`McpContentExtractor`)
+
+The MCP protocol allows tools to return mixed content types (`Text`, `Resource`, `ResourceLink`, `Image`, `Audio`). `McpContentExtractor` standardizes these into a clean, unified textual payload for the LLM turn loop:
+- **`RawContent::Text`**: Extracts text body and runs `clean_mcp_text` to automatically strip sampling fallback debug headers (e.g. `[Sampling fell back to raw results due to error: ...]`).
+- **`RawContent::Resource` (Text)**: Extracts embedded text document contents from `TextResourceContents`.
+- **`RawContent::Resource` (Binary)**: Formats `BlobResourceContents` into `[Binary Resource: <uri> (<mime_type>)]`.
+- **`RawContent::ResourceLink`**: Formats into `[Resource Link: <name> (<uri>)]`.
+- **`RawContent::Image` / `RawContent::Audio`**: Formats into `[Image: <mime_type>]` and `[Audio: <mime_type>]`.
+
 ## Inspecting
 
 ```bash

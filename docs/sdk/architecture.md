@@ -6,7 +6,26 @@ This document details the internal design, seam placement, and runtime contracts
 
 ## 1. Dual Runtime Topologies
 
-`cade-sdk` decouples agentic intelligence from execution topology, allowing seamless transitions between single-process embedded computing and distributed microservice architectures.
+`cade-sdk` decouples agentic intelligence from execution topology, allowing seamless transitions between single-process embedded computing and distributed microservice architectures (ADR-0020 & ADR-0021):
+
+```mermaid
+graph TB
+    subgraph ZeroDaemon [Topology A: Zero-Daemon Embedded Model - EmbeddedSession]
+        AppA[Host Application / Test Binary] --> SDK_A[cade-sdk EmbeddedSession]
+        SDK_A --> AI_A[cade-ai: Direct LLM Router or Mock]
+        SDK_A --> STORE_A[cade-store: In-Memory or File SQLite]
+        SDK_A --> AGENT_A[cade-agent: ToolRuntime & CapabilityMesh]
+        SDK_A --> STREAM_A[CadeStreamEvent Telemetry Stream]
+    end
+
+    subgraph ClientServer [Topology B: Client-Server Model - CadeClientSdk]
+        AppB[Client Application / CLI] --> SDK_B[cade-sdk CadeClientSdk]
+        SDK_B -->|HTTP / SSE REST Wire| SERVER[cade-server Axum Daemon]
+        SERVER --> STORE_B[SQLite Store & Approvals]
+        SERVER --> MCP_B[Managed MCP Daemon Processes]
+        SERVER --> AGENTS_B[Multi-Tenant Agent Runtimes]
+    end
+```
 
 ```
 Topology A: Zero-Daemon Embedded Model (`EmbeddedSession`)

@@ -1,7 +1,65 @@
-# Permissions
+# Permissions and Interactive Approvals
 
 CADE asks before running tools. The permission system controls **whether**
-to ask and **what's protected** even with approval bypassed.
+to ask, **how interactive approvals flow across the client/server seam**, and **what's permanently protected** even when approvals are bypassed.
+
+## Client/Server Approval Architecture
+
+In CADE's client/server architecture, tool execution takes place on `cade-server` while interaction happens in `cade-cli` (the TUI) or `cade-gui`. Approvals are managed through an asynchronous streaming yield seam:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Developer
+    participant TUI as CADE TUI (cade-cli)
+    participant Server as CADE Server (cade-server)
+    participant Pipeline as ToolPipeline
+    participant Delegate as SseApprovalDelegate
+    participant DB as SQLite Storage
+
+    User->>TUI: Submits Prompt (e.g. "Run maintenance")
+    TUI->>Server: POST /v1/agents/:id/run { input, permission_mode: "default" }
+    Note over Server: Server loads active rules from workspace settings.json
+    Server->>Pipeline: Tool call: bash("cargo clean")
+    Pipeline->>Pipeline: Evaluate Verdict (Verdict::Ask)
+    Pipeline->>Delegate: request_approval("bash", args, reason)
+    Delegate->>DB: create_pending_approval("app-123", "bash", args)
+    Delegate->>TUI: SSE event: "approval_required" { id: "app-123", tool: "bash", ... }
+    Note over Delegate: Asynchronously yields (polling SQLite status with backoff)
+    TUI->>User: Displays prompt: "⚠️ Permission Required for 'bash': /approve app-123 or /deny app-123"
+    User->>TUI: Types `/approve app-123`
+    TUI->>Server: POST /v1/approvals/app-123/action { "action": "approve" }
+    Server->>DB: set_approval_status("app-123", "approved")
+    Note over Delegate: Status unblocks with Ok(true)
+    Delegate-->>Pipeline: Approved
+    Pipeline->>Pipeline: Executes Tool and returns output
+    Server-->>TUI: SSE event: "tool_output"
+```
+
+### Interactive Question Seam (`ask_user_question`)
+
+When the model requires human steering, disambiguation, or architecture decisions, it calls `ask_user_question`. This pauses the server turn loop and prompts the user directly:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LLM as LLM Agent Loop
+    participant Server as CADE Server (execution.rs)
+    participant DB as SQLite Storage
+    participant TUI as CADE TUI (stream.rs)
+    actor User as User / Developer
+
+    LLM->>Server: Tool call: ask_user_question(questions)
+    Server->>DB: create_pending_approval("q-456", "ask_user_question", args)
+    Server->>TUI: SSE event: "question_required" { id: "q-456", questions: [...] }
+    Note over Server: Asynchronously yields on SQLite status with backoff
+    TUI->>User: Displays interactive question prompt in terminal
+    User->>TUI: Types `/approve q-456` or answers modal
+    TUI->>Server: POST /v1/approvals/q-456/action { "action": "approve", "feedback": "{\"DB\":\"PostgreSQL\"}" }
+    Server->>DB: set_approval_status("q-456", "approved:{\"DB\":\"PostgreSQL\"}")
+    Note over Server: Unblocks and formats: "User has answered your questions: DB=PostgreSQL"
+    Server-->>LLM: Returns formatted response as ToolResult.output
+```
 
 ## Modes
 
@@ -40,9 +98,20 @@ Example:
 
 ```json
 {
+  "permission_mode": "default",
   "permissions": {
-    "always_allow": ["read_file", "glob"],
-    "always_deny": ["bash:rm -rf"]
+    "allow": [
+      "Bash(cargo test)",
+      "Bash(cargo build)",
+      "read_file",
+      "glob"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "delete_file(*)"
+    ],
+    "strict_bash": false,
+    "allow_agent_mode_changes": false
   }
 }
 ```

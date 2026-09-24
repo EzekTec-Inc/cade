@@ -156,6 +156,7 @@ impl Repl {
         // Clear buffers at the start of each turn.
         reasoning_buf.lock().clear();
         assistant_buf.lock().clear();
+        let client_for_ui = self.client.clone();
         let ui_task = tokio::spawn(async move {
             let mut ui_rx = ui_rx;
             let mut in_reasoning = false;
@@ -380,25 +381,196 @@ impl Repl {
                             let _ = app.draw();
                         }
                     }
-                    "approval_requested" => {
-                        let subagent = msg.data["subagent_id"].as_str().unwrap_or("subagent");
-                        let tool = msg.data["tool_name"].as_str().unwrap_or("tool");
-                        let text = format!(
-                            "⚠️ Background Subagent [{}] requests permission to run {}. Type /approvals to review.",
-                            subagent, tool
-                        );
-                        let mut app = app_arc.lock();
-                        app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
-                        let _ = app.push(RenderLine::SystemMsg(text.clone()));
-                        app.notify_if_unfocused(
-                            cade_tui::app::notifier::AttentionCue::PermissionPrompt,
-                            "Permission Required",
-                            &text,
-                        );
-                        // Ring terminal bell
-                        print!("\x07");
-                        use std::io::Write;
-                        let _ = std::io::stdout().flush();
+                    "approval_requested" | "approval_required" => {
+                        let id = msg.data["id"].as_str().unwrap_or("").to_string();
+                        let tool = msg.data["tool_name"].as_str().unwrap_or("tool").to_string();
+                        let reason = msg.data["reason"]
+                            .as_str()
+                            .unwrap_or("requires permission")
+                            .to_string();
+                        let args_val = msg
+                            .data
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({}));
+                        let subagent = msg.data.get("subagent_id").and_then(|v| v.as_str());
+
+                        if let Some(subagent_id) = subagent {
+                            let text = format!(
+                                "⚠️ Background Subagent [{}] requests permission to run {}. Type /approvals to review.",
+                                subagent_id, tool
+                            );
+                            let mut app = app_arc.lock();
+                            app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
+                            let _ = app.push(RenderLine::SystemMsg(text.clone()));
+                        } else if !id.is_empty() {
+                            let client_c = client_for_ui.clone();
+                            let approval_id_c = id.clone();
+                            let target_preview = args_val
+                                .get("command")
+                                .or_else(|| args_val.get("path"))
+                                .or_else(|| args_val.get("file_path"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            let question = cade_tui::question::Question {
+                                header: format!("Approve {tool}"),
+                                text: if target_preview.is_empty() {
+                                    format!("Allow tool '{tool}' to run?\nReason: {reason}")
+                                } else {
+                                    format!(
+                                        "Allow tool '{tool}' to run?\nTarget: {target_preview}\nReason: {reason}"
+                                    )
+                                },
+                                options: vec![
+                                    cade_tui::question::QuestionOption {
+                                        label: "Allow once".to_string(),
+                                        description: "Approve this single tool execution".to_string(),
+                                    },
+                                    cade_tui::question::QuestionOption {
+                                        label: "Allow for session".to_string(),
+                                        description:
+                                            "Auto-approve this tool for the remainder of this session"
+                                                .to_string(),
+                                    },
+                                    cade_tui::question::QuestionOption {
+                                        label: "Deny".to_string(),
+                                        description: "Reject execution of this tool".to_string(),
+                                    },
+                                ],
+                                multi_select: false,
+                                allow_other: false,
+                                progress: None,
+                            };
+
+                            let rx_opt = {
+                                let mut app = app_arc.lock();
+                                app.show_toast(
+                                    format!("🔒 Approval required for {tool}"),
+                                    crate::ui::ToastLevel::Warning,
+                                );
+                                app.ask_question_async(question).ok()
+                            };
+
+                            if let Some(rx) = rx_opt {
+                                tokio::spawn(async move {
+                                    let action = match rx.await {
+                                        Ok(Some(cade_tui::question::QuestionAnswer::Single(
+                                            ref label,
+                                        ))) if label == "Allow once"
+                                            || label == "Allow for session" =>
+                                        {
+                                            "approve"
+                                        }
+                                        _ => "deny",
+                                    };
+                                    let body = serde_json::json!({ "action": action });
+                                    let _ = client_c
+                                        .raw_post(
+                                            &format!("/approvals/{approval_id_c}/action"),
+                                            &body,
+                                        )
+                                        .await;
+                                });
+                            }
+                        }
+                    }
+                    "question_required" | "question_requested" => {
+                        let id = msg.data["id"].as_str().unwrap_or("").to_string();
+                        let questions_val = msg
+                            .data
+                            .get("questions")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+
+                        if !id.is_empty()
+                            && let Some(first_q) =
+                                questions_val.as_array().and_then(|arr| arr.first())
+                        {
+                            let header = first_q
+                                .get("header")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Question")
+                                .to_string();
+                            let text = first_q
+                                .get("question")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let multi_select = first_q
+                                .get("multiSelect")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let options = first_q
+                                .get("options")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|opt| {
+                                            let label = opt
+                                                .get("label")
+                                                .and_then(|v| v.as_str())?
+                                                .to_string();
+                                            let desc = opt
+                                                .get("description")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            Some(cade_tui::question::QuestionOption {
+                                                label,
+                                                description: desc,
+                                            })
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            let question = cade_tui::question::Question {
+                                header,
+                                text,
+                                options,
+                                multi_select,
+                                allow_other: true,
+                                progress: None,
+                            };
+
+                            let client_c = client_for_ui.clone();
+                            let question_id_c = id.clone();
+
+                            let rx_opt = {
+                                let mut app = app_arc.lock();
+                                app.show_toast(
+                                    "❓ Clarifying question from agent".to_string(),
+                                    crate::ui::ToastLevel::Info,
+                                );
+                                app.ask_question_async(question).ok()
+                            };
+
+                            if let Some(rx) = rx_opt {
+                                tokio::spawn(async move {
+                                    let (action, feedback) = match rx.await {
+                                        Ok(Some(cade_tui::question::QuestionAnswer::Single(
+                                            ref label,
+                                        ))) => ("approve", Some(label.clone())),
+                                        Ok(Some(cade_tui::question::QuestionAnswer::Multi(
+                                            ref labels,
+                                        ))) => ("approve", Some(labels.join(", "))),
+                                        _ => ("deny", None),
+                                    };
+                                    let mut body = serde_json::json!({ "action": action });
+                                    if let Some(fb) = feedback {
+                                        body["feedback"] = fb.into();
+                                    }
+                                    let _ = client_c
+                                        .raw_post(
+                                            &format!("/approvals/{question_id_c}/action"),
+                                            &body,
+                                        )
+                                        .await;
+                                });
+                            }
+                        }
                     }
                     "subagent_started" => {
                         let subagent_id =
@@ -527,9 +699,17 @@ impl Repl {
             tool_output,
             ephemeral,
         );
+        let mode_str = self.permissions.mode().to_string();
         let messages = match self
             .client
-            .start_run_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel))
+            .start_run_cancellable_with_mode(
+                &agent_id,
+                input,
+                conv_ref,
+                Some(&mode_str),
+                on_event,
+                Some(cancel),
+            )
             .await
         {
             Ok(messages) => messages,
