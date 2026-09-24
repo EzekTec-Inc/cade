@@ -137,9 +137,46 @@ cd crates/cade-gui
 trunk build --release
 ```
 
-Output goes to `crates/cade-gui/dist/`. The `cade-server` build script
-watches that directory and re-embeds on next compile (see
-`crates/cade-server/build.rs`).
+Output goes to `crates/cade-gui/dist/`. The `cade-server` binary bakes all assets in `dist/` directly into `RawDistAssets` at compile time via `rust-embed`.
+
+## Offline Pre-Compiled Tailwind & Asset Delivery Architecture
+
+To guarantee 100% offline, air-gapped functionality with zero external CDN dependencies, CADE serves all styling and client assets locally from the server binary:
+
+```mermaid
+flowchart TD
+    subgraph Browser [Client Browser]
+        DASH[GET /dashboard]
+        TAIL[GET /dashboard/tailwind.js]
+        WASM[GET /dashboard/cade-gui-*.wasm]
+    end
+
+    subgraph Server [cade-server API Gate (crates/cade-server)]
+        SITE[DashboardSite Seam]
+        ASSETS[DashboardAssets Loader]
+        DEV_CHECK{CADE_DEV=1 or override?}
+        FS[Filesystem: cade-gui/dist/]
+        EMBED[Embedded: RawDistAssets via rust-embed]
+    end
+
+    DASH --> SITE
+    TAIL --> SITE
+    WASM --> SITE
+    SITE --> ASSETS
+    ASSETS --> DEV_CHECK
+    DEV_CHECK -- Yes --> FS
+    DEV_CHECK -- No (Production) --> EMBED
+    EMBED -->|200 OK + no-cache| Browser
+    FS -->|200 OK + no-cache| Browser
+```
+
+### Key Security & Reliability Features:
+1. **Zero External CDN Dependencies**: The Tailwind CSS engine is bundled locally at `/dashboard/tailwind.js` (398 KB). Adblockers, firewalls, and air-gapped corporate environments cannot break dashboard styling.
+2. **Trunk Copy-File Automation**: `crates/cade-gui/index.html` registers `<link data-trunk rel="copy-file" href="tailwind.js" />`, ensuring `tailwind.js` is automatically copied from source to `dist/` on every `trunk build`.
+3. **Defensive SVG Layout Constraints**: The CADE logo in `crates/cade-gui/src/components/login.rs` includes explicit `width="32"`, `height="32"`, and inline style constraints (`min-width: 32px; min-height: 32px; flex-shrink: 0;`), alongside an `svg.w-8` fallback rule in `<style>`. Even if JavaScript or stylesheets lag, the logo can never expand to 100% viewport width.
+4. **Dynamic Development Asset Overrides**:
+   - `CADE_DEV=1`: When set, `cade-server` bypasses compile-time embedded assets and reads directly from `crates/cade-gui/dist/` on disk, allowing instant hot-reloads of GUI changes without recompiling `cade-server`.
+   - `CADE_DASHBOARD_DIR=/path/to/dist`: Point the running server to an arbitrary custom frontend distribution folder.
 
 For dev iteration without a full server rebuild, point `trunk serve` at
 a running `cade-server` instance:

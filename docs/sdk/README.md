@@ -59,21 +59,62 @@ futures = "0.3"
 
 ---
 
-## ⚡ Quick 5-Line Zero-Daemon Example
+## ⚡ In-Process Zero-Daemon Execution (`EmbeddedSession`)
+
+Applications can run complete autonomous agent turns and streaming telemetry directly in-process with zero network latency and no external daemons (ADR-0020 & ADR-0021):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as Third-Party Application / Test
+    participant SDK as EmbeddedSession (cade-sdk)
+    participant Store as In-Memory SQLite (cade-store)
+    participant AI as LlmProvider (Direct or Mock)
+
+    Caller->>SDK: EmbeddedSession::builder().in_memory().provider(mock).build()
+    SDK->>Store: Initialize in-memory schema & migrations
+    Caller->>SDK: session.set_memory("convention", "TDD first")
+    SDK->>Store: Persist memory block to SQLite
+    Caller->>SDK: session.stream_prompt("Run task")
+    SDK->>AI: stream(CompletionRequest)
+    AI-->>SDK: StreamChunk::Text / StreamChunk::Usage
+    SDK-->>Caller: CadeStreamEvent::MessageDelta(delta)
+    SDK->>Store: Save conversation turn to SQLite
+    Caller->>SDK: session.get_memory("convention")
+    SDK->>Store: Query memory block
+    SDK-->>Caller: Some("TDD first")
+```
+
+### Complete Working Rust Example
 
 ```rust
-use cade_sdk::EmbeddedSession;
+use std::sync::Arc;
+use futures::StreamExt;
+use cade_sdk::{EmbeddedSession, events::CadeStreamEvent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Zero-daemon in-process execution with built-in memory & tools
-    let mut session = EmbeddedSession::builder()
+    // 1. Build an in-process session using in-memory SQLite (zero daemon required)
+    let session = EmbeddedSession::builder()
+        .in_memory()
+        .agent_name("ArchitectBot")
         .model("anthropic/claude-sonnet-4-5")
+        .system_prompt("You are an expert system design partner.")
         .build()
         .await?;
 
-    let answer = session.prompt("Scan src/ and summarize the architecture.").await?;
-    println!("{answer}");
+    // 2. Persist memory blocks directly into SQLite
+    session.set_memory("convention", "Always write tests before code (TDD).").await?;
+
+    // 3. Stream real-time telemetry deltas
+    let mut stream = session.stream_prompt("Propose a deep module structure.").await?;
+    while let Some(event) = stream.next().await {
+        if let CadeStreamEvent::MessageDelta(delta) = event {
+            print!("{delta}");
+        }
+    }
+    println!();
+
     Ok(())
 }
 ```

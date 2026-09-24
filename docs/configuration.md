@@ -29,14 +29,25 @@ priority (high → low):
 ```json
 {
   "store_api_key": true,
-  "default_model": "anthropic/claude-sonnet-4-5",
+  "default_model": "openai/gpt-6-sol",
+  "reasoning_effort": "medium",
   "permission_mode": "default",
   "theme": "dark",
   "last_agent": "...",
 
   "permissions": {
-    "always_allow": ["read_file", "glob"],
-    "always_deny":  ["bash:rm -rf"]
+    "allow": [
+      "Bash(cargo test)",
+      "Bash(cargo build)",
+      "read_file",
+      "glob"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "delete_file(*)"
+    ],
+    "strict_bash": false,
+    "allow_agent_mode_changes": false
   },
 
   "hooks": { /* see hooks.md */ },
@@ -165,6 +176,51 @@ The session cost cap is also available in settings files as
 | Variable | Purpose |
 |---|---|
 | `CADE_SSH_ACCEPT_NEW` | Auto-accept unknown SSH host keys |
+
+## OpenAI Dual-Wire Protocol & Model Capabilities
+
+CADE integrates an authoritative model classifier (`OpenAiModelCapabilities`) to determine endpoint routing, token limits, and reasoning parameter serialization across OpenAI model families:
+
+```mermaid
+flowchart TD
+    REQ[CompletionRequest: model, tools, reasoning_effort] --> CLASSIFY[OpenAiModelCapabilities::for_model]
+    
+    CLASSIFY -->|gpt-6* or gpt-5* with tools| RESPONSES_WIRE[/v1/responses Wire Protocol]
+    CLASSIFY -->|o1*, o3*, o4* reasoning models| CHAT_O[/v1/chat/completions Wire Protocol]
+    CLASSIFY -->|gpt-4o, gpt-4o-mini, legacy| CHAT_STD[/v1/chat/completions Wire Protocol]
+
+    subgraph ResponsesFormatting [Responses API Payload]
+        RESPONSES_WIRE --> R1[Endpoint: https://api.openai.com/v1/responses]
+        RESPONSES_WIRE --> R2[input: array of input items]
+        RESPONSES_WIRE --> R3[tools: flat function definitions]
+        RESPONSES_WIRE --> R4[max_output_tokens: integer]
+        RESPONSES_WIRE --> R5[reasoning: { effort: 'medium' }]
+    end
+
+    subgraph ChatOFormatting [Chat Completions Reasoning Payload]
+        CHAT_O --> O1[Endpoint: https://api.openai.com/v1/chat/completions]
+        CHAT_O --> O2[messages: standard chat message list]
+        CHAT_O --> O3[max_completion_tokens: integer]
+        CHAT_O --> O4[reasoning_effort: 'medium']
+    end
+
+    subgraph ChatStdFormatting [Standard Chat Payload]
+        CHAT_STD --> S1[Endpoint: https://api.openai.com/v1/chat/completions]
+        CHAT_STD --> S2[messages: standard chat message list]
+        CHAT_STD --> S3[max_tokens: integer]
+        CHAT_STD --> S4[tools: nested function declarations]
+    end
+```
+
+### Model Classification Matrix
+
+| Model Pattern | Protocol | Token Parameter | Reasoning Strategy | Tool Calling Behavior |
+|---|---|---|---|---|
+| `openai/gpt-6-*` (e.g. `gpt-6-sol`) | `/v1/responses` | `max_output_tokens` | `NestedReasoningObject` | Flat function tools + reasoning |
+| `openai/gpt-5*` (e.g. `gpt-5.6-luna`) | `/v1/responses` | `max_output_tokens` | `NestedReasoningObject` | Flat function tools + reasoning |
+| `openai/o1*`, `o3*`, `o4*` | `/v1/chat/completions` | `max_completion_tokens` | `TopLevelReasoningEffort` | Standard tools + top-level effort |
+| `openai/gpt-4.5*` | `/v1/chat/completions` | `max_completion_tokens` | `None` | Standard chat tools |
+| `openai/gpt-4o*` & legacy | `/v1/chat/completions` | `max_tokens` | `None` | Standard chat tools |
 
 ## CLI flags (selected)
 
