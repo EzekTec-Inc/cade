@@ -132,7 +132,20 @@ impl StreamEvent {
 
     /// Extract `approval_id` from an `approval_required` event.
     pub fn approval_id(&self) -> Option<&str> {
-        self.data.get("approval_id").and_then(|v| v.as_str())
+        self.data.get("id").and_then(|v| v.as_str())
+    }
+
+    /// The canonical approval request emitted by a server-owned run.
+    pub fn approval_request(&self) -> Option<ApprovalRequest<'_>> {
+        if self.msg_type() != "approval_required" {
+            return None;
+        }
+        Some(ApprovalRequest {
+            id: self.approval_id()?,
+            tool_name: self.tool_name()?,
+            arguments: self.data.get("arguments")?,
+            reason: self.data.get("reason")?.as_str()?,
+        })
     }
 
     /// Extract `run_id` from a canonical run event.
@@ -158,6 +171,14 @@ impl StreamEvent {
             .get("tool_result")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ApprovalRequest<'a> {
+    pub id: &'a str,
+    pub tool_name: &'a str,
+    pub arguments: &'a serde_json::Value,
+    pub reason: &'a str,
 }
 
 /// A tool call within a `tool_call_message` event.

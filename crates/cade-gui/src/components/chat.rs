@@ -109,6 +109,8 @@ pub fn ChatView() -> Element {
 
                 messages_panel { messages: state.messages, agent_name: agent_name.clone() }
 
+                chat_approvals { state }
+
                 input_area {
                     input_text: state.input_text,
                     is_loading: state.is_loading,
@@ -181,6 +183,78 @@ pub fn ChatView() -> Element {
                 div { class: "space-y-2 border-t border-slate-800/80 pt-4 flex-1",
                     div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider", "Modified Files" }
                     div { class: "text-xs font-mono text-slate-500 italic p-3 rounded bg-[#0c101d] border border-slate-800/60", "No modified files in session" }
+                }
+            }
+        }
+    }
+}
+
+/// Actionable approvals for the selected agent, including those arriving from
+/// the active run stream. The global feed and dashboard use the same queue ID.
+#[component]
+fn chat_approvals(state: AppState) -> Element {
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
+    let agent_id = (state.selected_agent)().map(|a| a.id).unwrap_or_default();
+    let approvals: Vec<_> = (state.pending_approvals)()
+        .into_iter()
+        .filter(|a| a["agent_id"].as_str() == Some(&agent_id))
+        .collect();
+
+    rsx! {
+        for approval in approvals {
+            {
+                let id = approval["id"].as_str().unwrap_or("").to_string();
+                let tool = approval["tool_name"].as_str().unwrap_or("tool").to_string();
+                let reason = approval["reason"].as_str().unwrap_or("Requires human review before execution.").to_string();
+                let arguments = approval["arguments"].as_str().map(String::from)
+                    .unwrap_or_else(|| approval["arguments"].to_string());
+                let id_approve = id.clone();
+                let id_deny = id.clone();
+                rsx! {
+                    div { key: "{id}", class: "mx-4 md:mx-8 p-4 rounded-xl border border-amber-500/40 bg-amber-950/20 text-sm space-y-2 shrink-0",
+                        div { class: "font-bold text-amber-300", "Approval Required: {tool}" }
+                        div { class: "text-xs font-mono text-slate-400", "ID: {id}" }
+                        div { class: "text-slate-200", "{reason}" }
+                        pre { class: "text-xs font-mono text-slate-300 whitespace-pre-wrap break-all max-h-32 overflow-y-auto", "{arguments}" }
+                        div { class: "flex gap-2",
+                            button {
+                                class: "px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer",
+                                onclick: move |_| {
+                                    let api = client();
+                                    let id = id_approve.clone();
+                                    let st = state;
+                                    spawn(async move {
+                                        match api.action_approval(&id, "approve").await {
+                                            Ok(_) => {
+                                                let mut list = st.pending_approvals;
+                                                list.write().retain(|a| a["id"] != id);
+                                            }
+                                            Err(e) => add_toast(&st, ToastLevel::Error, "Approval failed", e),
+                                        }
+                                    });
+                                },
+                                "Approve"
+                            }
+                            button {
+                                class: "px-3 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white cursor-pointer",
+                                onclick: move |_| {
+                                    let api = client();
+                                    let id = id_deny.clone();
+                                    let st = state;
+                                    spawn(async move {
+                                        match api.action_approval(&id, "deny").await {
+                                            Ok(_) => {
+                                                let mut list = st.pending_approvals;
+                                                list.write().retain(|a| a["id"] != id);
+                                            }
+                                            Err(e) => add_toast(&st, ToastLevel::Error, "Denial failed", e),
+                                        }
+                                    });
+                                },
+                                "Deny"
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -829,7 +903,13 @@ fn input_area(
             );
 
             let result = coordinator
-                .dispatch_turn(&text, messages, is_loading, cancel_token)
+                .dispatch_turn(
+                    &text,
+                    messages,
+                    is_loading,
+                    state.pending_approvals,
+                    cancel_token,
+                )
                 .await;
 
             match result {

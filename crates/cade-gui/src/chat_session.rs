@@ -10,6 +10,34 @@ use std::sync::atomic::AtomicBool;
 
 use crate::api::CadeApiClient;
 
+/// Merge run-stream approvals into the same pending list used by the dashboard.
+/// The global feed may have already delivered the request; keep one row per ID.
+pub fn track_approval_event(pending: &mut Vec<serde_json::Value>, event: &StreamEvent) {
+    match event.msg_type() {
+        "approval_required" => {
+            if let Some(request) = event.approval_request() {
+                if let Some(existing) = pending.iter_mut().find(|item| item["id"] == request.id) {
+                    // Queue rows fetched on reconnect have string arguments and
+                    // no reason. Enrich them with the live run's reviewed data.
+                    if let (Some(row), Some(fields)) =
+                        (existing.as_object_mut(), event.data.as_object())
+                    {
+                        row.extend(fields.clone());
+                    }
+                } else {
+                    pending.push(event.data.clone());
+                }
+            }
+        }
+        "approval_resolved" => {
+            if let Some(id) = event.approval_id() {
+                pending.retain(|item| item["id"] != id);
+            }
+        }
+        _ => {}
+    }
+}
+
 // region:    --- Types
 
 /// Outcome of a dispatched chat turn.
@@ -130,15 +158,15 @@ impl ChatSessionCoordinator {
                     serde_json::Value::String(format!("{existing}{result_block}"));
             }
             "approval_required" => {
-                let tool_name = event.tool_name().unwrap_or("tool");
-                let approval_id = event.approval_id().unwrap_or("pending");
-                let args = event.tool_args().unwrap_or("");
-                let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                let approval_card = format!(
-                    "\n\n[Approval Required: {tool_name}] (ID: {approval_id})\nRequires human review before execution.\nArguments: {args}\n"
-                );
-                messages[idx].content =
-                    serde_json::Value::String(format!("{existing}{approval_card}"));
+                if let Some(request) = event.approval_request() {
+                    let existing = messages[idx].content.as_str().unwrap_or("").to_string();
+                    let approval_card = format!(
+                        "\n\n[Approval Required: {}] (ID: {})\n{}\nArguments: {}\n",
+                        request.tool_name, request.id, request.reason, request.arguments
+                    );
+                    messages[idx].content =
+                        serde_json::Value::String(format!("{existing}{approval_card}"));
+                }
             }
             "approval_resolved" => {
                 let approval_id = event.approval_id().unwrap_or("unknown");
@@ -146,7 +174,7 @@ impl ChatSessionCoordinator {
                     .data
                     .get("approved")
                     .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
+                    .unwrap_or_else(|| event.data["status"].as_str() == Some("approved"));
                 let verdict_str = if approved { "Approved" } else { "Denied" };
                 let existing = messages[idx].content.as_str().unwrap_or("").to_string();
                 let resolved_block =
@@ -185,6 +213,7 @@ impl ChatSessionCoordinator {
         prompt: &str,
         mut messages_signal: Signal<Vec<ChatMessage>>,
         mut is_loading_signal: Signal<bool>,
+        mut pending_approvals: Signal<Vec<serde_json::Value>>,
         cancel_token: Arc<AtomicBool>,
     ) -> Result<ChatTurnOutcome, String> {
         let text = prompt.trim().to_string();
@@ -233,6 +262,9 @@ impl ChatSessionCoordinator {
                 self.conversation_id.as_deref(),
                 Some(cancel_token.clone()),
                 |event: StreamEvent| {
+                    let mut pending = pending_approvals();
+                    track_approval_event(&mut pending, &event);
+                    pending_approvals.set(pending);
                     if event.msg_type() == "stream_start"
                         && let Some(cid) =
                             event.data.get("conversation_id").and_then(|v| v.as_str())
@@ -403,7 +435,7 @@ mod tests {
         // 2. Approval Required
         let appr_event = StreamEvent {
             message_type: "approval_required".to_string(),
-            data: json!({ "tool_name": "delete_file", "approval_id": "appr-999", "tool_args": "{\"path\": \"old.txt\"}" }),
+            data: json!({ "id": "appr-999", "tool_name": "delete_file", "arguments": {"path": "old.txt"}, "reason": "Write requires approval" }),
         };
         ChatSessionCoordinator::apply_stream_event(
             &mut messages,
@@ -425,11 +457,19 @@ mod tests {
                 .unwrap()
                 .contains("(ID: appr-999)")
         );
+        assert!(
+            messages[0]
+                .content
+                .as_str()
+                .unwrap()
+                .contains("Write requires approval")
+        );
+        assert!(messages[0].content.as_str().unwrap().contains("old.txt"));
 
         // 3. Approval Resolved
         let resolved_event = StreamEvent {
             message_type: "approval_resolved".to_string(),
-            data: json!({ "approval_id": "appr-999", "approved": true }),
+            data: json!({ "id": "appr-999", "status": "approved" }),
         };
         ChatSessionCoordinator::apply_stream_event(
             &mut messages,
@@ -470,6 +510,42 @@ mod tests {
                 .unwrap()
                 .contains("[UI Widget Resource: ui://widgets/status]")
         );
+    }
+
+    #[test]
+    fn canonical_run_approval_is_actionable_and_deduplicated_with_global_feed() {
+        // Exact envelope fields produced by SseApprovalDelegate, decoded by the
+        // same StreamEvent parser used by the browser's run SSE transport.
+        let wire = json!({
+            "message_type": "approval_required", "id": "app-real-42",
+            "agent_id": "agent-1", "run_id": "run-1", "tool_call_id": "tc-1",
+            "tool_name": "write_file", "arguments": {"path": "notes.txt", "content": "hello"},
+            "reason": "Write requires approval"
+        });
+        let event: StreamEvent = serde_json::from_value(wire.clone()).unwrap();
+        let request = event
+            .approval_request()
+            .expect("web can review the request");
+        assert_eq!(request.id, "app-real-42");
+        assert_eq!(request.tool_name, "write_file");
+        assert_eq!(request.arguments["path"], "notes.txt");
+        assert_eq!(request.reason, "Write requires approval");
+
+        let mut pending = vec![json!({"id": "app-real-42", "agent_id": "agent-1"})];
+        track_approval_event(&mut pending, &event);
+        assert_eq!(pending.len(), 1, "global event and run event share an ID");
+        assert_eq!(pending[0]["reason"], "Write requires approval");
+        pending.clear();
+        track_approval_event(&mut pending, &event);
+        assert_eq!(pending[0]["id"], "app-real-42");
+        assert_eq!(pending[0]["arguments"]["content"], "hello");
+
+        let resolved: StreamEvent = serde_json::from_value(json!({
+            "message_type": "approval_resolved", "id": "app-real-42"
+        }))
+        .unwrap();
+        track_approval_event(&mut pending, &resolved);
+        assert!(pending.is_empty());
     }
 
     #[test]

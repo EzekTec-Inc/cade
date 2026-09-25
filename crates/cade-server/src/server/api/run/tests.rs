@@ -2313,23 +2313,31 @@ mod advanced_execution_tests {
 
             // A progress event precedes the permission request. Decode the
             // actual server envelope using the same CadeMessage adapter as the terminal.
-            let message = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    let envelope = rx
-                        .recv()
-                        .await
-                        .expect("turn must emit approval")
-                        .expect("event");
-                    let message: CadeMessage =
-                        serde_json::from_str(&envelope.data).expect("client event");
-                    if message.msg_type() == "approval_required" {
-                        break message;
+            let (message, raw_event) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let envelope = rx
+                            .recv()
+                            .await
+                            .expect("turn must emit approval")
+                            .expect("event");
+                        let message: CadeMessage =
+                            serde_json::from_str(&envelope.data).expect("client event");
+                        if message.msg_type() == "approval_required" {
+                            break (message, envelope.data);
+                        }
                     }
-                }
-            })
-            .await
-            .expect("approval should arrive promptly");
+                })
+                .await
+                .expect("approval should arrive promptly");
             let request = message.approval_request().expect("terminal can prompt");
+            let web_event: cade_api_types::StreamEvent =
+                serde_json::from_str(&raw_event).expect("browser decodes the server event");
+            let web_request = web_event.approval_request().expect("web can prompt");
+            assert_eq!(web_request.id, request.id);
+            assert_eq!(web_request.tool_name, request.tool_name);
+            assert_eq!(web_request.arguments, request.arguments);
+            assert_eq!(web_request.reason, request.reason);
             assert!(request.id.starts_with("app-"));
             assert_eq!(request.tool_name, "write_file");
             assert_eq!(
@@ -2342,6 +2350,12 @@ mod advanced_execution_tests {
             assert_eq!(message.data["tool_call_id"], "tc-direct-write");
             assert!(!path.exists(), "execution must wait for consent");
             assert!(!handle.is_finished(), "turn must wait for consent");
+
+            let queue = crate::server::api::approvals::list_approvals(State(state.clone()))
+                .await
+                .expect("dashboard can discover the pending approval");
+            assert_eq!(queue.0["approvals"].as_array().unwrap().len(), 1);
+            assert_eq!(queue.0["approvals"][0]["id"], request.id);
 
             let response = crate::server::api::approvals::action_approval(
                 State(state),
