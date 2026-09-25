@@ -360,6 +360,12 @@ fn path_is_protected_checks() {
     assert!(path_is_protected("/home/alice/.cade/db.key"));
     assert!(path_is_protected(".cade/db.key"));
     assert!(path_is_protected("./.cade/db.key"));
+    // Windows paths must receive the same protection as Unix paths.
+    assert!(path_is_protected(r"C:\work\project\.env"));
+    assert!(path_is_protected(r"C:\work\project\.git\config"));
+    assert!(path_is_protected(r"C:\Users\alice\.ssh\id_rsa"));
+    assert!(path_is_protected(r"C:\Users\alice\.cade\db.key"));
+    assert!(!path_is_protected(r"C:\work\project\src\main.rs"));
 }
 
 #[test]
