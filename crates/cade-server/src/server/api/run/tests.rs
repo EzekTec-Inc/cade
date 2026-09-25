@@ -2213,4 +2213,53 @@ mod advanced_execution_tests {
             result.output
         );
     }
+
+    #[tokio::test]
+    async fn test_turn_tools_in_default_mode_prompts_approval_for_crud_replace() {
+        // -- Setup & Fixtures
+        use crate::server::api::run::execution::SseApprovalDelegate;
+        use cade_agent::tools::ApprovalDelegate;
+
+        let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+        let delegate = SseApprovalDelegate {
+            db: state.db.clone(),
+            agent_id: "agent-crud-prompt-test".to_string(),
+            tx,
+        };
+
+        // Spawn approval request for Replace (CRUD tool previously in blindspot)
+        let handle = tokio::spawn(async move {
+            delegate
+                .request_approval(
+                    "tc-replace-crud",
+                    "Replace",
+                    &json!({ "path": "src/main.rs", "old_string": "foo", "new_string": "bar" }),
+                    "requires confirmation in default mode",
+                )
+                .await
+        });
+
+        // -- Check: Active turn receives approval_required SSE event
+        let event = rx
+            .recv()
+            .await
+            .expect("must receive approval_required SSE event for CRUD Replace");
+        let env = event.expect("infallible event envelope");
+        let payload: Value = serde_json::from_str(&env.data).expect("valid json");
+        assert_eq!(payload["type"], "approval_required");
+        assert_eq!(payload["tool_name"], "Replace");
+        let approval_id = payload["id"].as_str().expect("id must be string");
+
+        // User approves the request
+        cade_store::sqlite::set_approval_status(&state.db, approval_id, "approved")
+            .expect("must set approval status");
+
+        let result = handle
+            .await
+            .expect("task must join")
+            .expect("approval result");
+        assert!(result, "approved CRUD request must return Ok(true)");
+    }
 }

@@ -124,9 +124,10 @@ impl PermissionManager {
             tool_name
         };
 
-        let is_bash = matches!(base_name, "bash");
+        let norm_base = normalize_tool_name(base_name);
+        let is_bash = matches!(norm_base.as_str(), "bash" | "shell" | "runshellcommand");
 
-        let is_write = is_write_schema(base_name) || is_mcp_write;
+        let is_write = is_write_schema(tool_name) || is_write_schema(base_name) || is_mcp_write;
 
         let bash_is_write = if is_bash {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");

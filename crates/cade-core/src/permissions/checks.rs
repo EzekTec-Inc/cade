@@ -1,23 +1,93 @@
-// -- Write-schema detection (schema-level filtering for Plan mode)
+// -- Write-schema detection (schema-level filtering for Plan mode & permission resolution)
 
-/// Returns true if the tool name represents a write/mutating operation.
-/// Used to filter tool schemas out of the LLM's view in Plan mode.
+/// Strip namespace and server prefixes (e.g. "default_api:serena__replace_content" -> "replace_content")
+/// and convert to lower-case.
+pub fn normalize_tool_name(name: &str) -> String {
+    let mut s = name;
+    if let Some(pos) = s.rfind(':') {
+        s = &s[pos + 1..];
+    }
+    if let Some(pos) = s.rfind("__") {
+        s = &s[pos + 2..];
+    }
+    s.trim().to_ascii_lowercase()
+}
+
+/// Returns true if the tool name represents a write/mutating/CRUD operation.
+/// Used to enforce permission prompts and filter tool schemas in Plan mode.
 pub fn is_write_schema(name: &str) -> bool {
-    matches!(
-        name,
+    let clean = normalize_tool_name(name);
+
+    // 1. Exact matches across core CADE tools, Serena AST tools, GitHub MCP, and Desktop tools
+    if matches!(
+        clean.as_str(),
         "write_file"
             | "edit_file"
             | "create_file"
+            | "create_text_file"
+            | "create_directory"
             | "delete_file"
+            | "delete_directory"
             | "move_file"
             | "rename_file"
+            | "copy_file"
             | "patch_file"
             | "apply_patch"
             | "apply_diff"
+            | "apply_edit"
+            | "replace"
+            | "replace_in_file"
+            | "replace_content"
+            | "replace_in_files"
+            | "replace_symbol_body"
+            | "insert_after_symbol"
+            | "insert_before_symbol"
+            | "rename_symbol"
+            | "safe_delete_symbol"
             | "edit_block"
             | "desktop_control"
             | "send_notification"
-    )
+            | "create_archive"
+            | "extract_archive"
+            | "create_issue"
+            | "update_issue"
+            | "add_issue_comment"
+            | "create_pull_request"
+            | "update_pull_request"
+            | "merge_pull_request"
+            | "create_branch"
+            | "delete_branch"
+            | "create_repository"
+            | "delete_repository"
+            | "create_or_update_file"
+            | "trigger_workflow"
+            | "launch_app"
+            | "close_window"
+            | "lock_screen"
+            | "set_theme"
+            | "set_wallpaper"
+            | "set_volume"
+            | "set_brightness"
+            | "kill_process"
+            | "kill_session"
+            | "kill_sessions"
+            | "clipboard_write"
+            | "write_clipboard"
+            | "install_plugin"
+            | "install_skill"
+            | "lql_insert"
+            | "lql_delete"
+            | "lql_apply_patch"
+    ) {
+        return true;
+    }
+
+    // 2. Semantic prefix stems for CRUD and mutating tools
+    let stems = [
+        "write_", "create_", "edit_", "replace_", "insert_", "delete_", "remove_", "update_",
+        "patch_", "rename_", "copy_", "move_", "kill_", "apply_", "set_",
+    ];
+    stems.iter().any(|stem| clean.starts_with(stem))
 }
 
 // -- Delete action detection
@@ -49,17 +119,53 @@ pub fn is_delete_action(
     args: &serde_json::Value,
     is_mcp_write: bool,
 ) -> bool {
-    // 1. Native tool name
-    if base_name == "delete_file" {
+    let clean = normalize_tool_name(base_name);
+    let clean_full = normalize_tool_name(tool_name);
+
+    // 1. Native and AST deletion tools
+    if matches!(
+        clean.as_str(),
+        "delete_file"
+            | "delete_directory"
+            | "safe_delete_symbol"
+            | "delete_branch"
+            | "delete_repository"
+            | "kill_process"
+            | "kill_session"
+            | "kill_sessions"
+            | "lql_delete"
+    ) {
         return true;
     }
-    // 2. MCP tool — inspect full prefixed name for delete/remove keywords
-    if is_mcp_write && (tool_name.contains("delete") || tool_name.contains("remove")) {
+
+    // 2. Generic delete/remove/drop/destroy naming
+    if clean.starts_with("delete_")
+        || clean.starts_with("remove_")
+        || clean.starts_with("drop_")
+        || clean.starts_with("destroy_")
+        || clean.starts_with("kill_")
+    {
         return true;
     }
-    // 3. Bash commands: rm, rmdir, unlink, shred
-    if matches!(base_name, "bash") {
-        let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+    // 3. MCP tool — inspect full prefixed name for delete/remove/drop/destroy keywords
+    if is_mcp_write
+        && (clean_full.contains("delete")
+            || clean_full.contains("remove")
+            || clean_full.contains("drop")
+            || clean_full.contains("destroy")
+            || clean_full.contains("kill"))
+    {
+        return true;
+    }
+
+    // 4. Bash commands: rm, rmdir, unlink, shred
+    if matches!(clean.as_str(), "bash" | "runshellcommand" | "shell") {
+        let cmd = args
+            .get("command")
+            .or_else(|| args.get("cmd"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         return bash_first_cmd_is_delete(cmd);
     }
     false
@@ -320,3 +426,139 @@ fn segment_is_write(seg: &str) -> bool {
 }
 
 // region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_is_write_schema_recognizes_all_crud_and_mutating_tools() {
+        // Core CADE editing and creation tools
+        assert!(is_write_schema("write_file"));
+        assert!(is_write_schema("edit_file"));
+        assert!(is_write_schema("create_file"));
+        assert!(is_write_schema("Replace"));
+        assert!(is_write_schema("replace_in_file"));
+        assert!(is_write_schema("edit_block"));
+        assert!(is_write_schema("apply_patch"));
+
+        // Serena AST mutation tools with and without namespaces
+        assert!(is_write_schema("serena__replace_content"));
+        assert!(is_write_schema("serena__create_text_file"));
+        assert!(is_write_schema("serena__replace_symbol_body"));
+        assert!(is_write_schema("serena__insert_after_symbol"));
+        assert!(is_write_schema("serena__insert_before_symbol"));
+        assert!(is_write_schema("serena__rename_symbol"));
+        assert!(is_write_schema("serena__safe_delete_symbol"));
+        assert!(is_write_schema("default_api:serena__replace_content"));
+
+        // Desktop Commander mutation tools
+        assert!(is_write_schema("desktop-commander-mcp__write_file"));
+        assert!(is_write_schema("desktop-commander-mcp__delete_file"));
+        assert!(is_write_schema("desktop-commander-mcp__edit_block"));
+        assert!(is_write_schema("desktop-commander-mcp__create_directory"));
+        assert!(is_write_schema("desktop-commander-mcp__kill_process"));
+
+        // GitHub mutating operations
+        assert!(is_write_schema("github-mcp-server__create_issue"));
+        assert!(is_write_schema("github-mcp-server__update_pull_request"));
+        assert!(is_write_schema("github-mcp-server__merge_pull_request"));
+        assert!(is_write_schema("github-mcp-server__create_branch"));
+        assert!(is_write_schema("github-mcp-server__delete_branch"));
+
+        // Read-only tools must NOT be classified as write schemas
+        assert!(!is_write_schema("read_file"));
+        assert!(!is_write_schema("glob"));
+        assert!(!is_write_schema("grep"));
+        assert!(!is_write_schema("fetch_doc"));
+        assert!(!is_write_schema("serena__find_symbol"));
+        assert!(!is_write_schema("serena__read_file"));
+        assert!(!is_write_schema("serena__search_for_pattern"));
+        assert!(!is_write_schema("desktop-commander-mcp__read_file"));
+        assert!(!is_write_schema("github-mcp-server__get_pull_request"));
+    }
+
+    #[test]
+    fn test_is_delete_action_recognizes_destructive_operations() {
+        assert!(is_delete_action(
+            "delete_file",
+            "delete_file",
+            &json!({}),
+            false
+        ));
+        assert!(is_delete_action(
+            "safe_delete_symbol",
+            "safe_delete_symbol",
+            &json!({}),
+            false
+        ));
+        assert!(is_delete_action(
+            "serena__safe_delete_symbol",
+            "safe_delete_symbol",
+            &json!({}),
+            true
+        ));
+        assert!(is_delete_action(
+            "desktop-commander-mcp__delete_file",
+            "delete_file",
+            &json!({}),
+            true
+        ));
+        assert!(is_delete_action(
+            "github-mcp-server__delete_branch",
+            "delete_branch",
+            &json!({}),
+            true
+        ));
+        assert!(is_delete_action(
+            "kill_process",
+            "kill_process",
+            &json!({}),
+            false
+        ));
+
+        // Shell delete commands
+        assert!(is_delete_action(
+            "bash",
+            "bash",
+            &json!({"command": "rm -rf /tmp/target"}),
+            false
+        ));
+        assert!(is_delete_action(
+            "RunShellCommand",
+            "RunShellCommand",
+            &json!({"command": "rmdir foo"}),
+            false
+        ));
+        assert!(is_delete_action(
+            "shell",
+            "shell",
+            &json!({"command": "shred file.txt"}),
+            false
+        ));
+
+        // Non-delete write operations must return false for is_delete_action
+        assert!(!is_delete_action(
+            "write_file",
+            "write_file",
+            &json!({}),
+            false
+        ));
+        assert!(!is_delete_action("Replace", "Replace", &json!({}), false));
+        assert!(!is_delete_action(
+            "serena__replace_content",
+            "replace_content",
+            &json!({}),
+            true
+        ));
+        assert!(!is_delete_action(
+            "bash",
+            "bash",
+            &json!({"command": "cargo build"}),
+            false
+        ));
+    }
+}
+
+// endregion: --- Tests
