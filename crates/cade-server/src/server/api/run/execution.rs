@@ -166,6 +166,7 @@ fn parse_permission_mode(mode_str: &str) -> Option<cade_core::permissions::Permi
 pub(super) struct SseApprovalDelegate {
     pub(super) db: cade_store::sqlite::Db,
     pub(super) agent_id: String,
+    pub(super) run_id: String,
     pub(super) tx: SseTx,
 }
 
@@ -207,9 +208,10 @@ impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
         );
 
         let event_payload = json!({
-            "type": "approval_required",
+            "message_type": "approval_required",
             "id": approval_id,
             "agent_id": self.agent_id,
+            "run_id": self.run_id,
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "arguments": arguments,
@@ -453,6 +455,7 @@ pub(super) async fn execute_turn_tools(
             Arc::new(SseApprovalDelegate {
                 db: state.db.clone(),
                 agent_id: agent_id.clone(),
+                run_id: run_id.clone(),
                 tx: tx.clone(),
             })
         };

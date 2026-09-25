@@ -59,6 +59,15 @@ pub struct CadeMessage {
     pub data: Value,
 }
 
+/// Approval request carried by a run event. The top-level event `id` is the
+/// approval queue ID (not the tool-call ID).
+pub struct ApprovalRequest<'a> {
+    pub id: &'a str,
+    pub tool_name: &'a str,
+    pub arguments: &'a Value,
+    pub reason: &'a str,
+}
+
 impl CadeMessage {
     /// Return the message_type string, or empty if absent
     pub fn msg_type(&self) -> &str {
@@ -67,6 +76,18 @@ impl CadeMessage {
             .and_then(|v| v.as_str())
             .or(self.message_type.as_deref())
             .unwrap_or("")
+    }
+
+    pub fn approval_request(&self) -> Option<ApprovalRequest<'_>> {
+        if self.msg_type() != "approval_required" {
+            return None;
+        }
+        Some(ApprovalRequest {
+            id: self.id.as_deref()?,
+            tool_name: self.data.get("tool_name")?.as_str()?,
+            arguments: self.data.get("arguments")?,
+            reason: self.data.get("reason")?.as_str()?,
+        })
     }
 
     /// Construct a system notice message.

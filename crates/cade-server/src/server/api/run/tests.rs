@@ -2107,6 +2107,7 @@ mod advanced_execution_tests {
         let delegate = SseApprovalDelegate {
             db: state.db.clone(),
             agent_id: "agent-approval-test".to_string(),
+            run_id: "run-approval-test".to_string(),
             tx,
         };
 
@@ -2129,7 +2130,7 @@ mod advanced_execution_tests {
             .expect("must receive approval_required SSE event");
         let env = event.expect("infallible event envelope");
         let payload: Value = serde_json::from_str(&env.data).expect("valid json");
-        assert_eq!(payload["type"], "approval_required");
+        assert_eq!(payload["message_type"], "approval_required");
         let approval_id = payload["id"].as_str().expect("id must be string");
 
         // -- Exec: User approves the request via database status change (same as POST /v1/approvals/:id/action)
@@ -2226,6 +2227,7 @@ mod advanced_execution_tests {
         let delegate = SseApprovalDelegate {
             db: state.db.clone(),
             agent_id: "agent-crud-prompt-test".to_string(),
+            run_id: "run-crud-prompt-test".to_string(),
             tx,
         };
 
@@ -2248,7 +2250,7 @@ mod advanced_execution_tests {
             .expect("must receive approval_required SSE event for CRUD Replace");
         let env = event.expect("infallible event envelope");
         let payload: Value = serde_json::from_str(&env.data).expect("valid json");
-        assert_eq!(payload["type"], "approval_required");
+        assert_eq!(payload["message_type"], "approval_required");
         assert_eq!(payload["tool_name"], "Replace");
         let approval_id = payload["id"].as_str().expect("id must be string");
 
@@ -2261,5 +2263,121 @@ mod advanced_execution_tests {
             .expect("task must join")
             .expect("approval result");
         assert!(result, "approved CRUD request must return Ok(true)");
+    }
+
+    #[tokio::test]
+    async fn default_mode_direct_write_requires_client_decoded_decision() {
+        use cade_agent::agent::client::CadeMessage;
+
+        let directory = tempfile::Builder::new()
+            .prefix("cade-approval-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("test directory");
+
+        for (action, should_write) in [("approve", true), ("deny", false)] {
+            let path = directory.path().join(format!("{action}.txt"));
+            let args = json!({ "path": path.to_str().expect("utf-8 path"), "content": action });
+            // The decision endpoint holds a connection while querying the
+            // queue; use the production-style file-backed pool (>1 conn).
+            let mut state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+            state.db = cade_store::sqlite::open(
+                directory
+                    .path()
+                    .join(format!("{action}.db"))
+                    .to_str()
+                    .expect("db path"),
+            )
+            .expect("file-backed database");
+            let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+            let state_for_turn = state.clone();
+            let handle = tokio::spawn(async move {
+                execute_turn_tools(
+                    state_for_turn,
+                    runtime::TurnExecutionInput {
+                        agent_id: "agent-direct-approval".to_string(),
+                        conversation_id: None,
+                        run_id: "run-direct-approval".to_string(),
+                        input: "write a file".to_string(),
+                        permission_mode: Some("default".to_string()),
+                    },
+                    vec![LlmToolCall {
+                        id: "tc-direct-write".to_string(),
+                        name: "write_file".to_string(),
+                        arguments: args,
+                        thought_signature: None,
+                    }],
+                    tx,
+                )
+                .await
+            });
+
+            // A progress event precedes the permission request. Decode the
+            // actual server envelope using the same CadeMessage adapter as the terminal.
+            let message = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let envelope = rx
+                        .recv()
+                        .await
+                        .expect("turn must emit approval")
+                        .expect("event");
+                    let message: CadeMessage =
+                        serde_json::from_str(&envelope.data).expect("client event");
+                    if message.msg_type() == "approval_required" {
+                        break message;
+                    }
+                }
+            })
+            .await
+            .expect("approval should arrive promptly");
+            let request = message.approval_request().expect("terminal can prompt");
+            assert!(request.id.starts_with("app-"));
+            assert_eq!(request.tool_name, "write_file");
+            assert_eq!(
+                request.arguments["path"],
+                path.to_str().expect("utf-8 path")
+            );
+            assert_eq!(request.arguments["content"], action);
+            assert!(!request.reason.is_empty());
+            assert_eq!(message.data["run_id"], "run-direct-approval");
+            assert_eq!(message.data["tool_call_id"], "tc-direct-write");
+            assert!(!path.exists(), "execution must wait for consent");
+            assert!(!handle.is_finished(), "turn must wait for consent");
+
+            let response = crate::server::api::approvals::action_approval(
+                State(state),
+                Path(request.id.to_owned()),
+                axum::Json(crate::server::api::approvals::ActionPayload {
+                    action: action.to_string(),
+                    feedback: None,
+                }),
+            )
+            .await
+            .expect("decision endpoint accepts the client's approval ID");
+            assert_eq!(
+                response.0["status"],
+                if should_write { "approved" } else { "denied" }
+            );
+
+            let results = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+                .await
+                .expect("decision unblocks turn")
+                .expect("turn joins");
+            assert_eq!(results.len(), 1);
+            assert_eq!(path.exists(), should_write);
+            if should_write {
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("approved write"),
+                    action
+                );
+            }
+            assert_eq!(
+                results[0].0.is_error, !should_write,
+                "{}",
+                results[0].0.output
+            );
+            if !should_write {
+                assert!(results[0].0.output.contains("Permission Denied"));
+            }
+        }
     }
 }

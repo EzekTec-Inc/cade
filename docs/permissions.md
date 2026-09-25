@@ -24,10 +24,10 @@ sequenceDiagram
     Pipeline->>Pipeline: Evaluate Verdict (Verdict::Ask)
     Pipeline->>Delegate: request_approval("bash", args, reason)
     Delegate->>DB: create_pending_approval("app-123", "bash", args)
-    Delegate->>TUI: SSE event: "approval_required" { id: "app-123", tool: "bash", ... }
+    Delegate->>TUI: SSE data: { message_type: "approval_required", id: "app-123", tool_name: "bash", arguments: {...}, reason: "...", run_id: "...", agent_id: "...", tool_call_id: "..." }
     Note over Delegate: Asynchronously yields (polling SQLite status with backoff)
-    TUI->>User: Displays prompt: "⚠️ Permission Required for 'bash': /approve app-123 or /deny app-123"
-    User->>TUI: Types `/approve app-123`
+    TUI->>User: Displays "Approve bash" question with ID, arguments, reason, Allow once / Deny
+    User->>TUI: Selects Allow once
     TUI->>Server: POST /v1/approvals/app-123/action { "action": "approve" }
     Server->>DB: set_approval_status("app-123", "approved")
     Note over Delegate: Status unblocks with Ok(true)
@@ -205,13 +205,12 @@ When the agent requests to execute a potentially destructive tool (e.g. `bash` o
 ```text
 ╭─ Permission Request: bash ──────────────────────────────────────────────────╮
 │ Command: cargo test --all                                                   │
-│ [y] Allow Once  [s] Allow for Session  [a] Always Allow  [d] Deny           │
+│ [Allow once]  [Deny]                                                       │
 ╰─────────────────────────────────────────────────────────────────────────────╯
 ```
-- Type **`y`**: Grants permission for this single tool call only.
-- Type **`s`**: Adds an in-memory rule (`add_session_allow`) so `cargo test` runs without prompting for the rest of this session.
-- Type **`a`**: Persists to `~/.cade/settings.json` permanently.
-- Type **`d`**: Rejects execution and triggers LLM recovery.
+- **Allow once** approves this single tool call through the approval action endpoint.
+- **Deny** rejects execution and returns a permission-denied tool result.
+- Session and permanent grants are not offered by the streamed terminal prompt.
 
 ### Scenario 2: Rejecting with Constructive Redirection (`/deny <id> [feedback]`)
 When an autonomous background subagent requests a risky tool call:
