@@ -610,8 +610,12 @@ fn resolve_plan_mode_allows_reads() {
             .is_allow()
     );
     assert!(
-        mgr.resolve("update_memory", &json!({"label": "active_goal", "value": "test"}), false)
-            .is_allow()
+        mgr.resolve(
+            "update_memory",
+            &json!({"label": "active_goal", "value": "test"}),
+            false,
+        )
+        .is_allow()
     );
     assert!(
         mgr.resolve("update_plan", &json!({"steps": []}), false)
@@ -741,8 +745,12 @@ fn resolve_default_mode_allows_reads() {
             .is_allow()
     );
     assert!(
-        mgr.resolve("update_memory", &json!({"label": "persona", "value": "test"}), false)
-            .is_allow()
+        mgr.resolve(
+            "update_memory",
+            &json!({"label": "persona", "value": "test"}),
+            false,
+        )
+        .is_allow()
     );
 }
 
