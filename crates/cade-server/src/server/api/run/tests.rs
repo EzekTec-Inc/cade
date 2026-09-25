@@ -1964,7 +1964,7 @@ mod advanced_execution_tests {
                 conversation_id: Some("test-conv".to_string()),
                 run_id: "run-test-sequence".to_string(),
                 input: "read Cargo.toml and run a sequence".to_string(),
-                permission_mode: None,
+                permission_mode: Some("bypass".to_string()),
             },
             tool_calls,
             tx,
@@ -2537,6 +2537,301 @@ mod advanced_execution_tests {
                     assert_ne!(msg.msg_type(), "approval_required");
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn sequential_steps_require_independent_client_decisions_after_substitution() {
+        use cade_agent::agent::client::CadeMessage;
+
+        let directory = tempfile::Builder::new()
+            .prefix("cade-sequence-approval-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("test directory");
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.txt");
+        std::fs::write(&source, "from read step\n").expect("source fixture");
+        let mut state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+        state.db = cade_store::sqlite::open(
+            directory
+                .path()
+                .join("approvals.db")
+                .to_str()
+                .expect("db path"),
+        )
+        .expect("file-backed database");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let turn_state = state.clone();
+        let target_arg = target.to_str().expect("target path").to_owned();
+        let turn_target_arg = target_arg.clone();
+        let handle = tokio::spawn(async move {
+            execute_turn_tools(
+                turn_state,
+                runtime::TurnExecutionInput {
+                    agent_id: "agent-sequence".to_string(),
+                    conversation_id: None,
+                    run_id: "run-sequence".to_string(),
+                    input: "read, create, update, delete".to_string(),
+                    permission_mode: Some("default".to_string()),
+                },
+                vec![LlmToolCall {
+                    id: "tc-sequence".to_string(),
+                    name: "run_sequential_tasks".to_string(),
+                    arguments: json!({ "steps": [
+                        { "tool_name": "read_file", "arguments": {"path": source} },
+                        { "tool_name": "write_file", "arguments": {"path": turn_target_arg, "content": "$steps.0.output"} },
+                        { "tool_name": "write_file", "arguments": {"path": turn_target_arg, "content": "updated"} },
+                        { "tool_name": "bash", "arguments": {"command": format!("unlink '{}'", turn_target_arg)} }
+                    ] }),
+                    thought_signature: None,
+                }],
+                tx,
+            ).await
+        });
+
+        for (step, tool, decision) in [
+            (1, "write_file", "approve"),
+            (2, "write_file", "approve"),
+            (3, "bash", "deny"),
+        ] {
+            let message: CadeMessage =
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let event = rx
+                            .recv()
+                            .await
+                            .expect("approval event")
+                            .expect("event envelope");
+                        let decoded: CadeMessage =
+                            serde_json::from_str(&event.data).expect("client-decoded event");
+                        if decoded.msg_type() == "approval_required" {
+                            break decoded;
+                        }
+                    }
+                })
+                .await
+                .expect("step must ask promptly");
+            let request = message.approval_request().expect("terminal can prompt");
+            assert_eq!(request.tool_name, tool);
+            assert_eq!(
+                message.data["tool_call_id"],
+                format!("tc-sequence-step-{step}")
+            );
+            assert_eq!(message.data["run_id"], "run-sequence");
+            assert!(!request.reason.is_empty());
+            match step {
+                1 => {
+                    assert_eq!(request.arguments["path"], target_arg);
+                    assert_eq!(
+                        request.arguments["content"],
+                        "   1→from read step\n[1 lines total]"
+                    );
+                    assert!(!target.exists(), "create must wait for approval");
+                }
+                2 => {
+                    assert_eq!(request.arguments["content"], "updated");
+                    assert_eq!(
+                        std::fs::read_to_string(&target).unwrap(),
+                        "   1→from read step\n[1 lines total]"
+                    );
+                }
+                _ => {
+                    assert_eq!(std::fs::read_to_string(&target).unwrap(), "updated");
+                    assert!(
+                        request.arguments["command"]
+                            .as_str()
+                            .unwrap()
+                            .contains(&target_arg)
+                    );
+                }
+            }
+            assert!(!handle.is_finished(), "step must wait for its own decision");
+            let response = crate::server::api::approvals::action_approval(
+                State(state.clone()),
+                Path(request.id.to_owned()),
+                axum::Json(crate::server::api::approvals::ActionPayload {
+                    action: decision.to_string(),
+                    feedback: None,
+                }),
+            )
+            .await
+            .expect("client decision accepted");
+            assert_eq!(
+                response.0["status"],
+                if decision == "approve" {
+                    "approved"
+                } else {
+                    "denied"
+                }
+            );
+        }
+        let results = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("turn finishes")
+            .expect("turn joins");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].0.is_error, "denied delete stops sequence");
+        assert!(results[0].0.output.contains("Permission Denied"));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "updated");
+    }
+
+    #[tokio::test]
+    async fn sequential_plan_write_is_blocked_without_approval() {
+        let directory = tempfile::Builder::new()
+            .prefix("cade-sequence-plan-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("test directory");
+        let target = directory.path().join("blocked.txt");
+        let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let results = execute_turn_tools(
+            state,
+            runtime::TurnExecutionInput {
+                agent_id: "agent-sequence-plan".to_string(),
+                conversation_id: None,
+                run_id: "run-sequence-plan".to_string(),
+                input: "try to write in plan mode".to_string(),
+                permission_mode: Some("plan".to_string()),
+            },
+            vec![LlmToolCall {
+                id: "tc-sequence-plan".to_string(),
+                name: "run_sequential_tasks".to_string(),
+                arguments: json!({"steps": [
+                    {"tool_name": "write_file", "arguments": {"path": target, "content": "blocked"}}
+                ]}),
+                thought_signature: None,
+            }],
+            tx,
+        )
+        .await;
+        assert!(results[0].0.is_error);
+        assert!(results[0].0.output.contains("Plan Mode"));
+        assert!(!target.exists());
+        while let Ok(event) = rx.try_recv() {
+            let payload: serde_json::Value = serde_json::from_str(&event.unwrap().data).unwrap();
+            assert_ne!(payload["message_type"], "approval_required");
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_sequential_create_never_writes() {
+        use cade_agent::agent::client::CadeMessage;
+
+        let directory = tempfile::Builder::new()
+            .prefix("cade-sequence-deny-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("test directory");
+        let target = directory.path().join("denied.txt");
+        let mut state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+        state.db = cade_store::sqlite::open(
+            directory
+                .path()
+                .join("approvals.db")
+                .to_str()
+                .expect("db path"),
+        )
+        .expect("file-backed database");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let turn_state = state.clone();
+        let turn_target = target.clone();
+        let handle = tokio::spawn(async move {
+            execute_turn_tools(
+                turn_state,
+                runtime::TurnExecutionInput {
+                    agent_id: "agent-sequence-deny".to_string(),
+                    conversation_id: None,
+                    run_id: "run-sequence-deny".to_string(),
+                    input: "create a file".to_string(),
+                    permission_mode: Some("default".to_string()),
+                },
+                vec![LlmToolCall {
+                    id: "tc-sequence-deny".to_string(),
+                    name: "run_sequential_tasks".to_string(),
+                    arguments: json!({"steps": [
+                        {"tool_name": "write_file", "arguments": {"path": turn_target, "content": "not allowed"}}
+                    ]}),
+                    thought_signature: None,
+                }],
+                tx,
+            ).await
+        });
+        let message: CadeMessage = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = rx
+                    .recv()
+                    .await
+                    .expect("approval event")
+                    .expect("event envelope");
+                let decoded: CadeMessage = serde_json::from_str(&event.data).expect("client event");
+                if decoded.msg_type() == "approval_required" {
+                    break decoded;
+                }
+            }
+        })
+        .await
+        .expect("nested create must prompt");
+        let request = message
+            .approval_request()
+            .expect("actionable client request");
+        assert_eq!(message.data["tool_call_id"], "tc-sequence-deny-step-0");
+        assert_eq!(request.arguments["path"], target.to_str().unwrap());
+        assert!(!target.exists());
+        assert!(!handle.is_finished());
+        let response = crate::server::api::approvals::action_approval(
+            State(state),
+            Path(request.id.to_owned()),
+            axum::Json(crate::server::api::approvals::ActionPayload {
+                action: "deny".to_string(),
+                feedback: None,
+            }),
+        )
+        .await
+        .expect("denial accepted");
+        assert_eq!(response.0["status"], "denied");
+        let results = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("denial unblocks turn")
+            .expect("turn joins");
+        assert!(results[0].0.is_error);
+        assert!(results[0].0.output.contains("Permission Denied"));
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn sequential_protected_path_is_denied_without_prompt() {
+        let directory = tempfile::Builder::new()
+            .prefix("cade-sequence-protected-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("test directory");
+        let target = directory.path().join(".env");
+        let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let results = execute_turn_tools(
+            state,
+            runtime::TurnExecutionInput {
+                agent_id: "agent-sequence-protected".to_string(),
+                conversation_id: None,
+                run_id: "run-sequence-protected".to_string(),
+                input: "write a protected path".to_string(),
+                permission_mode: Some("default".to_string()),
+            },
+            vec![LlmToolCall {
+                id: "tc-sequence-protected".to_string(),
+                name: "run_sequential_tasks".to_string(),
+                arguments: json!({"steps": [
+                    {"tool_name": "write_file", "arguments": {"path": target, "content": "secret"}}
+                ]}),
+                thought_signature: None,
+            }],
+            tx,
+        )
+        .await;
+        assert!(results[0].0.is_error);
+        assert!(results[0].0.output.contains("protected path"));
+        assert!(!target.exists());
+        while let Ok(event) = rx.try_recv() {
+            let payload: serde_json::Value = serde_json::from_str(&event.unwrap().data).unwrap();
+            assert_ne!(payload["message_type"], "approval_required");
         }
     }
 }

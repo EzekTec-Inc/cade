@@ -2,7 +2,7 @@
 
 use super::{SseTx, storage_impl, subagent};
 use crate::server::state::AppState;
-use cade_agent::tools::{manager::ToolResult, runtime::ToolRuntime};
+use cade_agent::tools::{ToolPipeline, manager::ToolResult, runtime::ToolRuntime};
 use cade_ai::LlmToolCall;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -38,11 +38,9 @@ fn substitute_step_arguments(args: &mut Value, step_results: &[ToolResult]) {
 
 /// Executes a sequential workflow defined by the `run_sequential_tasks` tool.
 async fn handle_sequential_workflow(
-    _state: AppState,
-    _agent_id: String,
     tool_call_id: String,
     arguments: Value,
-    runtime: Arc<ToolRuntime>,
+    pipeline: Arc<ToolPipeline>,
 ) -> ToolResult {
     let steps = match arguments.get("steps").and_then(|s| s.as_array()) {
         Some(s) => s,
@@ -81,23 +79,24 @@ async fn handle_sequential_workflow(
 
         let step_tool_call_id = format!("{}-step-{}", tool_call_id, i);
 
-        let runtime_result = runtime
-            .execute(step_tool_call_id, tool_name, &step_args)
+        let result_to_store = match pipeline
+            .execute(&step_tool_call_id, tool_name, &step_args)
             .await
-            .unwrap_or_else(|| cade_agent::tools::runtime::RuntimeToolResult {
-                tool_call_id: format!("{}-step-{}", tool_call_id, i),
+        {
+            Ok(outcome) => ToolResult {
+                tool_call_id: outcome.tool_call_id,
+                tool_name: outcome.tool_name,
+                output: outcome.output,
+                is_error: outcome.is_error,
+                ui_resource_uri: outcome.ui_resource_uri,
+            },
+            Err(error) => ToolResult {
+                tool_call_id: step_tool_call_id,
                 tool_name: tool_name.to_string(),
-                output: format!("Error: Tool '{}' not found in runtime.", tool_name),
+                output: format!("Tool execution error: {error}"),
                 is_error: true,
                 ui_resource_uri: None,
-            });
-
-        let result_to_store = ToolResult {
-            tool_call_id: runtime_result.tool_call_id.clone(),
-            tool_name: runtime_result.tool_name.clone(),
-            output: runtime_result.output.clone(),
-            is_error: runtime_result.is_error,
-            ui_resource_uri: runtime_result.ui_resource_uri.clone(),
+            },
         };
 
         if !aggregated_output.is_empty() {
@@ -500,20 +499,11 @@ pub(super) async fn execute_turn_tools(
         .await;
 
         let result = if tool_name == "run_sequential_tasks" {
-            let state_c = state.clone();
-            let agent_id_c = agent_id.clone();
             let tool_call_id_c = tool_call_id.clone();
             let arguments_c = arguments.clone();
-            let runtime_c = Arc::clone(&runtime);
+            let pipeline_c = Arc::clone(&pipeline);
             let handle = tokio::spawn(async move {
-                handle_sequential_workflow(
-                    state_c,
-                    agent_id_c,
-                    tool_call_id_c,
-                    arguments_c,
-                    runtime_c,
-                )
-                .await
+                handle_sequential_workflow(tool_call_id_c, arguments_c, pipeline_c).await
             });
             handle.await.unwrap_or_else(|e| ToolResult {
                 tool_call_id: tool_call_id.clone(),
