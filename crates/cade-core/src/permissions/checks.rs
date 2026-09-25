@@ -268,7 +268,7 @@ const READONLY_CARGO: &[&str] = &[
 /// Returns true if the given path or command contains globally protected patterns
 /// (.git/, .env, .ssh/) that should never be written to by the agent.
 pub fn path_is_protected(path_or_cmd: &str) -> bool {
-    let p = path_or_cmd.to_lowercase();
+    let p = path_or_cmd.to_lowercase().replace('\\', "/");
     // Normalize delimiters for boundary checking
     let norm = p.replace(
         |c: char| c.is_whitespace() || c == '=' || c == '"' || c == '\'' || c == '>',

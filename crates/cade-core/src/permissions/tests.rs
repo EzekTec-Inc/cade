@@ -4,6 +4,26 @@ type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tes
 use super::*;
 use serde_json::json;
 
+#[test]
+fn unfamiliar_external_mutator_respects_rules_and_protected_paths() {
+    let tool = "external__transact";
+    let args = json!({"path": "notes.txt"});
+    let manager = PermissionManager::new(PermissionMode::Default);
+    assert!(manager.resolve(tool, &args, true).is_ask());
+    assert!(manager.resolve(tool, &args, false).is_allow());
+
+    manager.add_allow_rule(PermissionRule::parse(tool).unwrap());
+    assert!(manager.resolve(tool, &args, true).is_allow());
+    assert!(
+        manager
+            .resolve(tool, &json!({"path": ".env"}), true)
+            .is_deny()
+    );
+
+    manager.add_deny_rule(PermissionRule::parse(tool).unwrap());
+    assert!(manager.resolve(tool, &args, true).is_deny());
+}
+
 // -- PermissionRule::parse
 
 #[test]
@@ -340,6 +360,12 @@ fn path_is_protected_checks() {
     assert!(path_is_protected("/home/alice/.cade/db.key"));
     assert!(path_is_protected(".cade/db.key"));
     assert!(path_is_protected("./.cade/db.key"));
+    // Windows paths must receive the same protection as Unix paths.
+    assert!(path_is_protected(r"C:\work\project\.env"));
+    assert!(path_is_protected(r"C:\work\project\.git\config"));
+    assert!(path_is_protected(r"C:\Users\alice\.ssh\id_rsa"));
+    assert!(path_is_protected(r"C:\Users\alice\.cade\db.key"));
+    assert!(!path_is_protected(r"C:\work\project\src\main.rs"));
 }
 
 #[test]
@@ -590,8 +616,12 @@ fn resolve_plan_mode_allows_reads() {
             .is_allow()
     );
     assert!(
-        mgr.resolve("update_memory", &json!({"label": "active_goal", "value": "test"}), false)
-            .is_allow()
+        mgr.resolve(
+            "update_memory",
+            &json!({"label": "active_goal", "value": "test"}),
+            false,
+        )
+        .is_allow()
     );
     assert!(
         mgr.resolve("update_plan", &json!({"steps": []}), false)
@@ -721,8 +751,12 @@ fn resolve_default_mode_allows_reads() {
             .is_allow()
     );
     assert!(
-        mgr.resolve("update_memory", &json!({"label": "persona", "value": "test"}), false)
-            .is_allow()
+        mgr.resolve(
+            "update_memory",
+            &json!({"label": "persona", "value": "test"}),
+            false,
+        )
+        .is_allow()
     );
 }
 

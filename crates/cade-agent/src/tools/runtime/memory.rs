@@ -74,7 +74,10 @@ impl ToolRuntime {
             .await
         {
             Ok(_) => {
-                let _ = self.storage.stamp_provenance(&self.agent_id, &label, None).await;
+                let _ = self
+                    .storage
+                    .stamp_provenance(&self.agent_id, &label, None)
+                    .await;
                 (format!("Memory block '{label}' updated"), false)
             }
             Err(e) => {
@@ -96,7 +99,10 @@ impl ToolRuntime {
                         .await
                     {
                         Ok(_) => {
-                            let _ = self.storage.stamp_provenance(&self.agent_id, &label, None).await;
+                            let _ = self
+                                .storage
+                                .stamp_provenance(&self.agent_id, &label, None)
+                                .await;
                             (
                                 format!(
                                     "Memory block '{label}' updated (auto-trimmed from {orig} to {kept} chars to fit the {limit}-char limit)."

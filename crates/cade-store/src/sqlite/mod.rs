@@ -940,6 +940,11 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 21", [])?;
     }
 
+    if current_version < 22 {
+        conn.execute("ALTER TABLE pending_approvals ADD COLUMN reason TEXT", [])?;
+        conn.execute("PRAGMA user_version = 22", [])?;
+    }
+
     Ok(())
 }
 

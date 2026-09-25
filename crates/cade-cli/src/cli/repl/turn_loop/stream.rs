@@ -381,18 +381,14 @@ impl Repl {
                             let _ = app.draw();
                         }
                     }
-                    "approval_requested" | "approval_required" => {
-                        let id = msg.data["id"].as_str().unwrap_or("").to_string();
-                        let tool = msg.data["tool_name"].as_str().unwrap_or("tool").to_string();
-                        let reason = msg.data["reason"]
-                            .as_str()
-                            .unwrap_or("requires permission")
-                            .to_string();
-                        let args_val = msg
-                            .data
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::json!({}));
+                    "approval_required" => {
+                        let Some(request) = msg.approval_request() else {
+                            continue;
+                        };
+                        let id = request.id.to_string();
+                        let tool = request.tool_name.to_string();
+                        let reason = request.reason.to_string();
+                        let args_val = request.arguments;
                         let subagent = msg.data.get("subagent_id").and_then(|v| v.as_str());
 
                         if let Some(subagent_id) = subagent {
@@ -403,36 +399,22 @@ impl Repl {
                             let mut app = app_arc.lock();
                             app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
                             let _ = app.push(RenderLine::SystemMsg(text.clone()));
-                        } else if !id.is_empty() {
+                        } else {
                             let client_c = client_for_ui.clone();
                             let approval_id_c = id.clone();
-                            let target_preview = args_val
-                                .get("command")
-                                .or_else(|| args_val.get("path"))
-                                .or_else(|| args_val.get("file_path"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
+                            let args_preview = serde_json::to_string_pretty(args_val)
+                                .unwrap_or_else(|_| args_val.to_string());
 
                             let question = cade_tui::question::Question {
                                 header: format!("Approve {tool}"),
-                                text: if target_preview.is_empty() {
-                                    format!("Allow tool '{tool}' to run?\nReason: {reason}")
-                                } else {
-                                    format!(
-                                        "Allow tool '{tool}' to run?\nTarget: {target_preview}\nReason: {reason}"
-                                    )
-                                },
+                                text: format!(
+                                    "Approval {id}: allow '{tool}' to run?\nArguments: {args_preview}\nReason: {reason}"
+                                ),
                                 options: vec![
                                     cade_tui::question::QuestionOption {
                                         label: "Allow once".to_string(),
-                                        description: "Approve this single tool execution".to_string(),
-                                    },
-                                    cade_tui::question::QuestionOption {
-                                        label: "Allow for session".to_string(),
-                                        description:
-                                            "Auto-approve this tool for the remainder of this session"
-                                                .to_string(),
+                                        description: "Approve this single tool execution"
+                                            .to_string(),
                                     },
                                     cade_tui::question::QuestionOption {
                                         label: "Deny".to_string(),
@@ -458,11 +440,7 @@ impl Repl {
                                     let action = match rx.await {
                                         Ok(Some(cade_tui::question::QuestionAnswer::Single(
                                             ref label,
-                                        ))) if label == "Allow once"
-                                            || label == "Allow for session" =>
-                                        {
-                                            "approve"
-                                        }
+                                        ))) if label == "Allow once" => "approve",
                                         _ => "deny",
                                     };
                                     let body = serde_json::json!({ "action": action });

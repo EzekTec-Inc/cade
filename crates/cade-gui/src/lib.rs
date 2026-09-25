@@ -174,6 +174,14 @@ fn App() -> Element {
                 }
             }
 
+            // Seed the shared dashboard/chat queue for approvals created before
+            // this browser connected (the global SSE feed only sends new events).
+            if let Ok(data) = crate::api::CadeApiClient::new(key()).list_approvals().await
+                && let Some(rows) = data["approvals"].as_array()
+            {
+                pending_approvals.set(rows.clone());
+            }
+
             // Real-time SSE event loop
             loop {
                 let client_inst = crate::api::CadeApiClient::new(key());
@@ -356,6 +364,9 @@ fn App() -> Element {
                                                     &rid_c,
                                                     None,
                                                     move |stream_evt| {
+                                                        let mut pending = pending_approvals();
+                                                        crate::chat_session::track_approval_event(&mut pending, &stream_evt);
+                                                        pending_approvals.set(pending);
                                                         let mut list = msgs_sig();
                                                         crate::chat_session::ChatSessionCoordinator::apply_stream_event(
                                                             &mut list,
@@ -436,6 +447,11 @@ fn App() -> Element {
                                 convs.set(c_list);
                             }
                         }
+                    }
+                    if let Ok(data) = crate::api::CadeApiClient::new(key()).list_approvals().await
+                        && let Some(rows) = data["approvals"].as_array()
+                    {
+                        pending_approvals.set(rows.clone());
                     }
                 }
             }

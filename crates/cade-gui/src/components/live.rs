@@ -41,7 +41,10 @@ pub fn LiveView() -> Element {
         .as_ref()
         .and_then(|a| a.model.clone())
         .unwrap_or_else(|| "—".to_string());
-    let pending_approvals = (state.pending_approvals)();
+    let pending_approvals: Vec<_> = (state.pending_approvals)()
+        .into_iter()
+        .filter(crate::chat_session::is_tool_approval)
+        .collect();
 
     let mut selected_run = use_signal(|| None::<serde_json::Value>);
     let mut is_drawer_open = use_signal(|| false);

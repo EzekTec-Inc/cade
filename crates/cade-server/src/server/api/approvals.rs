@@ -65,19 +65,24 @@ pub async fn action_approval(
         .get()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Check if the approval exists first
-    let current_status = cade_store::sqlite::get_approval_status(&state.db, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if current_status.is_none() {
+    if !cade_store::sqlite::resolve_pending_approval(&state.db, &id, &status)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let current = cade_store::sqlite::get_approval_status(&state.db, &id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         return Err((
-            StatusCode::NOT_FOUND,
-            format!("Approval request '{}' not found.", id),
+            if current.is_some() {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            if current.is_some() {
+                format!("Approval request '{id}' is no longer pending.")
+            } else {
+                format!("Approval request '{id}' not found.")
+            },
         ));
     }
-
-    cade_store::sqlite::set_approval_status(&state.db, &id, &status)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     crate::server::api::agents::publish_global_event(
         Some(&state.db),

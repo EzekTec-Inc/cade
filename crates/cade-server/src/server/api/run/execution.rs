@@ -2,7 +2,7 @@
 
 use super::{SseTx, storage_impl, subagent};
 use crate::server::state::AppState;
-use cade_agent::tools::{manager::ToolResult, runtime::ToolRuntime};
+use cade_agent::tools::{ToolPipeline, manager::ToolResult, runtime::ToolRuntime};
 use cade_ai::LlmToolCall;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -38,11 +38,9 @@ fn substitute_step_arguments(args: &mut Value, step_results: &[ToolResult]) {
 
 /// Executes a sequential workflow defined by the `run_sequential_tasks` tool.
 async fn handle_sequential_workflow(
-    _state: AppState,
-    _agent_id: String,
     tool_call_id: String,
     arguments: Value,
-    runtime: Arc<ToolRuntime>,
+    pipeline: Arc<ToolPipeline>,
 ) -> ToolResult {
     let steps = match arguments.get("steps").and_then(|s| s.as_array()) {
         Some(s) => s,
@@ -81,23 +79,24 @@ async fn handle_sequential_workflow(
 
         let step_tool_call_id = format!("{}-step-{}", tool_call_id, i);
 
-        let runtime_result = runtime
-            .execute(step_tool_call_id, tool_name, &step_args)
+        let result_to_store = match pipeline
+            .execute(&step_tool_call_id, tool_name, &step_args)
             .await
-            .unwrap_or_else(|| cade_agent::tools::runtime::RuntimeToolResult {
-                tool_call_id: format!("{}-step-{}", tool_call_id, i),
+        {
+            Ok(outcome) => ToolResult {
+                tool_call_id: outcome.tool_call_id,
+                tool_name: outcome.tool_name,
+                output: outcome.output,
+                is_error: outcome.is_error,
+                ui_resource_uri: outcome.ui_resource_uri,
+            },
+            Err(error) => ToolResult {
+                tool_call_id: step_tool_call_id,
                 tool_name: tool_name.to_string(),
-                output: format!("Error: Tool '{}' not found in runtime.", tool_name),
+                output: format!("Tool execution error: {error}"),
                 is_error: true,
                 ui_resource_uri: None,
-            });
-
-        let result_to_store = ToolResult {
-            tool_call_id: runtime_result.tool_call_id.clone(),
-            tool_name: runtime_result.tool_name.clone(),
-            output: runtime_result.output.clone(),
-            is_error: runtime_result.is_error,
-            ui_resource_uri: runtime_result.ui_resource_uri.clone(),
+            },
         };
 
         if !aggregated_output.is_empty() {
@@ -144,11 +143,15 @@ async fn emit_tool_progress(
         object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
         object.insert("seq_id".to_owned(), Value::from(sequence));
     }
-    let _ = tx
-        .send(Ok(super::runtime::RunEventEnvelope {
+    // Progress is replayable; a stalled live receiver must not prevent the
+    // guarded invocation from reaching (or completing) its approval check.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(Ok(super::runtime::RunEventEnvelope {
             data: envelope.to_string(),
-        }))
-        .await;
+        })),
+    )
+    .await;
 }
 
 fn parse_permission_mode(mode_str: &str) -> Option<cade_core::permissions::PermissionMode> {
@@ -166,32 +169,125 @@ fn parse_permission_mode(mode_str: &str) -> Option<cade_core::permissions::Permi
 pub(super) struct SseApprovalDelegate {
     pub(super) db: cade_store::sqlite::Db,
     pub(super) agent_id: String,
+    pub(super) run_id: String,
     pub(super) tx: SseTx,
 }
 
-#[async_trait::async_trait]
-impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
-    async fn request_approval(
+// A cancelled turn must not leave a request in the actionable queue.
+struct PendingRunApproval {
+    db: cade_store::sqlite::Db,
+    id: String,
+    run_id: String,
+    tx: SseTx,
+    abandonment_reason: &'static str,
+}
+
+impl PendingRunApproval {
+    fn resolve(&self) -> Option<super::runtime::RunEventEnvelope> {
+        let changed = match cade_store::sqlite::resolve_pending_approval(
+            &self.db,
+            &self.id,
+            self.abandonment_reason,
+        ) {
+            Ok(changed) => changed,
+            Err(error) => {
+                tracing::error!(%error, approval_id = %self.id, "failed to cancel pending approval");
+                return None;
+            }
+        };
+        if changed {
+            let mut event = json!({
+                "message_type": "approval_resolved",
+                "id": self.id,
+                "status": self.abandonment_reason,
+                "approved": false,
+            });
+            match cade_store::sqlite::append_run_event(&self.db, &self.run_id, &event.to_string()) {
+                Ok(seq) => {
+                    event["run_id"] = self.run_id.clone().into();
+                    event["seq_id"] = seq.into();
+                }
+                Err(error) => {
+                    tracing::error!(%error, approval_id = %self.id, "failed to persist approval resolution")
+                }
+            }
+            crate::server::api::agents::publish_global_event(
+                Some(&self.db),
+                "approval_resolved",
+                json!({"id": self.id, "status": self.abandonment_reason}),
+            );
+            return Some(super::runtime::RunEventEnvelope {
+                data: event.to_string(),
+            });
+        }
+        None
+    }
+
+    async fn finish(&self) {
+        if let Some(event) = self.resolve() {
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(1), self.tx.send(Ok(event)))
+                    .await;
+        }
+    }
+}
+
+impl Drop for PendingRunApproval {
+    fn drop(&mut self) {
+        // Dropping a run task cannot await, but must still withdraw its queue
+        // entry. Normal timeout/cancellation paths use finish() in order.
+        if let Some(event) = self.resolve() {
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(Ok(event)))
+                    .await;
+            });
+        }
+    }
+}
+
+impl SseApprovalDelegate {
+    pub(super) async fn request_with_timeout(
         &self,
         tool_call_id: &str,
         tool_name: &str,
         arguments: &Value,
         reason: &str,
+        timeout: std::time::Duration,
     ) -> cade_agent::Result<bool> {
         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
-        let args_str = arguments.to_string();
-
-        if let Err(e) = cade_store::sqlite::create_pending_approval(
+        let event_payload = json!({
+            "message_type": "approval_required",
+            "id": approval_id,
+            "agent_id": self.agent_id,
+            "run_id": self.run_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "reason": reason,
+        });
+        let sequence = cade_store::sqlite::create_run_approval(
             &self.db,
-            &approval_id,
-            &self.agent_id,
-            None,
-            tool_name,
-            &args_str,
-        ) {
-            tracing::warn!("Failed to create pending approval in database: {e}");
-            return Ok(false);
-        }
+            &cade_store::sqlite::RunApproval {
+                id: &approval_id,
+                agent_id: &self.agent_id,
+                run_id: &self.run_id,
+                tool_name,
+                arguments: &arguments.to_string(),
+                reason,
+                event: &event_payload.to_string(),
+            },
+        )
+        .map_err(|error| {
+            cade_agent::Error::custom(format!("Failed to persist approval request: {error}"))
+        })?;
+        let mut pending = PendingRunApproval {
+            db: self.db.clone(),
+            id: approval_id.clone(),
+            run_id: self.run_id.clone(),
+            tx: self.tx.clone(),
+            abandonment_reason: "denied:Approval request cancelled",
+        };
 
         crate::server::api::agents::publish_global_event(
             Some(&self.db),
@@ -206,50 +302,89 @@ impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
             }),
         );
 
-        let event_payload = json!({
-            "type": "approval_required",
-            "id": approval_id,
-            "agent_id": self.agent_id,
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "arguments": arguments,
-            "reason": reason,
-        });
-        let _ = self
-            .tx
-            .send(Ok(super::runtime::RunEventEnvelope {
-                data: event_payload.to_string(),
-            }))
-            .await;
+        let mut live_payload = event_payload;
+        live_payload["seq_id"] = sequence.into();
+        // A closed receiver can reconnect via the durable log. A *full* live
+        // channel must not silently lose the prompt and wait for ten minutes.
+        let delivery = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            self.tx.send(Ok(super::runtime::RunEventEnvelope {
+                data: live_payload.to_string(),
+            })),
+        )
+        .await;
+        if delivery.is_err() {
+            pending.abandonment_reason = "denied:Approval prompt delivery timed out";
+            pending.finish().await;
+            return Err(cade_agent::Error::custom(
+                "Approval prompt delivery timed out",
+            ));
+        }
 
-        let timeout_secs = 600;
-        let start_time = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + timeout;
         let mut poll_interval = std::time::Duration::from_millis(150);
-
         loop {
-            if start_time.elapsed().as_secs() > timeout_secs {
-                return Err(cade_agent::Error::custom(
-                    "Approval request timed out after 10 minutes.",
-                ));
-            }
-
-            if let Ok(Some(status)) =
-                cade_store::sqlite::get_approval_status(&self.db, &approval_id)
-            {
-                if status == "approved" {
-                    return Ok(true);
-                } else if status == "denied" {
-                    return Ok(false);
-                } else if let Some(feedback) = status.strip_prefix("denied:") {
+            let status = cade_store::sqlite::get_approval_status(&self.db, &approval_id).map_err(
+                |error| {
+                    cade_agent::Error::custom(format!("Failed to read approval decision: {error}"))
+                },
+            )?;
+            match status.as_deref() {
+                Some("approved") => return Ok(true),
+                Some(status) if status.starts_with("approved:") => return Ok(true),
+                Some("denied") => return Ok(false),
+                Some(status) if status.starts_with("denied:") => {
                     return Err(cade_agent::Error::custom(format!(
-                        "Permission Denied: {feedback}"
+                        "Permission Denied: {}",
+                        &status[7..]
                     )));
                 }
+                Some("pending") => {}
+                _ => {
+                    return Err(cade_agent::Error::custom(
+                        "Approval request is missing or has an invalid status",
+                    ));
+                }
             }
-
-            tokio::time::sleep(poll_interval).await;
+            if cade_store::sqlite::is_run_cancellation_requested(&self.db, &self.run_id).map_err(
+                |error| {
+                    cade_agent::Error::custom(format!("Failed to read run cancellation: {error}"))
+                },
+            )? {
+                pending.finish().await;
+                return Err(cade_agent::Error::custom(
+                    "Approval request cancelled with run",
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                pending.abandonment_reason = "denied:Approval request timed out";
+                pending.finish().await;
+                return Err(cade_agent::Error::custom("Approval request timed out"));
+            }
+            tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + poll_interval))
+                .await;
             poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
+    async fn request_approval(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &Value,
+        reason: &str,
+    ) -> cade_agent::Result<bool> {
+        self.request_with_timeout(
+            tool_call_id,
+            tool_name,
+            arguments,
+            reason,
+            std::time::Duration::from_secs(600),
+        )
+        .await
     }
 }
 
@@ -453,6 +588,7 @@ pub(super) async fn execute_turn_tools(
             Arc::new(SseApprovalDelegate {
                 db: state.db.clone(),
                 agent_id: agent_id.clone(),
+                run_id: run_id.clone(),
                 tx: tx.clone(),
             })
         };
@@ -497,20 +633,11 @@ pub(super) async fn execute_turn_tools(
         .await;
 
         let result = if tool_name == "run_sequential_tasks" {
-            let state_c = state.clone();
-            let agent_id_c = agent_id.clone();
             let tool_call_id_c = tool_call_id.clone();
             let arguments_c = arguments.clone();
-            let runtime_c = Arc::clone(&runtime);
+            let pipeline_c = Arc::clone(&pipeline);
             let handle = tokio::spawn(async move {
-                handle_sequential_workflow(
-                    state_c,
-                    agent_id_c,
-                    tool_call_id_c,
-                    arguments_c,
-                    runtime_c,
-                )
-                .await
+                handle_sequential_workflow(tool_call_id_c, arguments_c, pipeline_c).await
             });
             handle.await.unwrap_or_else(|e| ToolResult {
                 tool_call_id: tool_call_id.clone(),

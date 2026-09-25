@@ -138,6 +138,21 @@ mod tests {
             ToolSchemaNormalizer::normalize("db", &tool, &["write_data".into()], false);
         assert!(!normalized.is_write);
     }
+
+    #[test]
+    fn unfamiliar_names_use_annotations_and_missing_metadata_defaults_to_write() {
+        use rmcp::model::ToolAnnotations;
+
+        let read = Tool::new("transact", "Reads data", JsonObject::new())
+            .with_annotations(ToolAnnotations::new().read_only(true));
+        let write = Tool::new("transact", "Changes data", JsonObject::new())
+            .with_annotations(ToolAnnotations::new().read_only(false));
+        let unknown = Tool::new("transact", "Unspecified", JsonObject::new());
+
+        assert!(!ToolSchemaNormalizer::normalize("external", &read, &[], false).is_write);
+        assert!(ToolSchemaNormalizer::normalize("external", &write, &[], false).is_write);
+        assert!(ToolSchemaNormalizer::normalize("external", &unknown, &[], false).is_write);
+    }
 }
 
 // endregion: --- Tests

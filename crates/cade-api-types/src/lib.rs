@@ -132,7 +132,12 @@ impl StreamEvent {
 
     /// Extract `approval_id` from an `approval_required` event.
     pub fn approval_id(&self) -> Option<&str> {
-        self.data.get("approval_id").and_then(|v| v.as_str())
+        self.data.get("id").and_then(|v| v.as_str())
+    }
+
+    /// The canonical approval request emitted by a server-owned run.
+    pub fn approval_request(&self) -> Option<ApprovalRequest<'_>> {
+        ApprovalRequest::from_parts(self.msg_type(), None, &self.data)
     }
 
     /// Extract `run_id` from a canonical run event.
@@ -157,6 +162,34 @@ impl StreamEvent {
         self.data
             .get("tool_result")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ApprovalRequest<'a> {
+    pub id: &'a str,
+    pub tool_name: &'a str,
+    pub arguments: &'a serde_json::Value,
+    pub reason: &'a str,
+}
+
+impl<'a> ApprovalRequest<'a> {
+    /// Decode the same run approval from flattened browser events and terminal
+    /// messages (whose deserializer may extract `id` from the flattened data).
+    pub fn from_parts(
+        kind: &str,
+        id: Option<&'a str>,
+        data: &'a serde_json::Value,
+    ) -> Option<Self> {
+        if kind != "approval_required" {
+            return None;
+        }
+        Some(Self {
+            id: id.or_else(|| data.get("id").and_then(|v| v.as_str()))?,
+            tool_name: data.get("tool_name")?.as_str()?,
+            arguments: data.get("arguments")?,
+            reason: data.get("reason")?.as_str()?,
+        })
     }
 }
 

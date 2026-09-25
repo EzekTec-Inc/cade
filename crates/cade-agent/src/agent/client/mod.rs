@@ -59,6 +59,8 @@ pub struct CadeMessage {
     pub data: Value,
 }
 
+pub use cade_api_types::ApprovalRequest;
+
 impl CadeMessage {
     /// Return the message_type string, or empty if absent
     pub fn msg_type(&self) -> &str {
@@ -67,6 +69,10 @@ impl CadeMessage {
             .and_then(|v| v.as_str())
             .or(self.message_type.as_deref())
             .unwrap_or("")
+    }
+
+    pub fn approval_request(&self) -> Option<ApprovalRequest<'_>> {
+        ApprovalRequest::from_parts(self.msg_type(), self.id.as_deref(), &self.data)
     }
 
     /// Construct a system notice message.
