@@ -481,15 +481,13 @@ impl McpManager {
         if let Some((_, is_write)) = self.find_tool_idx(prefixed_name).await {
             return is_write;
         }
-        if let Some(remote) = &self.remote_client {
-            if let Ok(statuses) = remote.list_mcp_statuses().await {
-                if let Some(is_write) = statuses
-                    .iter()
-                    .find_map(|s| s.tool_mutability.get(prefixed_name))
-                {
-                    return *is_write;
-                }
-            }
+        if let Some(remote) = &self.remote_client
+            && let Ok(statuses) = remote.list_mcp_statuses().await
+            && let Some(is_write) = statuses
+                .iter()
+                .find_map(|s| s.tool_mutability.get(prefixed_name))
+        {
+            return *is_write;
         }
         true
     }
