@@ -1,7 +1,9 @@
 // Tests for the run module.
 
+use super::execution::execute_turn_tools;
 use super::subagent::{filter_subagent_tools, handle_run_subagent_tool};
 use super::*;
+use std::sync::Arc;
 
 fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
     cade_store::sqlite::create_agent(
@@ -2732,6 +2734,7 @@ mod advanced_execution_tests {
                 effects: effects.clone(),
                 metadata,
             })));
+            let run_id = approval_test_run(&state.db, "agent-external");
             let args = json!({"resource": case});
             let (tx, mut rx) = tokio::sync::mpsc::channel(16);
             let state_for_turn = state.clone();
@@ -2741,7 +2744,7 @@ mod advanced_execution_tests {
                     runtime::TurnExecutionInput {
                         agent_id: "agent-external".into(),
                         conversation_id: None,
-                        run_id: "run-external".into(),
+                        run_id,
                         input: "transact".into(),
                         permission_mode: Some("default".into()),
                     },
@@ -2836,17 +2839,19 @@ mod advanced_execution_tests {
                 .expect("db path"),
         )
         .expect("file-backed database");
+        let run_id = approval_test_run(&state.db, "agent-sequence");
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let turn_state = state.clone();
         let target_arg = target.to_str().expect("target path").to_owned();
         let turn_target_arg = target_arg.clone();
+        let turn_run_id = run_id.clone();
         let handle = tokio::spawn(async move {
             execute_turn_tools(
                 turn_state,
                 runtime::TurnExecutionInput {
                     agent_id: "agent-sequence".to_string(),
                     conversation_id: None,
-                    run_id: "run-sequence".to_string(),
+                    run_id: turn_run_id,
                     input: "read, create, update, delete".to_string(),
                     permission_mode: Some("default".to_string()),
                 },
@@ -2893,7 +2898,7 @@ mod advanced_execution_tests {
                 message.data["tool_call_id"],
                 format!("tc-sequence-step-{step}")
             );
-            assert_eq!(message.data["run_id"], "run-sequence");
+            assert_eq!(message.data["run_id"], run_id);
             assert!(!request.reason.is_empty());
             match step {
                 1 => {
@@ -3007,6 +3012,7 @@ mod advanced_execution_tests {
                 .expect("db path"),
         )
         .expect("file-backed database");
+        let run_id = approval_test_run(&state.db, "agent-sequence-deny");
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let turn_state = state.clone();
         let turn_target = target.clone();
@@ -3016,7 +3022,7 @@ mod advanced_execution_tests {
                 runtime::TurnExecutionInput {
                     agent_id: "agent-sequence-deny".to_string(),
                     conversation_id: None,
-                    run_id: "run-sequence-deny".to_string(),
+                    run_id,
                     input: "create a file".to_string(),
                     permission_mode: Some("default".to_string()),
                 },
