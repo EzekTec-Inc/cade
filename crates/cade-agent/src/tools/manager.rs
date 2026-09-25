@@ -365,7 +365,7 @@ pub fn schemas_for_names(
 
 /// Returns true if the tool is an MCP tool that can mutate state.
 pub async fn is_mcp_write_tool(name: &str, mcp: &McpManager) -> bool {
-    if mcp.owns_tool(name).await {
+    if name.contains("__") {
         return mcp.is_write_tool(name).await;
     }
     false

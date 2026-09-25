@@ -77,6 +77,9 @@ pub struct McpStatus {
     pub key: String,
     pub command: String,
     pub tools: Vec<String>, // prefixed names
+    /// Mutability for discovered tools. Missing entries are treated as writes by callers.
+    #[serde(default)]
+    pub tool_mutability: HashMap<String, bool>,
     pub disabled: bool,
     #[serde(default = "default_ready_status")]
     pub status: String,
@@ -425,6 +428,11 @@ impl McpManager {
                 key: s.key.clone(),
                 command: s.command.clone(),
                 tools: s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
+                tool_mutability: s
+                    .tools
+                    .iter()
+                    .map(|t| (t.prefixed_name.clone(), t.is_write))
+                    .collect(),
                 disabled: s.disabled,
                 status: if s.disabled {
                     "disabled".to_string()
@@ -441,6 +449,7 @@ impl McpManager {
                     key: k.clone(),
                     command: String::new(),
                     tools: vec![],
+                    tool_mutability: HashMap::new(),
                     disabled: false,
                     status: diag.status.clone(),
                     error: diag.error.clone(),
@@ -466,13 +475,23 @@ impl McpManager {
         self.find_tool_idx(prefixed_name).await.is_some()
     }
 
-    /// Check if a tool owned by this manager is marked as a mutating/write tool.
+    /// Check mutability using connected metadata or the server-hosted catalog.
+    /// Unknown external tools fail closed: they are treated as writes until metadata is available.
     pub async fn is_write_tool(&self, prefixed_name: &str) -> bool {
         if let Some((_, is_write)) = self.find_tool_idx(prefixed_name).await {
-            is_write
-        } else {
-            false
+            return is_write;
         }
+        if let Some(remote) = &self.remote_client {
+            if let Ok(statuses) = remote.list_mcp_statuses().await {
+                if let Some(is_write) = statuses
+                    .iter()
+                    .find_map(|s| s.tool_mutability.get(prefixed_name))
+                {
+                    return *is_write;
+                }
+            }
+        }
+        true
     }
 
     async fn find_tool_idx(&self, prefixed_name: &str) -> Option<(usize, bool)> {

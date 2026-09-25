@@ -37,7 +37,7 @@ mod stub {
             false
         }
         pub async fn is_write_tool(&self, _name: &str) -> bool {
-            false
+            true
         }
         pub async fn all_tool_schemas(&self) -> Vec<Value> {
             vec![]

@@ -2394,4 +2394,149 @@ mod advanced_execution_tests {
             }
         }
     }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn remote_mcp_mutability_gates_server_turn_at_client_approval_seam() {
+        use cade_agent::agent::client::CadeMessage;
+        use cade_mcp::{McpManager, McpStatus, RemoteMcpClient};
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        struct Remote {
+            effects: Arc<Mutex<Vec<serde_json::Value>>>,
+            metadata: Option<bool>,
+        }
+
+        #[async_trait::async_trait]
+        impl RemoteMcpClient for Remote {
+            async fn call_mcp_tool(
+                &self,
+                _name: &str,
+                arguments: &serde_json::Value,
+            ) -> cade_mcp::Result<(String, bool, Option<String>)> {
+                self.effects.lock().unwrap().push(arguments.clone());
+                Ok(("executed".into(), false, None))
+            }
+
+            async fn list_mcp_statuses(&self) -> cade_mcp::Result<Vec<McpStatus>> {
+                Ok(vec![McpStatus {
+                    key: "external".into(),
+                    command: "remote".into(),
+                    tools: vec!["external__transact".into()],
+                    tool_mutability: self
+                        .metadata
+                        .map(|v| HashMap::from([("external__transact".into(), v)]))
+                        .unwrap_or_default(),
+                    disabled: false,
+                    status: "ready".into(),
+                    error: None,
+                }])
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        for (case, metadata, decision) in [
+            ("approved", Some(true), Some("approve")),
+            ("denied", Some(true), Some("deny")),
+            ("read", Some(false), None),
+            ("unknown", None, Some("deny")),
+        ] {
+            let effects = Arc::new(Mutex::new(Vec::new()));
+            let mut state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+            state.db = cade_store::sqlite::open(
+                directory
+                    .path()
+                    .join(format!("{case}.db"))
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            state.mcp = Arc::new(McpManager::from_remote(Arc::new(Remote {
+                effects: effects.clone(),
+                metadata,
+            })));
+            let args = json!({"resource": case});
+            let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+            let state_for_turn = state.clone();
+            let handle = tokio::spawn(async move {
+                execute_turn_tools(
+                    state_for_turn,
+                    runtime::TurnExecutionInput {
+                        agent_id: "agent-external".into(),
+                        conversation_id: None,
+                        run_id: "run-external".into(),
+                        input: "transact".into(),
+                        permission_mode: Some("default".into()),
+                    },
+                    vec![LlmToolCall {
+                        id: "tc-external".into(),
+                        name: "external__transact".into(),
+                        arguments: args.clone(),
+                        thought_signature: None,
+                    }],
+                    tx,
+                )
+                .await
+            });
+
+            if let Some(action) = decision {
+                let message = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let envelope = rx.recv().await.expect("approval event").expect("event");
+                        let message: CadeMessage = serde_json::from_str(&envelope.data).unwrap();
+                        if message.msg_type() == "approval_required" {
+                            break message;
+                        }
+                    }
+                })
+                .await
+                .expect("actionable approval must arrive");
+                let request = message.approval_request().expect("client can prompt");
+                assert_eq!(request.tool_name, "external__transact");
+                assert_eq!(request.arguments["resource"], case);
+                assert!(!request.reason.is_empty());
+                assert!(effects.lock().unwrap().is_empty(), "effect before decision");
+                let response = crate::server::api::approvals::action_approval(
+                    State(state),
+                    Path(request.id.to_owned()),
+                    axum::Json(crate::server::api::approvals::ActionPayload {
+                        action: action.into(),
+                        feedback: None,
+                    }),
+                )
+                .await
+                .expect("decision accepted");
+                assert_eq!(
+                    response.0["status"],
+                    if action == "approve" {
+                        "approved"
+                    } else {
+                        "denied"
+                    }
+                );
+            }
+            let results = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+                .await
+                .expect("turn finishes")
+                .expect("turn joins");
+            let executed = decision == Some("approve") || decision.is_none();
+            assert_eq!(
+                effects.lock().unwrap().clone(),
+                if executed {
+                    vec![json!({"resource": case})]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(results[0].0.is_error, !executed, "{case}");
+            if decision.is_none() {
+                while let Ok(event) = rx.try_recv() {
+                    let event = event.unwrap();
+                    let msg: CadeMessage = serde_json::from_str(&event.data).unwrap();
+                    assert_ne!(msg.msg_type(), "approval_required");
+                }
+            }
+        }
+    }
 }

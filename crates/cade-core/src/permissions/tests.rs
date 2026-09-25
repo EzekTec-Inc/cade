@@ -4,6 +4,26 @@ type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tes
 use super::*;
 use serde_json::json;
 
+#[test]
+fn unfamiliar_external_mutator_respects_rules_and_protected_paths() {
+    let tool = "external__transact";
+    let args = json!({"path": "notes.txt"});
+    let manager = PermissionManager::new(PermissionMode::Default);
+    assert!(manager.resolve(tool, &args, true).is_ask());
+    assert!(manager.resolve(tool, &args, false).is_allow());
+
+    manager.add_allow_rule(PermissionRule::parse(tool).unwrap());
+    assert!(manager.resolve(tool, &args, true).is_allow());
+    assert!(
+        manager
+            .resolve(tool, &json!({"path": ".env"}), true)
+            .is_deny()
+    );
+
+    manager.add_deny_rule(PermissionRule::parse(tool).unwrap());
+    assert!(manager.resolve(tool, &args, true).is_deny());
+}
+
 // -- PermissionRule::parse
 
 #[test]
