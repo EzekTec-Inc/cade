@@ -3,8 +3,25 @@ use serde_json::Value;
 
 impl ToolRuntime {
     pub(crate) async fn handle_update_memory(&self, args: &Value) -> (String, bool) {
-        let label = args["label"].as_str().unwrap_or("").trim().to_string();
-        let value = args["value"].as_str().unwrap_or("").to_string();
+        let label = args["label"]
+            .as_str()
+            .or_else(|| args["name"].as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let value = args["value"]
+            .as_str()
+            .or_else(|| args["content"].as_str())
+            .or_else(|| args["text"].as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                args.get("value")
+                    .or_else(|| args.get("content"))
+                    .or_else(|| args.get("text"))
+                    .filter(|v| !v.is_null())
+                    .map(|v| v.to_string())
+            })
+            .unwrap_or_default();
         let operation = args["operation"].as_str().unwrap_or("set");
         let description = args["description"].as_str().map(String::from);
 
@@ -56,7 +73,10 @@ impl ToolRuntime {
             )
             .await
         {
-            Ok(_) => (format!("Memory block '{label}' updated"), false),
+            Ok(_) => {
+                let _ = self.storage.stamp_provenance(&self.agent_id, &label, None).await;
+                (format!("Memory block '{label}' updated"), false)
+            }
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("exceeds character limit") {
@@ -75,12 +95,15 @@ impl ToolRuntime {
                         )
                         .await
                     {
-                        Ok(_) => (
-                            format!(
-                                "Memory block '{label}' updated (auto-trimmed from {orig} to {kept} chars to fit the {limit}-char limit)."
-                            ),
-                            false,
-                        ),
+                        Ok(_) => {
+                            let _ = self.storage.stamp_provenance(&self.agent_id, &label, None).await;
+                            (
+                                format!(
+                                    "Memory block '{label}' updated (auto-trimmed from {orig} to {kept} chars to fit the {limit}-char limit)."
+                                ),
+                                false,
+                            )
+                        }
                         Err(e2) => (format!("Failed after auto-trim: {e2}"), true),
                     }
                 } else {

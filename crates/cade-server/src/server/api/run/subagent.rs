@@ -1655,17 +1655,20 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
         );
 
         // Trigger native desktop notification via CADE's cross-platform desktop notification service
-        let title = "CADE — Approval Required";
-        let body = format!(
-            "Subagent [{}] requests permission to run '{}'",
-            self.subagent_id, tool_name
-        );
-        if let Err(e) = cade_desktop::desktop::notify::send_notification(
-            title,
-            &body,
-            cade_desktop::desktop::notify::Urgency::Critical,
-        ) {
-            tracing::warn!("Failed to send desktop notification: {e}");
+        #[cfg(feature = "desktop")]
+        {
+            let title = "CADE — Approval Required";
+            let body = format!(
+                "Subagent [{}] requests permission to run '{}'",
+                self.subagent_id, tool_name
+            );
+            if let Err(e) = cade_desktop::desktop::notify::send_notification(
+                title,
+                &body,
+                cade_desktop::desktop::notify::Urgency::Critical,
+            ) {
+                tracing::warn!("Failed to send desktop notification: {e}");
+            }
         }
 
         // Wait for approval

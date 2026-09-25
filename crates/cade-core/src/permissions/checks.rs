@@ -18,6 +18,41 @@ pub fn normalize_tool_name(name: &str) -> String {
 pub fn is_write_schema(name: &str) -> bool {
     let clean = normalize_tool_name(name);
 
+    // 0. Exclude internal agent meta-tools (memory, plan/todos, checkpoints, artifacts, reflection)
+    // from requiring interactive permission prompts or being blocked in Plan mode.
+    if matches!(
+        clean.as_str(),
+        "update_memory"
+            | "update_memory_typed"
+            | "update_memory_field"
+            | "memory_apply_patch"
+            | "archival_memory_insert"
+            | "archival_memory_search"
+            | "search_memory"
+            | "conversation_search"
+            | "query_event_log"
+            | "recall"
+            | "answer"
+            | "link_memory_evidence"
+            | "reflect"
+            | "store_artifact"
+            | "create_checkpoint"
+            | "list_checkpoints"
+            | "restore_checkpoint"
+            | "update_plan"
+            | "set_plan"
+            | "todowrite"
+            | "writetodos"
+            | "finish_task"
+            | "finishtask"
+            | "enter_plan_mode"
+            | "exit_plan_mode"
+            | "enterplanmode"
+            | "exitplanmode"
+    ) {
+        return false;
+    }
+
     // 1. Exact matches across core CADE tools, Serena AST tools, GitHub MCP, and Desktop tools
     if matches!(
         clean.as_str(),

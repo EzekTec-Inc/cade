@@ -445,6 +445,15 @@ fn read_schemas_not_write() {
     assert!(!is_write_schema("grep"));
     assert!(!is_write_schema("glob"));
     assert!(!is_write_schema("bash")); // bash is not inherently write at schema level
+    assert!(!is_write_schema("update_memory"));
+    assert!(!is_write_schema("update_memory_typed"));
+    assert!(!is_write_schema("update_memory_field"));
+    assert!(!is_write_schema("update_plan"));
+    assert!(!is_write_schema("set_plan"));
+    assert!(!is_write_schema("todowrite"));
+    assert!(!is_write_schema("writetodos"));
+    assert!(!is_write_schema("create_checkpoint"));
+    assert!(!is_write_schema("restore_checkpoint"));
 }
 
 // -- bash_first_cmd_is_delete
@@ -580,6 +589,14 @@ fn resolve_plan_mode_allows_reads() {
         mgr.resolve("glob", &json!({"pattern": "*.rs"}), false)
             .is_allow()
     );
+    assert!(
+        mgr.resolve("update_memory", &json!({"label": "active_goal", "value": "test"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("update_plan", &json!({"steps": []}), false)
+            .is_allow()
+    );
 }
 
 #[test]
@@ -701,6 +718,10 @@ fn resolve_default_mode_allows_reads() {
     );
     assert!(
         mgr.resolve("bash", &json!({"command": "ls"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("update_memory", &json!({"label": "persona", "value": "test"}), false)
             .is_allow()
     );
 }

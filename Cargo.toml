@@ -139,7 +139,7 @@ path = "src/main.rs"
 [features]
 default     = ["mcp"]
 full        = ["desktop", "web", "mcp", "integration", "backend-docker", "backend-ssh"]
-desktop     = ["cade-agent/desktop", "dep:cade-desktop"]
+desktop     = ["cade-agent/desktop", "dep:cade-desktop", "cade-server/desktop"]
 web         = ["cade-agent/web"]
 mcp         = ["cade-agent/mcp"]
 integration = ["dep:cade-sdk"]
