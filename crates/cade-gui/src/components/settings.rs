@@ -189,7 +189,7 @@ fn agent_settings_card(agent: cade_api_types::AgentInfo, api_key: Signal<String>
                                 onkeydown: {
                                     let aid = agent_id.clone();
                                     let aname = agent_name.clone();
-                                    move |e| {
+                                    move |e: KeyboardEvent| {
                                         if e.key() == Key::Enter {
                                             save_agent_name(
                                                 edit_name, aid.clone(), aname.clone(),

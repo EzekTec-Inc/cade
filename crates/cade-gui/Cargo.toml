@@ -23,7 +23,7 @@ web-sys              = { version = "0.3", features = ["Window", "Request", "Requ
 gloo-timers          = { version = "0.2", features = ["futures"] }
 
 # Dioxus for full responsive HTML/CSS UI
-dioxus = { version = "0.5", features = ["web"] }
+dioxus = { version = "0.6.3", features = ["web"] }
 pulldown-cmark.workspace = true
 
 # -- Browser-specific dependencies for random sources
