@@ -22,13 +22,32 @@ fn status_is_terminal(status: &str) -> bool {
 
 /// Re-hydrate a persisted event with its `seq_id` and `run_id` so clients can
 /// deduplicate replayed events after a reconnect.
-fn attach_run_meta(run_id: &str, seq: i64, data: &str) -> Value {
+fn attach_run_meta(
+    db: &sqlite::Db,
+    run_id: &str,
+    seq: i64,
+    data: &str,
+) -> cade_store::error::Result<Value> {
     let mut v: Value = serde_json::from_str(data).unwrap_or(Value::String(data.to_string()));
     if let Some(obj) = v.as_object_mut() {
+        if obj.get("message_type").and_then(Value::as_str) == Some("approval_required") {
+            let id = obj.get("id").and_then(Value::as_str).unwrap_or_default();
+            let status = sqlite::get_approval_status(db, id)?;
+            if status.as_deref() != Some("pending") {
+                obj.insert(
+                    "message_type".to_owned(),
+                    Value::String("approval_resolved".to_owned()),
+                );
+                obj.insert(
+                    "status".to_owned(),
+                    Value::String(status.unwrap_or_else(|| "missing".to_owned())),
+                );
+            }
+        }
         obj.insert("seq_id".to_string(), seq.into());
         obj.insert("run_id".to_string(), run_id.to_string().into());
     }
-    v
+    Ok(v)
 }
 
 /// GET /v1/runs/:run_id — run status + last seq_id
@@ -108,14 +127,21 @@ async fn run_replay_sse(state: &AppState, run_id: &str, after_seq: i64) -> Respo
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let run_id_owned = run_id.to_string();
-    let stream = futures::stream::iter(
-        events
-            .into_iter()
-            .map(move |(seq, data)| {
-                let v = attach_run_meta(&run_id_owned, seq, &data);
+    let payloads = events
+        .into_iter()
+        .map(|(seq, data)| {
+            attach_run_meta(&state.db, run_id, seq, &data).map(|v| {
                 Ok::<Event, std::convert::Infallible>(Event::default().data(v.to_string()))
             })
+        })
+        .collect::<cade_store::error::Result<Vec<_>>>();
+    let payloads = match payloads {
+        Ok(payloads) => payloads,
+        Err(error) => return err(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+    let stream = futures::stream::iter(
+        payloads
+            .into_iter()
             .chain(std::iter::once(Ok(Event::default().data("[DONE]")))),
     );
 
@@ -148,7 +174,13 @@ async fn run_follow_stream(state: &AppState, run_id: &str, after_seq: i64) -> Re
             let mut saw_terminal = false;
             for (seq, data) in &new_events {
                 last_seq = last_seq.max(*seq);
-                let v = attach_run_meta(&run_id_owned, *seq, data);
+                let v = match attach_run_meta(&db, &run_id_owned, *seq, data) {
+                    Ok(v) => v,
+                    Err(error) => {
+                        tracing::error!(%run_id_owned, %error, "follow stream: failed to resolve approval state");
+                        return;
+                    }
+                };
                 if v.get("message_type").and_then(Value::as_str) == Some("run_done") {
                     saw_terminal = true;
                 }

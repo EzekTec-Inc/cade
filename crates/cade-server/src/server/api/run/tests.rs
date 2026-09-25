@@ -3,6 +3,280 @@
 use super::subagent::{filter_subagent_tools, handle_run_subagent_tool};
 use super::*;
 
+fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
+    cade_store::sqlite::create_agent(
+        db,
+        &cade_store::sqlite::AgentRow {
+            id: agent_id.to_owned(),
+            name: "Approval test".to_owned(),
+            description: None,
+            model: "test".to_owned(),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+            active_plan_json: None,
+            parent_id: None,
+        },
+    )
+    .expect("test agent");
+    cade_store::sqlite::create_run(db, agent_id, None)
+        .expect("test run")
+        .id
+}
+
+#[tokio::test]
+async fn approval_reconnect_replays_same_actionable_request_once() {
+    use cade_agent::agent::client::CadeMessage;
+    use futures::StreamExt;
+
+    let dir = tempfile::Builder::new()
+        .prefix("cade-reconnect-")
+        .tempdir_in(std::env::current_dir().expect("cwd"))
+        .expect("temporary database and side effects");
+    for (action, writes) in [("approve", true), ("deny", false)] {
+        let mut state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+        state.db =
+            cade_store::sqlite::open(dir.path().join(format!("{action}.db")).to_str().unwrap())
+                .expect("file-backed db");
+        let run_id = approval_test_run(&state.db, "agent-reconnect");
+        let file = dir.path().join(format!("{action}.txt"));
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let worker_state = state.clone();
+        let worker_run = run_id.clone();
+        let worker_file = file.clone();
+        let worker =
+            tokio::spawn(async move {
+                execute_turn_tools(worker_state, runtime::TurnExecutionInput {
+                agent_id: "agent-reconnect".into(), conversation_id: None,
+                run_id: worker_run, input: "write".into(), permission_mode: Some("default".into()),
+            }, vec![LlmToolCall {
+                id: "tc-reconnect".into(), name: "write_file".into(),
+                arguments: json!({"path": worker_file.to_str().unwrap(), "content": "once"}),
+                thought_signature: None,
+            }], tx).await
+            });
+        // The original live run receiver sees the request, then disconnects.
+        let mut rx = rx;
+        let live = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = rx.recv().await.expect("live event").expect("envelope");
+                let message: CadeMessage =
+                    serde_json::from_str(&event.data).expect("client decode");
+                if message.msg_type() == "approval_required" {
+                    break message;
+                }
+            }
+        })
+        .await
+        .expect("live approval");
+        let live_request = live.approval_request().expect("actionable live approval");
+        let id = live_request.id.to_owned();
+        let seq = live.data["seq_id"].as_i64().expect("durable cursor");
+        drop(rx);
+        assert!(!file.exists() && !worker.is_finished());
+
+        // Reconnect to the actual run replay/follow endpoint. Consume the SSE
+        // with the terminal's decoder, not a fabricated approval payload.
+        let response = crate::server::api::runs::stream_run(
+            State(state.clone()),
+            Path(run_id.clone()),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "starting_after".to_owned(),
+                (seq - 1).to_string(),
+            )])),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let mut stream = response.into_body().into_data_stream();
+        let recovered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let chunk = stream.next().await.expect("SSE chunk").expect("SSE data");
+                let text = std::str::from_utf8(&chunk).expect("utf-8 event");
+                for line in text.lines().filter_map(|line| line.strip_prefix("data: ")) {
+                    let message: CadeMessage = serde_json::from_str(line).expect("client decode");
+                    if message.msg_type() == "approval_required" {
+                        return message;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("replay follows pending approval");
+        let request = recovered
+            .approval_request()
+            .expect("replayed approval can prompt");
+        assert_eq!(request.id, id);
+        assert_eq!(request.tool_name, "write_file");
+        assert_eq!(request.arguments["path"], file.to_str().unwrap());
+        assert_eq!(recovered.data["seq_id"], seq);
+        assert!(!file.exists() && !worker.is_finished());
+        assert_eq!(
+            cade_store::sqlite::list_pending_approvals(&state.db)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let result = crate::server::api::approvals::action_approval(
+            State(state.clone()),
+            Path(id.clone()),
+            axum::Json(crate::server::api::approvals::ActionPayload {
+                action: action.to_owned(),
+                feedback: None,
+            }),
+        )
+        .await
+        .expect("decision after reconnect");
+        assert_eq!(result.0["id"], id);
+        let results = tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("decision unblocks")
+            .expect("worker joins");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0.is_error, !writes, "{}", results[0].0.output);
+        assert_eq!(file.exists(), writes);
+        if writes {
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "once");
+        }
+        assert!(
+            cade_store::sqlite::list_pending_approvals(&state.db)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            crate::server::api::approvals::action_approval(
+                State(state.clone()),
+                Path(id.clone()),
+                axum::Json(crate::server::api::approvals::ActionPayload {
+                    action: "approve".into(),
+                    feedback: None,
+                }),
+            )
+            .await
+            .is_err(),
+            "a replayed decision cannot execute again"
+        );
+
+        // A subsequent replay of the same cursor cannot present a resolved
+        // request as pending, even though the original event stays durable.
+        cade_store::sqlite::finish_run(&state.db, &run_id, "done").unwrap();
+        let replay = crate::server::api::runs::stream_run(
+            State(state.clone()),
+            Path(run_id),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "starting_after".to_owned(),
+                (seq - 1).to_string(),
+            )])),
+        )
+        .await;
+        let body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        let event: Value = serde_json::from_str(
+            text.lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event["id"], id);
+        assert_eq!(event["message_type"], "approval_resolved");
+    }
+}
+
+#[tokio::test]
+async fn approval_persistence_failure_and_short_timeout_fail_closed() {
+    use cade_agent::tools::ApprovalDelegate;
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    approval_test_run(&state.db, "agent-failed-persistence");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let delegate = super::execution::SseApprovalDelegate {
+        db: state.db.clone(),
+        agent_id: "agent-failed-persistence".into(),
+        run_id: "missing-run".into(),
+        tx,
+    };
+    assert!(
+        delegate
+            .request_approval("tc", "write_file", &json!({}), "reason")
+            .await
+            .is_err()
+    );
+    assert!(rx.try_recv().is_err());
+    assert!(
+        cade_store::sqlite::list_pending_approvals(&state.db)
+            .unwrap()
+            .is_empty()
+    );
+
+    let run_id = approval_test_run(&state.db, "agent-timeout");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let delegate = super::execution::SseApprovalDelegate {
+        db: state.db.clone(),
+        agent_id: "agent-timeout".into(),
+        run_id,
+        tx,
+    };
+    let result = delegate
+        .request_with_timeout(
+            "tc",
+            "write_file",
+            &json!({}),
+            "reason",
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("timed out"));
+    let event = rx.recv().await.unwrap().unwrap();
+    let value: Value = serde_json::from_str(&event.data).unwrap();
+    assert_eq!(
+        cade_store::sqlite::get_approval_status(&state.db, value["id"].as_str().unwrap())
+            .unwrap()
+            .as_deref(),
+        Some("denied:Approval request timed out")
+    );
+    assert!(
+        cade_store::sqlite::list_pending_approvals(&state.db)
+            .unwrap()
+            .is_empty()
+    );
+
+    let run_id = approval_test_run(&state.db, "agent-cancel-approval");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let delegate = super::execution::SseApprovalDelegate {
+        db: state.db.clone(),
+        agent_id: "agent-cancel-approval".into(),
+        run_id: run_id.clone(),
+        tx,
+    };
+    let waiting = tokio::spawn(async move {
+        delegate
+            .request_approval("tc", "write_file", &json!({}), "reason")
+            .await
+    });
+    let event = rx.recv().await.unwrap().unwrap();
+    let value: Value = serde_json::from_str(&event.data).unwrap();
+    assert!(cade_store::sqlite::request_run_cancellation(&state.db, &run_id).unwrap());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), waiting)
+        .await
+        .expect("cancellation unblocks")
+        .unwrap();
+    assert!(result.unwrap_err().to_string().contains("cancelled"));
+    assert_eq!(
+        cade_store::sqlite::get_approval_status(&state.db, value["id"].as_str().unwrap())
+            .unwrap()
+            .as_deref(),
+        Some("denied:Approval request cancelled")
+    );
+    assert!(
+        cade_store::sqlite::list_pending_approvals(&state.db)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 // ── truncate_at_char_boundary (C2) ────────────────────────────────
 
 #[test]
@@ -2107,7 +2381,7 @@ mod advanced_execution_tests {
         let delegate = SseApprovalDelegate {
             db: state.db.clone(),
             agent_id: "agent-approval-test".to_string(),
-            run_id: "run-approval-test".to_string(),
+            run_id: approval_test_run(&state.db, "agent-approval-test"),
             tx,
         };
 
@@ -2227,7 +2501,7 @@ mod advanced_execution_tests {
         let delegate = SseApprovalDelegate {
             db: state.db.clone(),
             agent_id: "agent-crud-prompt-test".to_string(),
-            run_id: "run-crud-prompt-test".to_string(),
+            run_id: approval_test_run(&state.db, "agent-crud-prompt-test"),
             tx,
         };
 
@@ -2288,15 +2562,17 @@ mod advanced_execution_tests {
                     .expect("db path"),
             )
             .expect("file-backed database");
+            let run_id = approval_test_run(&state.db, "agent-direct-approval");
             let (tx, mut rx) = tokio::sync::mpsc::channel(16);
             let state_for_turn = state.clone();
+            let run_for_turn = run_id.clone();
             let handle = tokio::spawn(async move {
                 execute_turn_tools(
                     state_for_turn,
                     runtime::TurnExecutionInput {
                         agent_id: "agent-direct-approval".to_string(),
                         conversation_id: None,
-                        run_id: "run-direct-approval".to_string(),
+                        run_id: run_for_turn,
                         input: "write a file".to_string(),
                         permission_mode: Some("default".to_string()),
                     },
@@ -2346,7 +2622,7 @@ mod advanced_execution_tests {
             );
             assert_eq!(request.arguments["content"], action);
             assert!(!request.reason.is_empty());
-            assert_eq!(message.data["run_id"], "run-direct-approval");
+            assert_eq!(message.data["run_id"], run_id);
             assert_eq!(message.data["tool_call_id"], "tc-direct-write");
             assert!(!path.exists(), "execution must wait for consent");
             assert!(!handle.is_finished(), "turn must wait for consent");

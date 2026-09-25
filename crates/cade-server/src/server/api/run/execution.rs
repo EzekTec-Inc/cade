@@ -169,29 +169,62 @@ pub(super) struct SseApprovalDelegate {
     pub(super) tx: SseTx,
 }
 
-#[async_trait::async_trait]
-impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
-    async fn request_approval(
+// A cancelled turn must not leave a request in the actionable queue.
+struct PendingRunApproval {
+    db: cade_store::sqlite::Db,
+    id: String,
+    abandonment_reason: &'static str,
+}
+
+impl Drop for PendingRunApproval {
+    fn drop(&mut self) {
+        if let Err(error) = cade_store::sqlite::resolve_pending_approval(
+            &self.db,
+            &self.id,
+            self.abandonment_reason,
+        ) {
+            tracing::error!(%error, approval_id = %self.id, "failed to cancel pending approval");
+        }
+    }
+}
+
+impl SseApprovalDelegate {
+    pub(super) async fn request_with_timeout(
         &self,
         tool_call_id: &str,
         tool_name: &str,
         arguments: &Value,
         reason: &str,
+        timeout: std::time::Duration,
     ) -> cade_agent::Result<bool> {
         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
-        let args_str = arguments.to_string();
-
-        if let Err(e) = cade_store::sqlite::create_pending_approval(
+        let event_payload = json!({
+            "message_type": "approval_required",
+            "id": approval_id,
+            "agent_id": self.agent_id,
+            "run_id": self.run_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "reason": reason,
+        });
+        let sequence = cade_store::sqlite::create_run_approval(
             &self.db,
             &approval_id,
             &self.agent_id,
-            None,
+            &self.run_id,
             tool_name,
-            &args_str,
-        ) {
-            tracing::warn!("Failed to create pending approval in database: {e}");
-            return Ok(false);
-        }
+            &arguments.to_string(),
+            &event_payload.to_string(),
+        )
+        .map_err(|error| {
+            cade_agent::Error::custom(format!("Failed to persist approval request: {error}"))
+        })?;
+        let mut pending = PendingRunApproval {
+            db: self.db.clone(),
+            id: approval_id.clone(),
+            abandonment_reason: "denied:Approval request cancelled",
+        };
 
         crate::server::api::agents::publish_global_event(
             Some(&self.db),
@@ -206,51 +239,75 @@ impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
             }),
         );
 
-        let event_payload = json!({
-            "message_type": "approval_required",
-            "id": approval_id,
-            "agent_id": self.agent_id,
-            "run_id": self.run_id,
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "arguments": arguments,
-            "reason": reason,
-        });
-        let _ = self
-            .tx
-            .send(Ok(super::runtime::RunEventEnvelope {
-                data: event_payload.to_string(),
-            }))
-            .await;
+        let mut live_payload = event_payload;
+        live_payload["seq_id"] = sequence.into();
+        // A closed live receiver is recoverable through the durable run log.
+        let _ = self.tx.try_send(Ok(super::runtime::RunEventEnvelope {
+            data: live_payload.to_string(),
+        }));
 
-        let timeout_secs = 600;
-        let start_time = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + timeout;
         let mut poll_interval = std::time::Duration::from_millis(150);
-
         loop {
-            if start_time.elapsed().as_secs() > timeout_secs {
-                return Err(cade_agent::Error::custom(
-                    "Approval request timed out after 10 minutes.",
-                ));
-            }
-
-            if let Ok(Some(status)) =
-                cade_store::sqlite::get_approval_status(&self.db, &approval_id)
-            {
-                if status == "approved" {
-                    return Ok(true);
-                } else if status == "denied" {
-                    return Ok(false);
-                } else if let Some(feedback) = status.strip_prefix("denied:") {
+            let status = cade_store::sqlite::get_approval_status(&self.db, &approval_id).map_err(
+                |error| {
+                    cade_agent::Error::custom(format!("Failed to read approval decision: {error}"))
+                },
+            )?;
+            match status.as_deref() {
+                Some("approved") => return Ok(true),
+                Some(status) if status.starts_with("approved:") => return Ok(true),
+                Some("denied") => return Ok(false),
+                Some(status) if status.starts_with("denied:") => {
                     return Err(cade_agent::Error::custom(format!(
-                        "Permission Denied: {feedback}"
+                        "Permission Denied: {}",
+                        &status[7..]
                     )));
                 }
+                Some("pending") => {}
+                _ => {
+                    return Err(cade_agent::Error::custom(
+                        "Approval request is missing or has an invalid status",
+                    ));
+                }
             }
-
-            tokio::time::sleep(poll_interval).await;
+            if cade_store::sqlite::is_run_cancellation_requested(&self.db, &self.run_id).map_err(
+                |error| {
+                    cade_agent::Error::custom(format!("Failed to read run cancellation: {error}"))
+                },
+            )? {
+                return Err(cade_agent::Error::custom(
+                    "Approval request cancelled with run",
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                pending.abandonment_reason = "denied:Approval request timed out";
+                return Err(cade_agent::Error::custom("Approval request timed out"));
+            }
+            tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + poll_interval))
+                .await;
             poll_interval = (poll_interval * 2).min(std::time::Duration::from_secs(1));
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
+    async fn request_approval(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &Value,
+        reason: &str,
+    ) -> cade_agent::Result<bool> {
+        self.request_with_timeout(
+            tool_call_id,
+            tool_name,
+            arguments,
+            reason,
+            std::time::Duration::from_secs(600),
+        )
+        .await
     }
 }
 

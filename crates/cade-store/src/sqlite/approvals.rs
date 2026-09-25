@@ -36,6 +36,39 @@ pub fn create_pending_approval(
     Ok(())
 }
 
+/// Create an actionable approval and its replayable run event together. If
+/// either insert fails, no pending request can be exposed to a client.
+pub fn create_run_approval(
+    db: &Db,
+    id: &str,
+    agent_id: &str,
+    run_id: &str,
+    tool_name: &str,
+    arguments: &str,
+    event: &str,
+) -> Result<i64> {
+    let mut conn = db.get()?;
+    let tx = conn.transaction()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    tx.execute(
+        "INSERT INTO pending_approvals (id, agent_id, subagent_id, tool_name, arguments, status, created_at)
+         VALUES (?1, ?2, NULL, ?3, ?4, 'pending', ?5)",
+        params![id, agent_id, tool_name, arguments, now],
+    )?;
+    let seq = tx.query_row(
+        "INSERT INTO run_events (run_id, seq_id, data)
+         VALUES (?1, (SELECT COALESCE(MAX(seq_id), -1) + 1 FROM run_events WHERE run_id = ?1), ?2)
+         RETURNING seq_id",
+        params![run_id, event],
+        |row| row.get(0),
+    )?;
+    tx.commit()?;
+    Ok(seq)
+}
+
 pub fn get_approval_status(db: &Db, id: &str) -> Result<Option<String>> {
     let conn = db.get()?;
     let mut stmt = conn.prepare("SELECT status FROM pending_approvals WHERE id = ?1")?;
@@ -55,6 +88,16 @@ pub fn set_approval_status(db: &Db, id: &str, status: &str) -> Result<()> {
         params![id, status],
     )?;
     Ok(())
+}
+
+/// Only the first decision wins; a late response cannot resurrect a timed-out
+/// or cancelled request or approve a tool that has already been denied.
+pub fn resolve_pending_approval(db: &Db, id: &str, status: &str) -> Result<bool> {
+    let conn = db.get()?;
+    Ok(conn.execute(
+        "UPDATE pending_approvals SET status = ?2 WHERE id = ?1 AND status = 'pending'",
+        params![id, status],
+    )? == 1)
 }
 
 pub fn list_pending_approvals(db: &Db) -> Result<Vec<PendingApproval>> {
