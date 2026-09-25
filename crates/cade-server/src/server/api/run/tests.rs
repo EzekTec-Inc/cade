@@ -34,7 +34,11 @@ async fn approval_reconnect_replays_same_actionable_request_once() {
 
     let dir = tempfile::Builder::new()
         .prefix("cade-reconnect-")
-        .tempdir_in(std::env::current_dir().expect("cwd"))
+        .tempdir_in(
+            std::env::var_os("CADE_TEST_TEMP_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().expect("cwd")),
+        )
         .expect("temporary database and side effects");
     for (action, writes) in [("approve", true), ("deny", false)] {
         let mut state = build_state_with_llm(Arc::new(PanicOnCallLlm));
@@ -113,6 +117,14 @@ async fn approval_reconnect_replays_same_actionable_request_once() {
         assert_eq!(request.arguments["path"], file.to_str().unwrap());
         assert_eq!(recovered.data["seq_id"], seq);
         assert!(!file.exists() && !worker.is_finished());
+        let refreshed = crate::server::api::approvals::list_approvals(State(state.clone()))
+            .await
+            .expect("refreshed approval queue");
+        assert_eq!(refreshed.0["approvals"][0]["reason"], request.reason);
+        let stored_args: Value =
+            serde_json::from_str(refreshed.0["approvals"][0]["arguments"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(stored_args["path"], file.to_str().unwrap());
         assert_eq!(
             cade_store::sqlite::list_pending_approvals(&state.db)
                 .unwrap()
@@ -245,6 +257,16 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
             .is_empty()
     );
 
+    let resolved = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("timeout resolution delivered")
+        .unwrap()
+        .unwrap();
+    let resolved: cade_api_types::StreamEvent = serde_json::from_str(&resolved.data).unwrap();
+    assert_eq!(resolved.msg_type(), "approval_resolved");
+    assert_eq!(resolved.approval_id(), value["id"].as_str());
+    assert_eq!(resolved.data["status"], "denied:Approval request timed out");
+
     let run_id = approval_test_run(&state.db, "agent-cancel-approval");
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let delegate = super::execution::SseApprovalDelegate {
@@ -277,6 +299,68 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
             .unwrap()
             .is_empty()
     );
+
+    let resolved = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("cancellation resolution delivered")
+        .unwrap()
+        .unwrap();
+    let resolved: cade_api_types::StreamEvent = serde_json::from_str(&resolved.data).unwrap();
+    assert_eq!(resolved.msg_type(), "approval_resolved");
+    assert_eq!(resolved.approval_id(), value["id"].as_str());
+    assert_eq!(resolved.data["status"], "denied:Approval request cancelled");
+}
+
+#[tokio::test]
+async fn full_run_channel_fails_closed_without_waiting_for_decision() {
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    let run_id = approval_test_run(&state.db, "agent-full-channel");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    tx.send(Ok(super::runtime::RunEventEnvelope {
+        data: "occupied".into(),
+    }))
+    .await
+    .unwrap();
+    let file = std::env::current_dir()
+        .unwrap()
+        .join(format!("cade-full-channel-{}.txt", uuid::Uuid::new_v4()));
+    let results = tokio::time::timeout(
+        std::time::Duration::from_secs(6),
+        execute_turn_tools(
+            state.clone(),
+            runtime::TurnExecutionInput {
+                agent_id: "agent-full-channel".into(),
+                conversation_id: None,
+                run_id: run_id.clone(),
+                input: "write".into(),
+                permission_mode: Some("default".into()),
+            },
+            vec![LlmToolCall {
+                id: "tc".into(),
+                name: "write_file".into(),
+                arguments: json!({"path": file, "content": "should not run"}),
+                thought_signature: None,
+            }],
+            tx,
+        ),
+    )
+    .await
+    .expect("saturated stream must not hang the turn");
+    assert!(results[0].0.is_error);
+    assert!(
+        results[0].0.output.contains("delivery timed out"),
+        "{}",
+        results[0].0.output
+    );
+    assert!(!file.exists(), "saturated stream must not permit a write");
+    assert_eq!(rx.recv().await.unwrap().unwrap().data, "occupied");
+    let rows = cade_store::sqlite::list_pending_approvals(&state.db).unwrap();
+    assert!(rows.is_empty());
+    let events = cade_store::sqlite::run_events_after(&state.db, &run_id, -1).unwrap();
+    assert!(events.iter().any(
+        |(_, data)| serde_json::from_str::<Value>(data).unwrap()["message_type"]
+            == "approval_resolved"
+    ));
 }
 
 // ── truncate_at_char_boundary (C2) ────────────────────────────────

@@ -949,6 +949,7 @@ version = "0.2.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "cade-api-types",
  "cade-core",
  "cade-desktop",
  "cade-mcp",

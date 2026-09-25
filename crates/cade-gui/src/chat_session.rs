@@ -10,6 +10,13 @@ use std::sync::atomic::AtomicBool;
 
 use crate::api::CadeApiClient;
 
+/// Questions share the pending queue but have their own answer UI.
+pub fn is_tool_approval(row: &serde_json::Value) -> bool {
+    row["tool_name"]
+        .as_str()
+        .is_some_and(|name| name != "ask_user_question")
+}
+
 /// Merge run-stream approvals into the same pending list used by the dashboard.
 /// The global feed may have already delivered the request; keep one row per ID.
 pub fn track_approval_event(pending: &mut Vec<serde_json::Value>, event: &StreamEvent) {
@@ -546,6 +553,16 @@ mod tests {
         .unwrap();
         track_approval_event(&mut pending, &resolved);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn queue_questions_do_not_get_tool_approval_controls() {
+        assert!(!is_tool_approval(
+            &json!({"tool_name": "ask_user_question", "id": "q-1"})
+        ));
+        assert!(is_tool_approval(
+            &json!({"tool_name": "write_file", "id": "app-1", "reason": "Review write"})
+        ));
     }
 
     #[test]

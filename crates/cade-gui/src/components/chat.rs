@@ -191,13 +191,32 @@ pub fn ChatView() -> Element {
 
 /// Actionable approvals for the selected agent, including those arriving from
 /// the active run stream. The global feed and dashboard use the same queue ID.
+fn submit_chat_approval(
+    state: AppState,
+    api: crate::api::CadeApiClient,
+    id: String,
+    action: &'static str,
+) {
+    spawn(async move {
+        match api.action_approval(&id, action).await {
+            Ok(_) => {
+                let mut list = state.pending_approvals;
+                list.write().retain(|a| a["id"] != id);
+            }
+            Err(e) => add_toast(&state, ToastLevel::Error, "Approval failed", e),
+        }
+    });
+}
+
 #[component]
 fn chat_approvals(state: AppState) -> Element {
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let agent_id = (state.selected_agent)().map(|a| a.id).unwrap_or_default();
     let approvals: Vec<_> = (state.pending_approvals)()
         .into_iter()
-        .filter(|a| a["agent_id"].as_str() == Some(&agent_id))
+        .filter(|a| {
+            a["agent_id"].as_str() == Some(&agent_id) && crate::chat_session::is_tool_approval(a)
+        })
         .collect();
 
     rsx! {
@@ -220,36 +239,14 @@ fn chat_approvals(state: AppState) -> Element {
                             button {
                                 class: "px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer",
                                 onclick: move |_| {
-                                    let api = client();
-                                    let id = id_approve.clone();
-                                    let st = state;
-                                    spawn(async move {
-                                        match api.action_approval(&id, "approve").await {
-                                            Ok(_) => {
-                                                let mut list = st.pending_approvals;
-                                                list.write().retain(|a| a["id"] != id);
-                                            }
-                                            Err(e) => add_toast(&st, ToastLevel::Error, "Approval failed", e),
-                                        }
-                                    });
+                                    submit_chat_approval(state, client(), id_approve.clone(), "approve");
                                 },
                                 "Approve"
                             }
                             button {
                                 class: "px-3 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white cursor-pointer",
                                 onclick: move |_| {
-                                    let api = client();
-                                    let id = id_deny.clone();
-                                    let st = state;
-                                    spawn(async move {
-                                        match api.action_approval(&id, "deny").await {
-                                            Ok(_) => {
-                                                let mut list = st.pending_approvals;
-                                                list.write().retain(|a| a["id"] != id);
-                                            }
-                                            Err(e) => add_toast(&st, ToastLevel::Error, "Denial failed", e),
-                                        }
-                                    });
+                                    submit_chat_approval(state, client(), id_deny.clone(), "deny");
                                 },
                                 "Deny"
                             }

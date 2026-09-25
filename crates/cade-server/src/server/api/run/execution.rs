@@ -143,11 +143,15 @@ async fn emit_tool_progress(
         object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
         object.insert("seq_id".to_owned(), Value::from(sequence));
     }
-    let _ = tx
-        .send(Ok(super::runtime::RunEventEnvelope {
+    // Progress is replayable; a stalled live receiver must not prevent the
+    // guarded invocation from reaching (or completing) its approval check.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(Ok(super::runtime::RunEventEnvelope {
             data: envelope.to_string(),
-        }))
-        .await;
+        })),
+    )
+    .await;
 }
 
 fn parse_permission_mode(mode_str: &str) -> Option<cade_core::permissions::PermissionMode> {
@@ -173,17 +177,71 @@ pub(super) struct SseApprovalDelegate {
 struct PendingRunApproval {
     db: cade_store::sqlite::Db,
     id: String,
+    run_id: String,
+    tx: SseTx,
     abandonment_reason: &'static str,
 }
 
-impl Drop for PendingRunApproval {
-    fn drop(&mut self) {
-        if let Err(error) = cade_store::sqlite::resolve_pending_approval(
+impl PendingRunApproval {
+    fn resolve(&self) -> Option<super::runtime::RunEventEnvelope> {
+        let changed = match cade_store::sqlite::resolve_pending_approval(
             &self.db,
             &self.id,
             self.abandonment_reason,
         ) {
-            tracing::error!(%error, approval_id = %self.id, "failed to cancel pending approval");
+            Ok(changed) => changed,
+            Err(error) => {
+                tracing::error!(%error, approval_id = %self.id, "failed to cancel pending approval");
+                return None;
+            }
+        };
+        if changed {
+            let mut event = json!({
+                "message_type": "approval_resolved",
+                "id": self.id,
+                "status": self.abandonment_reason,
+                "approved": false,
+            });
+            match cade_store::sqlite::append_run_event(&self.db, &self.run_id, &event.to_string()) {
+                Ok(seq) => {
+                    event["run_id"] = self.run_id.clone().into();
+                    event["seq_id"] = seq.into();
+                }
+                Err(error) => {
+                    tracing::error!(%error, approval_id = %self.id, "failed to persist approval resolution")
+                }
+            }
+            crate::server::api::agents::publish_global_event(
+                Some(&self.db),
+                "approval_resolved",
+                json!({"id": self.id, "status": self.abandonment_reason}),
+            );
+            return Some(super::runtime::RunEventEnvelope {
+                data: event.to_string(),
+            });
+        }
+        None
+    }
+
+    async fn finish(&self) {
+        if let Some(event) = self.resolve() {
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(1), self.tx.send(Ok(event)))
+                    .await;
+        }
+    }
+}
+
+impl Drop for PendingRunApproval {
+    fn drop(&mut self) {
+        // Dropping a run task cannot await, but must still withdraw its queue
+        // entry. Normal timeout/cancellation paths use finish() in order.
+        if let Some(event) = self.resolve() {
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(Ok(event)))
+                    .await;
+            });
         }
     }
 }
@@ -210,12 +268,15 @@ impl SseApprovalDelegate {
         });
         let sequence = cade_store::sqlite::create_run_approval(
             &self.db,
-            &approval_id,
-            &self.agent_id,
-            &self.run_id,
-            tool_name,
-            &arguments.to_string(),
-            &event_payload.to_string(),
+            &cade_store::sqlite::RunApproval {
+                id: &approval_id,
+                agent_id: &self.agent_id,
+                run_id: &self.run_id,
+                tool_name,
+                arguments: &arguments.to_string(),
+                reason,
+                event: &event_payload.to_string(),
+            },
         )
         .map_err(|error| {
             cade_agent::Error::custom(format!("Failed to persist approval request: {error}"))
@@ -223,6 +284,8 @@ impl SseApprovalDelegate {
         let mut pending = PendingRunApproval {
             db: self.db.clone(),
             id: approval_id.clone(),
+            run_id: self.run_id.clone(),
+            tx: self.tx.clone(),
             abandonment_reason: "denied:Approval request cancelled",
         };
 
@@ -241,10 +304,22 @@ impl SseApprovalDelegate {
 
         let mut live_payload = event_payload;
         live_payload["seq_id"] = sequence.into();
-        // A closed live receiver is recoverable through the durable run log.
-        let _ = self.tx.try_send(Ok(super::runtime::RunEventEnvelope {
-            data: live_payload.to_string(),
-        }));
+        // A closed receiver can reconnect via the durable log. A *full* live
+        // channel must not silently lose the prompt and wait for ten minutes.
+        let delivery = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            self.tx.send(Ok(super::runtime::RunEventEnvelope {
+                data: live_payload.to_string(),
+            })),
+        )
+        .await;
+        if delivery.is_err() {
+            pending.abandonment_reason = "denied:Approval prompt delivery timed out";
+            pending.finish().await;
+            return Err(cade_agent::Error::custom(
+                "Approval prompt delivery timed out",
+            ));
+        }
 
         let deadline = tokio::time::Instant::now() + timeout;
         let mut poll_interval = std::time::Duration::from_millis(150);
@@ -276,12 +351,14 @@ impl SseApprovalDelegate {
                     cade_agent::Error::custom(format!("Failed to read run cancellation: {error}"))
                 },
             )? {
+                pending.finish().await;
                 return Err(cade_agent::Error::custom(
                     "Approval request cancelled with run",
                 ));
             }
             if tokio::time::Instant::now() >= deadline {
                 pending.abandonment_reason = "denied:Approval request timed out";
+                pending.finish().await;
                 return Err(cade_agent::Error::custom("Approval request timed out"));
             }
             tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + poll_interval))

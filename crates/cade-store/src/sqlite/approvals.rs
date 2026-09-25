@@ -9,6 +9,7 @@ pub struct PendingApproval {
     pub subagent_id: Option<String>,
     pub tool_name: String,
     pub arguments: String,
+    pub reason: Option<String>,
     pub status: String, // "pending", "approved", "denied"
     pub created_at: i64,
 }
@@ -36,17 +37,20 @@ pub fn create_pending_approval(
     Ok(())
 }
 
+/// The reviewed invocation and its durable run-stream payload.
+pub struct RunApproval<'a> {
+    pub id: &'a str,
+    pub agent_id: &'a str,
+    pub run_id: &'a str,
+    pub tool_name: &'a str,
+    pub arguments: &'a str,
+    pub reason: &'a str,
+    pub event: &'a str,
+}
+
 /// Create an actionable approval and its replayable run event together. If
 /// either insert fails, no pending request can be exposed to a client.
-pub fn create_run_approval(
-    db: &Db,
-    id: &str,
-    agent_id: &str,
-    run_id: &str,
-    tool_name: &str,
-    arguments: &str,
-    event: &str,
-) -> Result<i64> {
+pub fn create_run_approval(db: &Db, approval: &RunApproval<'_>) -> Result<i64> {
     let mut conn = db.get()?;
     let tx = conn.transaction()?;
     let now = std::time::SystemTime::now()
@@ -54,15 +58,15 @@ pub fn create_run_approval(
         .unwrap_or_default()
         .as_secs() as i64;
     tx.execute(
-        "INSERT INTO pending_approvals (id, agent_id, subagent_id, tool_name, arguments, status, created_at)
-         VALUES (?1, ?2, NULL, ?3, ?4, 'pending', ?5)",
-        params![id, agent_id, tool_name, arguments, now],
+        "INSERT INTO pending_approvals (id, agent_id, subagent_id, tool_name, arguments, status, created_at, reason)
+         VALUES (?1, ?2, NULL, ?3, ?4, 'pending', ?5, ?6)",
+        params![approval.id, approval.agent_id, approval.tool_name, approval.arguments, now, approval.reason],
     )?;
     let seq = tx.query_row(
         "INSERT INTO run_events (run_id, seq_id, data)
          VALUES (?1, (SELECT COALESCE(MAX(seq_id), -1) + 1 FROM run_events WHERE run_id = ?1), ?2)
          RETURNING seq_id",
-        params![run_id, event],
+        params![approval.run_id, approval.event],
         |row| row.get(0),
     )?;
     tx.commit()?;
@@ -103,7 +107,7 @@ pub fn resolve_pending_approval(db: &Db, id: &str, status: &str) -> Result<bool>
 pub fn list_pending_approvals(db: &Db) -> Result<Vec<PendingApproval>> {
     let conn = db.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, agent_id, subagent_id, tool_name, arguments, status, created_at
+        "SELECT id, agent_id, subagent_id, tool_name, arguments, status, created_at, reason
          FROM pending_approvals WHERE status = 'pending' ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -115,6 +119,7 @@ pub fn list_pending_approvals(db: &Db) -> Result<Vec<PendingApproval>> {
             arguments: row.get(4)?,
             status: row.get(5)?,
             created_at: row.get(6)?,
+            reason: row.get(7)?,
         })
     })?;
 
@@ -158,6 +163,65 @@ mod tests {
         let pending_after = list_pending_approvals(&db)?;
         assert_eq!(pending_after.len(), 0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn run_approval_restores_reviewed_reason_and_arguments() -> Result<()> {
+        let db = open(":memory:")?;
+        crate::sqlite::create_agent(
+            &db,
+            &crate::sqlite::AgentRow {
+                id: "agent".into(),
+                name: "Agent".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+                active_plan_json: None,
+                parent_id: None,
+            },
+        )?;
+        let run = crate::sqlite::create_run(&db, "agent", None)?;
+        create_run_approval(
+            &db,
+            &RunApproval {
+                id: "app-1",
+                agent_id: "agent",
+                run_id: &run.id,
+                tool_name: "write_file",
+                arguments: r#"{"path":"a.txt"}"#,
+                reason: "Write requires approval",
+                event: r#"{"message_type":"approval_required"}"#,
+            },
+        )?;
+        let rows = list_pending_approvals(&db)?;
+        assert_eq!(rows[0].reason.as_deref(), Some("Write requires approval"));
+        assert_eq!(rows[0].arguments, r#"{"path":"a.txt"}"#);
+        Ok(())
+    }
+
+    #[test]
+    fn existing_pending_rows_survive_reason_migration() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("old.db");
+        {
+            let conn = rusqlite::Connection::open(&path)?;
+            conn.execute_batch("CREATE TABLE pending_approvals (
+                id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, subagent_id TEXT,
+                tool_name TEXT NOT NULL, arguments TEXT NOT NULL, status TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            INSERT INTO pending_approvals VALUES ('old', 'agent', NULL, 'write_file', '{}', 'pending', 1);
+            PRAGMA user_version = 21;")?;
+        }
+        let db = open(path.to_str().expect("db path"))?;
+        let rows = list_pending_approvals(&db)?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "old");
+        assert_eq!(rows[0].reason, None);
         Ok(())
     }
 }
