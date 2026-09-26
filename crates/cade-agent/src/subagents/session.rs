@@ -316,6 +316,7 @@ impl SubagentApprovalChannel {
 pub struct SubagentSession {
     pub session_id: String,
     pub parent_agent_id: String,
+    pub parent_conversation_id: Option<String>,
     pub config: SubagentConfig,
     pub max_iters: usize,
     pub max_tokens_budget: Option<u64>,
@@ -328,6 +329,7 @@ pub struct SubagentSession {
     pub approval_channel: SubagentApprovalChannel,
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
+    parent_context: Vec<SubagentMessage>,
 }
 
 impl SubagentSession {
@@ -337,6 +339,7 @@ impl SubagentSession {
         Self {
             session_id: format!("subagent-sess-{}", uuid::Uuid::new_v4()),
             parent_agent_id: parent_agent_id.into(),
+            parent_conversation_id: None,
             config,
             max_iters: 20,
             max_tokens_budget: max_tokens,
@@ -349,7 +352,47 @@ impl SubagentSession {
             approval_channel: SubagentApprovalChannel::noop(),
             steering_queue: Vec::new(),
             pending_model_swap: None,
+            parent_context: Vec::new(),
         }
+    }
+
+    /// Bind this child to the conversation that invoked it. `None` preserves
+    /// the legacy unscoped CLI/foreground invocation.
+    pub fn with_parent_conversation_id(mut self, conversation_id: Option<String>) -> Self {
+        self.parent_conversation_id = conversation_id;
+        self
+    }
+
+    /// Supply the invoking conversation's recent messages, never an agent-wide
+    /// "latest conversation". Only the last eight messages enter the prompt.
+    pub fn with_parent_context(mut self, messages: Vec<SubagentMessage>) -> Self {
+        self.parent_context = messages.into_iter().rev().take(8).collect();
+        self.parent_context.reverse();
+        self
+    }
+
+    fn bounded_parent_context(&self) -> String {
+        if self.parent_context.is_empty() {
+            return String::new();
+        }
+        let mut context = String::from(
+            "\n\n<parent_context>\nBelow is the recent chat history from your parent session. Use this to understand the current work context, recently viewed files, and goals:\n",
+        );
+        for message in &self.parent_context {
+            let text = &message.content;
+            let truncated = text.lines().take(5).collect::<Vec<_>>().join("\n");
+            let suffix = if text.lines().count() > 5 {
+                " ... [truncated]"
+            } else {
+                ""
+            };
+            context.push_str(&format!(
+                "[{}]: {truncated}{suffix}\n",
+                message.role.to_uppercase()
+            ));
+        }
+        context.push_str("</parent_context>\n");
+        context
     }
 
     pub fn with_max_iters(mut self, max_iters: usize) -> Self {
@@ -541,6 +584,7 @@ impl SubagentSession {
         failover_models: Vec<String>,
         primary_path: &Path,
     ) -> SubagentOutcome {
+        let system_prompt = format!("{system_prompt}{}", self.bounded_parent_context());
         let mut messages = vec![SubagentMessage::user(initial_prompt)];
         let mut last_text = String::new();
         let mut failover_idx = 0;
@@ -738,6 +782,75 @@ mod tests {
         assert_eq!(schema["name"], FINISH_TOOL_NAME);
         assert_eq!(schema["parameters"]["type"], "object");
         assert!(schema["parameters"]["properties"]["status"].is_object());
+    }
+
+    #[tokio::test]
+    async fn invoking_conversation_context_is_bounded_and_separate() {
+        struct CapturingLlm(std::sync::Mutex<Vec<String>>);
+        #[async_trait]
+        impl SubagentLlmExecutor for CapturingLlm {
+            async fn complete_turn(
+                &self,
+                _model: &str,
+                system_prompt: &str,
+                _messages: &[SubagentMessage],
+                _tools: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                self.0.lock().unwrap().push(system_prompt.to_owned());
+                Ok(SubagentTurnResponse {
+                    content: Some("finished".into()),
+                    tool_calls: vec![],
+                    tokens_used: 1,
+                })
+            }
+        }
+        struct NoTools;
+        #[async_trait]
+        impl SubagentToolExecutor for NoTools {
+            async fn execute_tool(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+                _: &Path,
+            ) -> Result<String, String> {
+                panic!("no tool calls expected")
+            }
+        }
+
+        let llm = CapturingLlm(std::sync::Mutex::new(Vec::new()));
+        for (conv, own, other) in [("first", "alpha", "beta"), ("second", "beta", "alpha")] {
+            let messages = (0..10)
+                .map(|i| {
+                    SubagentMessage::user(format!("{own}-{i}\nline2\nline3\nline4\nline5\nhidden"))
+                })
+                .collect();
+            let config = SubagentConfig::from_args(&json!({"prompt": "task"}));
+            let mut session = SubagentSession::new(config, "same-agent")
+                .with_parent_conversation_id(Some(conv.into()))
+                .with_parent_context(messages);
+            assert_eq!(session.parent_conversation_id.as_deref(), Some(conv));
+            let outcome = session
+                .run_autonomous_loop(
+                    &llm,
+                    &NoTools,
+                    "test".into(),
+                    "system".into(),
+                    "task".into(),
+                    vec![],
+                    vec![],
+                    Path::new("."),
+                )
+                .await;
+            assert!(outcome.is_success());
+            let prompts = llm.0.lock().unwrap();
+            let prompt = prompts.last().unwrap();
+            assert!(prompt.contains(&format!("{own}-2")));
+            assert!(prompt.contains(&format!("{own}-9")));
+            assert!(!prompt.contains(&format!("{own}-1")));
+            assert!(!prompt.contains(other));
+            assert!(!prompt.contains("hidden"));
+        }
     }
 
     #[tokio::test]
