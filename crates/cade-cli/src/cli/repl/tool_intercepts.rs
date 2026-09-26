@@ -69,7 +69,11 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
             map.get(subagent_id).cloned()
         };
         if let Some(tx) = tx_opt {
-            let _ = tx.send(()).await;
+            tx.send(()).await.map_err(|_| {
+                cade_agent::Error::custom(format!(
+                    "subagent {subagent_id} is no longer accepting cancellation"
+                ))
+            })?;
             Ok(format!("Cancel signal sent to subagent {subagent_id}"))
         } else {
             Err(cade_agent::Error::custom(format!(

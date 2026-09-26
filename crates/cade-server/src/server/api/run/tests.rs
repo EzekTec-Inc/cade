@@ -1086,6 +1086,7 @@ async fn unknown_explicit_subagent_returns_error_before_launch() {
     let result = handle_run_subagent_tool(
         &state,
         "parent_x",
+        None,
         "tc_invalid",
         &serde_json::json!({"mode": "missing-agent-252", "prompt": "do thing", "background": true}),
         tx,
@@ -1108,6 +1109,7 @@ async fn unknown_explicit_subagent_returns_error_before_launch() {
     let no_prompt = handle_run_subagent_tool(
         &state,
         "parent_x",
+        None,
         "tc_invalid_empty",
         &serde_json::json!({"agent": "missing-agent-252", "prompt": ""}),
         tx,
@@ -1116,6 +1118,27 @@ async fn unknown_explicit_subagent_returns_error_before_launch() {
     assert!(no_prompt.is_error);
     assert!(no_prompt.output.contains("missing-agent-252"));
     assert_eq!(llm.call_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn cancellation_reports_closed_receiver_instead_of_success() {
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(rx);
+    state
+        .subagent_cancellations
+        .write()
+        .await
+        .insert("closed-child".into(), tx);
+
+    let result = super::subagent::handle_cancel_subagent_tool(
+        &state,
+        "cancel-call",
+        &json!({"subagent_id": "closed-child"}),
+    )
+    .await;
+    assert!(result.is_error, "{}", result.output);
+    assert!(result.output.contains("no longer accepting cancellation"));
 }
 
 /// A stateful mock that on the FIRST call returns a tool_call (forcing a
@@ -1583,8 +1606,32 @@ async fn subagent_write_file_records_recent_edit() {
     )
     .unwrap();
 
+    // The execution policy inherits only capabilities actually registered for
+    // the parent. This fixture intentionally grants write_file for this test.
+    cade_store::sqlite::upsert_tool(
+        &state.db,
+        &cade_store::sqlite::ToolRow {
+            id: "test-write-file".into(),
+            name: "write_file".into(),
+            description: None,
+            source_code: None,
+            json_schema: Some(json!({"name": "write_file"})),
+            tags: vec![],
+        },
+    )
+    .unwrap();
+
     let args = serde_json::json!({ "prompt": "write a file" });
-    let result = handle_run_subagent_tool(&state, parent_id, None, "tc_wf", &args, tx).await;
+    let result = super::subagent::handle_run_subagent_tool_inner(
+        &state,
+        parent_id,
+        None,
+        "tc_wf",
+        &args,
+        Box::new(super::subagent::SseEventEmitter { tx }),
+        cade_core::permissions::PermissionMode::BypassPermissions,
+    )
+    .await;
 
     assert!(!result.is_error, "got: {}", result.output);
 

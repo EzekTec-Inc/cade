@@ -1584,6 +1584,14 @@ mod tests {
 
     struct WritingTool;
 
+    fn writing_policy() -> SubagentToolPolicy {
+        let access = policy("build");
+        access
+            .permissions
+            .set_mode(PermissionMode::BypassPermissions);
+        access
+    }
+
     #[async_trait]
     impl SubagentToolExecutor for WritingTool {
         async fn execute_tool(
@@ -1655,6 +1663,7 @@ mod tests {
         }));
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let mut session = SubagentSession::new(config, "parent")
+            .with_tool_policy(writing_policy())
             .with_event_emitter(SubagentEventEmitter::new(Some(tx)));
         let failure = session
             .prepare_workspace(&live.path().join("missing"), None)
@@ -1685,7 +1694,8 @@ mod tests {
             let config = SubagentConfig::from_args(&json!({
                 "prompt": "write", "enforce_isolation": true
             }));
-            let mut session = SubagentSession::new(config, "parent");
+            let mut session =
+                SubagentSession::new(config, "parent").with_tool_policy(writing_policy());
             session.prepare_workspace(live.path(), None).await.unwrap();
             let temp_path = session.execution_path(live.path()).to_path_buf();
             let outcome =
@@ -1710,7 +1720,7 @@ mod tests {
     async fn optional_nonisolated_execution_remains_usable() {
         let live = tempdir().unwrap();
         let config = SubagentConfig::from_args(&json!({ "prompt": "write" }));
-        let mut session = SubagentSession::new(config, "parent");
+        let mut session = SubagentSession::new(config, "parent").with_tool_policy(writing_policy());
         let outcome = run_writing_session(&mut session, &writing_llm("done"), live.path()).await;
         assert!(outcome.is_success());
         assert_eq!(
@@ -1744,7 +1754,7 @@ mod tests {
         let config = SubagentConfig::from_args(&json!({
             "prompt": "write", "enforce_isolation": true
         }));
-        let mut session = SubagentSession::new(config, "parent");
+        let mut session = SubagentSession::new(config, "parent").with_tool_policy(writing_policy());
         session.prepare_workspace(live.path(), None).await.unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let live_path = live.path().to_path_buf();
@@ -1778,7 +1788,7 @@ mod tests {
         let config = SubagentConfig::from_args(&json!({
             "prompt": "write", "enforce_isolation": true
         }));
-        let mut session = SubagentSession::new(config, "parent");
+        let mut session = SubagentSession::new(config, "parent").with_tool_policy(writing_policy());
         session.prepare_workspace(live.path(), None).await.unwrap();
         let temp_path = session.execution_path(live.path()).to_path_buf();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);

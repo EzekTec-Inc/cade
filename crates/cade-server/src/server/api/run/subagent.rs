@@ -1340,7 +1340,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             failover_candidates,
             &root_path,
         )) => res,
-        _ = cancel_rx.recv() => Ok(cade_agent::subagents::SubagentOutcome::Failed {
+        Some(()) = cancel_rx.recv() => Ok(cade_agent::subagents::SubagentOutcome::Failed {
             error: "Subagent cancelled by parent".to_string(),
         }),
     };
@@ -1615,13 +1615,16 @@ pub(super) async fn handle_cancel_subagent_tool(
     };
 
     if let Some(tx) = tx_opt {
-        // Send cancel signal
-        let _ = tx.send(()).await;
+        let delivered = tx.send(()).await.is_ok();
         ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "cancel_subagent".to_string(),
-            output: format!("Cancel signal sent to subagent {subagent_id}"),
-            is_error: false,
+            output: if delivered {
+                format!("Cancel signal sent to subagent {subagent_id}")
+            } else {
+                format!("error: subagent {subagent_id} is no longer accepting cancellation")
+            },
+            is_error: !delivered,
             ui_resource_uri: None,
         }
     } else {
