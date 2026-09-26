@@ -359,6 +359,7 @@ pub struct CadeSubagentExecutor {
     pub parent_conversation_id: Option<String>,
     pub tool_call_id: String,
     pub emitter: Box<dyn SubagentEventEmitter>,
+    pub permission_mode: cade_core::permissions::PermissionMode,
 }
 
 impl CadeSubagentExecutor {
@@ -375,6 +376,7 @@ impl CadeSubagentExecutor {
             parent_conversation_id,
             tool_call_id,
             emitter,
+            permission_mode: cade_core::permissions::PermissionMode::Default,
         }
     }
 }
@@ -392,6 +394,7 @@ impl SubagentExecutor for CadeSubagentExecutor {
             &self.tool_call_id,
             args,
             self.emitter,
+            self.permission_mode,
         )
         .await
     }
@@ -402,6 +405,7 @@ struct ServerSubagentRunner {
     parent_agent_id: String,
     parent_conversation_id: Option<String>,
     sse_tx: super::SseTx,
+    permission_mode: cade_core::permissions::PermissionMode,
 }
 
 #[async_trait]
@@ -412,13 +416,14 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
         args: &serde_json::Value,
         _force_sync: bool,
     ) -> Result<cade_agent::tools::ToolResult, cade_agent::Error> {
-        let res = handle_subagent_single_inner_tool(
+        let res = handle_subagent_single_inner_tool_with_mode(
             &self.state,
             &self.parent_agent_id,
             self.parent_conversation_id.as_deref(),
             call_id,
             args,
             self.sse_tx.clone(),
+            self.permission_mode,
         )
         .await;
         Ok(res)
@@ -462,6 +467,7 @@ pub(super) async fn handle_subagent_tool(
     tool_call_id: String,
     args: serde_json::Value,
     sse_tx: super::SseTx,
+    permission_mode: cade_core::permissions::PermissionMode,
 ) -> cade_agent::tools::manager::ToolResult {
     if tool_name == "wait" {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -543,6 +549,7 @@ pub(super) async fn handle_subagent_tool(
         parent_agent_id: parent_agent_id.clone(),
         parent_conversation_id,
         sse_tx,
+        permission_mode,
     };
     let tool_call_id_c = tool_call_id.clone();
     let args_c = args.clone();
@@ -573,21 +580,24 @@ pub(super) async fn handle_subagent_tool(
     }
 }
 
-pub(super) async fn handle_subagent_single_inner_tool(
+async fn handle_subagent_single_inner_tool_with_mode(
     state: &AppState,
     parent_agent_id: &str,
     parent_conversation_id: Option<&str>,
     tool_call_id: &str,
     args: &serde_json::Value,
     sse_tx: super::SseTx,
+    permission_mode: cade_core::permissions::PermissionMode,
 ) -> cade_agent::tools::manager::ToolResult {
-    let executor: Box<dyn SubagentExecutor> = Box::new(CadeSubagentExecutor::new(
+    let mut concrete = CadeSubagentExecutor::new(
         state.clone(),
         parent_agent_id.to_string(),
         parent_conversation_id.map(str::to_owned),
         tool_call_id.to_string(),
         Box::new(SseEventEmitter { tx: sse_tx }),
-    ));
+    );
+    concrete.permission_mode = permission_mode;
+    let executor: Box<dyn SubagentExecutor> = Box::new(concrete);
     executor.execute(args).await
 }
 
@@ -740,6 +750,10 @@ struct ServerSubagentTools<'a> {
 
 #[async_trait::async_trait]
 impl<'a> cade_agent::subagents::SubagentToolExecutor for ServerSubagentTools<'a> {
+    async fn is_mcp_write(&self, tool_name: &str) -> bool {
+        cade_agent::tools::is_mcp_write_tool(tool_name, &self.state.mcp).await
+    }
+
     async fn execute_tool(
         &self,
         tool_call_id: &str,
@@ -791,6 +805,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     tool_call_id: &str,
     args: &serde_json::Value,
     emitter: Box<dyn SubagentEventEmitter>,
+    parent_mode: cade_core::permissions::PermissionMode,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::subagents::SubagentConfig;
     use cade_agent::tools::manager::ToolResult;
@@ -999,7 +1014,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     // for defence-in-depth alongside the depth counter.  If the parent is
     // not yet wired (no rows), `agent_tool_ids` is empty meaning "all
     // registered tools".
-    let parent_tool_schemas: Vec<serde_json::Value> = {
+    let (parent_tool_schemas, inherited_tools): (Vec<serde_json::Value>, Vec<String>) = {
         let parent_tool_ids =
             cade_store::sqlite::get_agent_tool_ids(&state.db, parent_agent_id).unwrap_or_default();
         let all = cade_store::sqlite::list_tools(&state.db).unwrap_or_default();
@@ -1030,6 +1045,10 @@ pub(super) async fn handle_run_subagent_tool_inner(
             }
         });
         let allow_nesting = def_opt.map(|d| d.allow_run_subagent).unwrap_or(false);
+        let inherited = raw
+            .iter()
+            .filter_map(|s| s["name"].as_str().map(str::to_string))
+            .collect();
         let mut filtered = filter_subagent_tools(raw, tools_filter, allow_nesting);
 
         // REC-4/G4: Inject the built-in `finish` tool so the model has an
@@ -1037,7 +1056,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         // implicit "no tool_calls = done" heuristic which could not distinguish
         // genuine completion from a confused model emitting prose mid-task.
         filtered.push(cade_agent::subagents::canonical_finish_tool_schema());
-        filtered
+        (filtered, inherited)
     };
 
     let allowed_paths = cfg.resolve_allowed_paths(def_opt);
@@ -1152,11 +1171,68 @@ pub(super) async fn handle_run_subagent_tool_inner(
         parent_agent_id: parent_agent_id.to_string(),
     };
 
+    let permission_settings = cade_core::settings::SettingsManager::new(&cwd_for_defs).ok();
+    let permissions = if let Some(ref settings) = permission_settings {
+        let settings = settings.permission_settings();
+        let permissions = cade_core::permissions::PermissionManager::new_with_strict_bash(
+            parent_mode,
+            settings.strict_bash,
+        );
+        permissions.reload_from_settings(settings);
+        permissions
+    } else {
+        cade_core::permissions::PermissionManager::new(parent_mode)
+    };
+    let policy = cade_agent::subagents::SubagentToolPolicy {
+        permissions,
+        tools: def_opt.map(|d| d.tools.clone()).unwrap_or_else(|| {
+            if cfg.mode == "plan" || cfg.mode == "recall" {
+                cade_agent::subagents::SubagentTools::Readonly
+            } else {
+                cade_agent::subagents::SubagentTools::All
+            }
+        }),
+        inherited_tools,
+        allow_nesting: def_opt.is_some_and(|d| d.allow_run_subagent),
+        max_depth,
+    };
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id)
         .with_parent_conversation_id(parent_conversation_id.map(str::to_owned))
         .with_parent_context(parent_context)
         .with_max_iters(max_iters)
-        .with_max_tokens_budget(cfg.max_tokens_budget);
+        .with_max_tokens_budget(cfg.max_tokens_budget)
+        .with_tool_policy(policy);
+
+    // A tool-level Ask is answered by the interactive approval queue, never by
+    // `human_review` (which applies only to the completed result).
+    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::channel(16);
+    session = session.with_approval_channel(
+        cade_agent::subagents::session::SubagentApprovalChannel::new(approval_tx),
+    );
+    let approval_adapter = HeadlessQueueAdapter {
+        db: state.db.clone(),
+        parent_agent_id: parent_agent_id.to_string(),
+        subagent_id: subagent_id.clone(),
+    };
+    struct ApprovalForwarder(tokio::task::JoinHandle<()>);
+    impl Drop for ApprovalForwarder {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _approval_task = ApprovalForwarder(tokio::spawn(async move {
+        use cade_core::permissions::PermissionService;
+        while let Some((_, tool_name, args, reply)) = approval_rx.recv().await {
+            let approved = approval_adapter
+                .request_permission(&tool_name, &args)
+                .await
+                .unwrap_or(false);
+            let _ = reply.send(cade_agent::subagents::session::SubagentApprovalResponse {
+                approved,
+                feedback: None,
+            });
+        }
+    }));
 
     // Event forwarder from SubagentSession to SSE stream
     let (session_evt_tx, mut session_evt_rx) = tokio::sync::mpsc::channel(128);
@@ -1643,6 +1719,25 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
             return Ok(false);
         }
 
+        // Withdraw pending approval if the child is interrupted mid-request.
+        struct PendingApproval {
+            db: cade_store::sqlite::Db,
+            id: String,
+        }
+        impl Drop for PendingApproval {
+            fn drop(&mut self) {
+                let _ = cade_store::sqlite::resolve_pending_approval(
+                    &self.db,
+                    &self.id,
+                    "denied:Subagent approval request cancelled",
+                );
+            }
+        }
+        let _pending = PendingApproval {
+            db: self.db.clone(),
+            id: approval_id.clone(),
+        };
+
         crate::server::api::agents::publish_global_event(
             Some(&self.db),
             "approval_required",
@@ -1682,16 +1777,16 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
                 return Err("Approval request timed out after 10 minutes.".to_string());
             }
 
-            if let Ok(Some(status)) =
-                cade_store::sqlite::get_approval_status(&self.db, &approval_id)
-            {
-                if status == "approved" {
+            match cade_store::sqlite::get_approval_status(&self.db, &approval_id) {
+                Ok(Some(status)) if status == "approved" || status.starts_with("approved:") => {
                     return Ok(true);
-                } else if status == "denied" {
-                    return Ok(false);
-                } else if let Some(feedback) = status.strip_prefix("denied:") {
-                    return Err(format!("Permission Denied: {}", feedback));
                 }
+                Ok(Some(status)) if status == "denied" => return Ok(false),
+                Ok(Some(status)) if status.starts_with("denied:") => {
+                    return Err(format!("Permission Denied: {}", &status[7..]));
+                }
+                Ok(Some(status)) if status == "pending" => {}
+                other => return Err(format!("Approval status unavailable: {other:?}")),
             }
 
             tokio::time::sleep(poll_interval).await;
@@ -1765,6 +1860,53 @@ pub(crate) fn is_failover_worthy_error(err_str: &str) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[tokio::test]
+    async fn server_subagent_approval_waits_for_real_queue_decision() {
+        use cade_core::permissions::PermissionService;
+        let db = cade_store::sqlite::open(":memory:").unwrap();
+        cade_store::sqlite::create_agent(
+            &db,
+            &cade_store::sqlite::AgentRow {
+                id: "parent".into(),
+                name: "Parent".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+                active_plan_json: None,
+                parent_id: None,
+            },
+        )
+        .unwrap();
+        let adapter = HeadlessQueueAdapter {
+            db: db.clone(),
+            parent_agent_id: "parent".into(),
+            subagent_id: "child".into(),
+        };
+        let request = tokio::spawn(async move {
+            adapter
+                .request_permission("write_file", &serde_json::json!({"path":"src/lib.rs"}))
+                .await
+        });
+        let pending = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let rows = cade_store::sqlite::list_pending_approvals(&db).unwrap();
+                if !rows.is_empty() {
+                    break rows;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!request.is_finished(), "queueing is not execution approval");
+        assert_eq!(pending[0].tool_name, "write_file");
+        cade_store::sqlite::resolve_pending_approval(&db, &pending[0].id, "denied").unwrap();
+        assert!(!request.await.unwrap().unwrap());
+    }
 
     #[test]
     fn test_filter_subagent_tools_constitutional_inheritance() {
