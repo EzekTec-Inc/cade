@@ -881,7 +881,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let subagent_id = format!("sa_{}", uuid::Uuid::new_v4());
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
     session.session_id = subagent_id.clone();
-    let (cancel_tx, cancel_rx) = tokio::sync::mpsc::channel(1);
+    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
     let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
     state
         .subagent_cancellations
@@ -971,12 +971,24 @@ pub(super) async fn handle_run_subagent_tool_inner(
     // REC-3/G2: Backpressure — block until a semaphore slot is free instead
     // of returning an instant error that causes the parent LLM to retry-loop.
     // Wrapped in the wall-clock timeout so a full semaphore never hangs forever.
-    let permit = match tokio::time::timeout(
-        std::time::Duration::from_secs(subagent_timeout_secs()),
-        state.subagent_semaphore.clone().acquire_owned(),
-    )
-    .await
-    {
+    let permit = match tokio::select! {
+        biased;
+        Some(()) = cancel_rx.recv() => {
+            cancellation.close();
+            state.subagent_cancellations.write().await.remove(&subagent_id);
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_subagent".to_string(),
+                output: "Subagent cancelled by parent".to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            };
+        }
+        acquired = tokio::time::timeout(
+            std::time::Duration::from_secs(subagent_timeout_secs()),
+            state.subagent_semaphore.clone().acquire_owned(),
+        ) => acquired,
+    } {
         Ok(Ok(p)) => p,
         Ok(Err(_)) => {
             state

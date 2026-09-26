@@ -1245,6 +1245,33 @@ pub async fn steer_subagent_handler(
     }
 }
 
+pub async fn cancel_subagent_handler(
+    State(state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let cancellation = state
+        .subagent_cancellations
+        .read()
+        .await
+        .get(&subagent_id)
+        .cloned()
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("No active subagent found with ID {subagent_id}"),
+            )
+        })?;
+    cancellation.cancel().map_err(|_| {
+        (
+            axum::http::StatusCode::CONFLICT,
+            format!("Subagent {subagent_id} is no longer accepting cancellation"),
+        )
+    })?;
+    Ok(Json(
+        json!({ "status": "cancelling", "subagent_id": subagent_id }),
+    ))
+}
+
 #[derive(serde::Deserialize)]
 pub struct SwapModelPayload {
     pub model: String,

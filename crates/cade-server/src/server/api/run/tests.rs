@@ -1130,6 +1130,110 @@ async fn failed_background_outcome_write_stays_pending_and_reports_run_error() {
 }
 
 #[tokio::test]
+async fn remote_cancel_endpoint_acknowledges_once_and_rejects_missing_or_closed_children() {
+    let state = build_state_with_llm(Arc::new(SlowLlm));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    state.subagent_cancellations.write().await.insert(
+        "remote-child".into(),
+        cade_agent::subagents::SubagentCancellation::new(tx),
+    );
+    let accepted =
+        super::cancel_subagent_handler(State(state.clone()), Path("remote-child".into()))
+            .await
+            .unwrap();
+    assert_eq!(accepted.0["status"], "cancelling");
+    assert_eq!(rx.recv().await, Some(()));
+    let repeated =
+        super::cancel_subagent_handler(State(state.clone()), Path("remote-child".into()))
+            .await
+            .unwrap_err();
+    assert_eq!(repeated.0, axum::http::StatusCode::CONFLICT);
+    let missing = super::cancel_subagent_handler(State(state), Path("absent".into()))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.0, axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn queued_foreground_cancellation_returns_error_without_starting_child() {
+    struct NoLlm;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for NoLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            panic!("cancelled child must not call model")
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("cancelled child must not stream")
+        }
+    }
+    let state = build_state_with_llm(Arc::new(NoLlm));
+    let slot = state
+        .subagent_semaphore
+        .clone()
+        .acquire_many_owned(4)
+        .await
+        .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::channel(128);
+    let running = tokio::spawn({
+        let state = state.clone();
+        async move {
+            handle_run_subagent_tool(
+                &state,
+                "queued-parent",
+                None,
+                "launch",
+                &json!({"prompt":"work"}),
+                tx,
+            )
+            .await
+        }
+    });
+    let child_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(id) = state
+                .subagent_cancellations
+                .read()
+                .await
+                .keys()
+                .next()
+                .cloned()
+            {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let cancel = super::subagent::handle_cancel_subagent_tool(
+        &state,
+        "cancel",
+        &json!({"subagent_id":child_id}),
+    )
+    .await;
+    assert!(!cancel.is_error, "{}", cancel.output);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), running)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.is_error);
+    assert!(result.output.contains("cancelled"), "{}", result.output);
+    assert!(state.subagent_cancellations.read().await.is_empty());
+    drop(slot);
+    assert_eq!(state.subagent_semaphore.available_permits(), 4);
+}
+
+#[tokio::test]
 async fn queued_background_cancellation_delivers_failure_and_releases_handle() {
     struct NoLlm;
     #[async_trait::async_trait]
@@ -1580,9 +1684,7 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
         };
         let outcomes: Vec<_> = messages
             .iter()
-            .filter(|m| {
-                m.content.contains("[background subagent") && m.content.contains("completed")
-            })
+            .filter(|m| m.content.contains("[background subagent") && m.content.contains(" done]"))
             .collect();
         assert_eq!(
             outcomes.len(),
