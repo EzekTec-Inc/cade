@@ -40,13 +40,17 @@ impl IsolatedWorkspace {
     /// Create a sandboxed temporary clone of the primary workspace.
     /// Uses standard ignore walking to skip ignored folders (e.g. target, node_modules).
     pub fn clone_from(primary: &Path) -> io::Result<Self> {
+        // An unreadable/missing source must not look like a successfully cloned
+        // (empty) workspace: ignore::Walk flattens traversal errors below.
+        std::fs::read_dir(primary)?;
         let tmp = tempfile::tempdir()?;
         let walker = ignore::WalkBuilder::new(primary)
             .standard_filters(true)
             .hidden(false)
             .build();
 
-        for entry in walker.flatten() {
+        for entry in walker {
+            let entry = entry.map_err(io::Error::other)?;
             let path = entry.path();
             if path.is_file()
                 && let Ok(rel_path) = path.strip_prefix(primary)

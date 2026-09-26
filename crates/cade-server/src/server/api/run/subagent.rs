@@ -895,35 +895,42 @@ pub(super) async fn handle_run_subagent_tool_inner(
         .map(|d| d.tools.is_readonly())
         .unwrap_or_else(|| cfg.mode == "plan" || cfg.mode == "recall");
 
-    let use_isolation = (std::env::var("CADE_ISOLATION")
-        .map(|v| v == "true")
-        .unwrap_or(false)
-        || cfg.enforce_isolation)
-        && !is_subagent_readonly;
-    let temp_workspace = if use_isolation {
-        let root = std::env::current_dir().unwrap_or_default();
-        match cade_agent::tools::IsolatedWorkspace::clone_from(&root) {
-            Ok(tmp) => {
-                let branch_name = format!("temp-branch-{}", subagent_id);
-                let tmp = tmp.with_git_branch(&branch_name).await;
-                tracing::info!(
-                    "Subagent [{}] running inside isolated workspace sandbox at {:?}",
-                    subagent_id,
-                    tmp.path()
-                );
-                Some(tmp)
-            }
+    let use_isolation = cfg.enforce_isolation
+        || (std::env::var("CADE_ISOLATION")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+            && !is_subagent_readonly);
+    let mut session_config = cfg.clone();
+    session_config.enforce_isolation = use_isolation;
+    let mut session = cade_agent::subagents::SubagentSession::new(session_config, parent_agent_id);
+    if use_isolation {
+        let root = match std::env::current_dir() {
+            Ok(root) => root,
             Err(e) => {
-                tracing::warn!(
-                    "Failed to clone workspace for subagent [{}]: {e}. Falling back to live host.",
-                    subagent_id
-                );
-                None
+                return ToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: "run_subagent".to_string(),
+                    output: format!(
+                        "error: required subagent isolation could not determine workspace: {e}"
+                    ),
+                    is_error: true,
+                    ui_resource_uri: None,
+                };
             }
+        };
+        // Merge the isolated snapshot through the workspace guard. A newly
+        // initialized git branch has unrelated history to the parent and
+        // cannot be merged back into an existing repository.
+        if let Err(e) = session.prepare_workspace(&root, None).await {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_subagent".to_string(),
+                output: format!("error: required subagent isolation setup failed: {e}"),
+                is_error: true,
+                ui_resource_uri: None,
+            };
         }
-    } else {
-        None
-    };
+    }
 
     let parent_model = cade_store::sqlite::get_agent(&state.db, parent_agent_id)
         .ok()
@@ -1106,7 +1113,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     );
 
     // Setup cancellation channel
-    let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::channel(1);
+    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
     {
         let mut cancellations = state.subagent_cancellations.write().await;
         cancellations.insert(subagent_id.clone(), cancel_tx);
@@ -1196,7 +1203,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         allow_nesting: def_opt.is_some_and(|d| d.allow_run_subagent),
         max_depth,
     };
-    let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id)
+    session = session
         .with_parent_conversation_id(parent_conversation_id.map(str::to_owned))
         .with_parent_context(parent_context)
         .with_max_iters(max_iters)
@@ -1305,18 +1312,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
         session_evt_tx,
     )));
 
-    let root_path = if let Some(ref tw) = temp_workspace {
-        tw.path().to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_default()
-    };
+    let root_path = std::env::current_dir().unwrap_or_default();
 
     let available_providers = cade_ai::catalogue::available_env_providers();
     let failover_candidates = build_failover_chain(&model, &parent_model, &available_providers);
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
-    let loop_res = tokio::time::timeout(
-        timeout_dur,
-        session.run_autonomous_loop(
+    let loop_res = tokio::select! {
+        res = tokio::time::timeout(timeout_dur, session.run_autonomous_loop(
             &llm_executor,
             &tools_executor,
             model,
@@ -1325,9 +1327,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
             parent_tool_schemas,
             failover_candidates,
             &root_path,
-        ),
-    )
-    .await;
+        )) => res,
+        _ = cancel_rx.recv() => Ok(cade_agent::subagents::SubagentOutcome::Failed {
+            error: "Subagent cancelled by parent".to_string(),
+        }),
+    };
+    // Dropping the guard discards changes if the run timed out or was cancelled.
+    session.workspace_guard = None;
 
     let elapsed = start_time.elapsed().as_secs() as u32;
 
@@ -1346,22 +1352,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             true,
         ),
         Ok(outcome) => match outcome {
-            cade_agent::subagents::SubagentOutcome::Done { summary, .. } => {
-                if let Some(ref tw) = temp_workspace {
-                    if let Err(e) = tw.merge_back().await {
-                        tracing::warn!(
-                            "Failed to copy back isolated files for subagent [{}]: {e}",
-                            subagent_id
-                        );
-                    } else {
-                        tracing::info!(
-                            "Successfully merged isolated files back for subagent [{}]",
-                            subagent_id
-                        );
-                    }
-                }
-                (summary, false)
-            }
+            cade_agent::subagents::SubagentOutcome::Done { summary, .. } => (summary, false),
             cade_agent::subagents::SubagentOutcome::Blocked { reason, .. } => (reason, true),
             cade_agent::subagents::SubagentOutcome::Failed { error } => (error, true),
             cade_agent::subagents::SubagentOutcome::Exhausted { reason, .. } => (reason, true),
