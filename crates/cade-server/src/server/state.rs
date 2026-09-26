@@ -313,7 +313,7 @@ pub struct AppState {
     /// Cancellation channels for actively running subagents.
     /// Key: subagent_id, Value: sender to abort the subagent loop.
     pub subagent_cancellations:
-        Arc<RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+        Arc<RwLock<std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
 
