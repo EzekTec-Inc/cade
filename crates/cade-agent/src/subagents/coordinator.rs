@@ -80,7 +80,7 @@ impl SubagentCoordinator {
                         &std::env::current_dir().unwrap_or_default(),
                     );
                     let mut out = String::from("Executable agents:\n");
-                    for d in defs {
+                    for d in crate::subagents::visible_subagents(&defs) {
                         out.push_str(&format!(
                             "- {} ({}): {} ({})\n",
                             d.name, d.scope, d.description, d.tools
@@ -145,7 +145,7 @@ impl SubagentCoordinator {
                         &std::env::current_dir().unwrap_or_default(),
                     );
                     let mut out = String::from("Registered subagent models:\n");
-                    for d in defs {
+                    for d in crate::subagents::visible_subagents(&defs) {
                         out.push_str(&format!(
                             "- {}: {}\n",
                             d.name,

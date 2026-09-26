@@ -1073,6 +1073,51 @@ async fn subagent_run_does_not_pollute_parent_db() {
     );
 }
 
+#[tokio::test]
+async fn unknown_explicit_subagent_returns_error_before_launch() {
+    use std::sync::atomic::Ordering;
+
+    let llm = std::sync::Arc::new(ScriptedLlm {
+        call_count: std::sync::atomic::AtomicUsize::new(0),
+        captured_iter2_messages: std::sync::Mutex::new(Vec::new()),
+    });
+    let state = build_state_with_llm(llm.clone());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let result = handle_run_subagent_tool(
+        &state,
+        "parent_x",
+        "tc_invalid",
+        &serde_json::json!({"mode": "missing-agent-252", "prompt": "do thing", "background": true}),
+        tx,
+    )
+    .await;
+
+    assert!(result.is_error);
+    assert!(result.output.contains("missing-agent-252"));
+    assert!(result.output.contains("list"));
+    assert_eq!(llm.call_count.load(Ordering::SeqCst), 0);
+    assert!(
+        rx.try_recv().is_err(),
+        "no child start event may be emitted"
+    );
+    assert!(state.subagent_cancellations.read().await.is_empty());
+
+    // The CLI @name path can arrive before a task has been typed; still
+    // report the unknown name rather than masking it with a prompt error.
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let no_prompt = handle_run_subagent_tool(
+        &state,
+        "parent_x",
+        "tc_invalid_empty",
+        &serde_json::json!({"agent": "missing-agent-252", "prompt": ""}),
+        tx,
+    )
+    .await;
+    assert!(no_prompt.is_error);
+    assert!(no_prompt.output.contains("missing-agent-252"));
+    assert_eq!(llm.call_count.load(Ordering::SeqCst), 0);
+}
+
 /// A stateful mock that on the FIRST call returns a tool_call (forcing a
 /// loop iteration), and on the SECOND call returns plain text.  The
 /// LLM messages it receives are recorded so tests can verify that the

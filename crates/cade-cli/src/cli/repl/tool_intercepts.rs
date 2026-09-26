@@ -1,7 +1,7 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
 use cade_agent::subagents::{
-    SubagentConfig, discover_all_subagents, resolve_subagent_auto, should_emit_completion_bell,
+    SubagentConfig, discover_all_subagents, should_emit_completion_bell, visible_subagents,
 };
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
     fn list_subagents(&self) -> std::result::Result<String, cade_agent::Error> {
         let defs = discover_all_subagents(&self.cwd);
         let mut out = String::from("Available subagents:\n");
-        for d in defs {
+        for d in visible_subagents(&defs) {
             out.push_str(&format!("- {}: {} ({})\n", d.name, d.description, d.tools));
         }
         Ok(out)
@@ -216,6 +216,20 @@ impl Repl {
         let mut cfg = SubagentConfig::from_args(args);
         cfg.silent_stream |= self.settings.lock().silent_subagents();
 
+        let all_defs = discover_all_subagents(&self.cwd);
+        let def_opt = match cfg.resolve_definition(&all_defs) {
+            Ok(def) => def.cloned(),
+            Err(reason) => {
+                return Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "subagent".to_string(),
+                    output: reason,
+                    is_error: true,
+                    ui_resource_uri: None,
+                });
+            }
+        };
+
         if let Err(reason) = cfg.validate() {
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
@@ -237,9 +251,6 @@ impl Repl {
                 ui_resource_uri: None,
             });
         }
-
-        let all_defs = discover_all_subagents(&self.cwd);
-        let def_opt = resolve_subagent_auto(&cfg.mode, &cfg.prompt, &all_defs).cloned();
 
         let subagent_mode = cfg.mode.clone();
         let background = cfg.background && !force_synchronous;

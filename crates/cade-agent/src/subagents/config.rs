@@ -13,7 +13,9 @@
 use serde_json::Value;
 
 use crate::agent::client::MemoryBlock;
-use crate::subagents::SubagentDef;
+use crate::subagents::{
+    SubagentDef, find_subagent, resolve_subagent_auto, route_subagent_by_description,
+};
 
 // ── Seed memory cap ──────────────────────────────────────────────────────────
 
@@ -36,6 +38,9 @@ pub struct SubagentConfig {
     /// `~/.cade/subagents/` / `.cade/subagents/`) or a built-in key like
     /// `"build"` / `"plan"`.  Defaults to `"build"`.
     pub mode: String,
+
+    /// Whether the caller supplied a mode/name rather than accepting the default.
+    pub mode_explicit: bool,
 
     /// When true the subagent runs in a background task; the tool call
     /// returns immediately with a task ID.
@@ -105,12 +110,17 @@ impl SubagentConfig {
             .trim()
             .to_string();
 
-        let mode = args["mode"]
+        let requested_mode = args["mode"]
             .as_str()
-            .or_else(|| args["agent"].as_str())
-            .unwrap_or("build")
-            .trim()
-            .to_string();
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                args["agent"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            });
+        let mode = requested_mode.unwrap_or("build").trim().to_string();
 
         let background = args["background"]
             .as_bool()
@@ -176,6 +186,7 @@ impl SubagentConfig {
         Self {
             prompt,
             mode,
+            mode_explicit: requested_mode.is_some(),
             background,
             model_override,
             custom_system_prompt,
@@ -206,6 +217,31 @@ impl SubagentConfig {
             return Err("error: 'prompt' or 'task' is required".to_string());
         }
         Ok(())
+    }
+
+    /// Resolve a launch request before allocating a child. Legacy mode keys
+    /// retain automatic routing; a named definition must match exactly.
+    pub fn resolve_definition<'a>(
+        &self,
+        all: &'a [SubagentDef],
+    ) -> Result<Option<&'a SubagentDef>, String> {
+        if !self.mode_explicit {
+            // The implicit "build" default is not an exact-name invocation:
+            // a hidden override must not become the automatic choice.
+            return Ok(find_subagent("build", all)
+                .filter(|d| !d.hidden)
+                .or_else(|| route_subagent_by_description(&self.prompt, all))
+                .or_else(|| find_subagent("worker", all).filter(|d| !d.hidden)));
+        }
+        if !matches!(self.mode.as_str(), "build" | "plan" | "recall") {
+            return find_subagent(&self.mode, all).map(Some).ok_or_else(|| {
+                format!(
+                    "error: subagent '{}' not found. Use subagent(action=\"list\") to see available names, or choose an existing definition.",
+                    self.mode
+                )
+            });
+        }
+        Ok(resolve_subagent_auto(&self.mode, &self.prompt, all))
     }
 
     // ── Tool resolution ──────────────────────────────────────────────────────
@@ -440,6 +476,74 @@ mod tests {
         assert!(cfg.human_review);
         assert!(cfg.silent_stream);
         assert_eq!(cfg.depth, 2);
+    }
+
+    #[test]
+    fn requested_name_resolution_preserves_legacy_routing_and_hidden_exact_lookup() {
+        let mut hidden = crate::subagents::builtin_subagents()
+            .into_iter()
+            .find(|d| d.name == "worker")
+            .expect("worker definition");
+        hidden.name = "private-tester".into();
+        hidden.description = "Run private verification".into();
+        hidden.hidden = true;
+        let mut public = hidden.clone();
+        public.name = "public-tester".into();
+        public.hidden = false;
+        let defs = vec![hidden, public];
+
+        let unpinned = SubagentConfig::from_args(&json!({"task": "Run private verification"}));
+        assert!(!unpinned.mode_explicit);
+        assert_eq!(
+            unpinned
+                .resolve_definition(&defs)
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("public-tester")
+        );
+        let legacy = SubagentConfig::from_args(
+            &json!({"mode": "build", "task": "Run private verification"}),
+        );
+        assert_eq!(
+            legacy
+                .resolve_definition(&defs)
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("public-tester")
+        );
+        let explicit = SubagentConfig::from_args(
+            &json!({"agent": "private-tester", "task": "Run private verification"}),
+        );
+        assert_eq!(
+            explicit
+                .resolve_definition(&defs)
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("private-tester")
+        );
+        assert_eq!(
+            crate::subagents::visible_subagents(&defs)
+                .map(|d| d.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["public-tester"]
+        );
+        let unknown = SubagentConfig::from_args(
+            &json!({"mode": "missing-tester", "task": "Run private verification"}),
+        );
+        let error = unknown.resolve_definition(&defs).unwrap_err();
+        assert!(error.contains("missing-tester"));
+        assert!(error.contains("list"));
+
+        let mut hidden_build = defs[0].clone();
+        hidden_build.name = "build".into();
+        let defs_with_hidden_default = vec![hidden_build, defs[1].clone()];
+        assert_eq!(
+            unpinned
+                .resolve_definition(&defs_with_hidden_default)
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("public-tester")
+        );
     }
 
     #[test]

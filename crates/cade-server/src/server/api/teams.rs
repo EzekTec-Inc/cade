@@ -45,21 +45,21 @@ pub async fn get_swarm_topology_handler() -> impl IntoResponse {
         });
     }
 
-    let standalone_subagents: Vec<TeamMemberSummary> = standalone_subs
-        .into_iter()
-        .map(|s| {
-            total_nodes += 1;
-            TeamMemberSummary {
-                id: s.name.clone(),
-                name: s.name,
-                role: Some("Autonomous Subagent".to_string()),
-                description: s.description,
-                model: s.model,
-                tools: "Configured".to_string(),
-                status: "Idle".to_string(),
-            }
-        })
-        .collect();
+    let standalone_subagents: Vec<TeamMemberSummary> =
+        cade_agent::subagents::visible_subagents(&standalone_subs)
+            .map(|s| {
+                total_nodes += 1;
+                TeamMemberSummary {
+                    id: s.name.clone(),
+                    name: s.name.clone(),
+                    role: Some("Autonomous Subagent".to_string()),
+                    description: s.description.clone(),
+                    model: s.model.clone(),
+                    tools: "Configured".to_string(),
+                    status: "Idle".to_string(),
+                }
+            })
+            .collect();
 
     let resp = SwarmTopologyResponse {
         teams,
