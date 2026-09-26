@@ -528,7 +528,8 @@ pub(super) async fn execute_turn_tools(
     let agent_id = turn_input.agent_id;
     let run_id = turn_input.run_id;
     let permission_mode_override = turn_input.permission_mode;
-    let _ = (&turn_input.conversation_id, &turn_input.input);
+    let conversation_id = turn_input.conversation_id;
+    let _ = &turn_input.input;
 
     let runtime = Arc::new(ToolRuntime::new(
         Arc::new(storage_impl::ServerStorageBackend {
@@ -656,18 +657,24 @@ pub(super) async fn execute_turn_tools(
         {
             let state_c = state.clone();
             let agent_id_c = agent_id.clone();
+            let conversation_id_c = conversation_id.clone();
             let tool_name_c = tool_name.clone();
             let tool_call_id_c = tool_call_id.clone();
             let arguments_c = arguments.clone();
+            let parent_mode = pipeline.permissions().mode();
             let tx_c = tx.clone();
+            let run_id_c = run_id.clone();
             let handle = tokio::spawn(async move {
                 subagent::handle_subagent_tool(
                     state_c,
                     agent_id_c,
+                    conversation_id_c,
                     tool_name_c,
                     tool_call_id_c,
                     arguments_c,
                     tx_c,
+                    parent_mode,
+                    run_id_c,
                 )
                 .await
             });
@@ -681,6 +688,7 @@ pub(super) async fn execute_turn_tools(
         } else if tool_name == "run_team" {
             let state_c = state.clone();
             let agent_id_c = agent_id.clone();
+            let conversation_id_c = conversation_id.clone();
             let tool_call_id_c = tool_call_id.clone();
             let arguments_c = arguments.clone();
             let tx_c = tx.clone();
@@ -688,6 +696,7 @@ pub(super) async fn execute_turn_tools(
                 subagent::handle_run_team_tool(
                     state_c,
                     agent_id_c,
+                    conversation_id_c,
                     tool_call_id_c,
                     arguments_c,
                     tx_c,

@@ -28,28 +28,63 @@ pub async fn run_headless(
     client: &HttpTransport,
     agent_id: &str,
     prompt: &str,
-    _permissions: &PermissionManager,
+    permissions: &PermissionManager,
     _mcp: &std::sync::Arc<McpManager>,
     _hooks: &HookEngine,
     on_output: Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
     _max_tokens_budget: Option<u64>,
     _allowed_paths: Option<Vec<String>>,
 ) -> Result<(String, HeadlessStats)> {
+    run_headless_with_cancel(
+        client,
+        agent_id,
+        prompt,
+        permissions,
+        _mcp,
+        _hooks,
+        on_output,
+        _max_tokens_budget,
+        _allowed_paths,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub async fn run_headless_with_cancel(
+    client: &HttpTransport,
+    agent_id: &str,
+    prompt: &str,
+    permissions: &PermissionManager,
+    _mcp: &std::sync::Arc<McpManager>,
+    _hooks: &HookEngine,
+    on_output: Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
+    _max_tokens_budget: Option<u64>,
+    _allowed_paths: Option<Vec<String>>,
+    cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<(String, HeadlessStats)> {
     let started = std::time::Instant::now();
     let output = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
     let output_for_event = output.clone();
     let messages = client
-        .start_run(agent_id, prompt, None, move |message| {
-            if let Some(text) = message.assistant_text() {
-                output_for_event.lock().push_str(text);
-                if let Some(callback) = &on_output {
-                    callback(HeadlessEvent::Text(text));
-                } else {
-                    print!("{}", sanitize_for_terminal(text));
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
+        .start_run_cancellable_with_mode(
+            agent_id,
+            prompt,
+            None,
+            Some(&permissions.mode().to_string()),
+            move |message| {
+                if let Some(text) = message.assistant_text() {
+                    output_for_event.lock().push_str(text);
+                    if let Some(callback) = &on_output {
+                        callback(HeadlessEvent::Text(text));
+                    } else {
+                        print!("{}", sanitize_for_terminal(text));
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
                 }
-            }
-        })
+            },
+            cancel,
+        )
         .await?;
     Ok((
         output.lock().trim().to_owned(),

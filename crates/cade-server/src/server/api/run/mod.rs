@@ -571,6 +571,46 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             }
         }
 
+        // Deliver only outcomes from this conversation, before building the
+        // next turn's context (also covers outcomes completed between runs).
+        let delivery_error = {
+            let mut map = state2.pending_subagent_results.write().await;
+            let key = (agent_id2.clone(), conv_id2.clone());
+            let mut failure = None;
+            if let Some(results) = map.get_mut(&key) {
+                while let Some(sr) = results.first() {
+                    match subagent::store_background_outcome(
+                        &state2,
+                        &agent_id2,
+                        conv_id2.as_deref(),
+                        sr,
+                    ) {
+                        Ok(()) => {
+                            results.remove(0);
+                        }
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if results.is_empty() {
+                    map.remove(&key);
+                }
+            }
+            failure
+        };
+        if let Some(error) = delivery_error {
+            tracing::error!(%error, "background outcome still pending; refusing to continue parent run");
+            send(json!({
+                "message_type": "error",
+                "error": "Background outcome could not be delivered; it remains pending for retry",
+            }))
+            .await;
+            exit_status = RunExitStatus::Error;
+            break;
+        }
+
         // ── Build context ─────────────────────────────────────────────
         // Fix: only increment the turn counter on the first iteration
         // (the actual user message). Subsequent iterations are tool-return
@@ -1013,55 +1053,6 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             );
         }
 
-        // ── Background subagent write-back ─────────────────────────────────
-        // Drain completed background results for this agent so the parent
-        // sees them on the next LLM iteration.  Each result is persisted as a
-        // `tool` message only when no tool result for that tool_call_id is
-        // already in the conversation — server-side background runs also
-        // return their result synchronously, so this dedupes instead of
-        // double-delivering, and the queue can no longer grow unbounded.
-        let pending_results = {
-            let mut map = state2.pending_subagent_results.write().await;
-            map.remove(&agent_id2).unwrap_or_default()
-        };
-        if !pending_results.is_empty() {
-            let existing_ids: std::collections::HashSet<String> =
-                cade_store::sqlite::list_messages(
-                    &state2.db,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    10000,
-                )
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|m| m.role == "tool")
-                .filter_map(|m| m.content["tool_call_id"].as_str().map(String::from))
-                .collect();
-
-            for sr in pending_results {
-                if existing_ids.contains(&sr.tool_call_id) {
-                    continue;
-                }
-                let body = format!(
-                    "[background subagent {} {}]\n{}",
-                    sr.subagent_id,
-                    if sr.is_error { "failed" } else { "completed" },
-                    sr.result
-                );
-                persist(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    "tool",
-                    json!({
-                        "content": body,
-                        "tool_call_id": sr.tool_call_id,
-                        "tool_name": "run_subagent",
-                    }),
-                );
-            }
-        }
-
         // Loop → re-invoke LLM with tool results
     }
 
@@ -1252,6 +1243,33 @@ pub async fn steer_subagent_handler(
             ),
         ))
     }
+}
+
+pub async fn cancel_subagent_handler(
+    State(state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let cancellation = state
+        .subagent_cancellations
+        .read()
+        .await
+        .get(&subagent_id)
+        .cloned()
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("No active subagent found with ID {subagent_id}"),
+            )
+        })?;
+    cancellation.cancel().map_err(|_| {
+        (
+            axum::http::StatusCode::CONFLICT,
+            format!("Subagent {subagent_id} is no longer accepting cancellation"),
+        )
+    })?;
+    Ok(Json(
+        json!({ "status": "cancelling", "subagent_id": subagent_id }),
+    ))
 }
 
 #[derive(serde::Deserialize)]

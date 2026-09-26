@@ -504,7 +504,7 @@ impl HttpTransport {
             messages.push(message.clone());
         };
 
-        while let Some(event) = events.next().await {
+        loop {
             if !cancellation_requested
                 && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
                 && let Some(id) = run_id.as_deref()
@@ -512,6 +512,16 @@ impl HttpTransport {
                 self.cancel_run(id).await?;
                 cancellation_requested = true;
             }
+            // A blocked tool may produce no stream events. Poll the cancellation
+            // flag independently rather than waiting forever for the next frame.
+            let event =
+                match tokio::time::timeout(std::time::Duration::from_millis(100), events.next())
+                    .await
+                {
+                    Ok(Some(event)) => event,
+                    Ok(None) => break,
+                    Err(_) => continue,
+                };
             match event {
                 Ok(reqwest_eventsource::Event::Open) => {}
                 Ok(reqwest_eventsource::Event::Message(message)) => {

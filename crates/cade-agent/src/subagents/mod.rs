@@ -10,9 +10,9 @@ pub use config::SubagentConfig;
 pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 pub use harness::{AgentHarness, HarnessLifecycleState, HarnessTaskSpec, IsolationPolicy};
 pub use session::{
-    FINISH_TOOL_NAME, SubagentEvent, SubagentEventEmitter, SubagentLlmExecutor, SubagentMessage,
-    SubagentOutcome, SubagentSession, SubagentToolCall, SubagentToolExecutor, SubagentTurnResponse,
-    canonical_finish_tool_schema,
+    FINISH_TOOL_NAME, SubagentCancellation, SubagentEvent, SubagentEventEmitter,
+    SubagentLlmExecutor, SubagentMessage, SubagentOutcome, SubagentSession, SubagentToolCall,
+    SubagentToolExecutor, SubagentToolPolicy, SubagentTurnResponse, canonical_finish_tool_schema,
 };
 pub use workspace_guard::IsolatedWorkspaceGuard;
 
@@ -749,6 +749,12 @@ pub fn find_subagent<'a>(name: &str, all: &'a [SubagentDef]) -> Option<&'a Subag
     all.iter().find(|d| d.name == name)
 }
 
+/// Public discovery view. Hidden definitions remain in the full registry for
+/// exact-name invocation, but must not appear in lists or completion.
+pub fn visible_subagents(all: &[SubagentDef]) -> impl Iterator<Item = &SubagentDef> {
+    all.iter().filter(|d| !d.hidden)
+}
+
 /// Resolve which subagent definition should run for a given `mode` argument.
 ///
 /// Selection order:
@@ -839,7 +845,7 @@ pub fn resolve_subagent_auto<'a>(
     {
         return Some(def);
     }
-    find_subagent("worker", all)
+    find_subagent("worker", all).filter(|d| !d.hidden)
 }
 
 // -- Parsing
@@ -1354,5 +1360,28 @@ mod tests {
         let defs = vec![desc_def("worker", "Implementation agent for normal tasks")];
         let got = resolve_subagent_auto("bug-hunter", "please run the test suite", &defs);
         assert_eq!(got.map(|d| d.name.as_str()), Some("worker"));
+    }
+
+    #[test]
+    fn project_hidden_definition_is_callable_but_absent_from_discovery_view() {
+        let project = tempfile::tempdir().unwrap();
+        let subagents = project.path().join(".cade/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("ticket252-private.md"),
+            "---\nname: ticket252-private\nhidden: true\ndescription: Private verification\n---\nPrivate instructions",
+        )
+        .unwrap();
+        let defs = discover_all_subagents(project.path());
+        let cfg = SubagentConfig::from_args(&serde_json::json!({
+            "mode": "ticket252-private", "prompt": "check"
+        }));
+        assert_eq!(
+            cfg.resolve_definition(&defs)
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("ticket252-private")
+        );
+        assert!(!visible_subagents(&defs).any(|d| d.name == "ticket252-private"));
     }
 }

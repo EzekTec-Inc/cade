@@ -1,9 +1,28 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
 use cade_agent::subagents::{
-    SubagentConfig, discover_all_subagents, resolve_subagent_auto, should_emit_completion_bell,
+    SubagentConfig, discover_all_subagents, should_emit_completion_bell, visible_subagents,
 };
 use std::sync::Arc;
+
+type CancellationMap = Arc<
+    tokio::sync::Mutex<
+        std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>,
+    >,
+>;
+
+async fn cancel_registered_subagent(
+    map: &CancellationMap,
+    id: &str,
+) -> std::result::Result<String, cade_agent::Error> {
+    let handle = map.lock().await.get(id).cloned().ok_or_else(|| {
+        cade_agent::Error::custom(format!("no active subagent found with ID {id}"))
+    })?;
+    handle.cancel().map_err(|_| {
+        cade_agent::Error::custom(format!("subagent {id} is no longer accepting cancellation"))
+    })?;
+    Ok(format!("Cancel signal sent to subagent {id}"))
+}
 
 impl Repl {
     /// Handle the `run_subagent` tool call — spawn a subagent and return its result.
@@ -54,7 +73,7 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
     fn list_subagents(&self) -> std::result::Result<String, cade_agent::Error> {
         let defs = discover_all_subagents(&self.cwd);
         let mut out = String::from("Available subagents:\n");
-        for d in defs {
+        for d in visible_subagents(&defs) {
             out.push_str(&format!("- {}: {} ({})\n", d.name, d.description, d.tools));
         }
         Ok(out)
@@ -64,18 +83,7 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
         &self,
         subagent_id: &str,
     ) -> std::result::Result<String, cade_agent::Error> {
-        let tx_opt = {
-            let map = self.subagent_cancellations.lock().await;
-            map.get(subagent_id).cloned()
-        };
-        if let Some(tx) = tx_opt {
-            let _ = tx.send(()).await;
-            Ok(format!("Cancel signal sent to subagent {subagent_id}"))
-        } else {
-            Err(cade_agent::Error::custom(format!(
-                "no active subagent found with ID {subagent_id}"
-            )))
-        }
+        cancel_registered_subagent(&self.subagent_cancellations, subagent_id).await
     }
 
     fn doctor_status(&self) -> std::result::Result<String, cade_agent::Error> {
@@ -98,20 +106,10 @@ impl Repl {
             SubagentTrayAction::None => {}
             SubagentTrayAction::Kill { subagent_id } => {
                 let cancel_res = self.cancel_subagent(&subagent_id).await;
-                {
+                if cancel_res.is_ok() {
                     let mut app = self.app.lock();
-                    if let Some(t) = app
-                        .subagent_trackers
-                        .iter_mut()
-                        .find(|t| t.task_id == subagent_id)
-                    {
-                        t.status = cade_tui::subagent_tracker::SubagentStatus::Failed {
-                            finished_at: std::time::Instant::now(),
-                            error: "Killed from Control Tray".into(),
-                        };
-                    }
                     app.show_toast(
-                        format!("Subagent {subagent_id} killed"),
+                        format!("Cancellation requested for {subagent_id}"),
                         cade_tui::ToastLevel::Info,
                     );
                     app.draw_dirty = true;
@@ -119,13 +117,22 @@ impl Repl {
                 }
                 if let Err(e) = cancel_res {
                     tracing::debug!("Local subagent cancel fallback for {subagent_id}: {e}");
-                    let _ = self
+                    let remote = self
                         .client
                         .raw_post(
                             &format!("/subagents/{subagent_id}/cancel"),
                             &serde_json::json!({ "action": "cancel", "id": subagent_id }),
                         )
                         .await;
+                    let mut app = self.app.lock();
+                    app.show_toast(
+                        match remote {
+                            Ok(_) => format!("Cancellation requested for {subagent_id}"),
+                            Err(e) => format!("Could not cancel {subagent_id}: {e}"),
+                        },
+                        cade_tui::ToastLevel::Info,
+                    );
+                    app.draw_dirty = true;
                 }
             }
             SubagentTrayAction::Steer {
@@ -216,6 +223,20 @@ impl Repl {
         let mut cfg = SubagentConfig::from_args(args);
         cfg.silent_stream |= self.settings.lock().silent_subagents();
 
+        let all_defs = discover_all_subagents(&self.cwd);
+        let def_opt = match cfg.resolve_definition(&all_defs) {
+            Ok(def) => def.cloned(),
+            Err(reason) => {
+                return Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "subagent".to_string(),
+                    output: reason,
+                    is_error: true,
+                    ui_resource_uri: None,
+                });
+            }
+        };
+
         if let Err(reason) = cfg.validate() {
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
@@ -226,11 +247,21 @@ impl Repl {
             });
         }
 
-        let all_defs = discover_all_subagents(&self.cwd);
-        let def_opt = resolve_subagent_auto(&cfg.mode, &cfg.prompt, &all_defs).cloned();
+        // Headless runs execute on the server; a local clone cannot redirect
+        // the server's tool calls. Refuse required isolation before start_run.
+        if cfg.enforce_isolation || std::env::var("CADE_ISOLATION").is_ok_and(|v| v == "true") {
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "subagent".to_string(),
+                output: "error: required subagent isolation cannot be established for a CLI headless run; refusing to run in the live workspace".to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            });
+        }
 
         let subagent_mode = cfg.mode.clone();
         let background = cfg.background && !force_synchronous;
+        let queued = background && self.subagent_semaphore.available_permits() == 0;
         let silent_stream = cfg.silent_stream;
         let human_review = cfg.human_review;
         let prompt = cfg.prompt_with_test_command();
@@ -348,10 +379,46 @@ impl Repl {
             Some(std::sync::Arc::new(|_| {}))
         };
 
+        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
+        let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
+        self.subagent_cancellations
+            .lock()
+            .await
+            .insert(task_id.clone(), cancellation.clone());
+        struct CancelGuard {
+            map: Arc<
+                tokio::sync::Mutex<
+                    std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>,
+                >,
+            >,
+            id: String,
+            cancellation: cade_agent::subagents::SubagentCancellation,
+        }
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                self.cancellation.close();
+                let map = self.map.clone();
+                let id = self.id.clone();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        map.lock().await.remove(&id);
+                    });
+                }
+            }
+        }
+        let cancel_guard = CancelGuard {
+            map: self.subagent_cancellations.clone(),
+            id: task_id.clone(),
+            cancellation,
+        };
+        let created_agent = Arc::new(tokio::sync::Mutex::new(None::<String>));
+        let server_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         let run_task = {
             let task_id_c = task_id.clone();
-            let cancellations_c = self.subagent_cancellations.clone();
             let cfg = cfg.clone();
+            let created_agent = created_agent.clone();
+            let server_cancel = server_cancel.clone();
             async move {
                 let (sub_agent_id, ephemeral) = if let Some(existing_id) = cfg.agent_id.clone() {
                     (existing_id, false)
@@ -380,44 +447,11 @@ impl Repl {
                     }
                 };
 
-                let mut cancel_rx = {
-                    let (tx, rx) = tokio::sync::mpsc::channel(1);
-                    let mut map = cancellations_c.lock().await;
-                    map.insert(sub_agent_id.clone(), tx.clone());
-                    map.insert(task_id_c.clone(), tx);
-                    rx
-                };
-
-                struct CancelGuard<'a> {
-                    map: &'a std::sync::Arc<
-                        tokio::sync::Mutex<
-                            std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>,
-                        >,
-                    >,
-                    id: String,
-                    task_id: String,
+                if ephemeral {
+                    *created_agent.lock().await = Some(sub_agent_id.clone());
                 }
-                impl<'a> Drop for CancelGuard<'a> {
-                    fn drop(&mut self) {
-                        let map = self.map.clone();
-                        let id = self.id.clone();
-                        let task_id = self.task_id.clone();
-                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                            handle.spawn(async move {
-                                let mut m = map.lock().await;
-                                m.remove(&id);
-                                m.remove(&task_id);
-                            });
-                        }
-                    }
-                }
-                let _cancel_guard = CancelGuard {
-                    map: &cancellations_c,
-                    id: sub_agent_id.clone(),
-                    task_id: task_id_c.clone(),
-                };
 
-                let run_headless_fut = crate::cli::headless::run_headless(
+                let run_headless_fut = crate::cli::headless::run_headless_with_cancel(
                     &client,
                     &sub_agent_id,
                     &prompt,
@@ -427,14 +461,16 @@ impl Repl {
                     on_output.clone(),
                     cfg.max_tokens_budget,
                     cfg.resolve_allowed_paths(def_opt.as_ref()),
+                    Some(&server_cancel),
                 );
 
-                let result = tokio::select! {
-                    res = run_headless_fut => res,
-                    _ = cancel_rx.recv() => {
-                        Err(crate::Error::custom("Task cancelled by parent".to_string()))
+                let result = run_headless_fut.await.and_then(|out| {
+                    if server_cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        Err(crate::Error::custom("Task cancelled by parent"))
+                    } else {
+                        Ok(out)
                     }
-                };
+                });
 
                 let (mut last_output, mut is_error) = match result {
                     Ok((output, _)) => (output, false),
@@ -443,6 +479,7 @@ impl Repl {
 
                 if ephemeral {
                     let _ = client.delete_agent(&sub_agent_id).await;
+                    created_agent.lock().await.take();
                 }
 
                 if !is_error && let Some(cmd) = cfg.test_command.as_deref() {
@@ -490,9 +527,33 @@ impl Repl {
             let bg_silent = silent_stream;
             let bg_app_arc = app_arc.clone();
             tokio::spawn(async move {
-                let _permit = sem.acquire_owned().await;
-                let (result, is_error) = run_task.await;
-                drop(_permit);
+                let _cancel_guard = cancel_guard;
+                let outcome = tokio::select! {
+                    biased;
+                    Some(()) = cancel_rx.recv() => None,
+                    permit = sem.acquire_owned() => {
+                        match permit {
+                            Ok(_permit) => {
+                                let mut run_task = std::pin::pin!(run_task);
+                                tokio::select! {
+                                    biased;
+                                    Some(()) = cancel_rx.recv() => {
+                                        server_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                        Some(run_task.await)
+                                    },
+                                    result = &mut run_task => Some(result),
+                                }
+                            }
+                            Err(_) => Some(("Subagent semaphore closed".to_string(), true)),
+                        }
+                    }
+                };
+                let (result, is_error) =
+                    outcome.unwrap_or_else(|| ("Subagent cancelled by parent".to_string(), true));
+                _cancel_guard.cancellation.close();
+                if let Some(id) = created_agent.lock().await.take() {
+                    let _ = bg_client.delete_agent(&id).await;
+                }
 
                 {
                     let label = format!("subagent:{}:{}", bg_st_label, bg_task_id);
@@ -570,16 +631,30 @@ impl Repl {
                 tool_call_id: call_id_owned,
                 tool_name: "subagent".to_string(),
                 output: format!(
-                    "Background subagent [{subagent_mode}] launched (task ID: {}). \
+                    "Background subagent [{subagent_mode}] {} (task ID: {}). \
                      You will be notified when it completes.",
+                    if queued { "queued" } else { "launched" },
                     task_id_c
                 ),
                 is_error: false,
                 ui_resource_uri: None,
             })
         } else {
+            let _cancel_guard = cancel_guard;
             let _permit = self.subagent_semaphore.acquire().await;
-            let (output, is_error) = run_task.await;
+            let mut run_task = std::pin::pin!(run_task);
+            let (output, is_error) = tokio::select! {
+                biased;
+                Some(()) = cancel_rx.recv() => {
+                    server_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                    run_task.await
+                },
+                result = &mut run_task => result,
+            };
+            _cancel_guard.cancellation.close();
+            if let Some(id) = created_agent.lock().await.take() {
+                let _ = self.client.delete_agent(&id).await;
+            }
             drop(_permit);
 
             if let Some(idx) = live_idx {
@@ -667,14 +742,16 @@ impl Repl {
 
 #[cfg(test)]
 mod tests {
+    use super::cancel_registered_subagent;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::{Mutex, mpsc};
 
     #[tokio::test]
-    async fn test_dual_key_cancellation_map() {
-        let cancellations: Arc<Mutex<HashMap<String, mpsc::Sender<()>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+    async fn cli_cancellation_is_truthful_for_active_repeated_missing_and_closed_handles() {
+        let cancellations: Arc<
+            Mutex<HashMap<String, cade_agent::subagents::SubagentCancellation>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
         let (tx, mut rx) = mpsc::channel(1);
 
         let sub_agent_id = "subagent-agent-123".to_string();
@@ -682,26 +759,48 @@ mod tests {
 
         {
             let mut map = cancellations.lock().await;
-            map.insert(sub_agent_id.clone(), tx.clone());
-            map.insert(task_id.clone(), tx);
+            let handle = cade_agent::subagents::SubagentCancellation::new(tx);
+            map.insert(sub_agent_id.clone(), handle.clone());
+            map.insert(task_id.clone(), handle);
         }
 
         // Cancel via task_id
-        let tx_opt = {
-            let map = cancellations.lock().await;
-            map.get(&task_id).cloned()
-        };
-        assert!(tx_opt.is_some());
-        let _ = tx_opt.unwrap().send(()).await;
+        assert!(
+            cancel_registered_subagent(&cancellations, &task_id)
+                .await
+                .is_ok()
+        );
+        assert!(
+            cancel_registered_subagent(&cancellations, &sub_agent_id)
+                .await
+                .is_err()
+        );
+        assert!(
+            cancel_registered_subagent(&cancellations, "missing")
+                .await
+                .is_err()
+        );
 
         // Verify receiver catches cancellation
         assert_eq!(rx.recv().await, Some(()));
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        cancellations.lock().await.insert(
+            "closed".into(),
+            cade_agent::subagents::SubagentCancellation::new(tx),
+        );
+        assert!(
+            cancel_registered_subagent(&cancellations, "closed")
+                .await
+                .is_err()
+        );
 
         // Clean up
         {
             let mut map = cancellations.lock().await;
             map.remove(&sub_agent_id);
             map.remove(&task_id);
+            map.remove("closed");
         }
         assert!(cancellations.lock().await.is_empty());
     }

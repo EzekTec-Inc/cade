@@ -307,13 +307,13 @@ pub struct AppState {
     // ── Subagents ───────────────────────────────────────────────────────────
     /// Completed background subagent results waiting to be injected into the
     /// parent agent's next agentic loop iteration.
-    /// Key: parent agent_id, Value: vec of completed results.
+    /// Key: (invoking agent_id, invoking conversation_id).
     pub pending_subagent_results:
-        Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
+        Arc<RwLock<std::collections::HashMap<(String, Option<String>), Vec<SubagentResult>>>>,
     /// Cancellation channels for actively running subagents.
     /// Key: subagent_id, Value: sender to abort the subagent loop.
     pub subagent_cancellations:
-        Arc<RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+        Arc<RwLock<std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
 
