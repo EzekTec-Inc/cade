@@ -423,7 +423,7 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
             &std::env::current_dir().unwrap_or_default(),
         );
         let mut out = String::from("Available subagents:\n");
-        for d in defs {
+        for d in cade_agent::subagents::visible_subagents(&defs) {
             out.push_str(&format!("- {}: {} ({})\n", d.name, d.description, d.tools));
         }
         Ok(out)
@@ -806,6 +806,23 @@ pub(super) async fn handle_run_subagent_tool_inner(
         };
     }
 
+    // Validate the requested definition before waiting for a slot or creating
+    // any child state. Keep hidden definitions available for exact lookup.
+    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
+    let def_opt = match cfg.resolve_definition(&all_defs) {
+        Ok(def) => def,
+        Err(reason) => {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_subagent".to_string(),
+                output: reason,
+                is_error: true,
+                ui_resource_uri: None,
+            };
+        }
+    };
+
     if let Err(reason) = cfg.validate() {
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
@@ -857,11 +874,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let subagent_id = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let task_preview: String = cfg.prompt.chars().take(80).collect();
     let prompt = cfg.prompt_with_test_command();
-
-    // Resolve subagent definition + model via shared helpers
-    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
-    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
-    let def_opt = cade_agent::subagents::resolve_subagent_auto(&cfg.mode, &cfg.prompt, &all_defs);
 
     let is_subagent_readonly = def_opt
         .map(|d| d.tools.is_readonly())

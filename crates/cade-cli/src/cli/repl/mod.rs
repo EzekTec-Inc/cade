@@ -441,10 +441,9 @@ impl Repl {
         }
         app.slash_ac.set_commands(slash_cmds);
 
-        let subagent_names = cade_agent::subagents::discover_all_subagents(&self.cwd)
-            .into_iter()
-            .filter(|s| !s.hidden)
-            .map(|s| s.name)
+        let all_subagents = cade_agent::subagents::discover_all_subagents(&self.cwd);
+        let subagent_names = cade_agent::subagents::visible_subagents(&all_subagents)
+            .map(|s| s.name.clone())
             .collect();
         app.slash_ac.set_at_subagents(subagent_names);
 
@@ -1239,8 +1238,8 @@ impl Repl {
             }
 
             // @name dispatch: route the whole message to a named subagent.
-            // Exact name lookup (hidden subagents included) — unmatched names
-            // fall through to a normal agent turn.
+            // Treat @name as an explicit subagent request. The shared launch
+            // resolver reports unknown names; hidden exact names still work.
             let at_dispatch = {
                 let (name, prompt) = if let Some(rest) = input.strip_prefix('@') {
                     match rest.split_once(char::is_whitespace) {
@@ -1250,11 +1249,7 @@ impl Repl {
                 } else {
                     ("", "")
                 };
-                if !name.is_empty()
-                    && cade_agent::subagents::discover_all_subagents(&self.cwd)
-                        .iter()
-                        .any(|d| d.name == name)
-                {
+                if !name.is_empty() {
                     Some((name.to_string(), prompt.to_string()))
                 } else {
                     None
