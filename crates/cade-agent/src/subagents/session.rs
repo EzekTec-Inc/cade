@@ -6,9 +6,14 @@
 
 use async_trait::async_trait;
 use cade_core::permissions::{PermissionManager, Verdict, is_write_schema, path_is_protected};
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::future::Future;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::SubagentTools;
 
@@ -487,7 +492,51 @@ pub struct SubagentSession {
     parent_context: Vec<SubagentMessage>,
 }
 
+/// Acknowledgement of an in-process child. `queued` describes the slot at
+/// admission time; the stable ID is also used by inspection and cancellation.
+pub struct SubagentLaunch {
+    pub child_id: String,
+    pub queued: bool,
+}
+
 impl SubagentSession {
+    /// Transfer ownership of a child to the runtime before waiting for a slot.
+    /// Completion is delivered once even if the invoking future has ended.
+    pub fn launch_background<R, F, Fut, D, Delivery>(
+        self,
+        semaphore: Arc<Semaphore>,
+        timeout: Duration,
+        mut cancel: tokio::sync::mpsc::Receiver<()>,
+        run: F,
+        deliver: D,
+    ) -> SubagentLaunch
+    where
+        R: Send + 'static,
+        F: FnOnce(Self, OwnedSemaphorePermit, tokio::sync::mpsc::Receiver<()>) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        D: FnOnce(Result<R, String>) -> Delivery + Send + 'static,
+        Delivery: Future<Output = ()> + Send + 'static,
+    {
+        let launch = SubagentLaunch {
+            child_id: self.session_id.clone(),
+            queued: semaphore.available_permits() == 0,
+        };
+        tokio::spawn(async move {
+            let result = tokio::select! {
+                Some(()) = cancel.recv() => Err("Subagent cancelled by parent".to_string()),
+                acquired = tokio::time::timeout(timeout, semaphore.acquire_owned()) => match acquired {
+                    Ok(Ok(permit)) => std::panic::AssertUnwindSafe(async move { run(self, permit, cancel).await })
+                        .catch_unwind().await.map_err(|_| "subagent task panicked".to_string()),
+                    Ok(Err(_)) => Err("subagent semaphore closed".to_string()),
+                    Err(_) => Err("timed out waiting for a subagent slot".to_string()),
+                }
+            };
+            deliver(result).await;
+        });
+        launch
+    }
     /// Create a new subagent session instance.
     pub fn new(config: SubagentConfig, parent_agent_id: impl Into<String>) -> Self {
         let max_tokens = config.max_tokens_budget;
@@ -1017,6 +1066,180 @@ mod tests {
     use super::*;
     use cade_core::permissions::PermissionMode;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn background_launch_acknowledges_blocked_and_queued_children_and_delivers_once() {
+        struct BlockedLlm(tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
+        #[async_trait]
+        impl SubagentLlmExecutor for BlockedLlm {
+            async fn complete_turn(
+                &self,
+                _: &str,
+                _: &str,
+                _: &[SubagentMessage],
+                _: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                self.0
+                    .lock()
+                    .await
+                    .take()
+                    .unwrap()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(SubagentTurnResponse {
+                    content: Some("finished".into()),
+                    tool_calls: vec![],
+                    tokens_used: 1,
+                })
+            }
+        }
+        struct NoTools;
+        #[async_trait]
+        impl SubagentToolExecutor for NoTools {
+            async fn execute_tool(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+                _: &Path,
+            ) -> Result<String, String> {
+                panic!("unexpected tool invocation")
+            }
+        }
+        let semaphore = Arc::new(Semaphore::new(1));
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let (outcome_tx, mut outcomes) = tokio::sync::mpsc::unbounded_channel();
+        let llm = Arc::new(BlockedLlm(tokio::sync::Mutex::new(Some(blocked))));
+        let run = move |mut session: SubagentSession, _permit: OwnedSemaphorePermit, _cancel| {
+            let llm = llm.clone();
+            async move {
+                let _hold_slot = _permit;
+                session
+                    .run_autonomous_loop(
+                        llm.as_ref(),
+                        &NoTools,
+                        "test".into(),
+                        "system".into(),
+                        "task".into(),
+                        vec![],
+                        vec![],
+                        Path::new("."),
+                    )
+                    .await
+            }
+        };
+        let first = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"first"})),
+            "parent",
+        )
+        .launch_background(
+            semaphore.clone(),
+            Duration::from_secs(2),
+            tokio::sync::mpsc::channel(1).1,
+            run,
+            {
+                let tx = outcome_tx.clone();
+                move |outcome| async move {
+                    tx.send(outcome).unwrap();
+                }
+            },
+        );
+        assert!(!first.child_id.is_empty());
+        // Wait for the child to enter its blocked LLM turn before launching the next.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while semaphore.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let second = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"second"})),
+            "parent",
+        )
+        .launch_background(
+            semaphore.clone(),
+            Duration::from_secs(2),
+            tokio::sync::mpsc::channel(1).1,
+            |mut session, _permit, _cancel| async move {
+                session
+                    .finalize_outcome(SubagentOutcome::Failed {
+                        error: "failed".into(),
+                    })
+                    .await
+            },
+            {
+                let tx = outcome_tx.clone();
+                move |outcome| async move {
+                    tx.send(outcome).unwrap();
+                }
+            },
+        );
+        assert!(second.queued);
+        assert_ne!(first.child_id, second.child_id);
+        assert!(
+            outcomes.try_recv().is_err(),
+            "neither child has completed yet"
+        );
+        release.send(()).unwrap();
+        let a = tokio::time::timeout(Duration::from_secs(2), outcomes.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let b = tokio::time::timeout(Duration::from_secs(2), outcomes.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(a.is_success());
+        assert!(matches!(b, SubagentOutcome::Failed { .. }));
+        assert!(outcomes.try_recv().is_err());
+        assert_eq!(semaphore.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn queued_launch_cancellation_and_timeout_report_failures_without_consuming_capacity() {
+        let slots = Arc::new(Semaphore::new(1));
+        let held = slots.clone().acquire_owned().await.unwrap();
+        for cancel_first in [true, false] {
+            let (cancel_tx, cancel_rx) = tokio::sync::mpsc::channel(1);
+            let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            let launch = SubagentSession::new(
+                SubagentConfig::from_args(&json!({"prompt":"task"})),
+                "parent",
+            )
+            .launch_background(
+                slots.clone(),
+                Duration::from_millis(30),
+                cancel_rx,
+                |_, _, _| async { panic!("queued child must not run") },
+                move |result: Result<(), String>| async move {
+                    result_tx.send(result).unwrap();
+                },
+            );
+            assert!(launch.queued);
+            if cancel_first {
+                cancel_tx.send(()).await.unwrap();
+            }
+            let failure = tokio::time::timeout(Duration::from_secs(1), result_rx)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                failure.contains(if cancel_first {
+                    "cancelled"
+                } else {
+                    "timed out"
+                }),
+                "{failure}"
+            );
+        }
+        assert_eq!(slots.available_permits(), 0);
+        drop(held);
+        assert_eq!(slots.available_permits(), 1);
+    }
 
     #[test]
     fn test_finish_tool_schema_structure() {

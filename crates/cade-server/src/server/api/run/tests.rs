@@ -759,6 +759,198 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
 }
 
 #[tokio::test]
+async fn server_background_launch_queues_without_waiting_and_survives_parent_turn() {
+    struct BlockedLlm(tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for BlockedLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            self.0.lock().await.take().unwrap().await.unwrap();
+            Ok(cade_ai::CompletionResponse {
+                content: Some("child finished after parent turn".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("not streaming")
+        }
+    }
+    let (release, blocked) = tokio::sync::oneshot::channel();
+    let state = build_state_with_llm(Arc::new(BlockedLlm(tokio::sync::Mutex::new(Some(blocked)))));
+    approval_test_run(&state.db, "queue-parent");
+    let conv =
+        cade_store::sqlite::create_conversation(&state.db, "queue-parent", "origin").unwrap();
+    let slot = state
+        .subagent_semaphore
+        .clone()
+        .acquire_many_owned(4)
+        .await
+        .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::channel(128);
+    let args = json!({"prompt":"work", "background":true});
+    let ack = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        handle_run_subagent_tool(
+            &state,
+            "queue-parent",
+            Some(&conv.id),
+            "launch-call",
+            &args,
+            tx,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(ack.output.contains("queued"), "{}", ack.output);
+    assert!(!ack.is_error);
+    let child_id = ack.output.split_whitespace().nth(2).unwrap().to_string();
+    assert!(
+        state
+            .subagent_cancellations
+            .read()
+            .await
+            .contains_key(&child_id)
+    );
+    drop(slot);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if state.subagent_semaphore.available_permits() == 3 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        cade_store::sqlite::list_messages(&state.db, "queue-parent", Some(&conv.id), 100)
+            .unwrap()
+            .iter()
+            .all(|m| m.content["phase"] != "outcome")
+    );
+    release.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if cade_store::sqlite::list_messages(&state.db, "queue-parent", Some(&conv.id), 100)
+                .unwrap()
+                .iter()
+                .any(|m| m.content["phase"] == "outcome")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let messages =
+        cade_store::sqlite::list_messages(&state.db, "queue-parent", Some(&conv.id), 100).unwrap();
+    let outcomes: Vec<_> = messages
+        .iter()
+        .filter(|m| m.content["phase"] == "outcome")
+        .collect();
+    assert_eq!(outcomes.len(), 1);
+    assert!(
+        outcomes[0].content["content"]
+            .as_str()
+            .unwrap()
+            .contains("child finished")
+    );
+    assert_eq!(outcomes[0].content["launch_tool_call_id"], "launch-call");
+    assert_eq!(state.subagent_semaphore.available_permits(), 4);
+}
+
+#[tokio::test]
+async fn queued_background_cancellation_delivers_failure_and_releases_handle() {
+    struct NoLlm;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for NoLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            panic!("cancelled before LLM")
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("not streaming")
+        }
+    }
+    let state = build_state_with_llm(Arc::new(NoLlm));
+    approval_test_run(&state.db, "cancel-parent");
+    let conv =
+        cade_store::sqlite::create_conversation(&state.db, "cancel-parent", "origin").unwrap();
+    let slot = state
+        .subagent_semaphore
+        .clone()
+        .acquire_many_owned(4)
+        .await
+        .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::channel(128);
+    let ack = handle_run_subagent_tool(
+        &state,
+        "cancel-parent",
+        Some(&conv.id),
+        "launch-call",
+        &json!({"prompt":"work", "background":true}),
+        tx,
+    )
+    .await;
+    let child_id = ack.output.split_whitespace().nth(2).unwrap();
+    let cancelled = super::subagent::handle_cancel_subagent_tool(
+        &state,
+        "cancel-call",
+        &json!({"subagent_id":child_id}),
+    )
+    .await;
+    assert!(!cancelled.is_error, "{}", cancelled.output);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if cade_store::sqlite::list_messages(&state.db, "cancel-parent", Some(&conv.id), 100)
+                .unwrap()
+                .iter()
+                .any(|m| m.content["phase"] == "outcome")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let messages =
+        cade_store::sqlite::list_messages(&state.db, "cancel-parent", Some(&conv.id), 100).unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|m| m.content["phase"] == "outcome")
+            .count(),
+        1
+    );
+    assert!(messages.iter().any(|m| m.content["is_error"] == true
+        && m.content["content"].as_str().unwrap().contains("cancelled")));
+    assert!(state.subagent_cancellations.read().await.is_empty());
+    drop(slot);
+    assert_eq!(state.subagent_semaphore.available_permits(), 4);
+}
+
+#[tokio::test]
 async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() {
     struct ContextLlm(std::sync::Mutex<Vec<(String, String)>>);
     #[async_trait::async_trait]
@@ -855,8 +1047,35 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
             tx_second
         ),
     );
-    assert_eq!(result_first.output, "outcome task-first");
-    assert_eq!(result_second.output, "outcome task-second");
+    assert!(result_first.output.contains("launch acknowledged"));
+    assert!(result_second.output.contains("launch acknowledged"));
+    assert_ne!(result_first.output, result_second.output);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let first_messages =
+                cade_store::sqlite::list_messages(&state.db, "shared-parent", Some(&first.id), 100)
+                    .unwrap();
+            let second_messages = cade_store::sqlite::list_messages(
+                &state.db,
+                "shared-parent",
+                Some(&second.id),
+                100,
+            )
+            .unwrap();
+            if first_messages
+                .iter()
+                .any(|m| m.content["phase"] == "outcome")
+                && second_messages
+                    .iter()
+                    .any(|m| m.content["phase"] == "outcome")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     {
         let captured = llm.0.lock().unwrap();
         assert_eq!(captured.len(), 2);
@@ -871,9 +1090,8 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
         }
     }
 
-    // Both launching calls have ended. A later parent run for each conversation
-    // must see only its own result, and repeated runs must not redeliver it.
-    // The first conversation already received its synchronous foreground result.
+    // The launch acknowledgement is stored by the parent run with the original
+    // call ID; the terminal outcome already reached the conversation directly.
     cade_store::sqlite::insert_message(
         &state.db,
         &cade_store::sqlite::MessageRow {
@@ -882,6 +1100,18 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
             conversation_id: Some(first.id.clone()),
             role: "tool".into(),
             content: json!({"tool_call_id": "tc-first", "content": result_first.output}),
+            char_count: 0,
+        },
+    )
+    .unwrap();
+    cade_store::sqlite::insert_message(
+        &state.db,
+        &cade_store::sqlite::MessageRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: "shared-parent".into(),
+            conversation_id: Some(second.id.clone()),
+            role: "tool".into(),
+            content: json!({"tool_call_id": "tc-second", "content": result_second.output}),
             char_count: 0,
         },
     )
@@ -914,8 +1144,21 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
             100,
         )
         .unwrap();
-        let delivered: Vec<_> = messages.iter().filter(|m| m.role == "tool").collect();
-        assert_eq!(delivered.len(), 1, "each conversation receives one outcome");
+        let delivered: Vec<_> = messages
+            .iter()
+            .filter(|m| m.content["phase"] == "outcome")
+            .collect();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "each conversation receives one terminal outcome"
+        );
+        assert_eq!(
+            messages.iter().filter(|m| m.role == "tool").count(),
+            2,
+            "one launch acknowledgement and one outcome, with distinct tool-call IDs"
+        );
+        assert_ne!(delivered[0].content["tool_call_id"], "tc-first");
         let own = if conversation.id == first.id {
             "task-first"
         } else {
@@ -1032,7 +1275,8 @@ async fn subagent_run_does_not_pollute_parent_db() {
     });
     let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_state_with_llm(llm_dyn);
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let events = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     let agents_before: i64 = state
         .db
@@ -1049,6 +1293,7 @@ async fn subagent_run_does_not_pollute_parent_db() {
 
     let args = serde_json::json!({ "prompt": "do thing" });
     let _ = handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx).await;
+    events.await.unwrap();
 
     let agents_after: i64 = state
         .db

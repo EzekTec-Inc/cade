@@ -301,11 +301,9 @@ impl SubagentEventEmitter for SseEventEmitter {
                 "mode": mode,
                 "model": model,
             });
-            let _ = tx
-                .send(Ok(super::runtime::RunEventEnvelope {
-                    data: ev.to_string(),
-                }))
-                .await;
+            let _ = tx.try_send(Ok(super::runtime::RunEventEnvelope {
+                data: ev.to_string(),
+            }));
         })
     }
 
@@ -330,11 +328,9 @@ impl SubagentEventEmitter for SseEventEmitter {
                 "is_error": is_error,
                 "writeback_facts": writeback_facts,
             });
-            let _ = tx
-                .send(Ok(super::runtime::RunEventEnvelope {
-                    data: ev.to_string(),
-                }))
-                .await;
+            let _ = tx.try_send(Ok(super::runtime::RunEventEnvelope {
+                data: ev.to_string(),
+            }));
         })
     }
 
@@ -459,6 +455,7 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_subagent_tool(
     state: AppState,
     parent_agent_id: String,
@@ -838,8 +835,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
     // any child state. Keep hidden definitions available for exact lookup.
     let cwd_for_defs = std::env::current_dir().unwrap_or_default();
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
-    let def_opt = match cfg.resolve_definition(&all_defs) {
-        Ok(def) => def,
+    match cfg.resolve_definition(&all_defs) {
+        Ok(_) => {}
         Err(reason) => {
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
@@ -861,17 +858,110 @@ pub(super) async fn handle_run_subagent_tool_inner(
         };
     }
 
+    let subagent_id = format!("sa_{}", uuid::Uuid::new_v4());
+    let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
+    session.session_id = subagent_id.clone();
+    let (cancel_tx, cancel_rx) = tokio::sync::mpsc::channel(1);
+    state
+        .subagent_cancellations
+        .write()
+        .await
+        .insert(subagent_id.clone(), cancel_tx);
+
+    if cfg.background {
+        let state_owned = state.clone();
+        let parent = parent_agent_id.to_string();
+        let conversation = parent_conversation_id.map(str::to_owned);
+        let call = tool_call_id.to_string();
+        let args = args.clone();
+        let completion_state = state.clone();
+        let completion_parent = parent_agent_id.to_string();
+        let completion_conversation = parent_conversation_id.map(str::to_owned);
+        let completion_call = tool_call_id.to_string();
+        let completion_id = subagent_id.clone();
+        let completion_sse = emitter.raw_sse_tx();
+        let launch = session.launch_background(
+            state.subagent_semaphore.clone(),
+            std::time::Duration::from_secs(subagent_timeout_secs()),
+            cancel_rx,
+            move |session, permit, cancel_rx| async move {
+                run_subagent_with_permit(
+                    &state_owned,
+                    &parent,
+                    conversation.as_deref(),
+                    &call,
+                    &args,
+                    emitter,
+                    parent_mode,
+                    session,
+                    permit,
+                    cancel_rx,
+                )
+                .await
+            },
+            move |result| async move {
+                completion_state
+                    .subagent_cancellations
+                    .write()
+                    .await
+                    .remove(&completion_id);
+                let (output, is_error) = match result {
+                    Ok(result) => (result.output, result.is_error),
+                    Err(reason) => {
+                        let event = serde_json::json!({
+                            "message_type": "subagent_complete",
+                            "subagent_id": completion_id,
+                            "status": "error",
+                            "result_preview": reason,
+                            "is_error": true,
+                        });
+                        let _ = completion_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                            data: event.to_string(),
+                        }));
+                        (reason, true)
+                    }
+                };
+                deliver_background_result(
+                    &completion_state,
+                    &completion_parent,
+                    completion_conversation.as_deref(),
+                    &completion_call,
+                    &completion_id,
+                    output,
+                    is_error,
+                )
+                .await;
+            },
+        );
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_subagent".to_string(),
+            output: format!(
+                "Background subagent {} {} (launch acknowledged; outcome will arrive in this conversation)",
+                launch.child_id,
+                if launch.queued { "queued" } else { "started" }
+            ),
+            is_error: false,
+            ui_resource_uri: None,
+        };
+    }
+
     // REC-3/G2: Backpressure — block until a semaphore slot is free instead
     // of returning an instant error that causes the parent LLM to retry-loop.
     // Wrapped in the wall-clock timeout so a full semaphore never hangs forever.
     let permit = match tokio::time::timeout(
         std::time::Duration::from_secs(subagent_timeout_secs()),
-        state.subagent_semaphore.acquire(),
+        state.subagent_semaphore.clone().acquire_owned(),
     )
     .await
     {
         Ok(Ok(p)) => p,
         Ok(Err(_)) => {
+            state
+                .subagent_cancellations
+                .write()
+                .await
+                .remove(&subagent_id);
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: "run_subagent".to_string(),
@@ -881,6 +971,11 @@ pub(super) async fn handle_run_subagent_tool_inner(
             };
         }
         Err(_) => {
+            state
+                .subagent_cancellations
+                .write()
+                .await
+                .remove(&subagent_id);
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: "run_subagent".to_string(),
@@ -899,7 +994,118 @@ pub(super) async fn handle_run_subagent_tool_inner(
         }
     };
 
-    let subagent_id = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let result = run_subagent_with_permit(
+        state,
+        parent_agent_id,
+        parent_conversation_id,
+        tool_call_id,
+        args,
+        emitter,
+        parent_mode,
+        session,
+        permit,
+        cancel_rx,
+    )
+    .await;
+    state
+        .subagent_cancellations
+        .write()
+        .await
+        .remove(&subagent_id);
+    result
+}
+
+/// A terminal record has its own identity, distinct from the launch tool
+/// result. The deterministic row ID makes repeated delivery idempotent.
+async fn deliver_background_result(
+    state: &AppState,
+    parent_agent_id: &str,
+    parent_conversation_id: Option<&str>,
+    tool_call_id: &str,
+    subagent_id: &str,
+    result: String,
+    is_error: bool,
+) {
+    let body = format!(
+        "[background subagent {subagent_id} {}]\n{result}",
+        if is_error { "failed" } else { "completed" }
+    );
+    let outcome_call_id = format!("{tool_call_id}:outcome:{subagent_id}");
+    if let Err(error) = cade_store::sqlite::insert_message(
+        &state.db,
+        &cade_store::sqlite::MessageRow {
+            id: format!("subagent-outcome-{subagent_id}"),
+            agent_id: parent_agent_id.to_string(),
+            conversation_id: parent_conversation_id.map(str::to_owned),
+            role: "tool".to_string(),
+            char_count: body.len(),
+            content: serde_json::json!({
+                "content": body,
+                "tool_call_id": outcome_call_id,
+                "launch_tool_call_id": tool_call_id,
+                "tool_name": "run_subagent",
+                "subagent_id": subagent_id,
+                "phase": "outcome",
+                "is_error": is_error,
+            }),
+        },
+    ) {
+        tracing::warn!(%subagent_id, %error, "background outcome delivery deferred to next parent run");
+        state
+            .pending_subagent_results
+            .write()
+            .await
+            .entry((
+                parent_agent_id.to_string(),
+                parent_conversation_id.map(str::to_owned),
+            ))
+            .or_default()
+            .push(crate::server::state::SubagentResult {
+                subagent_id: subagent_id.to_string(),
+                tool_call_id: outcome_call_id,
+                task_preview: String::new(),
+                result,
+                is_error,
+                elapsed_secs: 0,
+            });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_subagent_with_permit(
+    state: &AppState,
+    parent_agent_id: &str,
+    parent_conversation_id: Option<&str>,
+    tool_call_id: &str,
+    args: &serde_json::Value,
+    emitter: Box<dyn SubagentEventEmitter>,
+    parent_mode: cade_core::permissions::PermissionMode,
+    mut session: cade_agent::subagents::SubagentSession,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    mut cancel_rx: tokio::sync::mpsc::Receiver<()>,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::subagents::SubagentConfig;
+    use cade_agent::tools::manager::ToolResult;
+    let cfg = SubagentConfig::from_args(args);
+    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
+    let def_opt = match cfg.resolve_definition(&all_defs) {
+        Ok(def) => def,
+        Err(reason) => {
+            return ToolResult {
+                tool_call_id: tool_call_id.into(),
+                tool_name: "run_subagent".into(),
+                output: reason,
+                is_error: true,
+                ui_resource_uri: None,
+            };
+        }
+    };
+    let max_depth: usize = std::env::var("CADE_SUBAGENT_MAX_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    let subagent_id = session.session_id.clone();
     let task_preview: String = cfg.prompt.chars().take(80).collect();
     let prompt = cfg.prompt_with_test_command();
 
@@ -914,7 +1120,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             && !is_subagent_readonly);
     let mut session_config = cfg.clone();
     session_config.enforce_isolation = use_isolation;
-    let mut session = cade_agent::subagents::SubagentSession::new(session_config, parent_agent_id);
+    session.config = session_config;
     if use_isolation {
         let root = match std::env::current_dir() {
             Ok(root) => root,
@@ -1124,13 +1330,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         parent_agent_id.to_string(),
     );
 
-    // Setup cancellation channel
-    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
-    {
-        let mut cancellations = state.subagent_cancellations.write().await;
-        cancellations.insert(subagent_id.clone(), cancel_tx);
-    }
-
+    // The launch registered cancellation before waiting for a slot.
     struct CancelGuard {
         map: std::sync::Arc<
             tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>,
@@ -1268,11 +1468,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         "iter": turn,
                         "max_iters": max_it,
                     });
-                    let _ = raw_sse
-                        .send(Ok(super::runtime::RunEventEnvelope {
-                            data: iter_ev.to_string(),
-                        }))
-                        .await;
+                    let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                        data: iter_ev.to_string(),
+                    }));
                 }
                 cade_agent::subagents::SubagentEvent::OutputChunk { text } => {
                     let out_ev = serde_json::json!({
@@ -1280,11 +1478,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         "subagent_id": s_id_c,
                         "chunk": text,
                     });
-                    let _ = raw_sse
-                        .send(Ok(super::runtime::RunEventEnvelope {
-                            data: out_ev.to_string(),
-                        }))
-                        .await;
+                    let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                        data: out_ev.to_string(),
+                    }));
                 }
                 cade_agent::subagents::SubagentEvent::ToolExecuting { tool_name, .. } => {
                     let tool_ev = serde_json::json!({
@@ -1292,11 +1488,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         "subagent_id": s_id_c,
                         "tool": tool_name,
                     });
-                    let _ = raw_sse
-                        .send(Ok(super::runtime::RunEventEnvelope {
-                            data: tool_ev.to_string(),
-                        }))
-                        .await;
+                    let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                        data: tool_ev.to_string(),
+                    }));
                 }
                 cade_agent::subagents::SubagentEvent::ToolCompleted {
                     tool_name,
@@ -1309,11 +1503,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         "tool": tool_name,
                         "is_error": is_error,
                     });
-                    let _ = raw_sse
-                        .send(Ok(super::runtime::RunEventEnvelope {
-                            data: tool_ev.to_string(),
-                        }))
-                        .await;
+                    let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                        data: tool_ev.to_string(),
+                    }));
                 }
                 _ => {}
             }
@@ -1381,25 +1573,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
             writeback_count,
         )
         .await;
-
-    if cfg.background {
-        let sr = crate::server::state::SubagentResult {
-            subagent_id: subagent_id.clone(),
-            tool_call_id: tool_call_id.to_string(),
-            task_preview: task_preview.clone(),
-            result: output.clone(),
-            is_error,
-            elapsed_secs: elapsed,
-        };
-        let mut pending = state.pending_subagent_results.write().await;
-        pending
-            .entry((
-                session.parent_agent_id.clone(),
-                session.parent_conversation_id.clone(),
-            ))
-            .or_default()
-            .push(sr);
-    }
 
     // C2: truncate at a UTF-8 char boundary, never at a raw byte index.
     let output_final = if output.len() > super::SSE_OUTPUT_TRUNCATE_BYTES {
