@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -499,6 +500,38 @@ pub struct SubagentLaunch {
     pub queued: bool,
 }
 
+/// A single-use cancellation request. Shared clones cannot acknowledge the
+/// same request twice, and a dropped receiver is never reported as live.
+#[derive(Clone)]
+pub struct SubagentCancellation {
+    inner: Arc<Mutex<(tokio::sync::mpsc::Sender<()>, bool)>>,
+}
+
+impl SubagentCancellation {
+    pub fn new(sender: tokio::sync::mpsc::Sender<()>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new((sender, false))),
+        }
+    }
+
+    pub fn cancel(&self) -> Result<(), &'static str> {
+        let mut state = self.inner.lock().unwrap();
+        if state.1 || state.0.is_closed() {
+            return Err("subagent is no longer accepting cancellation");
+        }
+        state
+            .0
+            .try_send(())
+            .map_err(|_| "subagent is no longer accepting cancellation")?;
+        state.1 = true;
+        Ok(())
+    }
+
+    pub fn close(&self) {
+        self.inner.lock().unwrap().1 = true;
+    }
+}
+
 impl SubagentSession {
     /// Transfer ownership of a child to the runtime before waiting for a slot.
     /// Completion is delivered once even if the invoking future has ended.
@@ -512,9 +545,7 @@ impl SubagentSession {
     ) -> SubagentLaunch
     where
         R: Send + 'static,
-        F: FnOnce(Self, OwnedSemaphorePermit, tokio::sync::mpsc::Receiver<()>) -> Fut
-            + Send
-            + 'static,
+        F: FnOnce(Self, OwnedSemaphorePermit) -> Fut + Send + 'static,
         Fut: Future<Output = R> + Send + 'static,
         D: FnOnce(Result<R, String>) -> Delivery + Send + 'static,
         Delivery: Future<Output = ()> + Send + 'static,
@@ -525,10 +556,15 @@ impl SubagentSession {
         };
         tokio::spawn(async move {
             let result = tokio::select! {
+                biased;
                 Some(()) = cancel.recv() => Err("Subagent cancelled by parent".to_string()),
                 acquired = tokio::time::timeout(timeout, semaphore.acquire_owned()) => match acquired {
-                    Ok(Ok(permit)) => std::panic::AssertUnwindSafe(async move { run(self, permit, cancel).await })
-                        .catch_unwind().await.map_err(|_| "subagent task panicked".to_string()),
+                    Ok(Ok(permit)) => tokio::select! {
+                        biased;
+                        Some(()) = cancel.recv() => Err("Subagent cancelled by parent".to_string()),
+                        outcome = std::panic::AssertUnwindSafe(run(self, permit)).catch_unwind() =>
+                            outcome.map_err(|_| "subagent task panicked".to_string()),
+                    },
                     Ok(Err(_)) => Err("subagent semaphore closed".to_string()),
                     Err(_) => Err("timed out waiting for a subagent slot".to_string()),
                 }
@@ -1068,6 +1104,247 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
+    async fn cancelling_running_child_interrupts_blocked_tool_and_delivers_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct ToolLlm;
+        #[async_trait]
+        impl SubagentLlmExecutor for ToolLlm {
+            async fn complete_turn(
+                &self,
+                _: &str,
+                _: &str,
+                _: &[SubagentMessage],
+                _: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                Ok(SubagentTurnResponse {
+                    content: None,
+                    tokens_used: 1,
+                    tool_calls: vec![
+                        SubagentToolCall {
+                            id: "one".into(),
+                            name: "read_file".into(),
+                            arguments: json!({}),
+                        },
+                        SubagentToolCall {
+                            id: "two".into(),
+                            name: "read_file".into(),
+                            arguments: json!({}),
+                        },
+                    ],
+                })
+            }
+        }
+        struct BlockedTool {
+            entered: tokio::sync::Notify,
+            calls: AtomicUsize,
+            dropped: Arc<std::sync::atomic::AtomicBool>,
+        }
+        #[async_trait]
+        impl SubagentToolExecutor for BlockedTool {
+            async fn execute_tool(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+                _: &Path,
+            ) -> Result<String, String> {
+                struct DropSignal(Arc<std::sync::atomic::AtomicBool>);
+                impl Drop for DropSignal {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+                let _guard = DropSignal(self.dropped.clone());
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.entered.notify_one();
+                std::future::pending().await
+            }
+        }
+        let tools = Arc::new(BlockedTool {
+            entered: tokio::sync::Notify::new(),
+            calls: AtomicUsize::new(0),
+            dropped: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        let slots = Arc::new(Semaphore::new(1));
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let cancellation = SubagentCancellation::new(tx);
+        let (outcome_tx, mut outcome_rx) = tokio::sync::mpsc::unbounded_channel();
+        let policy = SubagentToolPolicy {
+            permissions: PermissionManager::new(PermissionMode::BypassPermissions),
+            tools: SubagentTools::All,
+            inherited_tools: vec!["read_file".into()],
+            allow_nesting: false,
+            max_depth: 2,
+        };
+        let launch = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(policy)
+        .launch_background(
+            slots.clone(),
+            Duration::from_secs(2),
+            rx,
+            {
+                let tools = tools.clone();
+                move |mut session, permit| async move {
+                    let _permit = permit;
+                    session
+                        .run_autonomous_loop(
+                            &ToolLlm,
+                            tools.as_ref(),
+                            "test".into(),
+                            "system".into(),
+                            "task".into(),
+                            vec![],
+                            vec![],
+                            Path::new("."),
+                        )
+                        .await
+                }
+            },
+            move |result| async move {
+                outcome_tx.send(result).unwrap();
+            },
+        );
+        assert!(!launch.queued);
+        tokio::time::timeout(Duration::from_secs(2), tools.entered.notified())
+            .await
+            .unwrap();
+        cancellation.cancel().unwrap();
+        assert!(cancellation.cancel().is_err());
+        let result = tokio::time::timeout(Duration::from_secs(2), outcome_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(
+            tools.dropped.load(Ordering::SeqCst),
+            "blocked tool future must be dropped"
+        );
+        assert_eq!(
+            tools.calls.load(Ordering::SeqCst),
+            1,
+            "no further tool calls"
+        );
+        assert_eq!(slots.available_permits(), 1);
+        assert!(outcome_rx.try_recv().is_err());
+        assert!(cancellation.cancel().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancellation_refuses_closed_and_completed_receivers() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let handle = SubagentCancellation::new(tx);
+        drop(rx);
+        assert!(handle.cancel().is_err());
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let completed = SubagentCancellation::new(tx);
+        completed.close();
+        assert!(completed.cancel().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_pending_approval_response() {
+        struct WriteLlm;
+        #[async_trait]
+        impl SubagentLlmExecutor for WriteLlm {
+            async fn complete_turn(
+                &self,
+                _: &str,
+                _: &str,
+                _: &[SubagentMessage],
+                _: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                Ok(SubagentTurnResponse {
+                    content: None,
+                    tokens_used: 1,
+                    tool_calls: vec![SubagentToolCall {
+                        id: "write".into(),
+                        name: "write_file".into(),
+                        arguments: json!({"path":"test.txt","content":"x"}),
+                    }],
+                })
+            }
+        }
+        struct NoTools;
+        #[async_trait]
+        impl SubagentToolExecutor for NoTools {
+            async fn execute_tool(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+                _: &Path,
+            ) -> Result<String, String> {
+                panic!("approval must be resolved before execution")
+            }
+        }
+        let slots = Arc::new(Semaphore::new(1));
+        let (cancel_tx, cancel_rx) = tokio::sync::mpsc::channel(1);
+        let cancellation = SubagentCancellation::new(cancel_tx);
+        let (approval_tx, mut approval_rx) = tokio::sync::mpsc::channel(1);
+        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        let session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(SubagentToolPolicy {
+            permissions: PermissionManager::new(PermissionMode::Default),
+            tools: SubagentTools::All,
+            inherited_tools: vec!["write_file".into()],
+            allow_nesting: false,
+            max_depth: 2,
+        })
+        .with_approval_channel(SubagentApprovalChannel::new(approval_tx));
+        session.launch_background(
+            slots.clone(),
+            Duration::from_secs(2),
+            cancel_rx,
+            |mut session, permit| async move {
+                let _permit = permit;
+                session
+                    .run_autonomous_loop(
+                        &WriteLlm,
+                        &NoTools,
+                        "test".into(),
+                        "system".into(),
+                        "task".into(),
+                        vec![],
+                        vec![],
+                        Path::new("."),
+                    )
+                    .await
+            },
+            move |result| async move {
+                outcome_tx.send(result).unwrap();
+            },
+        );
+        let (_, _, _, reply) = tokio::time::timeout(Duration::from_secs(2), approval_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        cancellation.cancel().unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), outcome_rx)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        assert!(
+            reply
+                .send(SubagentApprovalResponse {
+                    approved: true,
+                    feedback: None
+                })
+                .is_err()
+        );
+        assert_eq!(slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
     async fn background_launch_acknowledges_blocked_and_queued_children_and_delivers_once() {
         struct BlockedLlm(tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
         #[async_trait]
@@ -1110,7 +1387,7 @@ mod tests {
         let (release, blocked) = tokio::sync::oneshot::channel();
         let (outcome_tx, mut outcomes) = tokio::sync::mpsc::unbounded_channel();
         let llm = Arc::new(BlockedLlm(tokio::sync::Mutex::new(Some(blocked))));
-        let run = move |mut session: SubagentSession, _permit: OwnedSemaphorePermit, _cancel| {
+        let run = move |mut session: SubagentSession, _permit: OwnedSemaphorePermit| {
             let llm = llm.clone();
             async move {
                 let _hold_slot = _permit;
@@ -1161,7 +1438,7 @@ mod tests {
             semaphore.clone(),
             Duration::from_secs(2),
             tokio::sync::mpsc::channel(1).1,
-            |mut session, _permit, _cancel| async move {
+            |mut session, _permit| async move {
                 session
                     .finalize_outcome(SubagentOutcome::Failed {
                         error: "failed".into(),
@@ -1213,7 +1490,7 @@ mod tests {
                 slots.clone(),
                 Duration::from_millis(30),
                 cancel_rx,
-                |_, _, _| async { panic!("queued child must not run") },
+                |_, _| async { panic!("queued child must not run") },
                 move |result: Result<(), String>| async move {
                     result_tx.send(result).unwrap();
                 },

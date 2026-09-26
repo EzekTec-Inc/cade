@@ -263,28 +263,24 @@ impl<'a> TurnDirector<'a> {
                                                                     let cancellations = tick_cancellations.clone();
                                                                     let client = tick_client.clone();
                                                                     let subagent_id_c = subagent_id.clone();
-                                                                    if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id) {
-                                                                        t.status = cade_tui::subagent_tracker::SubagentStatus::Failed {
-                                                                            finished_at: std::time::Instant::now(),
-                                                                            error: "Killed from Control Tray".into(),
-                                                                        };
-                                                                    }
-                                                                    app.show_toast(format!("Subagent {subagent_id} killed"), cade_tui::ToastLevel::Info);
+                                                                    app.show_toast(format!("Requesting cancellation for {subagent_id}"), cade_tui::ToastLevel::Info);
                                                                     let _ = app.draw();
                                                                     tokio::spawn(async move {
                                                                         let tx_opt = {
                                                                             let map = cancellations.lock().await;
                                                                             map.get(&subagent_id_c).cloned()
                                                                         };
-                                                                        if let Some(tx) = tx_opt {
-                                                                            let _ = tx.send(()).await;
-                                                                        } else {
-                                                                            let _ = client
+                                                                        if tx_opt.as_ref().is_some_and(|tx| tx.cancel().is_ok()) {
+                                                                            return;
+                                                                        }
+                                                                        let result = client
                                                                                 .raw_post(
                                                                                     &format!("/subagents/{subagent_id_c}/cancel"),
                                                                                     &serde_json::json!({ "action": "cancel", "id": subagent_id_c }),
                                                                                 )
                                                                                 .await;
+                                                                        if let Err(e) = result {
+                                                                            tracing::warn!("Cannot cancel subagent {subagent_id_c}: {e}");
                                                                         }
                                                                     });
                                                                 }

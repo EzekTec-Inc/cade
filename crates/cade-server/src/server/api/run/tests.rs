@@ -1161,7 +1161,7 @@ async fn queued_background_cancellation_delivers_failure_and_releases_handle() {
         .acquire_many_owned(4)
         .await
         .unwrap();
-    let (tx, _rx) = tokio::sync::mpsc::channel(128);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
     let ack = handle_run_subagent_tool(
         &state,
         "cancel-parent",
@@ -1179,6 +1179,20 @@ async fn queued_background_cancellation_delivers_failure_and_releases_handle() {
     )
     .await;
     assert!(!cancelled.is_error, "{}", cancelled.output);
+    let repeated = super::subagent::handle_cancel_subagent_tool(
+        &state,
+        "again",
+        &json!({"subagent_id":child_id}),
+    )
+    .await;
+    assert!(repeated.is_error, "repeated cancellation was acknowledged");
+    let missing = super::subagent::handle_cancel_subagent_tool(
+        &state,
+        "missing",
+        &json!({"subagent_id":"absent"}),
+    )
+    .await;
+    assert!(missing.is_error);
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if cade_store::sqlite::list_messages(&state.db, "cancel-parent", Some(&conv.id), 100)
@@ -1204,9 +1218,110 @@ async fn queued_background_cancellation_delivers_failure_and_releases_handle() {
     );
     assert!(messages.iter().any(|m| m.content["is_error"] == true
         && m.content["content"].as_str().unwrap().contains("cancelled")));
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let event: serde_json::Value = serde_json::from_str(&terminal.data).unwrap();
+    assert_eq!(event["message_type"], "subagent_complete");
+    assert_eq!(event["status"], "cancelled");
+    assert_eq!(event["subagent_id"], child_id);
+    assert!(rx.try_recv().is_err(), "duplicate terminal event");
     assert!(state.subagent_cancellations.read().await.is_empty());
     drop(slot);
     assert_eq!(state.subagent_semaphore.available_permits(), 4);
+}
+
+#[tokio::test]
+async fn running_background_cancellation_interrupts_llm_and_publishes_one_terminal_event() {
+    use std::sync::atomic::Ordering;
+    struct StalledLlm(Arc<tokio::sync::Notify>, Arc<std::sync::atomic::AtomicBool>);
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for StalledLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Dropped {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            let _guard = Dropped(self.1.clone());
+            self.0.notify_one();
+            std::future::pending().await
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("not streaming")
+        }
+    }
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let state = build_state_with_llm(Arc::new(StalledLlm(entered.clone(), dropped.clone())));
+    approval_test_run(&state.db, "running-parent");
+    let conv =
+        cade_store::sqlite::create_conversation(&state.db, "running-parent", "origin").unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+    let ack = handle_run_subagent_tool(
+        &state,
+        "running-parent",
+        Some(&conv.id),
+        "launch",
+        &json!({"prompt":"work","background":true}),
+        tx,
+    )
+    .await;
+    assert!(!ack.is_error);
+    let child_id = ack.output.split_whitespace().nth(2).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    let cancelled = super::subagent::handle_cancel_subagent_tool(
+        &state,
+        "cancel",
+        &json!({"subagent_id":child_id}),
+    )
+    .await;
+    assert!(!cancelled.is_error);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.unwrap().unwrap();
+            let event: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+            if event["message_type"] == "subagent_complete" {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event["status"], "cancelled");
+    assert_eq!(event["subagent_id"], child_id);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state.subagent_semaphore.available_permits() != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(rx.try_recv().is_err());
+    let rows = cade_store::sqlite::list_messages(&state.db, "running-parent", Some(&conv.id), 100)
+        .unwrap();
+    let outcomes: Vec<_> = rows
+        .iter()
+        .filter(|row| row.content["phase"] == "outcome")
+        .collect();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].content["status"], "cancelled");
 }
 
 #[tokio::test]
@@ -1677,11 +1792,10 @@ async fn cancellation_reports_closed_receiver_instead_of_success() {
     let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     drop(rx);
-    state
-        .subagent_cancellations
-        .write()
-        .await
-        .insert("closed-child".into(), tx);
+    state.subagent_cancellations.write().await.insert(
+        "closed-child".into(),
+        cade_agent::subagents::SubagentCancellation::new(tx),
+    );
 
     let result = super::subagent::handle_cancel_subagent_tool(
         &state,

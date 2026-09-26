@@ -193,7 +193,9 @@ pub struct Repl {
     /// Cancellation channels for actively running subagents in the CLI.
     /// Key: subagent_id, Value: sender to abort the subagent loop.
     pub(crate) subagent_cancellations: std::sync::Arc<
-        tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>,
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>,
+        >,
     >,
     /// Receives a signal whenever a SKILL.MD file changes on disk.
     /// The REPL polls this each loop iteration and triggers a reload.

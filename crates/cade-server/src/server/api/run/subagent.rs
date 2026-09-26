@@ -882,11 +882,12 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
     session.session_id = subagent_id.clone();
     let (cancel_tx, cancel_rx) = tokio::sync::mpsc::channel(1);
+    let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
     state
         .subagent_cancellations
         .write()
         .await
-        .insert(subagent_id.clone(), cancel_tx);
+        .insert(subagent_id.clone(), cancellation.clone());
 
     if cfg.background {
         let state_owned = state.clone();
@@ -900,11 +901,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
         let completion_call = tool_call_id.to_string();
         let completion_id = subagent_id.clone();
         let completion_sse = emitter.raw_sse_tx();
+        let completion_cancel = cancellation.clone();
         let launch = session.launch_background(
             state.subagent_semaphore.clone(),
             std::time::Duration::from_secs(subagent_timeout_secs()),
             cancel_rx,
-            move |session, permit, cancel_rx| async move {
+            move |session, permit| async move {
+                let (_, unused_rx) = tokio::sync::mpsc::channel(1);
                 run_subagent_with_permit(
                     &state_owned,
                     &parent,
@@ -915,11 +918,12 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     parent_mode,
                     session,
                     permit,
-                    cancel_rx,
+                    unused_rx,
                 )
                 .await
             },
             move |result| async move {
+                completion_cancel.close();
                 completion_state
                     .subagent_cancellations
                     .write()
@@ -927,20 +931,18 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     .remove(&completion_id);
                 let (output, is_error) = match result {
                     Ok(result) => (result.output, result.is_error),
-                    Err(reason) => {
-                        let event = serde_json::json!({
-                            "message_type": "subagent_complete",
-                            "subagent_id": completion_id,
-                            "status": "error",
-                            "result_preview": reason,
-                            "is_error": true,
-                        });
-                        let _ = completion_sse.try_send(Ok(super::runtime::RunEventEnvelope {
-                            data: event.to_string(),
-                        }));
-                        (reason, true)
-                    }
+                    Err(reason) => (reason, true),
                 };
+                let event = serde_json::json!({
+                    "message_type": "subagent_complete",
+                    "subagent_id": completion_id,
+                    "status": background_outcome_status(&output, is_error),
+                    "result_preview": output.chars().take(200).collect::<String>(),
+                    "is_error": is_error,
+                });
+                let _ = completion_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                    data: event.to_string(),
+                }));
                 deliver_background_result(
                     &completion_state,
                     &completion_parent,
@@ -1027,6 +1029,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         cancel_rx,
     )
     .await;
+    cancellation.close();
     state
         .subagent_cancellations
         .write()
@@ -1037,6 +1040,20 @@ pub(super) async fn handle_run_subagent_tool_inner(
 
 /// A terminal record has its own identity, distinct from the launch tool
 /// result. The deterministic row ID makes repeated delivery idempotent.
+fn background_outcome_status(output: &str, is_error: bool) -> &'static str {
+    if !is_error {
+        "done"
+    } else if output == "Subagent cancelled by parent" {
+        "cancelled"
+    } else if output.starts_with("Subagent wall-clock timeout")
+        || output.starts_with("timed out waiting for a subagent slot")
+    {
+        "timeout"
+    } else {
+        "error"
+    }
+}
+
 pub(super) async fn deliver_background_result(
     state: &AppState,
     parent_agent_id: &str,
@@ -1096,7 +1113,7 @@ pub(super) fn store_background_outcome(
     let is_error = pending.is_error;
     let body = format!(
         "[background subagent {subagent_id} {}]\n{result}",
-        if is_error { "failed" } else { "completed" }
+        background_outcome_status(result, is_error)
     );
     let row = cade_store::sqlite::MessageRow {
         id: format!("subagent-outcome-{subagent_id}"),
@@ -1111,6 +1128,7 @@ pub(super) fn store_background_outcome(
             "tool_name": "run_subagent",
             "subagent_id": subagent_id,
             "phase": "outcome",
+            "status": background_outcome_status(result, is_error),
             "is_error": is_error,
         }),
     };
@@ -1398,7 +1416,9 @@ async fn run_subagent_with_permit(
     // The launch registered cancellation before waiting for a slot.
     struct CancelGuard {
         map: std::sync::Arc<
-            tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>,
+            tokio::sync::RwLock<
+                std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>,
+            >,
         >,
         id: String,
     }
@@ -1629,15 +1649,17 @@ async fn run_subagent_with_permit(
     };
 
     let result_preview: String = output.chars().take(200).collect();
-    emitter
-        .emit_complete(
-            &subagent_id,
-            is_error,
-            &result_preview,
-            elapsed,
-            writeback_count,
-        )
-        .await;
+    if !cfg.background {
+        emitter
+            .emit_complete(
+                &subagent_id,
+                is_error,
+                &result_preview,
+                elapsed,
+                writeback_count,
+            )
+            .await;
+    }
 
     // C2: truncate at a UTF-8 char boundary, never at a raw byte index.
     let output_final = if output.len() > super::SSE_OUTPUT_TRUNCATE_BYTES {
@@ -1853,7 +1875,7 @@ pub(super) async fn handle_cancel_subagent_tool(
     };
 
     if let Some(tx) = tx_opt {
-        let delivered = tx.send(()).await.is_ok();
+        let delivered = tx.cancel().is_ok();
         ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "cancel_subagent".to_string(),
