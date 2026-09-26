@@ -367,6 +367,17 @@ impl SubagentSession {
         self
     }
 
+    /// Prepare an isolated workspace before the child can invoke any tools.
+    pub async fn prepare_workspace(
+        &mut self,
+        primary_path: &Path,
+        branch_name: Option<String>,
+    ) -> std::io::Result<()> {
+        self.workspace_guard = None;
+        self.workspace_guard = Some(IsolatedWorkspaceGuard::new(primary_path, branch_name).await?);
+        Ok(())
+    }
+
     pub fn with_event_emitter(mut self, emitter: SubagentEventEmitter) -> Self {
         self.event_emitter = emitter;
         self
@@ -445,19 +456,23 @@ impl SubagentSession {
 
     /// Finalize execution outcome, committing workspace if successful and emitting event.
     pub async fn finalize_outcome(&mut self, outcome: SubagentOutcome) -> SubagentOutcome {
-        if outcome.is_success()
-            && let Some(ref mut guard) = self.workspace_guard
-            && let Err(e) = guard.commit_and_merge().await
-        {
-            let err_msg = format!("Failed to merge isolated workspace changes back: {e}");
-            let failed_outcome = SubagentOutcome::Failed { error: err_msg };
-            self.event_emitter
-                .emit(SubagentEvent::Finished {
-                    outcome: failed_outcome.clone(),
-                })
-                .await;
-            return failed_outcome;
-        }
+        let outcome = if outcome.is_success() {
+            if let Some(ref mut guard) = self.workspace_guard {
+                match guard.commit_and_merge().await {
+                    Ok(()) => outcome,
+                    Err(e) => SubagentOutcome::Failed {
+                        error: format!("Failed to merge isolated workspace changes back: {e}"),
+                    },
+                }
+            } else {
+                outcome
+            }
+        } else {
+            outcome
+        };
+        // Release the workspace on every terminal outcome, not only when the
+        // session itself is eventually dropped.
+        self.workspace_guard = None;
         self.event_emitter
             .emit(SubagentEvent::Finished {
                 outcome: outcome.clone(),
@@ -541,6 +556,13 @@ impl SubagentSession {
         failover_models: Vec<String>,
         primary_path: &Path,
     ) -> SubagentOutcome {
+        if self.config.enforce_isolation && self.workspace_guard.is_none() {
+            return self
+                .finalize_outcome(SubagentOutcome::Failed {
+                    error: "Required subagent isolation could not be established; refusing to run in the live workspace".into(),
+                })
+                .await;
+        }
         let mut messages = vec![SubagentMessage::user(initial_prompt)];
         let mut last_text = String::new();
         let mut failover_idx = 0;
@@ -968,6 +990,233 @@ mod tests {
         ) -> Result<String, String> {
             Ok(format!("Output from {tool_name}"))
         }
+    }
+
+    struct WritingTool;
+
+    #[async_trait]
+    impl SubagentToolExecutor for WritingTool {
+        async fn execute_tool(
+            &self,
+            _id: &str,
+            _name: &str,
+            _arguments: &Value,
+            execution_path: &Path,
+        ) -> Result<String, String> {
+            std::fs::write(execution_path.join("code.rs"), "child wrote here")
+                .map_err(|e| e.to_string())?;
+            Ok("written".into())
+        }
+    }
+
+    fn writing_llm(status: &str) -> MockLlm {
+        MockLlm {
+            turns: std::sync::Mutex::new(vec![
+                SubagentTurnResponse {
+                    content: None,
+                    tool_calls: vec![SubagentToolCall {
+                        id: "write".into(),
+                        name: "write_file".into(),
+                        arguments: json!({}),
+                    }],
+                    tokens_used: 1,
+                },
+                SubagentTurnResponse {
+                    content: None,
+                    tool_calls: vec![SubagentToolCall {
+                        id: "finish".into(),
+                        name: "finish".into(),
+                        arguments: json!({ "status": status, "summary": status }),
+                    }],
+                    tokens_used: 1,
+                },
+            ]),
+            observed_models: std::sync::Mutex::new(Vec::new()),
+            observed_messages: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn run_writing_session(
+        session: &mut SubagentSession,
+        llm: &MockLlm,
+        primary: &Path,
+    ) -> SubagentOutcome {
+        session
+            .run_autonomous_loop(
+                llm,
+                &WritingTool,
+                "test-model".into(),
+                "system".into(),
+                "write".into(),
+                vec![],
+                vec![],
+                primary,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn required_isolation_setup_failure_never_runs_child_in_live_workspace() {
+        let live = tempdir().unwrap();
+        let file = live.path().join("code.rs");
+        std::fs::write(&file, "original").unwrap();
+        let config = SubagentConfig::from_args(&json!({
+            "prompt": "write", "enforce_isolation": true
+        }));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut session = SubagentSession::new(config, "parent")
+            .with_event_emitter(SubagentEventEmitter::new(Some(tx)));
+        let failure = session
+            .prepare_workspace(&live.path().join("missing"), None)
+            .await;
+        assert!(
+            failure.is_err(),
+            "a missing workspace must not clone as empty"
+        );
+
+        let llm = writing_llm("done");
+        let outcome = run_writing_session(&mut session, &llm, live.path()).await;
+        assert!(matches!(outcome, SubagentOutcome::Failed { .. }));
+        assert!(outcome.summary_text().contains("isolation"));
+        assert!(matches!(
+            rx.recv().await,
+            Some(SubagentEvent::Finished { .. })
+        ));
+        assert!(llm.observed_models.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn isolated_execution_merges_only_success_and_cleans_up_on_failure() {
+        for status in ["done", "error"] {
+            let live = tempdir().unwrap();
+            let file = live.path().join("code.rs");
+            std::fs::write(&file, "original").unwrap();
+            let config = SubagentConfig::from_args(&json!({
+                "prompt": "write", "enforce_isolation": true
+            }));
+            let mut session = SubagentSession::new(config, "parent");
+            session.prepare_workspace(live.path(), None).await.unwrap();
+            let temp_path = session.execution_path(live.path()).to_path_buf();
+            let outcome =
+                run_writing_session(&mut session, &writing_llm(status), live.path()).await;
+            assert_eq!(outcome.is_success(), status == "done");
+            assert_eq!(
+                std::fs::read_to_string(file).unwrap(),
+                if status == "done" {
+                    "child wrote here"
+                } else {
+                    "original"
+                }
+            );
+            assert!(
+                !temp_path.exists(),
+                "workspace must be released at completion"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_nonisolated_execution_remains_usable() {
+        let live = tempdir().unwrap();
+        let config = SubagentConfig::from_args(&json!({ "prompt": "write" }));
+        let mut session = SubagentSession::new(config, "parent");
+        let outcome = run_writing_session(&mut session, &writing_llm("done"), live.path()).await;
+        assert!(outcome.is_success());
+        assert_eq!(
+            std::fs::read_to_string(live.path().join("code.rs")).unwrap(),
+            "child wrote here"
+        );
+    }
+
+    struct BlockingWriter(tokio::sync::mpsc::Sender<std::path::PathBuf>);
+
+    #[async_trait]
+    impl SubagentToolExecutor for BlockingWriter {
+        async fn execute_tool(
+            &self,
+            _id: &str,
+            _name: &str,
+            _arguments: &Value,
+            execution_path: &Path,
+        ) -> Result<String, String> {
+            std::fs::write(execution_path.join("code.rs"), "interrupted").unwrap();
+            self.0.send(execution_path.to_path_buf()).await.unwrap();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_isolated_run_discards_workspace_without_merging() {
+        let live = tempdir().unwrap();
+        let file = live.path().join("code.rs");
+        std::fs::write(&file, "original").unwrap();
+        let config = SubagentConfig::from_args(&json!({
+            "prompt": "write", "enforce_isolation": true
+        }));
+        let mut session = SubagentSession::new(config, "parent");
+        session.prepare_workspace(live.path(), None).await.unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let live_path = live.path().to_path_buf();
+        let task = tokio::spawn(async move {
+            session
+                .run_autonomous_loop(
+                    &writing_llm("done"),
+                    &BlockingWriter(tx),
+                    "model".into(),
+                    "system".into(),
+                    "write".into(),
+                    vec![],
+                    vec![],
+                    &live_path,
+                )
+                .await
+        });
+        let temp_path = rx.recv().await.unwrap();
+        assert!(temp_path.join("code.rs").exists());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(!temp_path.exists());
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn timed_out_isolated_run_discards_workspace_without_merging() {
+        let live = tempdir().unwrap();
+        let file = live.path().join("code.rs");
+        std::fs::write(&file, "original").unwrap();
+        let config = SubagentConfig::from_args(&json!({
+            "prompt": "write", "enforce_isolation": true
+        }));
+        let mut session = SubagentSession::new(config, "parent");
+        session.prepare_workspace(live.path(), None).await.unwrap();
+        let temp_path = session.execution_path(live.path()).to_path_buf();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let llm = writing_llm("done");
+        let tools = BlockingWriter(tx);
+        let mut loop_future = Box::pin(session.run_autonomous_loop(
+            &llm,
+            &tools,
+            "model".into(),
+            "system".into(),
+            "write".into(),
+            vec![],
+            vec![],
+            live.path(),
+        ));
+        tokio::select! {
+            _ = &mut loop_future => panic!("blocked tool cannot finish"),
+            path = rx.recv() => assert_eq!(path.unwrap(), temp_path),
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), &mut loop_future)
+                .await
+                .is_err()
+        );
+        drop(loop_future);
+        drop(session);
+        assert!(!temp_path.exists());
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "original");
     }
 
     #[tokio::test]

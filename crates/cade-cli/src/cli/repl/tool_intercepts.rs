@@ -226,6 +226,18 @@ impl Repl {
             });
         }
 
+        // Headless runs execute on the server; a local clone cannot redirect
+        // the server's tool calls. Refuse required isolation before start_run.
+        if cfg.enforce_isolation || std::env::var("CADE_ISOLATION").is_ok_and(|v| v == "true") {
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "subagent".to_string(),
+                output: "error: required subagent isolation cannot be established for a CLI headless run; refusing to run in the live workspace".to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            });
+        }
+
         let all_defs = discover_all_subagents(&self.cwd);
         let def_opt = resolve_subagent_auto(&cfg.mode, &cfg.prompt, &all_defs).cloned();
 
