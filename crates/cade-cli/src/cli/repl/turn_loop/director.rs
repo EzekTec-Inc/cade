@@ -133,7 +133,6 @@ impl<'a> TurnDirector<'a> {
         let tick_queued_followup = self.repl.queued_followup.clone();
         let tick_modal_close_ms = self.repl.last_modal_close_ms.clone();
         let tick_permissions = self.repl.permissions.clone();
-        let tick_cancellations = self.repl.subagent_cancellations.clone();
         let tick_client = self.repl.client.clone();
 
         let tick_handle = tokio::spawn(async move {
@@ -260,29 +259,25 @@ impl<'a> TurnDirector<'a> {
                                                             match action {
                                                                 cade_tui::app::subagent_tray::SubagentTrayAction::None => {}
                                                                 cade_tui::app::subagent_tray::SubagentTrayAction::Kill { subagent_id } => {
-                                                                    let cancellations = tick_cancellations.clone();
-                                                                    let client = tick_client.clone();
-                                                                    let subagent_id_c = subagent_id.clone();
-                                                                    app.show_toast(format!("Requesting cancellation for {subagent_id}"), cade_tui::ToastLevel::Info);
-                                                                    let _ = app.draw();
-                                                                    tokio::spawn(async move {
-                                                                        let tx_opt = {
-                                                                            let map = cancellations.lock().await;
-                                                                            map.get(&subagent_id_c).cloned()
-                                                                        };
-                                                                        if tx_opt.as_ref().is_some_and(|tx| tx.cancel().is_ok()) {
-                                                                            return;
-                                                                        }
-                                                                        let result = client
+                                                                     let client = tick_client.clone();
+                                                                     let subagent_id_c = subagent_id.clone();
+                                                                     app.show_toast(format!("Requesting cancellation for {subagent_id}"), cade_tui::ToastLevel::Info);
+                                                                     let _ = app.draw();
+                                                                     let app_for_ack = tick_app.clone();
+                                                                     tokio::spawn(async move {
+                                                                         let result = client
                                                                                 .raw_post(
                                                                                     &format!("/subagents/{subagent_id_c}/cancel"),
                                                                                     &serde_json::json!({ "action": "cancel", "id": subagent_id_c }),
-                                                                                )
-                                                                                .await;
-                                                                        if let Err(e) = result {
-                                                                            tracing::warn!("Cannot cancel subagent {subagent_id_c}: {e}");
-                                                                        }
-                                                                    });
+                                                                                 )
+                                                                                 .await;
+                                                                         let mut app = app_for_ack.lock();
+                                                                         app.show_toast(match result {
+                                                                             Ok(_) => format!("Cancellation requested for {subagent_id_c}"),
+                                                                             Err(e) => format!("Could not cancel {subagent_id_c}: {e}"),
+                                                                         }, cade_tui::ToastLevel::Info);
+                                                                         app.draw_dirty = true;
+                                                                     });
                                                                 }
                                                                 cade_tui::app::subagent_tray::SubagentTrayAction::Steer { subagent_id, message } => {
                                                                     let client = tick_client.clone();

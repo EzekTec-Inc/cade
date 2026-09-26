@@ -108,6 +108,17 @@ pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
     Ok(())
 }
 
+/// Compare a previously persisted message without silently treating storage errors as misses.
+pub fn message_content_matches(db: &Db, id: &str, content: &Value) -> Result<bool> {
+    let conn = db.get()?;
+    let stored: Option<String> = conn
+        .query_row("SELECT content FROM messages WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(stored.as_deref() == Some(content.to_string().as_str()))
+}
+
 /// Load the last `limit` messages for an agent (or a specific conversation), oldest-first.
 /// If `conversation_id` is None → load messages with NULL conversation_id (legacy/default).
 /// Pass `Some("")` for the stub "all messages" mode — but we don't use that; always filter.

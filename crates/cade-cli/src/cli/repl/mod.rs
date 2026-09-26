@@ -44,7 +44,6 @@ use std::sync::Arc;
 use crate::ui::{RenderLine, TuiApp, cycle_mode, cycle_mode_back};
 use cade_agent::agent::session::SessionStore;
 use cade_agent::agent::{HttpTransport, client::AgentState};
-use cade_agent::subagents::BackgroundResult;
 use cade_core::permissions::{PermissionManager, PermissionMode};
 use cade_core::settings::SettingsManager;
 use cade_core::skills::Skill;
@@ -162,8 +161,6 @@ pub struct Repl {
     pub(crate) exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
     /// Directory from which skills are discovered
     pub(crate) skills_dir: std::path::PathBuf,
-    /// Completed background subagent results waiting to be shown
-    pub(crate) background_results: Arc<Mutex<Vec<BackgroundResult>>>,
     /// Active toolset — switches with /model
     pub(crate) current_toolset: Arc<Mutex<Toolset>>,
     /// Hook engine — fires user-defined scripts at lifecycle events
@@ -187,16 +184,6 @@ pub struct Repl {
         std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
     /// Active capability set — controls which tools and commands are available.
     pub(crate) capabilities: cade_core::capabilities::CapabilitySet,
-    /// Semaphore limiting concurrent subagent LLM calls.
-    /// Capacity is read from CADE_MAX_SUBAGENTS at startup (default: 4).
-    pub(crate) subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
-    /// Cancellation channels for actively running subagents in the CLI.
-    /// Key: subagent_id, Value: sender to abort the subagent loop.
-    pub(crate) subagent_cancellations: std::sync::Arc<
-        tokio::sync::Mutex<
-            std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>,
-        >,
-    >,
     /// Receives a signal whenever a SKILL.MD file changes on disk.
     /// The REPL polls this each loop iteration and triggers a reload.
     pub(crate) skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
@@ -291,21 +278,10 @@ impl Repl {
         let perm_mode = permissions.mode();
         let agent_name_clone = agent_name.clone();
         let current_model_clone = current_model.clone();
-        let cap = std::env::var("CADE_MAX_SUBAGENTS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(4);
-        tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
         let skill_reload_rx = cade_core::skills::spawn_skill_watcher(&cwd, Some(&agent_id));
         let mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
         let plugin_reload_rx = spawn_plugin_watcher(&cwd);
 
-        // Pre-construct the background-results queue + the TuiApp so we can
-        // wire a `bg_pending_count` getter on the app pointing at the same
-        // shared queue.  The getter lets the input-loop's 50ms tick surface
-        // a toast when subagents finish while the user is idle (Option 2).
-        let background_results: Arc<Mutex<Vec<BackgroundResult>>> = Arc::new(Mutex::new(vec![]));
         let mut tui_app = TuiApp::new_with_theme(
             perm_mode,
             agent_name_clone.clone(),
@@ -327,10 +303,6 @@ impl Repl {
             engine.load_plugins(&cwd.join(".cade").join("plugins"));
         }
         tui_app.refresh_lua_ui();
-        {
-            let bg_for_getter = Arc::clone(&background_results);
-            tui_app.bg_pending_count = Some(Box::new(move || bg_for_getter.lock().len()));
-        }
 
         let app = Arc::new(Mutex::new(tui_app));
         let hooks = hooks.with_lua_runner(Arc::new(ReplLuaHookRunner { app: app.clone() }));
@@ -354,7 +326,6 @@ impl Repl {
             cwd,
             skills: Arc::new(Mutex::new(skills)),
             skills_dir,
-            background_results,
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
             first_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -364,10 +335,6 @@ impl Repl {
             mcp,
             active_mcp_servers: std::sync::Arc::new(parking_lot::Mutex::new(
                 std::collections::HashSet::new(),
-            )),
-            subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
-            subagent_cancellations: std::sync::Arc::new(tokio::sync::Mutex::new(
-                std::collections::HashMap::new(),
             )),
             skill_reload_rx,
             mcp_reload_rx,
@@ -842,23 +809,6 @@ impl Repl {
                         self.mcp_rx = Some(rx);
                     }
                     Err(_) => {}
-                }
-            }
-
-            // Check for completed background subagent results
-            {
-                let mut results = self.background_results.lock();
-                for r in results.drain(..) {
-                    let msg = format!("  ✓ Subagent '{}' finished:\n{}", r.subagent, r.result);
-                    let _ = self.app.lock().push(RenderLine::SystemMsg(msg));
-                    let notify = format!(
-                        "[Background subagent '{}' completed (task ID: {})]:\n{}",
-                        r.subagent, r.task_id, r.result
-                    );
-                    let _ = self
-                        .client
-                        .send_message(&self.agent_id(), &notify, false)
-                        .await;
                 }
             }
 

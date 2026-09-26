@@ -248,6 +248,25 @@ pub struct ContextTelemetry {
 
 /// Result of a completed background subagent, waiting for injection
 /// into the parent agent's next agentic loop iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentTerminalStatus {
+    Done,
+    Error,
+    Cancelled,
+    Timeout,
+}
+
+impl SubagentTerminalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Error => "error",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubagentResult {
     pub subagent_id: String,
@@ -255,6 +274,7 @@ pub struct SubagentResult {
     pub task_preview: String,
     pub result: String,
     pub is_error: bool,
+    pub status: SubagentTerminalStatus,
     pub elapsed_secs: u32,
 }
 
