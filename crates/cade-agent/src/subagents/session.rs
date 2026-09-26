@@ -5,9 +5,12 @@
 //! real-time telemetry streaming, and structured outcome models.
 
 use async_trait::async_trait;
+use cade_core::permissions::{PermissionManager, Verdict, is_write_schema, path_is_protected};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
+
+use super::SubagentTools;
 
 use super::config::SubagentConfig;
 use super::workspace_guard::IsolatedWorkspaceGuard;
@@ -117,6 +120,11 @@ pub trait SubagentLlmExecutor: Send + Sync {
 /// Abstraction for executing tools during a subagent session.
 #[async_trait]
 pub trait SubagentToolExecutor: Send + Sync {
+    /// Consult the live capability metadata, not just the spelling of an MCP tool.
+    async fn is_mcp_write(&self, _tool_name: &str) -> bool {
+        false
+    }
+
     async fn execute_tool(
         &self,
         tool_call_id: &str,
@@ -304,11 +312,157 @@ impl SubagentApprovalChannel {
                 .await
                 .map_err(|_| "Approval channel closed without response".to_string())
         } else {
-            Ok(SubagentApprovalResponse {
-                approved: true,
-                feedback: None,
-            })
+            Err("No interactive approval adapter available".to_string())
         }
+    }
+}
+
+/// Execution authority, independent of the schemas sent to the model.
+#[derive(Clone)]
+pub struct SubagentToolPolicy {
+    pub permissions: PermissionManager,
+    pub tools: SubagentTools,
+    /// Names inherited from the parent's actual capability catalog (before child filtering).
+    pub inherited_tools: Vec<String>,
+    pub allow_nesting: bool,
+    pub max_depth: usize,
+}
+
+impl SubagentToolPolicy {
+    pub fn permits_name(
+        &self,
+        name: &str,
+        is_mcp_write: bool,
+        mode: &str,
+        depth: usize,
+    ) -> Result<(), String> {
+        if !self.inherited_tools.iter().any(|n| n == name) {
+            return Err(format!("Tool '{name}' is not inherited from the parent"));
+        }
+        if matches!(name, "run_subagent" | "run_parallel_subagents" | "subagent")
+            && (!self.allow_nesting || depth + 1 >= self.max_depth)
+        {
+            return Err("Nested subagent delegation is not permitted at this depth".into());
+        }
+        let readonly =
+            mode == "plan" || mode == "recall" || matches!(self.tools, SubagentTools::Readonly);
+        if readonly && (is_write_schema(name) || is_mcp_write || matches!(name, "bash" | "shell")) {
+            return Err(format!("Read-only subagent cannot execute '{name}'"));
+        }
+        if readonly && name.contains("__") && !readonly_mcp_name(name) {
+            return Err(format!("MCP tool '{name}' is not a known read capability"));
+        }
+        match &self.tools {
+            SubagentTools::All => {}
+            SubagentTools::Readonly => {
+                // A read-only definition can use inherited MCP read capabilities.
+                if !matches!(
+                    name,
+                    "read_file"
+                        | "glob"
+                        | "grep"
+                        | "search_memory"
+                        | "conversation_search"
+                        | "archival_memory_search"
+                        | "recall"
+                        | "fetch_doc"
+                ) && !(name.contains("__") && readonly_mcp_name(name))
+                {
+                    return Err(format!("Tool '{name}' is not in the read-only tool set"));
+                }
+            }
+            SubagentTools::List(names) => {
+                if !names.iter().any(|n| n == name) {
+                    return Err(format!("Tool '{name}' is not allowed by child definition"));
+                }
+            }
+            SubagentTools::Restricted { allowed_tools, .. } => {
+                if !allowed_tools.iter().any(|n| n == name) {
+                    return Err(format!("Tool '{name}' is not allowed by child definition"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn permits_path(&self, name: &str, args: &Value, cwd: &Path) -> Result<(), String> {
+        let SubagentTools::Restricted { allowed_paths, .. } = &self.tools else {
+            return Ok(());
+        };
+        if !matches!(
+            name,
+            "read_file" | "write_file" | "edit_file" | "apply_patch" | "grep" | "glob"
+        ) {
+            return Ok(());
+        }
+        let path = args
+            .get("path")
+            .or_else(|| args.get("file_path"))
+            .and_then(Value::as_str)
+            .ok_or("Restricted file tool requires a path")?;
+        let absolute = if Path::new(path).is_absolute() {
+            Path::new(path).to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        let resolved = absolute
+            .canonicalize()
+            .or_else(|_| {
+                absolute
+                    .parent()
+                    .ok_or_else(|| std::io::Error::other("missing parent"))?
+                    .canonicalize()
+                    .map(|p| p.join(absolute.file_name().unwrap_or_default()))
+            })
+            .map_err(|e| format!("Cannot validate restricted path: {e}"))?;
+        if allowed_paths.iter().any(|allowed| {
+            let p = Path::new(allowed);
+            let absolute_allowed = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                cwd.join(p)
+            };
+            absolute_allowed
+                .canonicalize()
+                .is_ok_and(|p| resolved.starts_with(p))
+        }) {
+            Ok(())
+        } else {
+            Err(format!("Path '{}' is outside the allowed paths", path))
+        }
+    }
+}
+
+fn readonly_mcp_name(name: &str) -> bool {
+    [
+        "read", "find", "get", "list", "search", "inspect", "describe", "show", "view", "check",
+        "status", "select", "ask", "query", "skeleton", "extract",
+    ]
+    .iter()
+    .any(|part| name.rsplit("__").next().unwrap_or(name).contains(part))
+}
+
+fn targets_protected_path(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, v)| {
+            if matches!(
+                key.as_str(),
+                "path"
+                    | "file_path"
+                    | "filename"
+                    | "command"
+                    | "cmd"
+                    | "patch"
+                    | "source"
+                    | "destination"
+            ) {
+                v.as_str().is_some_and(path_is_protected)
+            } else {
+                targets_protected_path(v)
+            }
+        }),
+        Value::Array(values) => values.iter().any(targets_protected_path),
+        _ => false,
     }
 }
 
@@ -326,6 +480,7 @@ pub struct SubagentSession {
     pub event_emitter: SubagentEventEmitter,
     pub findings: Vec<SubagentFinding>,
     pub approval_channel: SubagentApprovalChannel,
+    pub tool_policy: Option<SubagentToolPolicy>,
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
 }
@@ -347,6 +502,7 @@ impl SubagentSession {
             event_emitter: SubagentEventEmitter::noop(),
             findings: Vec::new(),
             approval_channel: SubagentApprovalChannel::noop(),
+            tool_policy: None,
             steering_queue: Vec::new(),
             pending_model_swap: None,
         }
@@ -374,6 +530,11 @@ impl SubagentSession {
 
     pub fn with_approval_channel(mut self, channel: SubagentApprovalChannel) -> Self {
         self.approval_channel = channel;
+        self
+    }
+
+    pub fn with_tool_policy(mut self, policy: SubagentToolPolicy) -> Self {
+        self.tool_policy = Some(policy);
         self
     }
 
@@ -682,9 +843,67 @@ impl SubagentSession {
                     })
                     .await;
 
-                let output_res = tools
-                    .execute_tool(&tc.id, &tc.name, &tc.arguments, &exec_path)
-                    .await;
+                let output_res = async {
+                    let policy = self
+                        .tool_policy
+                        .as_ref()
+                        .ok_or("No subagent tool policy configured")?;
+                    // Remote MCP backends may not supply mutation metadata. An
+                    // unclassified capability is not automatically read-only.
+                    let is_mcp_write = tools.is_mcp_write(&tc.name).await
+                        || (tc.name.contains("__") && !readonly_mcp_name(&tc.name));
+                    policy.permits_name(
+                        &tc.name,
+                        is_mcp_write,
+                        &self.config.mode,
+                        self.config.depth,
+                    )?;
+                    policy.permits_path(&tc.name, &tc.arguments, &exec_path)?;
+                    if (is_write_schema(&tc.name) || is_mcp_write)
+                        && targets_protected_path(&tc.arguments)
+                    {
+                        return Err("security: protected path access denied".into());
+                    }
+                    match policy
+                        .permissions
+                        .resolve(&tc.name, &tc.arguments, is_mcp_write)
+                    {
+                        Verdict::Deny(reason) => return Err(reason),
+                        Verdict::Ask(reason) => {
+                            let approval_id = format!("appr-{}", uuid::Uuid::new_v4());
+                            self.event_emitter
+                                .emit(SubagentEvent::ApprovalRequired {
+                                    tool_name: tc.name.clone(),
+                                    arguments: tc.arguments.clone(),
+                                    approval_id: approval_id.clone(),
+                                })
+                                .await;
+                            let response = self
+                                .approval_channel
+                                .request_approval(&approval_id, &tc.name, &tc.arguments)
+                                .await;
+                            let approved = response.as_ref().is_ok_and(|r| r.approved);
+                            self.event_emitter
+                                .emit(SubagentEvent::ApprovalResolved {
+                                    approval_id,
+                                    approved,
+                                    feedback: response
+                                        .as_ref()
+                                        .ok()
+                                        .and_then(|r| r.feedback.clone()),
+                                })
+                                .await;
+                            if !approved {
+                                return Err(response.err().unwrap_or(reason));
+                            }
+                        }
+                        Verdict::Allow => {}
+                    }
+                    tools
+                        .execute_tool(&tc.id, &tc.name, &tc.arguments, &exec_path)
+                        .await
+                }
+                .await;
 
                 let is_error = output_res.is_err();
                 let output_text = match output_res {
@@ -730,6 +949,7 @@ impl SubagentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cade_core::permissions::PermissionMode;
     use tempfile::tempdir;
 
     #[test]
@@ -968,6 +1188,263 @@ mod tests {
         ) -> Result<String, String> {
             Ok(format!("Output from {tool_name}"))
         }
+    }
+
+    struct RecordingTools(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl SubagentToolExecutor for RecordingTools {
+        async fn is_mcp_write(&self, name: &str) -> bool {
+            name == "mcp__set_secret"
+        }
+
+        async fn execute_tool(
+            &self,
+            _: &str,
+            name: &str,
+            _: &Value,
+            _: &Path,
+        ) -> Result<String, String> {
+            self.0.lock().unwrap().push(name.to_owned());
+            Ok("executed".into())
+        }
+    }
+
+    fn scripted_calls(calls: Vec<(&str, Value)>) -> MockLlm {
+        MockLlm {
+            turns: std::sync::Mutex::new(vec![SubagentTurnResponse {
+                content: None,
+                tool_calls: calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (name, arguments))| SubagentToolCall {
+                        id: format!("call-{i}"),
+                        name: name.into(),
+                        arguments,
+                    })
+                    .collect(),
+                tokens_used: 1,
+            }]),
+            observed_models: std::sync::Mutex::new(vec![]),
+            observed_messages: std::sync::Mutex::new(vec![]),
+        }
+    }
+
+    fn policy(mode: &str) -> SubagentToolPolicy {
+        SubagentToolPolicy {
+            permissions: PermissionManager::new(if mode == "plan" {
+                PermissionMode::Plan
+            } else {
+                PermissionMode::Default
+            }),
+            tools: SubagentTools::All,
+            inherited_tools: [
+                "read_file",
+                "write_file",
+                "mcp__list_items",
+                "mcp__set_secret",
+                "run_subagent",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            allow_nesting: false,
+            max_depth: 3,
+        }
+    }
+
+    async fn exercise(session: &mut SubagentSession, llm: &MockLlm, tools: &RecordingTools) {
+        session
+            .run_autonomous_loop(
+                llm,
+                tools,
+                "model".into(),
+                "system".into(),
+                "task".into(),
+                vec![json!({"name": "read_file"})],
+                vec![],
+                Path::new("."),
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn execution_policy_checks_real_calls_not_visible_schemas() {
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(policy("build"));
+        session
+            .tool_policy
+            .as_ref()
+            .unwrap()
+            .permissions
+            .add_deny_rule(cade_core::permissions::PermissionRule::parse("read_file").unwrap());
+        let calls = scripted_calls(vec![
+            ("read_file", json!({"path":"src/lib.rs"})),
+            ("mcp__list_items", json!({})),
+            ("write_file", json!({"path":".env", "content":"secret"})),
+            ("unknown_tool", json!({})),
+            ("run_subagent", json!({"prompt":"nested"})),
+        ]);
+        let tools = RecordingTools(std::sync::Mutex::new(vec![]));
+        exercise(&mut session, &calls, &tools).await;
+        assert_eq!(*tools.0.lock().unwrap(), vec!["mcp__list_items"]);
+        let seen = calls.observed_messages.lock().unwrap();
+        let results = &seen[1];
+        assert!(
+            results
+                .iter()
+                .any(|m| m.content.contains("blocked by deny rule"))
+        );
+        assert!(results.iter().any(|m| m.content.contains("protected path")));
+        assert!(results.iter().any(|m| m.content.contains("not inherited")));
+        assert!(
+            results
+                .iter()
+                .any(|m| m.content.contains("Nested subagent"))
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_waits_for_approval_and_fails_closed_without_adapter() {
+        let calls = || scripted_calls(vec![("write_file", json!({"path":"src/lib.rs"}))]);
+        let tools = RecordingTools(std::sync::Mutex::new(vec![]));
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task", "human_review":true})),
+            "parent",
+        )
+        .with_tool_policy(policy("build"));
+        exercise(&mut session, &calls(), &tools).await;
+        assert!(
+            tools.0.lock().unwrap().is_empty(),
+            "post-run review cannot approve an execution"
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(policy("build"))
+        .with_approval_channel(SubagentApprovalChannel::new(tx));
+        let llm = calls();
+        let execution = async {
+            exercise(&mut session, &llm, &tools).await;
+        };
+        let responder = async {
+            let (_, name, _, reply) = rx.recv().await.unwrap();
+            assert_eq!(name, "write_file");
+            assert!(
+                tools.0.lock().unwrap().is_empty(),
+                "execution must wait for user verdict"
+            );
+            reply
+                .send(SubagentApprovalResponse {
+                    approved: true,
+                    feedback: None,
+                })
+                .unwrap();
+        };
+        tokio::join!(execution, responder);
+        assert_eq!(*tools.0.lock().unwrap(), vec!["write_file"]);
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(policy("build"))
+        .with_approval_channel(SubagentApprovalChannel::new(tx));
+        let denied_calls = calls();
+        tokio::join!(exercise(&mut session, &denied_calls, &tools), async {
+            let (_, _, _, reply) = rx.recv().await.unwrap();
+            reply
+                .send(SubagentApprovalResponse {
+                    approved: false,
+                    feedback: None,
+                })
+                .unwrap();
+        });
+        assert_eq!(*tools.0.lock().unwrap(), vec!["write_file"]);
+    }
+
+    #[tokio::test]
+    async fn plan_and_mcp_metadata_block_mutations_but_allow_inherited_reads() {
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task", "mode":"plan"})),
+            "parent",
+        )
+        .with_tool_policy(policy("plan"));
+        let llm = scripted_calls(vec![
+            ("mcp__list_items", json!({})),
+            ("mcp__set_secret", json!({"path":"src/lib.rs"})),
+            ("write_file", json!({"path":"src/lib.rs"})),
+        ]);
+        let tools = RecordingTools(std::sync::Mutex::new(vec![]));
+        exercise(&mut session, &llm, &tools).await;
+        assert_eq!(*tools.0.lock().unwrap(), vec!["mcp__list_items"]);
+    }
+
+    #[tokio::test]
+    async fn restricted_paths_and_protected_nested_mcp_arguments_are_checked_before_execution() {
+        let root = tempdir().unwrap();
+        std::fs::create_dir(root.path().join("allowed")).unwrap();
+        std::fs::create_dir(root.path().join("other")).unwrap();
+        let mut policy = policy("build");
+        policy.tools = SubagentTools::Restricted {
+            allowed_tools: vec!["read_file".into(), "mcp__set_secret".into()],
+            allowed_paths: vec![root.path().join("allowed").to_string_lossy().to_string()],
+        };
+        policy
+            .permissions
+            .set_mode(PermissionMode::BypassPermissions);
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(policy);
+        let llm = scripted_calls(vec![
+            (
+                "read_file",
+                json!({"path":root.path().join("other/secret")}),
+            ),
+            ("read_file", json!({"path":root.path().join("allowed/ok")})),
+            ("mcp__set_secret", json!({"params":{"path":".env"}})),
+        ]);
+        let tools = RecordingTools(std::sync::Mutex::new(vec![]));
+        exercise(&mut session, &llm, &tools).await;
+        assert_eq!(*tools.0.lock().unwrap(), vec!["read_file"]);
+    }
+
+    #[tokio::test]
+    async fn permitted_mcp_write_and_nesting_depth_follow_effective_policy() {
+        let mut access = policy("build");
+        access
+            .permissions
+            .set_mode(PermissionMode::BypassPermissions);
+        access.allow_nesting = true;
+        access.max_depth = 2;
+        assert!(
+            access
+                .permits_name("run_subagent", false, "build", 0)
+                .is_ok()
+        );
+        assert!(
+            access
+                .permits_name("run_subagent", false, "build", 1)
+                .is_err()
+        );
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(access);
+        let tools = RecordingTools(std::sync::Mutex::new(vec![]));
+        let calls = scripted_calls(vec![("mcp__set_secret", json!({"value":"ordinary"}))]);
+        exercise(&mut session, &calls, &tools).await;
+        assert_eq!(*tools.0.lock().unwrap(), vec!["mcp__set_secret"]);
     }
 
     #[tokio::test]
