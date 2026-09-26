@@ -465,6 +465,7 @@ pub(super) async fn handle_subagent_tool(
     args: serde_json::Value,
     sse_tx: super::SseTx,
     permission_mode: cade_core::permissions::PermissionMode,
+    run_id: String,
 ) -> cade_agent::tools::manager::ToolResult {
     if tool_name == "wait" {
         let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -541,6 +542,25 @@ pub(super) async fn handle_subagent_tool(
         };
     }
 
+    // Background children have a lifecycle beyond this run. Give their events
+    // a detached, durable relay instead of retaining the HTTP response sender.
+    let sse_tx = if args.get("background").and_then(|v| v.as_bool()) == Some(true) {
+        let (child_events, mut receiver) = tokio::sync::mpsc::channel::<
+            Result<super::runtime::RunEventEnvelope, std::convert::Infallible>,
+        >(128);
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            while let Some(Ok(event)) = receiver.recv().await {
+                if let Err(error) = cade_store::sqlite::append_run_event(&db, &run_id, &event.data)
+                {
+                    tracing::error!(%run_id, %error, "failed to record background child event");
+                }
+            }
+        });
+        child_events
+    } else {
+        sse_tx
+    };
     let runner_owned = ServerSubagentRunner {
         state: state.clone(),
         parent_agent_id: parent_agent_id.clone(),
@@ -1017,7 +1037,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
 
 /// A terminal record has its own identity, distinct from the launch tool
 /// result. The deterministic row ID makes repeated delivery idempotent.
-async fn deliver_background_result(
+pub(super) async fn deliver_background_result(
     state: &AppState,
     parent_agent_id: &str,
     parent_conversation_id: Option<&str>,
@@ -1026,30 +1046,17 @@ async fn deliver_background_result(
     result: String,
     is_error: bool,
 ) {
-    let body = format!(
-        "[background subagent {subagent_id} {}]\n{result}",
-        if is_error { "failed" } else { "completed" }
-    );
-    let outcome_call_id = format!("{tool_call_id}:outcome:{subagent_id}");
-    if let Err(error) = cade_store::sqlite::insert_message(
-        &state.db,
-        &cade_store::sqlite::MessageRow {
-            id: format!("subagent-outcome-{subagent_id}"),
-            agent_id: parent_agent_id.to_string(),
-            conversation_id: parent_conversation_id.map(str::to_owned),
-            role: "tool".to_string(),
-            char_count: body.len(),
-            content: serde_json::json!({
-                "content": body,
-                "tool_call_id": outcome_call_id,
-                "launch_tool_call_id": tool_call_id,
-                "tool_name": "run_subagent",
-                "subagent_id": subagent_id,
-                "phase": "outcome",
-                "is_error": is_error,
-            }),
-        },
-    ) {
+    let pending = crate::server::state::SubagentResult {
+        subagent_id: subagent_id.to_string(),
+        tool_call_id: format!("{tool_call_id}:outcome:{subagent_id}"),
+        task_preview: String::new(),
+        result,
+        is_error,
+        elapsed_secs: 0,
+    };
+    if let Err(error) =
+        store_background_outcome(state, parent_agent_id, parent_conversation_id, &pending)
+    {
         tracing::warn!(%subagent_id, %error, "background outcome delivery deferred to next parent run");
         state
             .pending_subagent_results
@@ -1060,14 +1067,72 @@ async fn deliver_background_result(
                 parent_conversation_id.map(str::to_owned),
             ))
             .or_default()
-            .push(crate::server::state::SubagentResult {
-                subagent_id: subagent_id.to_string(),
-                tool_call_id: outcome_call_id,
-                task_preview: String::new(),
-                result,
-                is_error,
-                elapsed_secs: 0,
+            .push(pending);
+        crate::server::api::agents::publish_global_event(
+            Some(&state.db),
+            "subagent_delivery_failed",
+            serde_json::json!({
+                "agent_id": parent_agent_id,
+                "conversation_id": parent_conversation_id,
+                "subagent_id": subagent_id,
+                "status": "pending_retry",
+                "error": "Background outcome could not be persisted; retry on the next parent run",
+            }),
+        );
+    }
+}
+
+/// Persist a standalone conversation notification. A tool-role row would be
+/// discarded by the provider sanitizer because its launch tool call was
+/// already answered with the acknowledgement on the previous turn.
+pub(super) fn store_background_outcome(
+    state: &AppState,
+    parent_agent_id: &str,
+    parent_conversation_id: Option<&str>,
+    pending: &crate::server::state::SubagentResult,
+) -> Result<(), String> {
+    let subagent_id = &pending.subagent_id;
+    let result = &pending.result;
+    let is_error = pending.is_error;
+    let body = format!(
+        "[background subagent {subagent_id} {}]\n{result}",
+        if is_error { "failed" } else { "completed" }
+    );
+    let row = cade_store::sqlite::MessageRow {
+        id: format!("subagent-outcome-{subagent_id}"),
+        agent_id: parent_agent_id.to_string(),
+        conversation_id: parent_conversation_id.map(str::to_owned),
+        role: "user".to_string(),
+        char_count: body.len(),
+        content: serde_json::json!({
+            "content": body,
+            "tool_call_id": pending.tool_call_id,
+            "launch_tool_call_id": pending.tool_call_id.rsplit_once(":outcome:").map(|(id, _)| id).unwrap_or(&pending.tool_call_id),
+            "tool_name": "run_subagent",
+            "subagent_id": subagent_id,
+            "phase": "outcome",
+            "is_error": is_error,
+        }),
+    };
+    match cade_store::sqlite::insert_message(&state.db, &row) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // Retrying an already delivered child must not block the parent.
+            // A different row or a persistent storage error still fails.
+            let existing = state.db.get().ok().and_then(|db| {
+                db.query_row(
+                    "SELECT content FROM messages WHERE id = ?1",
+                    [&row.id],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok()
             });
+            if existing.as_deref() == Some(row.content.to_string().as_str()) {
+                Ok(())
+            } else {
+                Err(error.to_string())
+            }
+        }
     }
 }
 

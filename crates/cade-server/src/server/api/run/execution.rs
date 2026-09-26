@@ -663,6 +663,7 @@ pub(super) async fn execute_turn_tools(
             let arguments_c = arguments.clone();
             let parent_mode = pipeline.permissions().mode();
             let tx_c = tx.clone();
+            let run_id_c = run_id.clone();
             let handle = tokio::spawn(async move {
                 subagent::handle_subagent_tool(
                     state_c,
@@ -673,6 +674,7 @@ pub(super) async fn execute_turn_tools(
                     arguments_c,
                     tx_c,
                     parent_mode,
+                    run_id_c,
                 )
                 .await
             });

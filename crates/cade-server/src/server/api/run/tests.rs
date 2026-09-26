@@ -796,23 +796,43 @@ async fn server_background_launch_queues_without_waiting_and_survives_parent_tur
         .acquire_many_owned(4)
         .await
         .unwrap();
-    let (tx, _rx) = tokio::sync::mpsc::channel(128);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
     let args = json!({"prompt":"work", "background":true});
+    let run_id = cade_store::sqlite::create_run(&state.db, "queue-parent", Some(&conv.id))
+        .unwrap()
+        .id;
     let ack = tokio::time::timeout(
         std::time::Duration::from_millis(500),
-        handle_run_subagent_tool(
-            &state,
-            "queue-parent",
-            Some(&conv.id),
-            "launch-call",
-            &args,
+        super::subagent::handle_subagent_tool(
+            state.clone(),
+            "queue-parent".into(),
+            Some(conv.id.clone()),
+            "run_subagent".into(),
+            "launch-call".into(),
+            args,
             tx,
+            cade_core::permissions::PermissionMode::Default,
+            run_id.clone(),
         ),
     )
     .await
     .unwrap();
     assert!(ack.output.contains("queued"), "{}", ack.output);
     assert!(!ack.is_error);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .unwrap()
+            .is_none(),
+        "background child must not retain the launching run stream"
+    );
+    let done_seq = cade_store::sqlite::append_run_event(
+        &state.db,
+        &run_id,
+        &json!({"message_type":"run_done", "status":"done"}).to_string(),
+    )
+    .unwrap();
+    cade_store::sqlite::finish_run(&state.db, &run_id, "done").unwrap();
     let child_id = ack.output.split_whitespace().nth(2).unwrap().to_string();
     assert!(
         state
@@ -868,6 +888,245 @@ async fn server_background_launch_queues_without_waiting_and_survives_parent_tur
     );
     assert_eq!(outcomes[0].content["launch_tool_call_id"], "launch-call");
     assert_eq!(state.subagent_semaphore.available_permits(), 4);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if cade_store::sqlite::run_events_after(&state.db, &run_id, done_seq)
+                .unwrap()
+                .iter()
+                .any(|(_, data)| data.contains("subagent_complete"))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let response = crate::server::api::runs::stream_run(
+        State(state),
+        Path(run_id),
+        axum::extract::Query(std::collections::HashMap::from([(
+            "starting_after".to_string(),
+            done_seq.to_string(),
+        )])),
+    )
+    .await;
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let replay = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        replay.contains("subagent_complete") && replay.contains("[DONE]"),
+        "{replay}"
+    );
+}
+
+#[tokio::test]
+async fn background_completion_survives_actual_parent_context_sanitization() {
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    approval_test_run(&state.db, "context-parent");
+    let conv =
+        cade_store::sqlite::create_conversation(&state.db, "context-parent", "origin").unwrap();
+    for content in ["original task", "next turn"] {
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                agent_id: "context-parent".into(),
+                conversation_id: Some(conv.id.clone()),
+                role: "user".into(),
+                content: json!({"content":content}),
+                char_count: content.len(),
+            },
+        )
+        .unwrap();
+    }
+    super::subagent::deliver_background_result(
+        &state,
+        "context-parent",
+        Some(&conv.id),
+        "launch-id",
+        "sa-context",
+        "distinctive completed result".into(),
+        false,
+    )
+    .await;
+    super::subagent::deliver_background_result(
+        &state,
+        "context-parent",
+        Some(&conv.id),
+        "launch-id",
+        "sa-context",
+        "distinctive completed result".into(),
+        false,
+    )
+    .await;
+    assert!(
+        state.pending_subagent_results.read().await.is_empty(),
+        "duplicate delivery must not be queued as a failed write"
+    );
+    let (_, messages, _) = crate::server::api::messages::build_context(
+        state,
+        "context-parent".into(),
+        Some(conv.id),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|m| m.content.contains("distinctive completed result"))
+            .count(),
+        1,
+        "terminal outcome must reach the next model context after sanitization: {messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn failed_background_outcome_write_stays_pending_and_reports_run_error() {
+    struct StopBuild;
+    #[async_trait::async_trait]
+    impl runtime::ContextBuilder for StopBuild {
+        async fn build(
+            &self,
+            _: String,
+            _: Option<String>,
+            _: bool,
+        ) -> Result<runtime::RunContext, String> {
+            Err("context should not run before outcome delivery".into())
+        }
+    }
+    struct NoTools;
+    #[async_trait::async_trait]
+    impl runtime::CapabilityExecutor for NoTools {
+        async fn execute(
+            &self,
+            _: runtime::TurnExecutionInput,
+            _: Vec<LlmToolCall>,
+            _: SseTx,
+        ) -> Vec<(cade_agent::tools::manager::ToolResult, Value)> {
+            panic!("no tools")
+        }
+    }
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    approval_test_run(&state.db, "storage-parent");
+    let conv =
+        cade_store::sqlite::create_conversation(&state.db, "storage-parent", "origin").unwrap();
+    let run = cade_store::sqlite::create_run(&state.db, "storage-parent", Some(&conv.id)).unwrap();
+    let create_messages: String = state
+        .db
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    state
+        .db
+        .get()
+        .unwrap()
+        .execute_batch("DROP TABLE messages")
+        .unwrap();
+    let mut global_events = crate::server::api::agents::GLOBAL_EVENTS_TX.subscribe();
+    super::subagent::deliver_background_result(
+        &state,
+        "storage-parent",
+        Some(&conv.id),
+        "launch-id",
+        "sa-storage",
+        "important outcome".into(),
+        false,
+    )
+    .await;
+    let published = tokio::time::timeout(std::time::Duration::from_secs(1), global_events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(published["event_type"], "subagent_delivery_failed");
+    assert_eq!(published["subagent_id"], "sa-storage");
+    assert_eq!(
+        state
+            .pending_subagent_results
+            .read()
+            .await
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        1
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    run_agent_loop_with_dependencies(
+        state.clone(),
+        runtime::LoopRequest {
+            agent_id: "storage-parent".into(),
+            conversation_id: Some(conv.id.clone()),
+            run_id: run.id,
+            theme_command: None,
+            input: "next turn".into(),
+            permission_mode: None,
+        },
+        tx,
+        Arc::new(StopBuild),
+        Arc::new(NoTools),
+    )
+    .await;
+    let mut events = Vec::new();
+    while let Some(Ok(event)) = rx.recv().await {
+        events.push(event.data);
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| e.to_lowercase().contains("background outcome") && e.contains("error")),
+        "{events:?}"
+    );
+    assert_eq!(
+        state
+            .pending_subagent_results
+            .read()
+            .await
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        1,
+        "failed persistence must retain the outcome for a later retry"
+    );
+    state
+        .db
+        .get()
+        .unwrap()
+        .execute_batch(&create_messages)
+        .unwrap();
+    let next = cade_store::sqlite::create_run(&state.db, "storage-parent", Some(&conv.id)).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    run_agent_loop_with_dependencies(
+        state.clone(),
+        runtime::LoopRequest {
+            agent_id: "storage-parent".into(),
+            conversation_id: Some(conv.id.clone()),
+            run_id: next.id,
+            theme_command: None,
+            input: "next turn".into(),
+            permission_mode: None,
+        },
+        tx,
+        Arc::new(StopBuild),
+        Arc::new(NoTools),
+    )
+    .await;
+    while rx.recv().await.is_some() {}
+    assert!(state.pending_subagent_results.read().await.is_empty());
+    let rows = cade_store::sqlite::list_messages(&state.db, "storage-parent", Some(&conv.id), 100)
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|m| m.content["phase"] == "outcome")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -979,15 +1238,30 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
             panic!("parent context fails before calling the model")
         }
     }
-    struct StopBeforeLlm;
+    struct StopBeforeLlm {
+        state: AppState,
+        contexts: Arc<std::sync::Mutex<Vec<(Option<String>, Vec<cade_ai::LlmMessage>)>>>,
+    }
     #[async_trait::async_trait]
     impl runtime::ContextBuilder for StopBeforeLlm {
         async fn build(
             &self,
-            _: String,
-            _: Option<String>,
-            _: bool,
+            agent: String,
+            conversation: Option<String>,
+            is_tool_return: bool,
         ) -> Result<runtime::RunContext, String> {
+            let context = crate::server::api::messages::build_context(
+                self.state.clone(),
+                agent,
+                conversation.clone(),
+                is_tool_return,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            self.contexts
+                .lock()
+                .unwrap()
+                .push((conversation, context.1));
             Err("context inspected".into())
         }
     }
@@ -1006,6 +1280,7 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
 
     let llm = Arc::new(ContextLlm(std::sync::Mutex::new(Vec::new())));
     let state = build_state_with_llm(llm.clone());
+    let parent_contexts = Arc::new(std::sync::Mutex::new(Vec::new()));
     approval_test_run(&state.db, "shared-parent");
     let first =
         cade_store::sqlite::create_conversation(&state.db, "shared-parent", "first").unwrap();
@@ -1132,7 +1407,10 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
                 permission_mode: None,
             },
             tx,
-            Arc::new(StopBeforeLlm),
+            Arc::new(StopBeforeLlm {
+                state: state.clone(),
+                contexts: parent_contexts.clone(),
+            }),
             Arc::new(NoTools),
         )
         .await;
@@ -1155,8 +1433,12 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
         );
         assert_eq!(
             messages.iter().filter(|m| m.role == "tool").count(),
-            2,
-            "one launch acknowledgement and one outcome, with distinct tool-call IDs"
+            1,
+            "the tool result is only the launch acknowledgement"
+        );
+        assert_eq!(
+            delivered[0].role, "user",
+            "completion is a model-visible notification"
         );
         assert_ne!(delivered[0].content["tool_call_id"], "tc-first");
         let own = if conversation.id == first.id {
@@ -1172,6 +1454,31 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
         let content = delivered[0].content.to_string();
         assert!(content.contains(own));
         assert!(!content.contains(other));
+    }
+    let contexts = parent_contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 4);
+    for (conversation, messages) in contexts.iter() {
+        let (own, other) = if conversation.as_deref() == Some(first.id.as_str()) {
+            ("task-first", "task-second")
+        } else {
+            ("task-second", "task-first")
+        };
+        let outcomes: Vec<_> = messages
+            .iter()
+            .filter(|m| {
+                m.content.contains("[background subagent") && m.content.contains("completed")
+            })
+            .collect();
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "one model-visible outcome per conversation: {messages:?}"
+        );
+        assert!(outcomes[0].content.contains(own));
+        assert!(
+            !messages.iter().any(|m| m.content.contains(other)),
+            "cross-conversation leak: {messages:?}"
+        );
     }
 }
 

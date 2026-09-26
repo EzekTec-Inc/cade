@@ -573,47 +573,42 @@ pub(crate) async fn run_agent_loop_with_dependencies(
 
         // Deliver only outcomes from this conversation, before building the
         // next turn's context (also covers outcomes completed between runs).
-        let pending_results = {
+        let delivery_error = {
             let mut map = state2.pending_subagent_results.write().await;
-            map.remove(&(agent_id2.clone(), conv_id2.clone()))
-                .unwrap_or_default()
-        };
-        if !pending_results.is_empty() {
-            let mut existing_ids: std::collections::HashSet<String> =
-                cade_store::sqlite::list_messages(
-                    &state2.db,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    10000,
-                )
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|m| m.role == "tool")
-                .filter_map(|m| m.content["tool_call_id"].as_str().map(String::from))
-                .collect();
-
-            for sr in pending_results {
-                if !existing_ids.insert(sr.tool_call_id.clone()) {
-                    continue;
+            let key = (agent_id2.clone(), conv_id2.clone());
+            let mut failure = None;
+            if let Some(results) = map.get_mut(&key) {
+                while let Some(sr) = results.first() {
+                    match subagent::store_background_outcome(
+                        &state2,
+                        &agent_id2,
+                        conv_id2.as_deref(),
+                        sr,
+                    ) {
+                        Ok(()) => {
+                            results.remove(0);
+                        }
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
                 }
-                let body = format!(
-                    "[background subagent {} {}]\n{}",
-                    sr.subagent_id,
-                    if sr.is_error { "failed" } else { "completed" },
-                    sr.result
-                );
-                persist(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    "tool",
-                    json!({
-                        "content": body,
-                        "tool_call_id": sr.tool_call_id,
-                        "tool_name": "run_subagent",
-                    }),
-                );
+                if results.is_empty() {
+                    map.remove(&key);
+                }
             }
+            failure
+        };
+        if let Some(error) = delivery_error {
+            tracing::error!(%error, "background outcome still pending; refusing to continue parent run");
+            send(json!({
+                "message_type": "error",
+                "error": "Background outcome could not be delivered; it remains pending for retry",
+            }))
+            .await;
+            exit_status = RunExitStatus::Error;
+            break;
         }
 
         // ── Build context ─────────────────────────────────────────────
