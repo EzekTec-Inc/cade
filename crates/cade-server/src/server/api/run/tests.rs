@@ -758,6 +758,180 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
     }
 }
 
+#[tokio::test]
+async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() {
+    struct ContextLlm(std::sync::Mutex<Vec<(String, String)>>);
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for ContextLlm {
+        async fn complete(
+            &self,
+            request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            let task = request.messages.last().unwrap().content.clone();
+            let system = request.messages.first().unwrap().content.clone();
+            self.0.lock().unwrap().push((task.clone(), system));
+            Ok(cade_ai::CompletionResponse {
+                content: Some(format!("outcome {task}")),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("parent context fails before calling the model")
+        }
+    }
+    struct StopBeforeLlm;
+    #[async_trait::async_trait]
+    impl runtime::ContextBuilder for StopBeforeLlm {
+        async fn build(
+            &self,
+            _: String,
+            _: Option<String>,
+            _: bool,
+        ) -> Result<runtime::RunContext, String> {
+            Err("context inspected".into())
+        }
+    }
+    struct NoTools;
+    #[async_trait::async_trait]
+    impl runtime::CapabilityExecutor for NoTools {
+        async fn execute(
+            &self,
+            _: runtime::TurnExecutionInput,
+            _: Vec<LlmToolCall>,
+            _: SseTx,
+        ) -> Vec<(cade_agent::tools::manager::ToolResult, Value)> {
+            panic!("parent model never requested tools")
+        }
+    }
+
+    let llm = Arc::new(ContextLlm(std::sync::Mutex::new(Vec::new())));
+    let state = build_state_with_llm(llm.clone());
+    approval_test_run(&state.db, "shared-parent");
+    let first =
+        cade_store::sqlite::create_conversation(&state.db, "shared-parent", "first").unwrap();
+    let second =
+        cade_store::sqlite::create_conversation(&state.db, "shared-parent", "second").unwrap();
+    for (conversation, marker) in [(&first, "private-first"), (&second, "private-second")] {
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                agent_id: "shared-parent".into(),
+                conversation_id: Some(conversation.id.clone()),
+                role: "user".into(),
+                content: json!(marker),
+                char_count: marker.len(),
+            },
+        )
+        .unwrap();
+    }
+    let (tx_first, _rx_first) = tokio::sync::mpsc::channel(64);
+    let (tx_second, _rx_second) = tokio::sync::mpsc::channel(64);
+    let first_args = json!({"prompt":"task-first", "background":true});
+    let second_args = json!({"prompt":"task-second", "background":true});
+    let (result_first, result_second) = tokio::join!(
+        handle_run_subagent_tool(
+            &state,
+            "shared-parent",
+            Some(&first.id),
+            "tc-first",
+            &first_args,
+            tx_first
+        ),
+        handle_run_subagent_tool(
+            &state,
+            "shared-parent",
+            Some(&second.id),
+            "tc-second",
+            &second_args,
+            tx_second
+        ),
+    );
+    assert_eq!(result_first.output, "outcome task-first");
+    assert_eq!(result_second.output, "outcome task-second");
+    {
+        let captured = llm.0.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        for (task, prompt) in captured.iter() {
+            let (own, other) = if task == "task-first" {
+                ("private-first", "private-second")
+            } else {
+                ("private-second", "private-first")
+            };
+            assert!(prompt.contains(own), "{prompt}");
+            assert!(!prompt.contains(other), "{prompt}");
+        }
+    }
+
+    // Both launching calls have ended. A later parent run for each conversation
+    // must see only its own result, and repeated runs must not redeliver it.
+    // The first conversation already received its synchronous foreground result.
+    cade_store::sqlite::insert_message(
+        &state.db,
+        &cade_store::sqlite::MessageRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: "shared-parent".into(),
+            conversation_id: Some(first.id.clone()),
+            role: "tool".into(),
+            content: json!({"tool_call_id": "tc-first", "content": result_first.output}),
+            char_count: 0,
+        },
+    )
+    .unwrap();
+    for conversation in [&second, &first, &second, &first] {
+        let run =
+            cade_store::sqlite::create_run(&state.db, "shared-parent", Some(&conversation.id))
+                .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        run_agent_loop_with_dependencies(
+            state.clone(),
+            runtime::LoopRequest {
+                agent_id: "shared-parent".into(),
+                conversation_id: Some(conversation.id.clone()),
+                run_id: run.id,
+                theme_command: None,
+                input: "next turn".into(),
+                permission_mode: None,
+            },
+            tx,
+            Arc::new(StopBeforeLlm),
+            Arc::new(NoTools),
+        )
+        .await;
+        while rx.recv().await.is_some() {}
+        let messages = cade_store::sqlite::list_messages(
+            &state.db,
+            "shared-parent",
+            Some(&conversation.id),
+            100,
+        )
+        .unwrap();
+        let delivered: Vec<_> = messages.iter().filter(|m| m.role == "tool").collect();
+        assert_eq!(delivered.len(), 1, "each conversation receives one outcome");
+        let own = if conversation.id == first.id {
+            "task-first"
+        } else {
+            "task-second"
+        };
+        let other = if conversation.id == first.id {
+            "task-second"
+        } else {
+            "task-first"
+        };
+        let content = delivered[0].content.to_string();
+        assert!(content.contains(own));
+        assert!(!content.contains(other));
+    }
+}
+
 /// Stateful mock: returns `run_subagent` exactly once per loop level
 /// (when the message list has just system+user) and a final text on
 /// the next iter (after a tool result has been appended).  This keeps
@@ -828,7 +1002,7 @@ async fn recursive_subagent_calls_are_bounded_by_depth() {
     let args = serde_json::json!({ "prompt": "start", "_subagent_depth": 0 });
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx),
+        handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx),
     )
     .await
     .expect("must not deadlock — chain must terminate via depth guard");
@@ -874,7 +1048,7 @@ async fn subagent_run_does_not_pollute_parent_db() {
         .unwrap();
 
     let args = serde_json::json!({ "prompt": "do thing" });
-    let _ = handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
+    let _ = handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx).await;
 
     let agents_after: i64 = state
         .db
@@ -965,7 +1139,7 @@ async fn subagent_dispatches_tool_calls_and_loops() {
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
     let args = serde_json::json!({ "prompt": "do thing" });
-    let result = handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
+    let result = handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx).await;
 
     assert!(
         !result.is_error,
@@ -1127,7 +1301,7 @@ async fn subagent_loop_respects_wall_clock_timeout() {
     let args = serde_json::json!({ "prompt": "slow task" });
 
     let start = std::time::Instant::now();
-    let result = handle_run_subagent_tool(&state, "parent_slow", "tc_slow", &args, tx).await;
+    let result = handle_run_subagent_tool(&state, "parent_slow", None, "tc_slow", &args, tx).await;
     let elapsed = start.elapsed();
 
     // Must return within ~5s (2s test timeout + slack), NOT 60s.
@@ -1266,7 +1440,7 @@ async fn depth_limit_blocks_recursion_before_llm_call() {
     });
 
     // Should NOT panic — i.e. LLM is never called.
-    let result = handle_run_subagent_tool(&state, "parent_agent_x", "tc_1", &args, tx).await;
+    let result = handle_run_subagent_tool(&state, "parent_agent_x", None, "tc_1", &args, tx).await;
 
     assert!(result.is_error, "depth-limit must produce an error result");
     assert!(
@@ -1365,7 +1539,7 @@ async fn subagent_write_file_records_recent_edit() {
     .unwrap();
 
     let args = serde_json::json!({ "prompt": "write a file" });
-    let result = handle_run_subagent_tool(&state, parent_id, "tc_wf", &args, tx).await;
+    let result = handle_run_subagent_tool(&state, parent_id, None, "tc_wf", &args, tx).await;
 
     assert!(!result.is_error, "got: {}", result.output);
 
@@ -1465,7 +1639,7 @@ async fn subagent_mcp_prefixed_write_records_recent_edit() {
     .unwrap();
 
     let args = serde_json::json!({ "prompt": "write via mcp" });
-    let _result = handle_run_subagent_tool(&state, parent_id, "tc_mcp", &args, tx).await;
+    let _result = handle_run_subagent_tool(&state, parent_id, None, "tc_mcp", &args, tx).await;
 
     // The MCP tool won't actually write (no MCP server connected in test),
     // but we don't care about the dispatch result — we care that the

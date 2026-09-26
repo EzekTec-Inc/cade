@@ -356,6 +356,7 @@ pub trait SubagentExecutor: Send + Sync {
 pub struct CadeSubagentExecutor {
     pub state: AppState,
     pub parent_agent_id: String,
+    pub parent_conversation_id: Option<String>,
     pub tool_call_id: String,
     pub emitter: Box<dyn SubagentEventEmitter>,
 }
@@ -364,12 +365,14 @@ impl CadeSubagentExecutor {
     pub fn new(
         state: AppState,
         parent_agent_id: String,
+        parent_conversation_id: Option<String>,
         tool_call_id: String,
         emitter: Box<dyn SubagentEventEmitter>,
     ) -> Self {
         Self {
             state,
             parent_agent_id,
+            parent_conversation_id,
             tool_call_id,
             emitter,
         }
@@ -385,6 +388,7 @@ impl SubagentExecutor for CadeSubagentExecutor {
         handle_run_subagent_tool_inner(
             &self.state,
             &self.parent_agent_id,
+            self.parent_conversation_id.as_deref(),
             &self.tool_call_id,
             args,
             self.emitter,
@@ -396,6 +400,7 @@ impl SubagentExecutor for CadeSubagentExecutor {
 struct ServerSubagentRunner {
     state: AppState,
     parent_agent_id: String,
+    parent_conversation_id: Option<String>,
     sse_tx: super::SseTx,
 }
 
@@ -410,6 +415,7 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
         let res = handle_subagent_single_inner_tool(
             &self.state,
             &self.parent_agent_id,
+            self.parent_conversation_id.as_deref(),
             call_id,
             args,
             self.sse_tx.clone(),
@@ -451,6 +457,7 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
 pub(super) async fn handle_subagent_tool(
     state: AppState,
     parent_agent_id: String,
+    parent_conversation_id: Option<String>,
     tool_name: String,
     tool_call_id: String,
     args: serde_json::Value,
@@ -534,6 +541,7 @@ pub(super) async fn handle_subagent_tool(
     let runner_owned = ServerSubagentRunner {
         state: state.clone(),
         parent_agent_id: parent_agent_id.clone(),
+        parent_conversation_id,
         sse_tx,
     };
     let tool_call_id_c = tool_call_id.clone();
@@ -568,6 +576,7 @@ pub(super) async fn handle_subagent_tool(
 pub(super) async fn handle_subagent_single_inner_tool(
     state: &AppState,
     parent_agent_id: &str,
+    parent_conversation_id: Option<&str>,
     tool_call_id: &str,
     args: &serde_json::Value,
     sse_tx: super::SseTx,
@@ -575,6 +584,7 @@ pub(super) async fn handle_subagent_single_inner_tool(
     let executor: Box<dyn SubagentExecutor> = Box::new(CadeSubagentExecutor::new(
         state.clone(),
         parent_agent_id.to_string(),
+        parent_conversation_id.map(str::to_owned),
         tool_call_id.to_string(),
         Box::new(SseEventEmitter { tx: sse_tx }),
     ));
@@ -584,6 +594,7 @@ pub(super) async fn handle_subagent_single_inner_tool(
 pub(super) async fn handle_run_subagent_tool(
     state: &AppState,
     parent_agent_id: &str,
+    parent_conversation_id: Option<&str>,
     tool_call_id: &str,
     args: &serde_json::Value,
     sse_tx: super::SseTx,
@@ -591,6 +602,7 @@ pub(super) async fn handle_run_subagent_tool(
     let executor: Box<dyn SubagentExecutor> = Box::new(CadeSubagentExecutor::new(
         state.clone(),
         parent_agent_id.to_string(),
+        parent_conversation_id.map(str::to_owned),
         tool_call_id.to_string(),
         Box::new(SseEventEmitter { tx: sse_tx }),
     ));
@@ -775,6 +787,7 @@ impl<'a> cade_agent::subagents::SubagentToolExecutor for ServerSubagentTools<'a>
 pub(super) async fn handle_run_subagent_tool_inner(
     state: &AppState,
     parent_agent_id: &str,
+    parent_conversation_id: Option<&str>,
     tool_call_id: &str,
     args: &serde_json::Value,
     emitter: Box<dyn SubagentEventEmitter>,
@@ -946,43 +959,22 @@ pub(super) async fn handle_run_subagent_tool_inner(
         SubagentConfig::format_seed_section(&filtered)
     };
 
-    let parent_context = {
-        let mut context_str = String::new();
-        let parent_conv_id = {
-            if let Ok(convs) = cade_store::sqlite::list_conversations(&state.db, parent_agent_id) {
-                convs.first().map(|c| c.id.clone())
-            } else {
-                None
-            }
-        };
-        if let Ok(msgs) = cade_store::sqlite::list_messages(
-            &state.db,
-            parent_agent_id,
-            parent_conv_id.as_deref(),
-            8,
-        ) {
-            context_str.push_str("\n\n<parent_context>\n");
-            context_str.push_str("Below is the recent chat history from your parent session. Use this to understand the current work context, recently viewed files, and goals:\n");
-            for m in msgs {
-                let role = m.role.to_uppercase();
-                let text = match &m.content {
-                    serde_json::Value::String(s) => s.clone(),
+    let parent_context =
+        cade_store::sqlite::list_messages(&state.db, parent_agent_id, parent_conversation_id, 8)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| cade_agent::subagents::SubagentMessage {
+                role: m.role,
+                content: match m.content {
+                    serde_json::Value::String(s) => s,
                     other => other.to_string(),
-                };
-                let trunc_text: String = text.lines().take(5).collect::<Vec<_>>().join("\n");
-                let suffix = if text.lines().count() > 5 {
-                    " ... [truncated]"
-                } else {
-                    ""
-                };
-                context_str.push_str(&format!("[{role}]: {trunc_text}{suffix}\n"));
-            }
-            context_str.push_str("</parent_context>\n");
-        }
-        context_str
-    };
+                },
+                tool_calls: None,
+                tool_call_id: None,
+            })
+            .collect();
 
-    let system_prompt_full = format!("{system_prompt}{seed_section}{parent_context}");
+    let system_prompt_full = format!("{system_prompt}{seed_section}");
 
     // ── Subagent agentic loop (Approach C) ──────────────────────────────
     //
@@ -1161,6 +1153,8 @@ pub(super) async fn handle_run_subagent_tool_inner(
     };
 
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id)
+        .with_parent_conversation_id(parent_conversation_id.map(str::to_owned))
+        .with_parent_context(parent_context)
         .with_max_iters(max_iters)
         .with_max_tokens_budget(cfg.max_tokens_budget);
 
@@ -1320,7 +1314,10 @@ pub(super) async fn handle_run_subagent_tool_inner(
         };
         let mut pending = state.pending_subagent_results.write().await;
         pending
-            .entry(parent_agent_id.to_string())
+            .entry((
+                session.parent_agent_id.clone(),
+                session.parent_conversation_id.clone(),
+            ))
             .or_default()
             .push(sr);
     }
@@ -1345,6 +1342,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
 struct CadeSubagentRunner {
     state: AppState,
     parent_agent_id: String,
+    parent_conversation_id: Option<String>,
     sse_tx: super::SseTx,
 }
 
@@ -1358,6 +1356,7 @@ impl cade_agent::team::SubagentRunner for CadeSubagentRunner {
         Ok(handle_run_subagent_tool(
             &self.state,
             &self.parent_agent_id,
+            self.parent_conversation_id.as_deref(),
             task_call_id,
             args,
             self.sse_tx.clone(),
@@ -1422,6 +1421,7 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
 pub(super) async fn handle_run_team_tool(
     state: AppState,
     parent_agent_id: String,
+    parent_conversation_id: Option<String>,
     tool_call_id: String,
     args: serde_json::Value,
     sse_tx: super::SseTx,
@@ -1465,6 +1465,7 @@ pub(super) async fn handle_run_team_tool(
     let runner = CadeSubagentRunner {
         state: state.clone(),
         parent_agent_id: parent_agent_id.clone(),
+        parent_conversation_id,
         sse_tx: sse_tx.clone(),
     };
     let llm = CadeLlmCompleter {
