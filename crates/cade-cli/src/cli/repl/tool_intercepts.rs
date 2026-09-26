@@ -1,6 +1,6 @@
 use super::Repl;
 use crate::Result;
-use cade_agent::subagents::{discover_all_subagents, visible_subagents};
+use cade_agent::subagents::{SubagentConfig, discover_all_subagents, visible_subagents};
 
 #[async_trait::async_trait]
 impl cade_agent::subagents::SubagentSingleRunner for Repl {
@@ -79,7 +79,7 @@ impl Repl {
                 }),
             )
             .await?;
-        Ok(cade_agent::tools::ToolResult {
+        let mut result = cade_agent::tools::ToolResult {
             tool_call_id: call_id.to_string(),
             tool_name: "subagent".to_string(),
             output: response["output"]
@@ -88,7 +88,41 @@ impl Repl {
                 .to_string(),
             is_error: response["is_error"].as_bool().unwrap_or(true),
             ui_resource_uri: None,
-        })
+        };
+        let config = SubagentConfig::from_args(&args);
+        if !config.background {
+            if let cade_core::hooks::HookOutcome::Block { reason } = self
+                .hooks
+                .subagent_stop(&config.mode, &result.output, result.is_error)
+                .await
+            {
+                result
+                    .output
+                    .push_str(&format!("\n\n[SubagentStop hook: {reason}]"));
+            }
+            if !result.is_error && config.human_review {
+                use crate::ui::question::{Question, QuestionOption};
+                let question = Question {
+                    header: format!("Subagent [{}] Completed", config.mode),
+                    text: "Review the subagent's work. Select Approve, or type feedback to Reject and re-task:".to_string(),
+                    options: vec![QuestionOption { label: "Approve".to_string(), description: String::new() }],
+                    multi_select: false,
+                    allow_other: true,
+                    progress: None,
+                };
+                if let Some(answer) = self.app.lock().ask_question(&question).unwrap_or(None)
+                    && answer.as_str() != "Approve"
+                {
+                    result.is_error = true;
+                    result.output = format!(
+                        "HUMAN REVIEW REJECTED: The user rejected the subagent's work with feedback: {}\n\nPrevious output:\n{}",
+                        answer.as_str(),
+                        result.output
+                    );
+                }
+            }
+        }
+        Ok(result)
     }
 
     pub(crate) async fn dispatch_subagent_tray_action(
