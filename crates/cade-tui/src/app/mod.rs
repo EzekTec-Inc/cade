@@ -630,6 +630,7 @@ pub fn tick_bg_pending_toast(
 pub struct ActiveQuestionDrawState {
     pub question: crate::question::Question,
     pub cursor_pos: usize,
+    pub detail_scroll: u16,
     pub custom_text: String,
     pub checked: Vec<bool>,
     pub n_real: usize,
@@ -638,6 +639,31 @@ pub struct ActiveQuestionDrawState {
     pub total_items: usize,
     pub other_idx: usize,
     pub submit_idx: usize,
+}
+
+impl ActiveQuestionDrawState {
+    fn new(question: crate::question::Question) -> Self {
+        let n_real = question.options.len();
+        let has_other = question.allow_other;
+        let has_submit = question.multi_select;
+        Self {
+            question,
+            cursor_pos: 0,
+            detail_scroll: 0,
+            custom_text: String::new(),
+            checked: vec![false; n_real],
+            n_real,
+            has_other,
+            has_submit,
+            total_items: n_real + usize::from(has_other) + usize::from(has_submit),
+            other_idx: if has_other { n_real } else { usize::MAX },
+            submit_idx: if has_submit {
+                n_real + usize::from(has_other)
+            } else {
+                usize::MAX
+            },
+        }
+    }
 }
 
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
@@ -649,6 +675,19 @@ pub struct ActiveQuestionState {
     pub result: Option<Option<crate::question::QuestionAnswer>>,
 }
 
+impl ActiveQuestionState {
+    pub fn new(
+        question: crate::question::Question,
+        tx: tokio::sync::oneshot::Sender<Option<crate::question::QuestionAnswer>>,
+    ) -> Self {
+        Self {
+            draw_state: ActiveQuestionDrawState::new(question),
+            tx: Some(tx),
+            result: None,
+        }
+    }
+}
+
 impl OverlayComponent for ActiveQuestionState {
     fn id(&self) -> &'static str {
         "active_question"
@@ -657,20 +696,7 @@ impl OverlayComponent for ActiveQuestionState {
     fn render_overlay(&mut self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
 
     fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
-        let sep_area = Rect::new(area.x, area.y, area.width, 1);
-        let body_area = Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        );
-        crate::app::layout::question::render_question_inline(
-            frame,
-            &self.draw_state,
-            sep_area,
-            body_area,
-            colors,
-        );
+        crate::app::layout::question::render_question_inline(frame, &self.draw_state, area, colors);
     }
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
@@ -681,6 +707,12 @@ impl OverlayComponent for ActiveQuestionState {
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 ans_opt = Some(None);
+            }
+            (KeyCode::PageUp, _) => {
+                st.detail_scroll = st.detail_scroll.saturating_sub(3);
+            }
+            (KeyCode::PageDown, _) => {
+                st.detail_scroll = st.detail_scroll.saturating_add(3);
             }
             (KeyCode::Up, _) => {
                 if st.cursor_pos > 0 {
@@ -702,7 +734,9 @@ impl OverlayComponent for ActiveQuestionState {
                     st.cursor_pos - 1
                 };
             }
-            (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
+            (KeyCode::Char(c), KeyModifiers::NONE)
+                if c.is_ascii_digit() && c != '0' && st.cursor_pos != st.other_idx =>
+            {
                 let idx = (c as usize) - ('0' as usize) - 1;
                 if idx < st.total_items {
                     if st.question.multi_select {
@@ -723,30 +757,27 @@ impl OverlayComponent for ActiveQuestionState {
             }
             (KeyCode::Enter, _) => {
                 if st.question.multi_select {
-                    if st.cursor_pos == st.submit_idx {
-                        let selected: Vec<String> = st
+                    if st.cursor_pos == st.submit_idx || st.cursor_pos == st.other_idx {
+                        let mut selected: Vec<String> = st
                             .checked
                             .iter()
                             .enumerate()
                             .filter(|(_, c)| **c)
                             .map(|(i, _)| st.question.options[i].label.clone())
                             .collect();
+                        if !st.custom_text.trim().is_empty() {
+                            selected.push(st.custom_text.trim().to_string());
+                        }
                         if !selected.is_empty() {
                             ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
-                        }
-                    } else if st.cursor_pos == st.other_idx {
-                        if !st.custom_text.is_empty() {
-                            ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(vec![
-                                st.custom_text.clone(),
-                            ])));
                         }
                     } else if st.cursor_pos < st.n_real {
                         st.checked[st.cursor_pos] = !st.checked[st.cursor_pos];
                     }
                 } else if st.cursor_pos == st.other_idx {
-                    if !st.custom_text.is_empty() {
-                        ans_opt = Some(Some(crate::question::QuestionAnswer::Single(
-                            st.custom_text.clone(),
+                    if !st.custom_text.trim().is_empty() {
+                        ans_opt = Some(Some(crate::question::QuestionAnswer::Custom(
+                            st.custom_text.trim().to_string(),
                         )));
                     }
                 } else {

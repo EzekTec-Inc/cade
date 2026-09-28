@@ -170,6 +170,9 @@ pub(super) struct SseApprovalDelegate {
     pub(super) db: cade_store::sqlite::Db,
     pub(super) agent_id: String,
     pub(super) run_id: String,
+    pub(super) conversation_id: Option<String>,
+    pub(super) conversation_approvals: Arc<crate::server::state::ConversationApprovals>,
+    pub(super) permissions: cade_core::permissions::PermissionManager,
     pub(super) tx: SseTx,
 }
 
@@ -330,6 +333,22 @@ impl SseApprovalDelegate {
                 },
             )?;
             match status.as_deref() {
+                Some("approved_session") => {
+                    let Some(conversation_id) = self.conversation_id.as_deref() else {
+                        return Err(cade_agent::Error::custom(
+                            "Session approval requires a conversation",
+                        ));
+                    };
+                    self.conversation_approvals.grant(
+                        &self.agent_id,
+                        conversation_id,
+                        tool_name,
+                        arguments,
+                    );
+                    self.permissions
+                        .add_session_allow_call(tool_name, arguments);
+                    return Ok(true);
+                }
                 Some("approved") => return Ok(true),
                 Some(status) if status.starts_with("approved:") => return Ok(true),
                 Some("denied") => return Ok(false),
@@ -527,8 +546,9 @@ pub(super) async fn execute_turn_tools(
     let mut turn_results: Vec<(ToolResult, Value)> = Vec::new();
     let agent_id = turn_input.agent_id;
     let run_id = turn_input.run_id;
+    let conversation_id = turn_input.conversation_id;
     let permission_mode_override = turn_input.permission_mode;
-    let _ = (&turn_input.conversation_id, &turn_input.input);
+    let _ = &turn_input.input;
 
     let runtime = Arc::new(ToolRuntime::new(
         Arc::new(storage_impl::ServerStorageBackend {
@@ -581,6 +601,12 @@ pub(super) async fn execute_turn_tools(
         permissions.set_mode(mode);
     }
 
+    if let Some(conversation_id) = conversation_id.as_deref() {
+        state
+            .conversation_approvals
+            .apply_to(&agent_id, conversation_id, &permissions);
+    }
+
     let approval_delegate: Arc<dyn cade_agent::tools::ApprovalDelegate> =
         if permissions.mode() == cade_core::permissions::PermissionMode::BypassPermissions {
             Arc::new(cade_agent::tools::AutoApprovalDelegate)
@@ -589,6 +615,9 @@ pub(super) async fn execute_turn_tools(
                 db: state.db.clone(),
                 agent_id: agent_id.clone(),
                 run_id: run_id.clone(),
+                conversation_id: conversation_id.clone(),
+                conversation_approvals: Arc::clone(&state.conversation_approvals),
+                permissions: permissions.clone(),
                 tx: tx.clone(),
             })
         };

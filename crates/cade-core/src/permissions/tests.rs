@@ -418,6 +418,38 @@ fn manager_session_allow_invalid_ignored() {
 }
 
 #[test]
+fn exact_session_grant_obeys_hard_denials_and_invalidation() {
+    let mgr = PermissionManager::new(PermissionMode::Default);
+    let args = serde_json::json!({"path": "src/file.rs", "content": "first"});
+    mgr.add_session_allow_call("write_file", &args);
+    assert!(mgr.resolve("write_file", &args, false).is_allow());
+    assert!(
+        mgr.resolve(
+            "write_file",
+            &serde_json::json!({"path": "src/file.rs", "content": "second"}),
+            false
+        )
+        .is_ask()
+    );
+    mgr.add_deny_rule(PermissionRule::parse("write_file").unwrap());
+    assert!(mgr.resolve("write_file", &args, false).is_deny());
+
+    let plan = PermissionManager::new(PermissionMode::Plan);
+    plan.add_session_allow_call("write_file", &args);
+    assert!(plan.resolve("write_file", &args, false).is_deny());
+
+    let mcp = PermissionManager::new(PermissionMode::Default);
+    let mcp_args = serde_json::json!({"path": "src/file.rs"});
+    mcp.add_session_allow_call("github__write_file", &mcp_args);
+    assert!(
+        mcp.resolve("github__write_file", &mcp_args, true)
+            .is_allow()
+    );
+    mcp.remove_session_allows_for_prefix("github__");
+    assert!(mcp.resolve("github__write_file", &mcp_args, true).is_ask());
+}
+
+#[test]
 fn manager_mode_change() {
     let mgr = PermissionManager::new(PermissionMode::Default);
     assert_eq!(mgr.mode(), PermissionMode::Default);

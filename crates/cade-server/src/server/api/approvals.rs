@@ -9,10 +9,6 @@ use serde_json::{Value, json};
 pub async fn list_approvals(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let _conn = state
-        .db
-        .get()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let pending = cade_store::sqlite::list_pending_approvals(&state.db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "approvals": pending })))
@@ -20,7 +16,7 @@ pub async fn list_approvals(
 
 #[derive(serde::Deserialize)]
 pub struct ActionPayload {
-    pub action: String, // "approve" or "deny"
+    pub action: String, // "approve", "approve_session", or "deny"
     pub feedback: Option<String>,
 }
 
@@ -41,6 +37,14 @@ pub async fn action_approval(
                 "approved".to_string()
             }
         }
+        "approve_session"
+            if payload
+                .feedback
+                .as_deref()
+                .is_none_or(|s| s.trim().is_empty()) =>
+        {
+            "approved_session".to_string()
+        }
         "deny" => {
             if let Some(fb) = &payload.feedback {
                 if !fb.trim().is_empty() {
@@ -55,15 +59,10 @@ pub async fn action_approval(
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Invalid action. Must be 'approve' or 'deny'.".to_string(),
+                "Invalid action. Must be 'approve', 'approve_session', or 'deny'.".to_string(),
             ));
         }
     };
-
-    let _conn = state
-        .db
-        .get()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if !cade_store::sqlite::resolve_pending_approval(&state.db, &id, &status)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

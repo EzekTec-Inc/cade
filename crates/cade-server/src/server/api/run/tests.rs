@@ -28,6 +28,82 @@ fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
 }
 
 #[tokio::test]
+async fn session_approval_reuses_only_exact_calls_in_its_conversation() {
+    use cade_agent::agent::client::CadeMessage;
+
+    let dir = tempfile::Builder::new()
+        .prefix("cade-session-approval-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    approval_test_run(&state.db, "agent-scope");
+    let first = cade_store::sqlite::create_conversation(&state.db, "agent-scope", "one").unwrap();
+    let second = cade_store::sqlite::create_conversation(&state.db, "agent-scope", "two").unwrap();
+    let path = dir.path().join("file.txt");
+
+    for (conversation, content, action, prompts, writes) in [
+        (&first.id, "original", "approve_session", true, true),
+        (&first.id, "original", "", false, true),
+        (&first.id, "changed", "deny", true, false),
+        (&second.id, "original", "deny", true, false),
+    ] {
+        let run_id = cade_store::sqlite::create_run(&state.db, "agent-scope", Some(conversation))
+            .unwrap()
+            .id;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let input = runtime::TurnExecutionInput {
+            agent_id: "agent-scope".into(),
+            conversation_id: Some(conversation.clone()),
+            run_id,
+            input: "write".into(),
+            permission_mode: Some("default".into()),
+        };
+        let call = LlmToolCall {
+            id: format!("tc-{content}-{action}"),
+            name: "write_file".into(),
+            arguments: json!({"path": path, "content": content}),
+            thought_signature: None,
+        };
+        let worker = tokio::spawn(execute_turn_tools(state.clone(), input, vec![call], tx));
+
+        if prompts {
+            let id = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let event = rx.recv().await.unwrap().unwrap();
+                    let message: CadeMessage = serde_json::from_str(&event.data).unwrap();
+                    if let Some(request) = message.approval_request() {
+                        break request.id.to_string();
+                    }
+                }
+            })
+            .await
+            .expect("approval required for a new invocation");
+            let _ = crate::server::api::approvals::action_approval(
+                State(state.clone()),
+                Path(id),
+                axum::Json(crate::server::api::approvals::ActionPayload {
+                    action: action.into(),
+                    feedback: None,
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0].0.is_error, !writes, "{}", result[0].0.output);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        assert!(
+            cade_store::sqlite::list_pending_approvals(&state.db)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn approval_reconnect_replays_same_actionable_request_once() {
     use cade_agent::agent::client::CadeMessage;
     use futures::StreamExt;
@@ -137,7 +213,7 @@ async fn approval_reconnect_replays_same_actionable_request_once() {
             Path(id.clone()),
             axum::Json(crate::server::api::approvals::ActionPayload {
                 action: action.to_owned(),
-                feedback: None,
+                feedback: (action == "deny").then(|| "Use a read-only alternative".into()),
             }),
         )
         .await
@@ -149,6 +225,9 @@ async fn approval_reconnect_replays_same_actionable_request_once() {
             .expect("worker joins");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0.is_error, !writes, "{}", results[0].0.output);
+        if !writes {
+            assert!(results[0].0.output.contains("Use a read-only alternative"));
+        }
         assert_eq!(file.exists(), writes);
         if writes {
             assert_eq!(std::fs::read_to_string(&file).unwrap(), "once");
@@ -209,6 +288,9 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
         db: state.db.clone(),
         agent_id: "agent-failed-persistence".into(),
         run_id: "missing-run".into(),
+        conversation_id: None,
+        conversation_approvals: Arc::clone(&state.conversation_approvals),
+        permissions: cade_core::permissions::PermissionManager::default(),
         tx,
     };
     assert!(
@@ -230,6 +312,9 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
         db: state.db.clone(),
         agent_id: "agent-timeout".into(),
         run_id,
+        conversation_id: None,
+        conversation_approvals: Arc::clone(&state.conversation_approvals),
+        permissions: cade_core::permissions::PermissionManager::default(),
         tx,
     };
     let result = delegate
@@ -273,6 +358,9 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
         db: state.db.clone(),
         agent_id: "agent-cancel-approval".into(),
         run_id: run_id.clone(),
+        conversation_id: None,
+        conversation_approvals: Arc::clone(&state.conversation_approvals),
+        permissions: cade_core::permissions::PermissionManager::default(),
         tx,
     };
     let waiting = tokio::spawn(async move {
@@ -715,6 +803,7 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
         max_context_budget: None,
     });
     AppState {
+        conversation_approvals: Default::default(),
         subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -2468,6 +2557,9 @@ mod advanced_execution_tests {
             db: state.db.clone(),
             agent_id: "agent-approval-test".to_string(),
             run_id: approval_test_run(&state.db, "agent-approval-test"),
+            conversation_id: None,
+            conversation_approvals: Arc::clone(&state.conversation_approvals),
+            permissions: cade_core::permissions::PermissionManager::default(),
             tx,
         };
 
@@ -2588,6 +2680,9 @@ mod advanced_execution_tests {
             db: state.db.clone(),
             agent_id: "agent-crud-prompt-test".to_string(),
             run_id: approval_test_run(&state.db, "agent-crud-prompt-test"),
+            conversation_id: None,
+            conversation_approvals: Arc::clone(&state.conversation_approvals),
+            permissions: cade_core::permissions::PermissionManager::default(),
             tx,
         };
 

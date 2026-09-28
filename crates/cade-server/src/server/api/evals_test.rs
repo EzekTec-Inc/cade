@@ -30,6 +30,7 @@ async fn list_eval_tasks_returns_empty_on_fresh_db() {
     });
 
     let state = AppState {
+        conversation_approvals: Default::default(),
         subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),

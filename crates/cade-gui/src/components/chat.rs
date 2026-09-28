@@ -485,6 +485,7 @@ fn chat_sidebar(
                     }
                     {conv_rows.iter().map(|(conv_id, conv_title, date_str, msg_count, is_active)| {
                         let id_sel = conv_id.clone();
+                        let id_click = id_sel.clone();
                         let id_del = conv_id.clone();
                         let title = conv_title.clone();
                         let date_label = date_str.clone();
@@ -499,7 +500,7 @@ fn chat_sidebar(
                                 } else {
                                     "group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[#16171d] text-slate-400 hover:text-slate-200 cursor-pointer transition-colors duration-100"
                                 },
-                                onclick: move |_| active_conversation.set(Some(id_sel.clone())),
+                                onclick: move |_| active_conversation.set(Some(id_click.clone())),
                                 div { class: "flex flex-col min-w-0 pr-2 truncate",
                                     div { class: "flex items-center space-x-2 truncate",
                                         span { class: "text-xs shrink-0 select-none", if is_active { "💬" } else { "🗨️" } }
@@ -947,9 +948,10 @@ fn input_area(
                                 "px-4 py-2 hover:bg-[#1f212a] text-gray-400 text-xs cursor-pointer flex items-center justify-between"
                             };
                             let s_click = s.clone();
+                            let s_label = s_click.clone();
                             rsx! {
                                 div {
-                                    key: "{s_click}",
+                                    key: "{s_label}",
                                     class: "{row_class}",
                                     onclick: move |_| {
                                         let text = input_text();
@@ -962,8 +964,8 @@ fn input_area(
                                         show_suggestions.set(false);
                                     },
                                     div { class: "flex items-center space-x-2",
-                                        span { class: "text-gray-500 font-mono", if s_click.starts_with('/') { "⚡" } else { "📄" } }
-                                        span { class: "font-mono", "{s_click}" }
+                                        span { class: "text-gray-500 font-mono", if s_label.starts_with('/') { "⚡" } else { "📄" } }
+                                        span { class: "font-mono", "{s_label}" }
                                     }
                                     if is_active {
                                         span { class: "text-[10px] text-gray-500 font-semibold uppercase tracking-wider", "Enter to select" }

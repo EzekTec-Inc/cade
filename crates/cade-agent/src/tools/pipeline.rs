@@ -258,7 +258,7 @@ impl ToolPipeline {
                 );
                 let approved = self
                     .approval_delegate
-                    .request_approval(tool_call_id, tool_name, arguments, &reason)
+                    .request_approval(tool_call_id, canonical, arguments, &reason)
                     .await?;
 
                 if !approved {
