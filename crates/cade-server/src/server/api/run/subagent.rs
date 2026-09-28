@@ -15,24 +15,8 @@ fn get_writeback_lock(parent_agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         .clone()
 }
 
-static STEERING_QUEUES: OnceLock<
-    Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>,
-> = OnceLock::new();
-
-fn get_steering_queues()
--> &'static Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>> {
-    STEERING_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub fn steer_subagent(subagent_id: &str, message: String) -> bool {
-    let queues = get_steering_queues()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(tx) = queues.get(subagent_id) {
-        tx.send(message).is_ok()
-    } else {
-        false
-    }
+pub fn steer_subagent(subagent_id: &str, message: String) -> Result<(), String> {
+    cade_agent::subagents::SubagentSession::steer_child(subagent_id, message)
 }
 
 static HOTSWAP_MODELS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -453,6 +437,18 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
     fn doctor_status(&self) -> Result<String, cade_agent::Error> {
         Ok("Subagent system status: OK. Multi-agent concurrency slots available.".to_string())
     }
+
+    async fn child_status(&self, id: &str) -> Result<String, cade_agent::Error> {
+        cade_agent::subagents::SubagentSession::child_status(id)
+            .map(|status| format!("Subagent '{id}' is {status}"))
+            .map_err(cade_agent::Error::custom)
+    }
+
+    async fn steer_child(&self, id: &str, message: &str) -> Result<String, cade_agent::Error> {
+        steer_subagent(id, message.to_string())
+            .map(|()| format!("Guidance accepted for subagent '{id}' next turn"))
+            .map_err(cade_agent::Error::custom)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -639,7 +635,6 @@ pub(super) async fn handle_run_subagent_tool(
 struct ServerSubagentLlm<'a> {
     state: &'a AppState,
     subagent_id: String,
-    steer_rx: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -691,29 +686,6 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
                 content: m.content.clone(),
                 tool_calls,
                 tool_call_id: m.tool_call_id.clone(),
-                images: None,
-                cache_control: None,
-            });
-        }
-
-        // Drain any steering messages
-        let mut steer_msgs = Vec::new();
-        {
-            let mut rx = self.steer_rx.lock().await;
-            while let Ok(msg) = rx.try_recv() {
-                steer_msgs.push(msg);
-            }
-        }
-        if !steer_msgs.is_empty() {
-            let steering_content = format!(
-                "[Supervisor Steering Guidance]:\n\n{}",
-                steer_msgs.join("\n\n")
-            );
-            ai_messages.push(cade_ai::LlmMessage {
-                role: "user".to_string(),
-                content: steering_content,
-                tool_calls: None,
-                tool_call_id: None,
                 images: None,
                 cache_control: None,
             });
@@ -881,6 +853,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let subagent_id = format!("sa_{}", uuid::Uuid::new_v4());
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
     session.session_id = subagent_id.clone();
+    let control = session.register_control(true);
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
     let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
     state
@@ -902,11 +875,14 @@ pub(super) async fn handle_run_subagent_tool_inner(
         let completion_id = subagent_id.clone();
         let completion_sse = emitter.raw_sse_tx();
         let completion_cancel = cancellation.clone();
+        let running_control = control.clone();
+        let completion_control = control.clone();
         let launch = session.launch_background(
             state.subagent_semaphore.clone(),
             std::time::Duration::from_secs(subagent_timeout_secs()),
             cancel_rx,
             move |session, permit| async move {
+                running_control.running();
                 let (_, unused_rx) = tokio::sync::mpsc::channel(1);
                 run_subagent_with_permit(
                     &state_owned,
@@ -933,6 +909,9 @@ pub(super) async fn handle_run_subagent_tool_inner(
                     Ok(result) => (result.output, result.is_error),
                     Err(reason) => (reason, true),
                 };
+                if !matches!(completion_control.status(), cade_agent::subagents::SubagentStatus::Finished { outcome } if outcome != "error") {
+                    completion_control.finished(background_outcome_status(&output, is_error));
+                }
                 let event = serde_json::json!({
                     "message_type": "subagent_complete",
                     "subagent_id": completion_id,
@@ -1027,6 +1006,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             };
         }
     };
+    control.running();
 
     let result = run_subagent_with_permit(
         state,
@@ -1041,6 +1021,10 @@ pub(super) async fn handle_run_subagent_tool_inner(
         cancel_rx,
     )
     .await;
+    if !matches!(control.status(), cade_agent::subagents::SubagentStatus::Finished { outcome } if outcome != "error")
+    {
+        control.finished(background_outcome_status(&result.output, result.is_error));
+    }
     cancellation.close();
     state
         .subagent_cancellations
@@ -1454,31 +1438,9 @@ async fn run_subagent_with_permit(
         id: subagent_id.clone(),
     };
 
-    // Setup steering channel
-    let (steer_tx, steer_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    {
-        let mut queues = get_steering_queues().lock().unwrap();
-        queues.insert(subagent_id.clone(), steer_tx);
-    }
-    struct SteeringCleanup {
-        subagent_id: String,
-    }
-    impl Drop for SteeringCleanup {
-        fn drop(&mut self) {
-            let mut queues = get_steering_queues().lock().unwrap();
-            queues.remove(&self.subagent_id);
-            let mut models = get_hotswap_models().lock().unwrap();
-            models.remove(&self.subagent_id);
-        }
-    }
-    let _steering_cleanup = SteeringCleanup {
-        subagent_id: subagent_id.clone(),
-    };
-
     let llm_executor = ServerSubagentLlm {
         state,
         subagent_id: subagent_id.clone(),
-        steer_rx: std::sync::Arc::new(tokio::sync::Mutex::new(steer_rx)),
     };
     let tools_executor = ServerSubagentTools {
         state,
@@ -1577,6 +1539,16 @@ async fn run_subagent_with_permit(
                     });
                     let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
                         data: out_ev.to_string(),
+                    }));
+                }
+                cade_agent::subagents::SubagentEvent::SteeringApplied { messages } => {
+                    let event = serde_json::json!({
+                        "message_type": "subagent_steered",
+                        "subagent_id": s_id_c,
+                        "messages": messages,
+                    });
+                    let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                        data: event.to_string(),
                     }));
                 }
                 cade_agent::subagents::SubagentEvent::ToolExecuting { tool_name, .. } => {

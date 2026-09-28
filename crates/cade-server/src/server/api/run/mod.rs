@@ -1230,19 +1230,22 @@ pub async fn steer_subagent_handler(
     Path(subagent_id): Path<String>,
     Json(payload): Json<SteerPayload>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
-    if subagent::steer_subagent(&subagent_id, payload.message) {
-        Ok(Json(
-            json!({ "status": "success", "subagent_id": subagent_id }),
-        ))
-    } else {
-        Err((
-            axum::http::StatusCode::NOT_FOUND,
-            format!(
-                "Subagent '{}' not active or steering queue closed.",
-                subagent_id
-            ),
-        ))
-    }
+    subagent::steer_subagent(&subagent_id, payload.message)
+        .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+    Ok(Json(
+        json!({ "status": "accepted", "subagent_id": subagent_id }),
+    ))
+}
+
+pub async fn subagent_status_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let status = cade_agent::subagents::SubagentSession::child_status(&subagent_id)
+        .map_err(|e| (axum::http::StatusCode::NOT_FOUND, e))?;
+    Ok(Json(
+        json!({ "subagent_id": subagent_id, "status": status.to_string() }),
+    ))
 }
 
 pub async fn cancel_subagent_handler(

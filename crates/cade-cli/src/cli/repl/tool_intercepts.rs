@@ -93,6 +93,45 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
         out.push_str(&report.to_formatted_summary());
         Ok(out)
     }
+
+    async fn child_status(&self, id: &str) -> std::result::Result<String, cade_agent::Error> {
+        if let Ok(status) = cade_agent::subagents::SubagentSession::child_status(id) {
+            return Ok(format!("Subagent '{id}' is {status}"));
+        }
+        let response = self
+            .client
+            .raw_get(&format!("/subagents/{id}/status"))
+            .await
+            .map_err(|e| {
+                cade_agent::Error::custom(format!("Subagent '{id}' is not reachable: {e}"))
+            })?;
+        let status = response["status"]
+            .as_str()
+            .ok_or_else(|| cade_agent::Error::custom("Server returned no child status"))?;
+        Ok(format!("Subagent '{id}' is {status}"))
+    }
+
+    async fn steer_child(
+        &self,
+        id: &str,
+        message: &str,
+    ) -> std::result::Result<String, cade_agent::Error> {
+        if cade_agent::subagents::SubagentSession::child_status(id).is_ok() {
+            return Err(cade_agent::Error::custom(format!(
+                "Steering local CLI child '{id}' is unsupported"
+            )));
+        }
+        self.client
+            .raw_post(
+                &format!("/subagents/{id}/steer"),
+                &serde_json::json!({"message":message}),
+            )
+            .await
+            .map_err(|e| {
+                cade_agent::Error::custom(format!("Could not steer subagent '{id}': {e}"))
+            })?;
+        Ok(format!("Guidance accepted for subagent '{id}' next turn"))
+    }
 }
 
 impl Repl {
@@ -139,31 +178,36 @@ impl Repl {
                 subagent_id,
                 message,
             } => {
+                let body = serde_json::json!({ "message": message });
+                let result = self
+                    .client
+                    .raw_post(&format!("/subagents/{subagent_id}/steer"), &body)
+                    .await;
                 {
                     let mut app = self.app.lock();
-                    if let Some(t) = app
-                        .subagent_trackers
-                        .iter_mut()
-                        .find(|t| t.task_id == subagent_id)
-                    {
-                        t.push_output(format!("[STEERING GUIDANCE]: {message}"));
+                    if result.is_ok() {
+                        if let Some(t) = app
+                            .subagent_trackers
+                            .iter_mut()
+                            .find(|t| t.task_id == subagent_id)
+                        {
+                            t.push_output(format!("[STEERING GUIDANCE]: {message}"));
+                        }
                     }
                     app.show_toast(
-                        format!("Steering guidance sent to {subagent_id}"),
-                        cade_tui::ToastLevel::Success,
+                        match &result {
+                            Ok(_) => format!("Steering guidance accepted for {subagent_id}"),
+                            Err(e) => format!("Could not steer {subagent_id}: {e}"),
+                        },
+                        if result.is_ok() {
+                            cade_tui::ToastLevel::Success
+                        } else {
+                            cade_tui::ToastLevel::Info
+                        },
                     );
                     app.draw_dirty = true;
                     let _ = app.draw();
                 }
-                let body = serde_json::json!({
-                    "action": "steer",
-                    "id": subagent_id,
-                    "message": message,
-                });
-                let _ = self
-                    .client
-                    .raw_post(&format!("/subagents/{subagent_id}/steer"), &body)
-                    .await;
             }
             SubagentTrayAction::HotSwapModel { subagent_id, model } => {
                 {
@@ -380,6 +424,10 @@ impl Repl {
         };
 
         let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
+        let mut local_session =
+            cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id.clone());
+        local_session.session_id = task_id.clone();
+        let control = local_session.register_control(true);
         let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
         self.subagent_cancellations
             .lock()
@@ -517,6 +565,7 @@ impl Repl {
         };
 
         if background {
+            let background_control = control.clone();
             let sem = std::sync::Arc::clone(&self.subagent_semaphore);
             let bg = bg_results;
             let st = subagent_mode.clone();
@@ -527,6 +576,7 @@ impl Repl {
             let bg_silent = silent_stream;
             let bg_app_arc = app_arc.clone();
             tokio::spawn(async move {
+                let _session = local_session;
                 let _cancel_guard = cancel_guard;
                 let outcome = tokio::select! {
                     biased;
@@ -534,6 +584,7 @@ impl Repl {
                     permit = sem.acquire_owned() => {
                         match permit {
                             Ok(_permit) => {
+                                background_control.running();
                                 let mut run_task = std::pin::pin!(run_task);
                                 tokio::select! {
                                     biased;
@@ -550,6 +601,7 @@ impl Repl {
                 };
                 let (result, is_error) =
                     outcome.unwrap_or_else(|| ("Subagent cancelled by parent".to_string(), true));
+                background_control.finished(if is_error { "error" } else { "done" });
                 _cancel_guard.cancellation.close();
                 if let Some(id) = created_agent.lock().await.take() {
                     let _ = bg_client.delete_agent(&id).await;
@@ -640,8 +692,10 @@ impl Repl {
                 ui_resource_uri: None,
             })
         } else {
+            let _session = local_session;
             let _cancel_guard = cancel_guard;
             let _permit = self.subagent_semaphore.acquire().await;
+            control.running();
             let mut run_task = std::pin::pin!(run_task);
             let (output, is_error) = tokio::select! {
                 biased;
@@ -651,6 +705,7 @@ impl Repl {
                 },
                 result = &mut run_task => result,
             };
+            control.finished(if is_error { "error" } else { "done" });
             _cancel_guard.cancellation.close();
             if let Some(id) = created_agent.lock().await.take() {
                 let _ = self.client.delete_agent(&id).await;
