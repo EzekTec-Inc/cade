@@ -633,6 +633,8 @@ pub struct ActiveQuestionDrawState {
     pub total_items: usize,
     pub other_idx: usize,
     pub submit_idx: usize,
+    pub custom_cursor_pos: usize,
+    pub scroll_offset: u16,
 }
 
 impl ActiveQuestionDrawState {
@@ -659,6 +661,8 @@ impl ActiveQuestionDrawState {
             total_items,
             other_idx,
             submit_idx,
+            custom_cursor_pos: 0,
+            scroll_offset: 0,
         }
     }
 }
@@ -752,8 +756,37 @@ impl OverlayComponent for ActiveQuestionState {
                     ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
                 }
             }
+            (KeyCode::Left, _) if st.cursor_pos == st.other_idx => {
+                if st.custom_cursor_pos > 0 {
+                    st.custom_cursor_pos -= 1;
+                }
+            }
+            (KeyCode::Right, _) if st.cursor_pos == st.other_idx => {
+                if st.custom_cursor_pos < st.custom_text.chars().count() {
+                    st.custom_cursor_pos += 1;
+                }
+            }
+            (KeyCode::Home, _) if st.cursor_pos == st.other_idx => {
+                st.custom_cursor_pos = 0;
+            }
+            (KeyCode::End, _) if st.cursor_pos == st.other_idx => {
+                st.custom_cursor_pos = st.custom_text.chars().count();
+            }
+            (KeyCode::Delete, _) if st.cursor_pos == st.other_idx => {
+                let char_count = st.custom_text.chars().count();
+                if st.custom_cursor_pos < char_count {
+                    let mut chars: Vec<char> = st.custom_text.chars().collect();
+                    chars.remove(st.custom_cursor_pos);
+                    st.custom_text = chars.into_iter().collect();
+                }
+            }
             (KeyCode::Backspace, _) if st.cursor_pos == st.other_idx => {
-                st.custom_text.pop();
+                if st.custom_cursor_pos > 0 {
+                    let mut chars: Vec<char> = st.custom_text.chars().collect();
+                    chars.remove(st.custom_cursor_pos - 1);
+                    st.custom_text = chars.into_iter().collect();
+                    st.custom_cursor_pos -= 1;
+                }
             }
             (KeyCode::Enter, _) => {
                 if st.question.multi_select {
@@ -791,12 +824,17 @@ impl OverlayComponent for ActiveQuestionState {
             }
             (KeyCode::Char('u'), KeyModifiers::CONTROL) if st.cursor_pos == st.other_idx => {
                 st.custom_text.clear();
+                st.custom_cursor_pos = 0;
             }
             (KeyCode::Char(c), m)
                 if (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT)
                     && st.cursor_pos == st.other_idx =>
             {
-                st.custom_text.push(c);
+                let mut chars: Vec<char> = st.custom_text.chars().collect();
+                let pos = st.custom_cursor_pos.min(chars.len());
+                chars.insert(pos, c);
+                st.custom_text = chars.into_iter().collect();
+                st.custom_cursor_pos = pos + 1;
             }
             _ => return OverlayInputResult::NotHandled,
         }

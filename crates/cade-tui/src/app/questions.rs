@@ -14,18 +14,6 @@ impl TuiApp {
         &mut self,
         question: &crate::question::Question,
     ) -> Result<Option<crate::question::QuestionAnswer>> {
-        let n_real = question.options.len();
-        let has_other = question.allow_other;
-        let has_submit = question.multi_select;
-        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
-
-        let other_idx = if has_other { n_real } else { usize::MAX };
-        let submit_idx = if has_submit {
-            n_real + usize::from(has_other)
-        } else {
-            usize::MAX
-        };
-
         // snap to bottom when asking
         self.scroll = 0;
 
@@ -36,18 +24,7 @@ impl TuiApp {
         );
 
         let state = ActiveQuestionState {
-            draw_state: ActiveQuestionDrawState {
-                question: question.clone(),
-                cursor_pos: 0,
-                custom_text: String::new(),
-                checked: vec![false; n_real],
-                n_real,
-                has_other,
-                has_submit,
-                total_items,
-                other_idx,
-                submit_idx,
-            },
+            draw_state: ActiveQuestionDrawState::new(question.clone()),
             tx: None,
             result: None,
         };
@@ -112,17 +89,6 @@ impl TuiApp {
         question: &crate::question::Question,
         key_rx: std::sync::mpsc::Receiver<crossterm::event::KeyEvent>,
     ) -> Result<Option<crate::question::QuestionAnswer>> {
-        let n_real = question.options.len();
-        let has_other = question.allow_other;
-        let has_submit = question.multi_select;
-        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
-        let other_idx = if has_other { n_real } else { usize::MAX };
-        let submit_idx = if has_submit {
-            n_real + usize::from(has_other)
-        } else {
-            usize::MAX
-        };
-
         self.scroll = 0;
 
         self.notify_if_unfocused(
@@ -132,18 +98,7 @@ impl TuiApp {
         );
 
         let state = ActiveQuestionState {
-            draw_state: ActiveQuestionDrawState {
-                question: question.clone(),
-                cursor_pos: 0,
-                custom_text: String::new(),
-                checked: vec![false; n_real],
-                n_real,
-                has_other,
-                has_submit,
-                total_items,
-                other_idx,
-                submit_idx,
-            },
+            draw_state: ActiveQuestionDrawState::new(question.clone()),
             tx: None,
             result: None,
         };
@@ -212,18 +167,6 @@ impl TuiApp {
         &mut self,
         question: crate::question::Question,
     ) -> Result<tokio::sync::oneshot::Receiver<Option<crate::question::QuestionAnswer>>> {
-        let n_real = question.options.len();
-        let has_other = question.allow_other;
-        let has_submit = question.multi_select;
-        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
-
-        let other_idx = if has_other { n_real } else { usize::MAX };
-        let submit_idx = if has_submit {
-            n_real + usize::from(has_other)
-        } else {
-            usize::MAX
-        };
-
         // snap to bottom when asking
         self.scroll = 0;
 
@@ -236,18 +179,7 @@ impl TuiApp {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let state = ActiveQuestionState {
-            draw_state: ActiveQuestionDrawState {
-                question,
-                cursor_pos: 0,
-                custom_text: String::new(),
-                checked: vec![false; n_real],
-                n_real,
-                has_other,
-                has_submit,
-                total_items,
-                other_idx,
-                submit_idx,
-            },
+            draw_state: ActiveQuestionDrawState::new(question),
             tx: Some(tx),
             result: None,
         };

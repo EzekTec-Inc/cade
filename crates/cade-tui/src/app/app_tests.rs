@@ -1402,3 +1402,133 @@ fn test_question_modal_multi_select_renders_checkboxes() {
     assert!(rendered.contains("[Submit]"), "submit button must show [Submit]");
     assert!(rendered.contains("Space toggle · 1-N toggle"));
 }
+
+#[test]
+fn test_question_modal_freeform_other_text_editing_and_submit() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::question::{Question, QuestionOption, QuestionAnswer};
+
+    let question = Question {
+        header: "Custom".to_string(),
+        text: "Select or specify:".to_string(),
+        options: vec![QuestionOption {
+            label: "Option A".to_string(),
+            description: "".to_string(),
+        }],
+        multi_select: false,
+        allow_other: true,
+        progress: None,
+    };
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    // 1. Move cursor to other_idx (index 1)
+    let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    state.handle_input(key_down);
+    assert_eq!(state.draw_state.cursor_pos, state.draw_state.other_idx);
+
+    // 2. Type "FooBar"
+    for c in "FooBar".chars() {
+        state.handle_input(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(state.draw_state.custom_text, "FooBar");
+    assert_eq!(state.draw_state.custom_cursor_pos, 6);
+
+    // 3. Move cursor left 3 positions (between Foo and Bar)
+    let key_left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+    state.handle_input(key_left);
+    state.handle_input(key_left);
+    state.handle_input(key_left);
+    assert_eq!(state.draw_state.custom_cursor_pos, 3);
+
+    // 4. Type " "
+    state.handle_input(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(state.draw_state.custom_text, "Foo Bar");
+    assert_eq!(state.draw_state.custom_cursor_pos, 4);
+
+    // 5. Backspace removes the space
+    let key_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+    state.handle_input(key_backspace);
+    assert_eq!(state.draw_state.custom_text, "FooBar");
+    assert_eq!(state.draw_state.custom_cursor_pos, 3);
+
+    // 6. Press Enter on "Other" to submit
+    let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    let res = state.handle_input(key_enter);
+    assert!(matches!(res, OverlayInputResult::Dismiss));
+
+    let received = rx.try_recv().expect("must receive custom answer");
+    assert_eq!(
+        received,
+        Some(QuestionAnswer::Single("FooBar".to_string()))
+    );
+}
+
+#[test]
+fn test_question_modal_overflow_scrolling_and_small_viewport() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use crate::question::{Question, QuestionOption};
+
+    // Very constrained viewport: 50 columns x 10 rows
+    let backend = TestBackend::new(50, 10);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let options: Vec<QuestionOption> = (1..=12)
+        .map(|i| QuestionOption {
+            label: format!("Choice {i}"),
+            description: format!("Description for {i}"),
+        })
+        .collect();
+
+    let question = Question {
+        header: "Long List".to_string(),
+        text: "Please pick an item from this long list:".to_string(),
+        options,
+        multi_select: false,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    let colors = ThemeColors::default();
+
+    // Render at top of list
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.area.width, 50);
+    assert_eq!(buffer.area.height, 10);
+
+    // Navigate down to item 10 to exercise scrolling logic
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    for _ in 0..10 {
+        state.handle_input(key_down);
+    }
+    assert_eq!(state.draw_state.cursor_pos, 10);
+
+    // Render with cursor at item 10 — must not panic and must calculate scroll cleanly
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+}

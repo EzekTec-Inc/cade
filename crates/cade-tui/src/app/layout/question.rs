@@ -266,9 +266,9 @@ pub(crate) fn render_question_modal(
     }
 
     let modal_w = desired_w
-        .min(full_area.width.saturating_sub(4))
+        .min(full_area.width.saturating_sub(2))
         .min(76)
-        .max(40.min(full_area.width));
+        .max(20.min(full_area.width));
 
     // Calculate height
     let mut rows: u16 = 2; // top & bottom borders
@@ -293,7 +293,7 @@ pub(crate) fn render_question_modal(
 
     let modal_h = rows
         .min(full_area.height.saturating_sub(2))
-        .max(8.min(full_area.height));
+        .max(6.min(full_area.height));
 
     let x = full_area.x + (full_area.width.saturating_sub(modal_w)) / 2;
     let y = full_area.y + (full_area.height.saturating_sub(modal_h)) / 2;
@@ -352,10 +352,15 @@ pub(crate) fn render_question_modal(
         lines.push(Line::from(""));
     }
 
+    let mut selected_line_idx: usize = 0;
+
     // Options
     for idx in 0..aq.total_items {
         let is_selected = aq.cursor_pos == idx;
         let selector = if is_selected { "❯" } else { " " };
+        if is_selected {
+            selected_line_idx = lines.len();
+        }
 
         // Submit item (multi-select only)
         if idx == aq.submit_idx {
@@ -378,14 +383,26 @@ pub(crate) fn render_question_modal(
         if idx == aq.other_idx {
             let display = if is_selected {
                 if aq.custom_text.is_empty() {
-                    "Type something.█".to_string()
+                    "Type something...█".to_string()
                 } else {
-                    format!("{}█", aq.custom_text)
+                    let chars: Vec<char> = aq.custom_text.chars().collect();
+                    let pos = aq.custom_cursor_pos.min(chars.len());
+                    let mut s = String::new();
+                    for (i, c) in chars.iter().enumerate() {
+                        if i == pos {
+                            s.push('█');
+                        }
+                        s.push(*c);
+                    }
+                    if pos == chars.len() {
+                        s.push('█');
+                    }
+                    s
                 }
             } else if !aq.custom_text.is_empty() {
                 aq.custom_text.clone()
             } else {
-                "Type something.".to_string()
+                "Type something...".to_string()
             };
 
             lines.push(Line::from(vec![
@@ -476,9 +493,25 @@ pub(crate) fn render_question_modal(
         colors.text_dim().add_modifier(Modifier::DIM),
     )));
 
+    let total_lines = lines.len();
+    let visible_height = inner.height as usize;
+
+    let scroll_y = if total_lines > visible_height && visible_height > 0 {
+        if selected_line_idx < aq.scroll_offset as usize {
+            selected_line_idx as u16
+        } else if selected_line_idx >= (aq.scroll_offset as usize) + visible_height {
+            (selected_line_idx + 1).saturating_sub(visible_height) as u16
+        } else {
+            aq.scroll_offset
+        }
+    } else {
+        0
+    };
+
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
+            .scroll((scroll_y, 0))
             .style(Style::default()),
         inner,
     );
