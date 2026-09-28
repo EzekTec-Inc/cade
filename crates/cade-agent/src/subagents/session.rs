@@ -793,6 +793,26 @@ pub struct SubagentLaunch {
     pub queued: bool,
 }
 
+/// Failure before or during an independently owned background child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentLaunchFailure {
+    Cancelled,
+    TimedOut,
+    Closed,
+    Panicked,
+}
+
+impl std::fmt::Display for SubagentLaunchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cancelled => "Subagent cancelled by parent",
+            Self::TimedOut => "timed out waiting for a subagent slot",
+            Self::Closed => "subagent semaphore closed",
+            Self::Panicked => "subagent task panicked",
+        })
+    }
+}
+
 /// A single-use cancellation request. Shared clones cannot acknowledge the
 /// same request twice, and a dropped receiver is never reported as live.
 #[derive(Clone)]
@@ -808,7 +828,10 @@ impl SubagentCancellation {
     }
 
     pub fn cancel(&self) -> Result<(), &'static str> {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.1 || state.0.is_closed() {
             return Err("subagent is no longer accepting cancellation");
         }
@@ -821,7 +844,10 @@ impl SubagentCancellation {
     }
 
     pub fn close(&self) {
-        self.inner.lock().unwrap().1 = true;
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .1 = true;
     }
 }
 
@@ -840,7 +866,7 @@ impl SubagentSession {
         R: Send + 'static,
         F: FnOnce(Self, OwnedSemaphorePermit) -> Fut + Send + 'static,
         Fut: Future<Output = R> + Send + 'static,
-        D: FnOnce(Result<R, String>) -> Delivery + Send + 'static,
+        D: FnOnce(Result<R, SubagentLaunchFailure>) -> Delivery + Send + 'static,
         Delivery: Future<Output = ()> + Send + 'static,
     {
         let launch = SubagentLaunch {
@@ -850,16 +876,16 @@ impl SubagentSession {
         tokio::spawn(async move {
             let result = tokio::select! {
                 biased;
-                Some(()) = cancel.recv() => Err("Subagent cancelled by parent".to_string()),
+                Some(()) = cancel.recv() => Err(SubagentLaunchFailure::Cancelled),
                 acquired = tokio::time::timeout(timeout, semaphore.acquire_owned()) => match acquired {
                     Ok(Ok(permit)) => tokio::select! {
                         biased;
-                        Some(()) = cancel.recv() => Err("Subagent cancelled by parent".to_string()),
+                        Some(()) = cancel.recv() => Err(SubagentLaunchFailure::Cancelled),
                         outcome = std::panic::AssertUnwindSafe(run(self, permit)).catch_unwind() =>
-                            outcome.map_err(|_| "subagent task panicked".to_string()),
+                            outcome.map_err(|_| SubagentLaunchFailure::Panicked),
                     },
-                    Ok(Err(_)) => Err("subagent semaphore closed".to_string()),
-                    Err(_) => Err("timed out waiting for a subagent slot".to_string()),
+                    Ok(Err(_)) => Err(SubagentLaunchFailure::Closed),
+                    Err(_) => Err(SubagentLaunchFailure::TimedOut),
                 }
             };
             deliver(result).await;
@@ -1807,7 +1833,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(result.unwrap_err(), SubagentLaunchFailure::Cancelled);
         assert!(
             tools.dropped.load(Ordering::SeqCst),
             "blocked tool future must be dropped"
@@ -1921,7 +1947,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap_err()
-                .contains("cancelled")
+                == SubagentLaunchFailure::Cancelled
         );
         assert!(
             reply
@@ -2081,7 +2107,7 @@ mod tests {
                 Duration::from_millis(30),
                 cancel_rx,
                 |_, _| async { panic!("queued child must not run") },
-                move |result: Result<(), String>| async move {
+                move |result: Result<(), SubagentLaunchFailure>| async move {
                     result_tx.send(result).unwrap();
                 },
             );
@@ -2094,13 +2120,13 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap_err();
-            assert!(
-                failure.contains(if cancel_first {
-                    "cancelled"
+            assert_eq!(
+                failure,
+                if cancel_first {
+                    SubagentLaunchFailure::Cancelled
                 } else {
-                    "timed out"
-                }),
-                "{failure}"
+                    SubagentLaunchFailure::TimedOut
+                }
             );
         }
         assert_eq!(slots.available_permits(), 0);

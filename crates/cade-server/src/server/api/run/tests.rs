@@ -1352,7 +1352,7 @@ async fn background_completion_survives_actual_parent_context_sanitization() {
         "launch-id",
         "sa-context",
         "distinctive completed result".into(),
-        false,
+        crate::server::state::SubagentTerminalStatus::Done,
     )
     .await;
     super::subagent::deliver_background_result(
@@ -1362,7 +1362,7 @@ async fn background_completion_survives_actual_parent_context_sanitization() {
         "launch-id",
         "sa-context",
         "distinctive completed result".into(),
-        false,
+        crate::server::state::SubagentTerminalStatus::Done,
     )
     .await;
     assert!(
@@ -1442,7 +1442,7 @@ async fn failed_background_outcome_write_stays_pending_and_reports_run_error() {
         "launch-id",
         "sa-storage",
         "important outcome".into(),
-        false,
+        crate::server::state::SubagentTerminalStatus::Done,
     )
     .await;
     let published = tokio::time::timeout(std::time::Duration::from_secs(1), global_events.recv())
@@ -2022,6 +2022,235 @@ async fn running_background_cancellation_interrupts_llm_and_publishes_one_termin
         .collect();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].content["status"], "cancelled");
+}
+
+#[tokio::test]
+async fn cli_subagent_adapter_rejects_other_agents_conversations_and_unknown_definitions() {
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    approval_test_run(&state.db, "cli-parent");
+    approval_test_run(&state.db, "another-parent");
+    let own = cade_store::sqlite::create_conversation(&state.db, "cli-parent", "own").unwrap();
+    let other =
+        cade_store::sqlite::create_conversation(&state.db, "another-parent", "other").unwrap();
+    let request = |conversation_id: Option<String>| super::LaunchSubagentPayload {
+        conversation_id,
+        args: json!({"prompt": "task", "mode": "no-such-definition"}),
+        mode: "default".into(),
+    };
+    let err = super::launch_subagent_handler(
+        State(state.clone()),
+        Path("cli-parent".into()),
+        Json(request(Some(other.id))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.0, axum::http::StatusCode::NOT_FOUND);
+    let result = super::launch_subagent_handler(
+        State(state.clone()),
+        Path("cli-parent".into()),
+        Json(request(Some(own.id))),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(result["is_error"], true);
+    assert!(
+        result["output"]
+            .as_str()
+            .unwrap()
+            .contains("no-such-definition")
+    );
+    assert!(state.subagent_cancellations.read().await.is_empty());
+}
+
+#[tokio::test]
+async fn cli_subagent_adapter_uses_only_the_invoking_conversation_context() {
+    struct EchoContext;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for EchoContext {
+        async fn complete(
+            &self,
+            req: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Ok(cade_ai::CompletionResponse {
+                content: Some(req.messages.first().unwrap().content.clone()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("child must use complete, not stream")
+        }
+    }
+    let state = build_state_with_llm(Arc::new(EchoContext));
+    approval_test_run(&state.db, "cli-context-parent");
+    let first =
+        cade_store::sqlite::create_conversation(&state.db, "cli-context-parent", "first").unwrap();
+    let second =
+        cade_store::sqlite::create_conversation(&state.db, "cli-context-parent", "second").unwrap();
+    for (conversation, marker) in [(&first, "private-first"), (&second, "private-second")] {
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                agent_id: "cli-context-parent".into(),
+                conversation_id: Some(conversation.id.clone()),
+                role: "user".into(),
+                content: json!(marker),
+                char_count: marker.len(),
+            },
+        )
+        .unwrap();
+    }
+    for (conversation, expected, excluded) in [
+        (&first, "private-first", "private-second"),
+        (&second, "private-second", "private-first"),
+    ] {
+        let result = super::launch_subagent_handler(
+            State(state.clone()),
+            Path("cli-context-parent".into()),
+            Json(super::LaunchSubagentPayload {
+                conversation_id: Some(conversation.id.clone()),
+                args: json!({"prompt": "inspect context"}),
+                mode: "default".into(),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(result["is_error"], false, "{result}");
+        let text = result["output"].as_str().unwrap();
+        assert!(text.contains(expected), "{text}");
+        assert!(!text.contains(excluded), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn cli_subagent_adapter_enforces_plan_policy_on_unlisted_tool_calls() {
+    struct UnlistedWrite {
+        turns: std::sync::atomic::AtomicUsize,
+        observed: std::sync::Mutex<String>,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for UnlistedWrite {
+        async fn complete(
+            &self,
+            req: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            let first = self.turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            if first {
+                assert!(!req.tools.iter().any(|tool| tool["name"] == "write_file"));
+            } else {
+                *self.observed.lock().unwrap() = format!("{:?}", req.messages);
+            }
+            Ok(cade_ai::CompletionResponse {
+                content: Some("done".into()),
+                tool_calls: if first {
+                    vec![cade_ai::LlmToolCall {
+                        id: "injected-write".into(),
+                        name: "write_file".into(),
+                        arguments: json!({"path": "_cli_policy_should_not_write.tmp", "content": "unsafe"}),
+                        thought_signature: None,
+                    }]
+                } else {
+                    vec![]
+                },
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("child must use complete, not stream")
+        }
+    }
+    let llm = Arc::new(UnlistedWrite {
+        turns: std::sync::atomic::AtomicUsize::new(0),
+        observed: std::sync::Mutex::new(String::new()),
+    });
+    let state = build_state_with_llm(llm.clone());
+    approval_test_run(&state.db, "cli-policy-parent");
+    let result = super::launch_subagent_handler(
+        State(state),
+        Path("cli-policy-parent".into()),
+        Json(super::LaunchSubagentPayload {
+            conversation_id: None,
+            args: json!({"prompt": "task", "mode": "plan"}),
+            mode: "plan".into(),
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(result["is_error"], false, "{result}");
+    assert!(llm.observed.lock().unwrap().contains("Tool error:"));
+    assert!(!std::path::Path::new("_cli_policy_should_not_write.tmp").exists());
+}
+
+#[tokio::test]
+async fn subagent_sse_emitter_waits_for_capacity_instead_of_losing_inspection_events() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let emitter = super::subagent::SseEventEmitter { tx };
+    use super::subagent::SubagentEventEmitter;
+    emitter
+        .emit_started("child", "task", "worker", "model")
+        .await;
+    let second = emitter.emit_complete("child", false, "done", 1, 0);
+    tokio::pin!(second);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut second)
+            .await
+            .is_err()
+    );
+    assert!(
+        rx.recv()
+            .await
+            .unwrap()
+            .unwrap()
+            .data
+            .contains("subagent_started")
+    );
+    second.await;
+    assert!(
+        rx.recv()
+            .await
+            .unwrap()
+            .unwrap()
+            .data
+            .contains("subagent_complete")
+    );
+}
+
+#[tokio::test]
+async fn background_status_is_recorded_from_outcome_not_from_output_text() {
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    approval_test_run(&state.db, "typed-status-parent");
+    super::subagent::deliver_background_result(
+        &state,
+        "typed-status-parent",
+        None,
+        "call",
+        "child",
+        "Subagent cancelled by parent".into(),
+        crate::server::state::SubagentTerminalStatus::Error,
+    )
+    .await;
+    let messages =
+        cade_store::sqlite::list_messages(&state.db, "typed-status-parent", None, 10).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].content["status"], "error");
 }
 
 #[tokio::test]
@@ -2763,9 +2992,8 @@ async fn subagent_loop_respects_wall_clock_timeout() {
 
 // ── REC-2: EphemeralEnvironment cleanup ────────────────────────────────
 
-/// REC-2: An `EphemeralEnvironment` must delete the ephemeral agent row
-/// and write back subagent memory when dropped, even if the agentic
-/// loop panics or returns early.
+/// A dropped child must delete its ephemeral row without merging incomplete
+/// findings into its parent (including after a panic or interrupted run).
 #[test]
 fn ephemeral_environment_cleans_up_on_drop() {
     use super::subagent::EphemeralEnvironment;
@@ -2838,12 +3066,12 @@ fn ephemeral_environment_cleans_up_on_drop() {
         "ephemeral row must be deleted after guard drop"
     );
 
-    // Write-back must have happened: parent should have `subagent:my_finding`.
+    // An unsuccessful or interrupted run must not merge findings.
     let parent_blocks = cade_store::sqlite::get_memory_blocks(&db, "parent_g").unwrap();
     let labels: Vec<&str> = parent_blocks.iter().map(|(l, _, _)| l.as_str()).collect();
     assert!(
-        labels.contains(&"subagent:my_finding"),
-        "write-back must run before delete; got labels: {labels:?}"
+        !labels.contains(&"subagent:my_finding"),
+        "interrupted work must not be merged; got labels: {labels:?}"
     );
 }
 

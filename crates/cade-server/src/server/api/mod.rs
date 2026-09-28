@@ -103,6 +103,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/subagents/{id}/model",
             post(run::swap_subagent_model_handler),
         )
+        .route(
+            "/v1/agents/{id}/subagents",
+            post(run::launch_subagent_handler),
+        )
         .route("/v1/plugins", get(plugins::list_plugins_handler))
         .route("/v1/plugins/install", post(plugins::install_plugin_handler))
         .route(

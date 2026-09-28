@@ -1225,6 +1225,61 @@ pub struct SteerPayload {
     pub message: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct LaunchSubagentPayload {
+    pub conversation_id: Option<String>,
+    pub args: Value,
+    pub mode: String,
+}
+
+/// CLI direct invocation uses the same server-owned session, permissions and
+/// workspace setup as a subagent invoked from a parent run.
+pub async fn launch_subagent_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<LaunchSubagentPayload>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    use axum::http::StatusCode;
+    let agent = cade_store::sqlite::get_agent(&state.db, &agent_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if agent.is_none() {
+        return Err((StatusCode::NOT_FOUND, "parent agent not found".into()));
+    }
+    if let Some(ref id) = payload.conversation_id {
+        let conversation = cade_store::sqlite::get_conversation(&state.db, id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if !conversation.is_some_and(|c| c.agent_id == agent_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "conversation not found for parent agent".into(),
+            ));
+        }
+    }
+    let mode = payload.mode.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid permission mode".to_string(),
+        )
+    })?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+    // The direct CLI response isn't an SSE subscription; drain live events so
+    // inspection backpressure cannot stall the child.
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let result = subagent::handle_run_subagent_tool_inner(
+        &state,
+        &agent_id,
+        payload.conversation_id.as_deref(),
+        &format!("cli-{}", uuid::Uuid::new_v4()),
+        &payload.args,
+        Box::new(subagent::SseEventEmitter { tx }),
+        mode,
+    )
+    .await;
+    Ok(Json(
+        json!({"output": result.output, "is_error": result.is_error}),
+    ))
+}
+
 pub async fn steer_subagent_handler(
     State(_state): State<AppState>,
     Path(subagent_id): Path<String>,
