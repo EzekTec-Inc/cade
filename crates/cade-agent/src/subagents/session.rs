@@ -9,10 +9,12 @@ use cade_core::permissions::{PermissionManager, Verdict, is_write_schema, path_i
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -226,6 +228,9 @@ pub enum SubagentEvent {
     },
     OutputChunk {
         text: String,
+    },
+    SteeringApplied {
+        messages: usize,
     },
     Finished {
         outcome: SubagentOutcome,
@@ -491,6 +496,122 @@ pub struct SubagentSession {
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
     parent_context: Vec<SubagentMessage>,
+    control: Option<SubagentControl>,
+}
+
+/// In-process lifecycle and next-turn guidance for an identified child.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentStatus {
+    Queued,
+    Running,
+    Paused,
+    Finished { outcome: String },
+}
+
+impl std::fmt::Display for SubagentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::Paused => write!(f, "paused"),
+            Self::Finished { outcome } => write!(f, "finished ({outcome})"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SubagentControl(Arc<Mutex<ControlState>>);
+
+struct ControlState {
+    status: SubagentStatus,
+    guidance: Vec<String>,
+}
+
+fn controls() -> &'static Mutex<HashMap<String, SubagentControl>> {
+    static CONTROLS: OnceLock<Mutex<HashMap<String, SubagentControl>>> = OnceLock::new();
+    CONTROLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+impl SubagentControl {
+    pub fn status(&self) -> SubagentStatus {
+        self.0.lock().unwrap().status.clone()
+    }
+
+    pub fn running(&self) {
+        self.0.lock().unwrap().status = SubagentStatus::Running;
+    }
+
+    pub fn finished(&self, outcome: impl Into<String>) {
+        let mut state = self.0.lock().unwrap();
+        state.status = SubagentStatus::Finished {
+            outcome: outcome.into(),
+        };
+        state.guidance.clear();
+    }
+
+    pub fn steer(&self, message: String) -> Result<(), String> {
+        let mut state = self.0.lock().unwrap();
+        if state.status != SubagentStatus::Running {
+            return Err(format!("Cannot steer subagent in {} state", state.status));
+        }
+        if message.trim().is_empty() {
+            return Err("Steering guidance must not be empty".into());
+        }
+        state.guidance.push(message);
+        Ok(())
+    }
+
+    fn take_guidance(&self) -> Vec<String> {
+        std::mem::take(&mut self.0.lock().unwrap().guidance)
+    }
+}
+
+impl SubagentSession {
+    /// Register the stable child ID when the invocation is admitted.
+    pub fn register_control(&mut self, queued: bool) -> SubagentControl {
+        let control = SubagentControl(Arc::new(Mutex::new(ControlState {
+            status: if queued {
+                SubagentStatus::Queued
+            } else {
+                SubagentStatus::Running
+            },
+            guidance: Vec::new(),
+        })));
+        controls()
+            .lock()
+            .unwrap()
+            .insert(self.session_id.clone(), control.clone());
+        self.control = Some(control.clone());
+        control
+    }
+
+    pub fn child_status(id: &str) -> Result<SubagentStatus, String> {
+        controls()
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(SubagentControl::status)
+            .ok_or_else(|| {
+                format!("Subagent '{id}' not found in this process; check the child ID or its host")
+            })
+    }
+
+    pub fn steer_child(id: &str, message: String) -> Result<(), String> {
+        let control = controls().lock().unwrap().get(id).cloned().ok_or_else(|| {
+            format!("Subagent '{id}' not found in this process; check the child ID or its host")
+        })?;
+        control.steer(message)
+    }
+}
+
+impl Drop for SubagentSession {
+    fn drop(&mut self) {
+        if let Some(control) = &self.control
+            && !matches!(control.status(), SubagentStatus::Finished { .. })
+        {
+            control.finished("error");
+        }
+    }
 }
 
 /// Acknowledgement of an in-process child. `queued` describes the slot at
@@ -594,6 +715,7 @@ impl SubagentSession {
             steering_queue: Vec::new(),
             pending_model_swap: None,
             parent_context: Vec::new(),
+            control: None,
         }
     }
 
@@ -762,6 +884,14 @@ impl SubagentSession {
         // Release the workspace on every terminal outcome, not only when the
         // session itself is eventually dropped.
         self.workspace_guard = None;
+        if let Some(control) = &self.control {
+            control.finished(match &outcome {
+                SubagentOutcome::Done { .. } => "done",
+                SubagentOutcome::Blocked { .. } => "blocked",
+                SubagentOutcome::Failed { .. } => "error",
+                SubagentOutcome::Exhausted { .. } => "exhausted",
+            });
+        }
         self.event_emitter
             .emit(SubagentEvent::Finished {
                 outcome: outcome.clone(),
@@ -783,7 +913,11 @@ impl SubagentSession {
     }
 
     pub fn take_pending_steering(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.steering_queue)
+        let mut guidance = std::mem::take(&mut self.steering_queue);
+        if let Some(control) = &self.control {
+            guidance.extend(control.take_guidance());
+        }
+        guidance
     }
 
     pub fn take_pending_model_hot_swap(&mut self) -> Option<String> {
@@ -873,6 +1007,11 @@ impl SubagentSession {
                     steer_msgs.join("\n\n")
                 );
                 messages.push(SubagentMessage::user(guidance));
+                self.event_emitter
+                    .emit(SubagentEvent::SteeringApplied {
+                        messages: steer_msgs.len(),
+                    })
+                    .await;
             }
 
             // 3. Emit Turn Started
@@ -2489,5 +2628,151 @@ mod tests {
                 .iter()
                 .any(|m| m.content.contains("Focus strictly on test assertion"))
         );
+    }
+
+    #[tokio::test]
+    async fn child_control_reports_lifecycle_and_delivers_guidance_on_next_turn() {
+        struct GatedLlm {
+            entered: tokio::sync::Notify,
+            release: tokio::sync::Notify,
+            turns: std::sync::atomic::AtomicUsize,
+            seen: Mutex<Vec<Vec<SubagentMessage>>>,
+        }
+        #[async_trait]
+        impl SubagentLlmExecutor for GatedLlm {
+            async fn complete_turn(
+                &self,
+                _: &str,
+                _: &str,
+                messages: &[SubagentMessage],
+                _: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                let turn = self.turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.seen.lock().unwrap().push(messages.to_vec());
+                if turn == 0 {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                    Ok(SubagentTurnResponse {
+                        content: None,
+                        tool_calls: vec![SubagentToolCall {
+                            id: "read".into(),
+                            name: "read_file".into(),
+                            arguments: json!({"path":"test.txt"}),
+                        }],
+                        tokens_used: 1,
+                    })
+                } else {
+                    Ok(SubagentTurnResponse {
+                        content: None,
+                        tool_calls: vec![SubagentToolCall {
+                            id: "finish".into(),
+                            name: "finish".into(),
+                            arguments: json!({"status":"done","summary":"guided"}),
+                        }],
+                        tokens_used: 1,
+                    })
+                }
+            }
+        }
+
+        let llm = Arc::new(GatedLlm {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            turns: std::sync::atomic::AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+        });
+        let semaphore = Arc::new(Semaphore::new(1));
+        let held = semaphore.clone().acquire_owned().await.unwrap();
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"work"})),
+            "parent",
+        );
+        let id = session.session_id.clone();
+        let control = session.register_control(true);
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(16);
+        session = session.with_event_emitter(SubagentEventEmitter::new(Some(events_tx)));
+        let (cancel_tx, cancel_rx) = tokio::sync::mpsc::channel(1);
+        let (_keep_cancel, (done_tx, done_rx)) = (cancel_tx, tokio::sync::oneshot::channel());
+        let running = control.clone();
+        let llm_run = llm.clone();
+        let launch = session.launch_background(
+            semaphore,
+            Duration::from_secs(5),
+            cancel_rx,
+            move |mut session, _permit| async move {
+                running.running();
+                session
+                    .run_autonomous_loop(
+                        llm_run.as_ref(),
+                        &MockToolExecutor,
+                        "model".into(),
+                        "system".into(),
+                        "work".into(),
+                        vec![],
+                        vec![],
+                        Path::new("."),
+                    )
+                    .await
+            },
+            move |result| async move {
+                let _ = done_tx.send(result);
+            },
+        );
+        assert_eq!(launch.child_id, id);
+        assert!(launch.queued);
+        assert_eq!(
+            SubagentSession::child_status(&id).unwrap(),
+            SubagentStatus::Queued
+        );
+        assert!(SubagentSession::steer_child(&id, "too early".into()).is_err());
+        assert!(SubagentSession::steer_child("missing-child", "no".into()).is_err());
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(3), llm.entered.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            SubagentSession::child_status(&id).unwrap(),
+            SubagentStatus::Running
+        );
+        SubagentSession::steer_child(&id, "focus on assertions".into()).unwrap();
+        llm.release.notify_one();
+        let outcome = tokio::time::timeout(Duration::from_secs(3), done_rx)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.summary_text(), "guided");
+        assert_eq!(
+            SubagentSession::child_status(&id).unwrap(),
+            SubagentStatus::Finished {
+                outcome: "done".into()
+            }
+        );
+        assert!(SubagentSession::steer_child(&id, "late guidance".into()).is_err());
+        let seen = llm.seen.lock().unwrap();
+        assert!(
+            !seen[0]
+                .iter()
+                .any(|m| m.content.contains("focus on assertions"))
+        );
+        assert!(
+            seen[1]
+                .iter()
+                .any(|m| m.content.contains("[Supervisor Steering Guidance]")
+                    && m.content.contains("focus on assertions"))
+        );
+        drop(seen);
+        let mut applied = false;
+        while let Ok(event) = events_rx.try_recv() {
+            if matches!(event, SubagentEvent::SteeringApplied { messages: 1 }) {
+                applied = true;
+            }
+            if let SubagentEvent::Finished { outcome } = event {
+                assert_eq!(outcome.summary_text(), "guided");
+                assert!(applied, "steering application must be observable");
+                return;
+            }
+        }
+        panic!("terminal event was not delivered");
     }
 }

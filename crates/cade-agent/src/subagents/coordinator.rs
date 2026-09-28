@@ -25,6 +25,18 @@ pub trait SubagentSingleRunner: Send + Sync {
     /// Inspects the subagent system status.
     fn doctor_status(&self) -> Result<String>;
 
+    async fn child_status(&self, _id: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "Child status is unsupported by this adapter",
+        ))
+    }
+
+    async fn steer_child(&self, _id: &str, _message: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "Child steering is unsupported by this adapter",
+        ))
+    }
+
     /// Dynamically hot-swaps the model of an active subagent for its next turn.
     fn hot_swap_model(&self, subagent_id: &str, new_model: &str) -> Result<String> {
         Ok(format!(
@@ -621,11 +633,12 @@ impl SubagentCoordinator {
                             ui_resource_uri: None,
                         });
                     }
+                    let result = runner.steer_child(&subagent_id, &message).await;
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: format!("Guidance sent to subagent '{}'", subagent_id),
-                        is_error: false,
+                        output: result.as_ref().map_or_else(|e| e.to_string(), Clone::clone),
+                        is_error: result.is_err(),
                         ui_resource_uri: None,
                     });
                 }
@@ -712,16 +725,18 @@ impl SubagentCoordinator {
                         .clone()
                         .or_else(|| cfg.agent_id.clone())
                         .or_else(|| args["id"].as_str().map(|s| s.to_string()));
-                    let out = if let Some(id) = subagent_id {
-                        format!("Subagent '{id}' is registered")
+                    let result = if let Some(id) = subagent_id.as_deref() {
+                        runner.child_status(id).await
                     } else {
-                        runner.doctor_status()?
+                        Err(crate::Error::custom(
+                            "'id' is required for child status; use 'doctor' for system status",
+                        ))
                     };
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: out,
-                        is_error: false,
+                        output: result.as_ref().map_or_else(|e| e.to_string(), Clone::clone),
+                        is_error: result.is_err(),
                         ui_resource_uri: None,
                     });
                 }
@@ -1059,8 +1074,18 @@ mod tests {
         let res = SubagentCoordinator::coordinate(&runner, "call_2", &status_args)
             .await
             .expect("coordinate status");
-        assert!(!res.is_error);
-        assert!(res.output.contains("agent-123"));
+        assert!(res.is_error);
+        assert!(res.output.contains("unsupported"));
+
+        let steer = SubagentCoordinator::coordinate(
+            &runner,
+            "steer",
+            &json!({"action":"steer", "id":"agent-123", "message":"focus"}),
+        )
+        .await
+        .unwrap();
+        assert!(steer.is_error);
+        assert!(steer.output.contains("unsupported"));
 
         // Resume action with guidance
         let resume_args = json!({

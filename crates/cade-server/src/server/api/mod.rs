@@ -84,6 +84,10 @@ pub fn router(state: AppState) -> Router {
             post(run::steer_subagent_handler),
         )
         .route(
+            "/v1/subagents/{id}/status",
+            get(run::subagent_status_handler),
+        )
+        .route(
             "/v1/subagents/{id}/cancel",
             post(run::cancel_subagent_handler),
         )

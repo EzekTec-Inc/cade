@@ -834,6 +834,36 @@ async fn server_background_launch_queues_without_waiting_and_survives_parent_tur
     .unwrap();
     cade_store::sqlite::finish_run(&state.db, &run_id, "done").unwrap();
     let child_id = ack.output.split_whitespace().nth(2).unwrap().to_string();
+    let queued_status =
+        super::subagent_status_handler(State(state.clone()), Path(child_id.clone()))
+            .await
+            .unwrap();
+    assert_eq!(queued_status.0["status"], "queued");
+    let rejected = super::steer_subagent_handler(
+        State(state.clone()),
+        Path(child_id.clone()),
+        axum::Json(super::SteerPayload {
+            message: "too early".into(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(rejected.0, axum::http::StatusCode::CONFLICT);
+    let (control_tx, _control_rx) = tokio::sync::mpsc::channel(16);
+    let tool_status = super::subagent::handle_subagent_tool(
+        state.clone(),
+        "queue-parent".into(),
+        Some(conv.id.clone()),
+        "subagent".into(),
+        "status-call".into(),
+        json!({"action":"status", "id":child_id}),
+        control_tx,
+        cade_core::permissions::PermissionMode::Default,
+        run_id.clone(),
+    )
+    .await;
+    assert!(!tool_status.is_error, "{}", tool_status.output);
+    assert!(tool_status.output.contains("queued"));
     assert!(
         state
             .subagent_cancellations
@@ -880,6 +910,40 @@ async fn server_background_launch_queues_without_waiting_and_survives_parent_tur
         .filter(|m| m.content["phase"] == "outcome")
         .collect();
     assert_eq!(outcomes.len(), 1);
+    let terminal_status =
+        super::subagent_status_handler(State(state.clone()), Path(child_id.clone()))
+            .await
+            .unwrap();
+    assert_eq!(terminal_status.0["status"], "finished (done)");
+    let late = super::steer_subagent_handler(
+        State(state.clone()),
+        Path(child_id.clone()),
+        axum::Json(super::SteerPayload {
+            message: "too late".into(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(late.0, axum::http::StatusCode::CONFLICT);
+    let missing =
+        super::subagent_status_handler(State(state.clone()), Path("unknown-child".into()))
+            .await
+            .unwrap_err();
+    assert_eq!(missing.0, axum::http::StatusCode::NOT_FOUND);
+    let (reject_tx, _reject_rx) = tokio::sync::mpsc::channel(16);
+    let rejected_tool = super::subagent::handle_subagent_tool(
+        state.clone(),
+        "queue-parent".into(),
+        Some(conv.id.clone()),
+        "run_subagent".into(),
+        "steer-late".into(),
+        json!({"action":"steer", "id":child_id, "message":"late"}),
+        reject_tx,
+        cade_core::permissions::PermissionMode::Default,
+        run_id.clone(),
+    )
+    .await;
+    assert!(rejected_tool.is_error);
     assert!(
         outcomes[0].content["content"]
             .as_str()
@@ -919,6 +983,175 @@ async fn server_background_launch_queues_without_waiting_and_survives_parent_tur
         replay.contains("subagent_complete") && replay.contains("[DONE]"),
         "{replay}"
     );
+}
+
+#[tokio::test]
+async fn parent_control_steers_next_turn_for_both_subagent_tool_names() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    struct TwoTurnLlm {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        turns: AtomicUsize,
+        saw_guidance: AtomicBool,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for TwoTurnLlm {
+        async fn complete(
+            &self,
+            request: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            let turn = self.turns.fetch_add(1, Ordering::SeqCst);
+            if turn == 0 {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(cade_ai::CompletionResponse {
+                    content: None,
+                    tool_calls: vec![cade_ai::LlmToolCall {
+                        id: "read".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path":"nonexistent-child-test-file"}),
+                        thought_signature: None,
+                    }],
+                    finish_reason: "tool_calls".into(),
+                })
+            } else {
+                self.saw_guidance.store(
+                    request.messages.iter().any(|m| {
+                        m.content.contains("[Supervisor Steering Guidance]")
+                            && m.content.contains("inspect the result")
+                    }),
+                    Ordering::SeqCst,
+                );
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("guided result".into()),
+                    tool_calls: vec![],
+                    finish_reason: "stop".into(),
+                })
+            }
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("subagent must use complete")
+        }
+    }
+
+    for tool_name in ["run_subagent", "subagent"] {
+        let llm = Arc::new(TwoTurnLlm {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            turns: AtomicUsize::new(0),
+            saw_guidance: AtomicBool::new(false),
+        });
+        let state = build_state_with_llm(llm.clone());
+        approval_test_run(&state.db, "steering-parent");
+        let conversation =
+            cade_store::sqlite::create_conversation(&state.db, "steering-parent", tool_name)
+                .unwrap();
+        let run_id =
+            cade_store::sqlite::create_run(&state.db, "steering-parent", Some(&conversation.id))
+                .unwrap()
+                .id;
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+        let launch = super::subagent::handle_subagent_tool(
+            state.clone(),
+            "steering-parent".into(),
+            Some(conversation.id.clone()),
+            tool_name.into(),
+            "launch".into(),
+            json!({"prompt":"work", "background":true}),
+            tx,
+            cade_core::permissions::PermissionMode::Default,
+            run_id.clone(),
+        )
+        .await;
+        assert!(!launch.is_error, "{}: {}", tool_name, launch.output);
+        let id = launch
+            .output
+            .split_whitespace()
+            .find(|part| part.starts_with("sa_"))
+            .unwrap()
+            .to_string();
+        tokio::time::timeout(std::time::Duration::from_secs(5), llm.entered.notified())
+            .await
+            .unwrap();
+        let status = super::subagent_status_handler(State(state.clone()), Path(id.clone()))
+            .await
+            .unwrap();
+        assert_eq!(status.0["status"], "running");
+        let (control_tx, _control_rx) = tokio::sync::mpsc::channel(32);
+        let result = super::subagent::handle_subagent_tool(
+            state.clone(),
+            "steering-parent".into(),
+            Some(conversation.id.clone()),
+            tool_name.into(),
+            "steer".into(),
+            json!({"action":"steer", "id":id, "message":"inspect the result"}),
+            control_tx,
+            cade_core::permissions::PermissionMode::Default,
+            run_id.clone(),
+        )
+        .await;
+        assert!(!result.is_error, "{}: {}", tool_name, result.output);
+        assert!(result.output.contains("accepted"));
+        llm.release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if cade_store::sqlite::list_messages(
+                    &state.db,
+                    "steering-parent",
+                    Some(&conversation.id),
+                    100,
+                )
+                .unwrap()
+                .iter()
+                .any(|m| m.content["phase"] == "outcome")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            llm.saw_guidance.load(Ordering::SeqCst),
+            "{tool_name} failed to deliver guidance"
+        );
+        let messages = cade_store::sqlite::list_messages(
+            &state.db,
+            "steering-parent",
+            Some(&conversation.id),
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content["phase"] == "outcome")
+                .count(),
+            1
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if cade_store::sqlite::run_events_after(&state.db, &run_id, 0)
+                    .unwrap()
+                    .iter()
+                    .any(|(_, data)| data.contains("subagent_steered"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }
 
 #[tokio::test]
