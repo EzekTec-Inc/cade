@@ -667,6 +667,14 @@ impl LlmRouter {
 
 #[async_trait::async_trait]
 impl LlmProvider for LlmRouter {
+    fn validate_model(&self, model: &str) -> Result<()> {
+        if model.trim().is_empty() || model != model.trim() || model.ends_with('/') {
+            return Err(Error::custom(
+                "Model ID must be a nonempty, valid model name",
+            ));
+        }
+        LlmRouter::validate_model(self, model)
+    }
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let (provider, bare_model) = self.resolve_provider(&req.model)?;
         let routed = CompletionRequest {

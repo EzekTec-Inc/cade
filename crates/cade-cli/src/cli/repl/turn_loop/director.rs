@@ -306,18 +306,25 @@ impl<'a> TurnDirector<'a> {
                                                                     let client = tick_client.clone();
                                                                     let subagent_id_c = subagent_id.clone();
                                                                     let model_c = model.clone();
-                                                                    if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id) {
-                                                                        t.push_output(format!("[MODEL HOT-SWAP]: {model}"));
-                                                                    }
-                                                                    app.show_toast(format!("Model hot-swap to {model} for {subagent_id}"), cade_tui::ToastLevel::Info);
-                                                                    let _ = app.draw();
+                                                                    let ui = tick_app.clone();
+                                                                    // The server must acknowledge delivery before we claim the model changed.
                                                                     tokio::spawn(async move {
                                                                         let body = serde_json::json!({
-                                                                            "action": "hot_swap",
-                                                                            "id": subagent_id_c,
                                                                             "model": model_c,
                                                                         });
-                                                                        let _ = client.raw_post(&format!("/subagents/{subagent_id_c}/model"), &body).await;
+                                                                        let result = client.raw_post(&format!("/subagents/{subagent_id_c}/model"), &body).await;
+                                                                        let mut app = ui.lock();
+                                                                        if result.is_ok() {
+                                                                            if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id_c) {
+                                                                                t.push_output(format!("[MODEL HOT-SWAP QUEUED]: {model_c}"));
+                                                                            }
+                                                                        }
+                                                                        let level = if result.is_ok() { cade_tui::ToastLevel::Info } else { cade_tui::ToastLevel::Error };
+                                                                        app.show_toast(match result {
+                                                                            Ok(_) => format!("Model hot-swap to {model_c} accepted for {subagent_id_c} (next turn)"),
+                                                                            Err(e) => format!("Could not change model for {subagent_id_c}: {e}"),
+                                                                        }, level);
+                                                                        app.draw_dirty = true;
                                                                     });
                                                                 }
                                                                  cade_tui::app::subagent_tray::SubagentTrayAction::PauseResume { subagent_id } => {

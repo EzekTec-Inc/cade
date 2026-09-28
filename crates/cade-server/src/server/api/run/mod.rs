@@ -1327,18 +1327,27 @@ pub struct SwapModelPayload {
 }
 
 pub async fn swap_subagent_model_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(subagent_id): Path<String>,
     Json(payload): Json<SwapModelPayload>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
-    if subagent::swap_subagent_model(&subagent_id, payload.model.clone()) {
-        Ok(Json(
-            json!({ "status": "success", "subagent_id": subagent_id, "model": payload.model }),
-        ))
-    } else {
-        Err((
-            axum::http::StatusCode::NOT_FOUND,
-            format!("Subagent '{}' not active.", subagent_id),
-        ))
-    }
+    state.llm.validate_model(&payload.model).map_err(|e| {
+        (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("Invalid model '{}': {e}", payload.model),
+        )
+    })?;
+    subagent::swap_subagent_model(&subagent_id, payload.model.clone()).map_err(|e| {
+        (
+            if e.contains("no longer accepting") {
+                axum::http::StatusCode::CONFLICT
+            } else {
+                axum::http::StatusCode::NOT_FOUND
+            },
+            e,
+        )
+    })?;
+    Ok(Json(
+        json!({ "status": "accepted", "subagent_id": subagent_id, "model": payload.model, "effective": "next_turn" }),
+    ))
 }

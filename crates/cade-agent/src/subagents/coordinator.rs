@@ -50,10 +50,10 @@ pub trait SubagentSingleRunner: Send + Sync {
     }
 
     /// Dynamically hot-swaps the model of an active subagent for its next turn.
-    fn hot_swap_model(&self, subagent_id: &str, new_model: &str) -> Result<String> {
-        Ok(format!(
-            "Model for subagent '{subagent_id}' queued to swap to '{new_model}'"
-        ))
+    async fn hot_swap_model(&self, subagent_id: &str, new_model: &str) -> Result<String> {
+        Err(crate::Error::custom(format!(
+            "Model hot-swap is unsupported for subagent '{subagent_id}' on this route (requested '{new_model}')"
+        )))
     }
 }
 
@@ -765,12 +765,12 @@ impl SubagentCoordinator {
                             ui_resource_uri: None,
                         });
                     }
-                    let out = runner.hot_swap_model(&subagent_id, &new_model)?;
+                    let result = runner.hot_swap_model(&subagent_id, &new_model).await;
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: out,
-                        is_error: false,
+                        is_error: result.is_err(),
+                        output: result.unwrap_or_else(|e| format!("error: {e}")),
                         ui_resource_uri: None,
                     });
                 }
@@ -1127,7 +1127,8 @@ mod tests {
         let res = SubagentCoordinator::coordinate(&runner, "call_4", &model_args)
             .await
             .expect("coordinate model hot-swap");
-        assert!(!res.is_error);
+        assert!(res.is_error);
+        assert!(res.output.contains("unsupported"));
         assert!(res.output.contains("agent-123"));
         assert!(res.output.contains("anthropic/claude-3-7-sonnet"));
     }
