@@ -320,18 +320,28 @@ impl<'a> TurnDirector<'a> {
                                                                         let _ = client.raw_post(&format!("/subagents/{subagent_id_c}/model"), &body).await;
                                                                     });
                                                                 }
-                                                                cade_tui::app::subagent_tray::SubagentTrayAction::PauseResume { subagent_id } => {
-                                                                    let client = tick_client.clone();
-                                                                    let subagent_id_c = subagent_id.clone();
-                                                                    app.show_toast(format!("Pause/Resume signal sent to {subagent_id}"), cade_tui::ToastLevel::Info);
-                                                                    let _ = app.draw();
-                                                                    tokio::spawn(async move {
-                                                                        let body = serde_json::json!({
-                                                                            "action": "pause_resume",
-                                                                            "id": subagent_id_c,
-                                                                        });
-                                                                        let _ = client.raw_post(&format!("/subagents/{subagent_id_c}/pause"), &body).await;
-                                                                    });
+                                                                 cade_tui::app::subagent_tray::SubagentTrayAction::PauseResume { subagent_id } => {
+                                                                     let client = tick_client.clone();
+                                                                     let subagent_id_c = subagent_id.clone();
+                                                                     let app_ref = tick_app.clone();
+                                                                     tokio::spawn(async move {
+                                                                         let result = match client.raw_get(&format!("/subagents/{subagent_id_c}/pause")).await {
+                                                                             Ok(state) => {
+                                                                                 let action = if state["status"] == "paused" { "resume" } else { "pause" };
+                                                                                 client.raw_post(&format!("/subagents/{subagent_id_c}/{action}"), &serde_json::json!({})).await
+                                                                             }
+                                                                             Err(e) => Err(e),
+                                                                         };
+                                                                         if let Some(mut app) = app_ref.try_lock() {
+                                                                             let message = match result {
+                                                                                 Ok(body) => format!("Subagent {subagent_id_c}: {}", body["status"].as_str().unwrap_or("unknown")),
+                                                                                 Err(e) => format!("Could not control {subagent_id_c}: {e}"),
+                                                                             };
+                                                                             app.show_toast(message, cade_tui::ToastLevel::Info);
+                                                                             app.draw_dirty = true;
+                                                                             let _ = app.draw();
+                                                                         }
+                                                                     });
                                                                 }
                                                             }
                                                         }

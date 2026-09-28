@@ -195,6 +195,9 @@ impl SubagentOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum SubagentEvent {
+    PauseStateChanged {
+        state: SubagentPauseState,
+    },
     TurnStarted {
         turn: usize,
         max_turns: usize,
@@ -235,6 +238,124 @@ pub enum SubagentEvent {
     Finished {
         outcome: SubagentOutcome,
     },
+}
+
+/// The observable state of the in-process pause gate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPauseState {
+    Queued,
+    Running,
+    PauseRequested,
+    Paused,
+    Finished,
+}
+
+impl SubagentPauseState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::PauseRequested => "pause_requested",
+            Self::Paused => "paused",
+            Self::Finished => "finished",
+        }
+    }
+}
+
+/// Shared control for a single live session. Requests never acknowledge a
+/// boundary transition until the child actually reaches the boundary.
+#[derive(Clone)]
+pub struct SubagentPause {
+    tx: tokio::sync::watch::Sender<SubagentPauseState>,
+}
+
+impl SubagentPause {
+    pub fn new() -> Self {
+        let (tx, _) = tokio::sync::watch::channel(SubagentPauseState::Queued);
+        Self { tx }
+    }
+
+    pub fn state(&self) -> SubagentPauseState {
+        *self.tx.borrow()
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<SubagentPauseState> {
+        self.tx.subscribe()
+    }
+
+    pub fn pause(&self) -> Result<SubagentPauseState, &'static str> {
+        let mut result = Err("subagent is not running");
+        self.tx.send_modify(|state| {
+            if *state == SubagentPauseState::Running {
+                *state = SubagentPauseState::PauseRequested;
+                result = Ok(*state);
+            }
+        });
+        result
+    }
+
+    pub fn resume(&self) -> Result<SubagentPauseState, &'static str> {
+        let mut result = Err("subagent is not paused");
+        self.tx.send_modify(|state| {
+            if matches!(
+                state,
+                SubagentPauseState::Paused | SubagentPauseState::PauseRequested
+            ) {
+                *state = SubagentPauseState::Running;
+                result = Ok(*state);
+            }
+        });
+        result
+    }
+
+    fn start(&self) {
+        self.tx.send_modify(|state| {
+            if *state == SubagentPauseState::Queued {
+                *state = SubagentPauseState::Running;
+            }
+        });
+    }
+
+    pub fn finish(&self) {
+        self.tx.send_replace(SubagentPauseState::Finished);
+    }
+
+    async fn boundary(&self, emitter: &SubagentEventEmitter) {
+        let mut rx = self.tx.subscribe();
+        loop {
+            let state = *rx.borrow_and_update();
+            if state == SubagentPauseState::PauseRequested {
+                let mut paused = false;
+                self.tx.send_modify(|current| {
+                    if *current == SubagentPauseState::PauseRequested {
+                        *current = SubagentPauseState::Paused;
+                        paused = true;
+                    }
+                });
+                if paused {
+                    emitter
+                        .emit(SubagentEvent::PauseStateChanged {
+                            state: SubagentPauseState::Paused,
+                        })
+                        .await;
+                }
+                continue;
+            }
+            if state != SubagentPauseState::Paused {
+                return;
+            }
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+impl Default for SubagentPause {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Asynchronous event broadcaster for subagents supporting unicast & broadcast subscribers.
@@ -495,6 +616,7 @@ pub struct SubagentSession {
     pub tool_policy: Option<SubagentToolPolicy>,
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
+    pub pause: SubagentPause,
     parent_context: Vec<SubagentMessage>,
     control: Option<SubagentControl>,
 }
@@ -504,6 +626,7 @@ pub struct SubagentSession {
 pub enum SubagentStatus {
     Queued,
     Running,
+    PauseRequested,
     Paused,
     Finished { outcome: String },
 }
@@ -513,6 +636,7 @@ impl std::fmt::Display for SubagentStatus {
         match self {
             Self::Queued => write!(f, "queued"),
             Self::Running => write!(f, "running"),
+            Self::PauseRequested => write!(f, "pause requested"),
             Self::Paused => write!(f, "paused"),
             Self::Finished { outcome } => write!(f, "finished ({outcome})"),
         }
@@ -525,6 +649,7 @@ pub struct SubagentControl(Arc<Mutex<ControlState>>);
 struct ControlState {
     status: SubagentStatus,
     guidance: Vec<String>,
+    pause: SubagentPause,
 }
 
 fn controls() -> &'static Mutex<HashMap<String, SubagentControl>> {
@@ -534,7 +659,15 @@ fn controls() -> &'static Mutex<HashMap<String, SubagentControl>> {
 
 impl SubagentControl {
     pub fn status(&self) -> SubagentStatus {
-        self.0.lock().unwrap().status.clone()
+        let state = self.0.lock().unwrap();
+        if matches!(state.status, SubagentStatus::Finished { .. }) {
+            return state.status.clone();
+        }
+        match state.pause.state() {
+            SubagentPauseState::PauseRequested => SubagentStatus::PauseRequested,
+            SubagentPauseState::Paused => SubagentStatus::Paused,
+            _ => state.status.clone(),
+        }
     }
 
     pub fn running(&self) {
@@ -551,8 +684,16 @@ impl SubagentControl {
 
     pub fn steer(&self, message: String) -> Result<(), String> {
         let mut state = self.0.lock().unwrap();
-        if state.status != SubagentStatus::Running {
-            return Err(format!("Cannot steer subagent in {} state", state.status));
+        let status = match state.pause.state() {
+            SubagentPauseState::PauseRequested => SubagentStatus::PauseRequested,
+            SubagentPauseState::Paused => SubagentStatus::Paused,
+            _ => state.status.clone(),
+        };
+        if !matches!(
+            status,
+            SubagentStatus::Running | SubagentStatus::PauseRequested | SubagentStatus::Paused
+        ) {
+            return Err(format!("Cannot steer subagent in {status} state"));
         }
         if message.trim().is_empty() {
             return Err("Steering guidance must not be empty".into());
@@ -576,6 +717,7 @@ impl SubagentSession {
                 SubagentStatus::Running
             },
             guidance: Vec::new(),
+            pause: self.pause.clone(),
         })));
         controls()
             .lock()
@@ -611,6 +753,7 @@ impl Drop for SubagentSession {
         {
             control.finished("error");
         }
+        self.pause.finish();
     }
 }
 
@@ -714,6 +857,7 @@ impl SubagentSession {
             tool_policy: None,
             steering_queue: Vec::new(),
             pending_model_swap: None,
+            pause: SubagentPause::new(),
             parent_context: Vec::new(),
             control: None,
         }
@@ -867,6 +1011,7 @@ impl SubagentSession {
 
     /// Finalize execution outcome, committing workspace if successful and emitting event.
     pub async fn finalize_outcome(&mut self, outcome: SubagentOutcome) -> SubagentOutcome {
+        self.pause.finish();
         let outcome = if outcome.is_success() {
             if let Some(ref mut guard) = self.workspace_guard {
                 match guard.commit_and_merge().await {
@@ -979,6 +1124,7 @@ impl SubagentSession {
         failover_models: Vec<String>,
         primary_path: &Path,
     ) -> SubagentOutcome {
+        self.pause.start();
         if self.config.enforce_isolation && self.workspace_guard.is_none() {
             return self
                 .finalize_outcome(SubagentOutcome::Failed {
@@ -992,6 +1138,9 @@ impl SubagentSession {
         let mut failover_idx = 0;
 
         for _iter in 0..self.max_iters {
+            // All tool calls from the previous turn finish before this gate.
+            // No next turn (or its tools) starts while the gate is paused.
+            self.pause.boundary(&self.event_emitter).await;
             // 1. Dynamic Model Hot-Swap check
             if let Some(new_model) = self.take_pending_model_hot_swap()
                 && new_model != model
@@ -1241,6 +1390,158 @@ mod tests {
     use super::*;
     use cade_core::permissions::PermissionMode;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn pause_at_turn_boundary_keeps_tools_and_conversation_until_resume() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct TwoTurns {
+            calls: AtomicUsize,
+            entered: tokio::sync::Notify,
+            release: tokio::sync::Notify,
+        }
+        #[async_trait]
+        impl SubagentLlmExecutor for TwoTurns {
+            async fn complete_turn(
+                &self,
+                _: &str,
+                _: &str,
+                messages: &[SubagentMessage],
+                _: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                if call == 0 {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                    Ok(SubagentTurnResponse {
+                        content: Some("first turn".into()),
+                        tokens_used: 1,
+                        tool_calls: vec![SubagentToolCall {
+                            id: "read".into(),
+                            name: "read_file".into(),
+                            arguments: json!({}),
+                        }],
+                    })
+                } else {
+                    assert!(messages.iter().any(|m| m.content == "first turn"));
+                    assert!(
+                        messages
+                            .iter()
+                            .any(|m| m.content.contains("finish the task"))
+                    );
+                    assert!(
+                        messages
+                            .iter()
+                            .any(|m| m.role == "tool" && m.content == "retained tool result")
+                    );
+                    Ok(SubagentTurnResponse {
+                        content: None,
+                        tokens_used: 1,
+                        tool_calls: vec![SubagentToolCall {
+                            id: "finish".into(),
+                            name: "finish".into(),
+                            arguments: json!({"status":"done", "summary":"resumed"}),
+                        }],
+                    })
+                }
+            }
+        }
+        struct ReadTool(AtomicUsize);
+        #[async_trait]
+        impl SubagentToolExecutor for ReadTool {
+            async fn execute_tool(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+                _: &Path,
+            ) -> Result<String, String> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok("retained tool result".into())
+            }
+        }
+
+        let llm = Arc::new(TwoTurns {
+            calls: AtomicUsize::new(0),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let tools = Arc::new(ReadTool(AtomicUsize::new(0)));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(policy("build"))
+        .with_event_emitter(SubagentEventEmitter::new(Some(tx)));
+        let id = session.session_id.clone();
+        session.register_control(true).running();
+        let control = session.pause.clone();
+        assert!(control.pause().is_err(), "queued child has not started");
+        let run_llm = llm.clone();
+        let run_tools = tools.clone();
+        let run = tokio::spawn(async move {
+            session
+                .run_autonomous_loop(
+                    &*run_llm,
+                    &*run_tools,
+                    "test".into(),
+                    "system".into(),
+                    "task".into(),
+                    vec![],
+                    vec![],
+                    Path::new("."),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), llm.entered.notified())
+            .await
+            .unwrap();
+        assert_eq!(control.pause(), Ok(SubagentPauseState::PauseRequested));
+        assert_eq!(
+            SubagentSession::child_status(&id).unwrap(),
+            SubagentStatus::PauseRequested
+        );
+        assert!(control.pause().is_err());
+        llm.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(
+                    rx.recv().await,
+                    Some(SubagentEvent::PauseStateChanged {
+                        state: SubagentPauseState::Paused
+                    })
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(control.state(), SubagentPauseState::Paused);
+        assert_eq!(
+            SubagentSession::child_status(&id).unwrap(),
+            SubagentStatus::Paused
+        );
+        SubagentSession::steer_child(&id, "finish the task".into()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(tools.0.load(Ordering::SeqCst), 1);
+        assert!(!run.is_finished());
+        assert_eq!(control.resume(), Ok(SubagentPauseState::Running));
+        assert_eq!(
+            SubagentSession::child_status(&id).unwrap(),
+            SubagentStatus::Running
+        );
+        assert!(control.resume().is_err());
+        assert!(
+            matches!(run.await.unwrap(), SubagentOutcome::Done { summary, .. } if summary == "resumed")
+        );
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(control.state(), SubagentPauseState::Finished);
+        assert!(control.resume().is_err());
+        assert!(control.pause().is_err());
+    }
 
     #[tokio::test]
     async fn cancelling_running_child_interrupts_blocked_tool_and_delivers_once() {

@@ -1275,6 +1275,52 @@ pub async fn cancel_subagent_handler(
     ))
 }
 
+pub async fn pause_subagent_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    control_subagent_pause(&subagent_id, false)
+}
+
+pub async fn pause_subagent_state_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let status = subagent::pause_state(&subagent_id).ok_or_else(|| {
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            format!("No active subagent found with ID {subagent_id}"),
+        )
+    })?;
+    Ok(Json(
+        json!({ "subagent_id": subagent_id, "status": status }),
+    ))
+}
+
+pub async fn resume_subagent_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    control_subagent_pause(&subagent_id, true)
+}
+
+fn control_subagent_pause(
+    id: &str,
+    resume: bool,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let state = subagent::control_pause(id, resume).map_err(|reason| {
+        (
+            if reason.starts_with("no active") {
+                axum::http::StatusCode::NOT_FOUND
+            } else {
+                axum::http::StatusCode::CONFLICT
+            },
+            reason,
+        )
+    })?;
+    Ok(Json(json!({ "subagent_id": id, "status": state })))
+}
+
 #[derive(serde::Deserialize)]
 pub struct SwapModelPayload {
     pub model: String,

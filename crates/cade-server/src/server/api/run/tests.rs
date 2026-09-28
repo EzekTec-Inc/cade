@@ -1388,6 +1388,177 @@ async fn remote_cancel_endpoint_acknowledges_once_and_rejects_missing_or_closed_
 }
 
 #[tokio::test]
+async fn pause_routes_report_requested_then_actual_boundary_and_resume() {
+    use cade_agent::subagents::session::{
+        SubagentToolCall, SubagentToolExecutor, SubagentTurnResponse,
+    };
+    use cade_agent::subagents::{
+        SubagentConfig, SubagentLlmExecutor, SubagentMessage, SubagentPauseState, SubagentSession,
+    };
+    use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Llm {
+        calls: AtomicUsize,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl SubagentLlmExecutor for Llm {
+        async fn complete_turn(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[SubagentMessage],
+            _: &[Value],
+        ) -> Result<SubagentTurnResponse, String> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(SubagentTurnResponse {
+                    content: None,
+                    tokens_used: 1,
+                    tool_calls: vec![SubagentToolCall {
+                        id: "first".into(),
+                        name: "read_file".into(),
+                        arguments: json!({}),
+                    }],
+                })
+            } else {
+                Ok(SubagentTurnResponse {
+                    content: None,
+                    tokens_used: 1,
+                    tool_calls: vec![SubagentToolCall {
+                        id: "finish".into(),
+                        name: "finish".into(),
+                        arguments: json!({"status":"done", "summary":"ok"}),
+                    }],
+                })
+            }
+        }
+    }
+    struct Tools;
+    #[async_trait::async_trait]
+    impl SubagentToolExecutor for Tools {
+        async fn execute_tool(
+            &self,
+            _: &str,
+            _: &str,
+            _: &Value,
+            _: &std::path::Path,
+        ) -> Result<String, String> {
+            Ok("read".into())
+        }
+    }
+
+    let state = build_state_with_llm(Arc::new(SlowLlm));
+    let mut session = SubagentSession::new(
+        SubagentConfig::from_args(&json!({"prompt":"task"})),
+        "parent",
+    );
+    session.session_id = "pause-route-test".into();
+    let gate = session.pause.clone();
+    super::subagent::register_pause_control(session.session_id.clone(), gate.clone());
+    assert_eq!(
+        super::pause_subagent_handler(State(state.clone()), Path("pause-route-test".into()))
+            .await
+            .unwrap_err()
+            .0,
+        axum::http::StatusCode::CONFLICT
+    );
+    let llm = Arc::new(Llm {
+        calls: AtomicUsize::new(0),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let model = llm.clone();
+    let run = tokio::spawn(async move {
+        session
+            .run_autonomous_loop(
+                &*model,
+                &Tools,
+                "model".into(),
+                "system".into(),
+                "task".into(),
+                vec![],
+                vec![],
+                std::path::Path::new("."),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), llm.entered.notified())
+        .await
+        .unwrap();
+    let pause =
+        super::pause_subagent_handler(State(state.clone()), Path("pause-route-test".into()))
+            .await
+            .unwrap();
+    assert_eq!(pause.0["status"], "pause_requested");
+    llm.release.notify_one();
+    let mut changes = gate.subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while *changes.borrow_and_update() != SubagentPauseState::Paused {
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(llm.calls.load(Ordering::SeqCst), 1);
+    let state_reply =
+        super::pause_subagent_state_handler(State(state.clone()), Path("pause-route-test".into()))
+            .await
+            .unwrap();
+    assert_eq!(state_reply.0["status"], "paused");
+    assert_eq!(
+        super::pause_subagent_handler(State(state.clone()), Path("pause-route-test".into()))
+            .await
+            .unwrap_err()
+            .0,
+        axum::http::StatusCode::CONFLICT
+    );
+    // A control action in the parent run observes the very same gate as HTTP.
+    let (sse, _events) = tokio::sync::mpsc::channel(16);
+    let parent_resume = super::subagent::handle_subagent_tool(
+        state.clone(),
+        "parent".into(),
+        None,
+        "subagent".into(),
+        "control-call".into(),
+        json!({"action":"resume", "id":"pause-route-test"}),
+        sse,
+        cade_core::permissions::PermissionMode::Default,
+        "run-test".into(),
+    )
+    .await;
+    assert!(!parent_resume.is_error, "{}", parent_resume.output);
+    assert!(parent_resume.output.contains("running"));
+    assert_eq!(
+        super::resume_subagent_handler(State(state.clone()), Path("pause-route-test".into()))
+            .await
+            .unwrap_err()
+            .0,
+        axum::http::StatusCode::CONFLICT
+    );
+    assert!(run.await.unwrap().is_success());
+    assert_eq!(llm.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        super::resume_subagent_handler(State(state.clone()), Path("pause-route-test".into()))
+            .await
+            .unwrap_err()
+            .0,
+        axum::http::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        super::pause_subagent_handler(State(state), Path("nonexistent".into()))
+            .await
+            .unwrap_err()
+            .0,
+        axum::http::StatusCode::NOT_FOUND
+    );
+    super::subagent::unregister_pause_control("pause-route-test");
+}
+
+#[tokio::test]
 async fn queued_foreground_cancellation_returns_error_without_starting_child() {
     struct NoLlm;
     #[async_trait::async_trait]
@@ -1629,12 +1800,16 @@ async fn running_background_cancellation_interrupts_llm_and_publishes_one_termin
     )
     .await;
     assert!(!cancelled.is_error);
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let (event, saw_finished) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut saw_finished = false;
         loop {
             let event = rx.recv().await.unwrap().unwrap();
             let event: serde_json::Value = serde_json::from_str(&event.data).unwrap();
             if event["message_type"] == "subagent_complete" {
-                break event;
+                break (event, saw_finished);
+            }
+            if event["message_type"] == "subagent_state" && event["status"] == "finished" {
+                saw_finished = true;
             }
         }
     })
@@ -1650,6 +1825,23 @@ async fn running_background_cancellation_interrupts_llm_and_publishes_one_termin
     .await
     .unwrap();
     assert!(dropped.load(Ordering::SeqCst));
+    // The pause gate also publishes a terminal lifecycle state. It can arrive
+    // after the completion event; only a second completion would be a duplicate.
+    if !saw_finished {
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = rx.recv().await.unwrap().unwrap();
+                let event: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+                assert_ne!(event["message_type"], "subagent_complete");
+                if event["message_type"] == "subagent_state" && event["status"] == "finished" {
+                    break event;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(finished["subagent_id"], child_id);
+    }
     assert!(rx.try_recv().is_err());
     let rows = cade_store::sqlite::list_messages(&state.db, "running-parent", Some(&conv.id), 100)
         .unwrap();

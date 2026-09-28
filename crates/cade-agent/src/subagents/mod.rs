@@ -11,9 +11,9 @@ pub use coordinator::{SubagentCoordinator, SubagentSingleRunner};
 pub use harness::{AgentHarness, HarnessLifecycleState, HarnessTaskSpec, IsolationPolicy};
 pub use session::{
     FINISH_TOOL_NAME, SubagentCancellation, SubagentControl, SubagentEvent, SubagentEventEmitter,
-    SubagentLlmExecutor, SubagentMessage, SubagentOutcome, SubagentSession, SubagentStatus,
-    SubagentToolCall, SubagentToolExecutor, SubagentToolPolicy, SubagentTurnResponse,
-    canonical_finish_tool_schema,
+    SubagentLlmExecutor, SubagentMessage, SubagentOutcome, SubagentPause, SubagentPauseState,
+    SubagentSession, SubagentStatus, SubagentToolCall, SubagentToolExecutor, SubagentToolPolicy,
+    SubagentTurnResponse, canonical_finish_tool_schema,
 };
 pub use workspace_guard::IsolatedWorkspaceGuard;
 
