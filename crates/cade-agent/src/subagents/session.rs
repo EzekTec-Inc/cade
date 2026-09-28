@@ -5,7 +5,9 @@
 //! real-time telemetry streaming, and structured outcome models.
 
 use async_trait::async_trait;
-use cade_core::permissions::{PermissionManager, Verdict, is_write_schema, path_is_protected};
+use cade_core::permissions::{
+    PermissionManager, PermissionService, Verdict, is_write_schema, path_is_protected,
+};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -116,6 +118,12 @@ pub struct SubagentTurnResponse {
 /// Abstraction for LLM completion driving subagent turns.
 #[async_trait]
 pub trait SubagentLlmExecutor: Send + Sync {
+    /// Rebuild provider-facing instructions and capabilities for each candidate
+    /// (including failover). The session retains the original policy and history.
+    fn prepare_turn(&self, _model: &str, prompt: &str, tools: &[Value]) -> (String, Vec<Value>) {
+        (prompt.to_string(), tools.to_vec())
+    }
+
     async fn complete_turn(
         &self,
         model: &str,
@@ -461,6 +469,31 @@ pub struct SubagentToolPolicy {
 }
 
 impl SubagentToolPolicy {
+    /// The child definition's model-visible tool set. Execution additionally
+    /// checks inherited capabilities, mode, MCP metadata and permission rules.
+    pub fn definition_allows(tools: &SubagentTools, name: &str) -> bool {
+        match tools {
+            SubagentTools::All => true,
+            SubagentTools::Readonly => {
+                matches!(
+                    name,
+                    "read_file"
+                        | "glob"
+                        | "grep"
+                        | "search_memory"
+                        | "conversation_search"
+                        | "archival_memory_search"
+                        | "recall"
+                        | "fetch_doc"
+                ) || (name.contains("__") && readonly_mcp_name(name))
+            }
+            SubagentTools::List(names) => names.iter().any(|n| n == name),
+            SubagentTools::Restricted { allowed_tools, .. } => {
+                allowed_tools.iter().any(|n| n == name)
+            }
+        }
+    }
+
     pub fn permits_name(
         &self,
         name: &str,
@@ -484,35 +517,8 @@ impl SubagentToolPolicy {
         if readonly && name.contains("__") && !readonly_mcp_name(name) {
             return Err(format!("MCP tool '{name}' is not a known read capability"));
         }
-        match &self.tools {
-            SubagentTools::All => {}
-            SubagentTools::Readonly => {
-                // A read-only definition can use inherited MCP read capabilities.
-                if !matches!(
-                    name,
-                    "read_file"
-                        | "glob"
-                        | "grep"
-                        | "search_memory"
-                        | "conversation_search"
-                        | "archival_memory_search"
-                        | "recall"
-                        | "fetch_doc"
-                ) && !(name.contains("__") && readonly_mcp_name(name))
-                {
-                    return Err(format!("Tool '{name}' is not in the read-only tool set"));
-                }
-            }
-            SubagentTools::List(names) => {
-                if !names.iter().any(|n| n == name) {
-                    return Err(format!("Tool '{name}' is not allowed by child definition"));
-                }
-            }
-            SubagentTools::Restricted { allowed_tools, .. } => {
-                if !allowed_tools.iter().any(|n| n == name) {
-                    return Err(format!("Tool '{name}' is not allowed by child definition"));
-                }
-            }
+        if !Self::definition_allows(&self.tools, name) {
+            return Err(format!("Tool '{name}' is not allowed by child definition"));
         }
         Ok(())
     }
@@ -613,6 +619,7 @@ pub struct SubagentSession {
     pub event_emitter: SubagentEventEmitter,
     pub findings: Vec<SubagentFinding>,
     pub approval_channel: SubagentApprovalChannel,
+    permission_service: Option<Arc<dyn PermissionService>>,
     pub tool_policy: Option<SubagentToolPolicy>,
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
@@ -651,6 +658,7 @@ struct ControlState {
     status: SubagentStatus,
     guidance: Vec<String>,
     pause: SubagentPause,
+    model: SubagentModelControl,
 }
 
 fn controls() -> &'static Mutex<HashMap<String, SubagentControl>> {
@@ -681,6 +689,29 @@ impl SubagentControl {
             outcome: outcome.into(),
         };
         state.guidance.clear();
+        state.model.close();
+    }
+
+    pub fn pause_state(&self) -> SubagentPauseState {
+        self.0.lock().unwrap().pause.state()
+    }
+
+    pub fn set_paused(&self, resume: bool) -> Result<SubagentPauseState, String> {
+        let state = self.0.lock().unwrap();
+        (if resume {
+            state.pause.resume()
+        } else {
+            state.pause.pause()
+        })
+        .map_err(str::to_string)
+    }
+
+    pub fn request_model(&self, model: String) -> Result<(), String> {
+        let state = self.0.lock().unwrap();
+        if matches!(state.status, SubagentStatus::Finished { .. }) {
+            return Err("subagent is no longer accepting model changes".into());
+        }
+        state.model.request(model).map_err(str::to_string)
     }
 
     pub fn steer(&self, message: String) -> Result<(), String> {
@@ -711,6 +742,10 @@ impl SubagentControl {
 impl SubagentSession {
     /// Register the stable child ID when the invocation is admitted.
     pub fn register_control(&mut self, queued: bool) -> SubagentControl {
+        let model = self
+            .model_control
+            .get_or_insert_with(SubagentModelControl::new)
+            .clone();
         let control = SubagentControl(Arc::new(Mutex::new(ControlState {
             status: if queued {
                 SubagentStatus::Queued
@@ -719,6 +754,7 @@ impl SubagentSession {
             },
             guidance: Vec::new(),
             pause: self.pause.clone(),
+            model,
         })));
         controls()
             .lock()
@@ -745,6 +781,36 @@ impl SubagentSession {
         })?;
         control.steer(message)
     }
+
+    pub fn pause_state(id: &str) -> Option<SubagentPauseState> {
+        controls()
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(SubagentControl::pause_state)
+    }
+
+    pub fn control_pause(id: &str, resume: bool) -> Result<SubagentPauseState, String> {
+        let control = controls()
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("no active subagent found with ID {id}"))?;
+        control
+            .set_paused(resume)
+            .map_err(|e| format!("subagent {id} {e}"))
+    }
+
+    pub fn swap_child_model(id: &str, model: String) -> Result<(), String> {
+        let control = controls()
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("No active subagent found with ID {id}"))?;
+        control.request_model(model)
+    }
 }
 
 impl Drop for SubagentSession {
@@ -755,6 +821,9 @@ impl Drop for SubagentSession {
             control.finished("error");
         }
         self.pause.finish();
+        if let Some(model) = &self.model_control {
+            model.close();
+        }
     }
 }
 
@@ -909,6 +978,7 @@ impl SubagentSession {
             event_emitter: SubagentEventEmitter::noop(),
             findings: Vec::new(),
             approval_channel: SubagentApprovalChannel::noop(),
+            permission_service: None,
             tool_policy: None,
             steering_queue: Vec::new(),
             pending_model_swap: None,
@@ -994,12 +1064,20 @@ impl SubagentSession {
         self
     }
 
+    pub fn with_permission_service(mut self, service: Arc<dyn PermissionService>) -> Self {
+        self.permission_service = Some(service);
+        self
+    }
+
     pub fn with_tool_policy(mut self, policy: SubagentToolPolicy) -> Self {
         self.tool_policy = Some(policy);
         self
     }
 
     pub fn with_model_control(mut self, control: SubagentModelControl) -> Self {
+        if let Some(registered) = &self.control {
+            registered.0.lock().unwrap().model = control.clone();
+        }
         self.model_control = Some(control);
         self
     }
@@ -1250,8 +1328,10 @@ impl SubagentSession {
             };
 
             for candidate in active_candidates.iter().skip(failover_idx) {
+                let (candidate_prompt, candidate_tools) =
+                    llm.prepare_turn(candidate, &system_prompt, &tool_schemas);
                 match llm
-                    .complete_turn(candidate, &system_prompt, &messages, &tool_schemas)
+                    .complete_turn(candidate, &candidate_prompt, &messages, &candidate_tools)
                     .await
                 {
                     Ok(resp) => {
@@ -1386,10 +1466,19 @@ impl SubagentSession {
                                     approval_id: approval_id.clone(),
                                 })
                                 .await;
-                            let response = self
-                                .approval_channel
-                                .request_approval(&approval_id, &tc.name, &tc.arguments)
-                                .await;
+                            let response = if let Some(service) = &self.permission_service {
+                                service
+                                    .request_permission(&tc.name, &tc.arguments)
+                                    .await
+                                    .map(|approved| SubagentApprovalResponse {
+                                        approved,
+                                        feedback: None,
+                                    })
+                            } else {
+                                self.approval_channel
+                                    .request_approval(&approval_id, &tc.name, &tc.arguments)
+                                    .await
+                            };
                             let approved = response.as_ref().is_ok_and(|r| r.approved);
                             self.event_emitter
                                 .emit(SubagentEvent::ApprovalResolved {
@@ -2619,6 +2708,42 @@ mod tests {
                 .unwrap();
         });
         assert_eq!(*tools.0.lock().unwrap(), vec!["write_file"]);
+    }
+
+    #[tokio::test]
+    async fn permission_service_only_sees_ask_and_cannot_override_deny_or_protected_paths() {
+        struct RecordingService(Mutex<Vec<String>>);
+        #[async_trait]
+        impl PermissionService for RecordingService {
+            async fn request_permission(&self, name: &str, _: &Value) -> Result<bool, String> {
+                self.0.lock().unwrap().push(name.into());
+                Ok(true)
+            }
+        }
+        let service = Arc::new(RecordingService(Mutex::new(vec![])));
+        let access = policy("build");
+        access
+            .permissions
+            .add_deny_rule(cade_core::permissions::PermissionRule::parse("read_file").unwrap());
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_tool_policy(access)
+        .with_permission_service(service.clone());
+        let calls = scripted_calls(vec![
+            ("read_file", json!({"path":"src/lib.rs"})),
+            ("write_file", json!({"path":"src/lib.rs"})),
+            ("write_file", json!({"path":".env"})),
+            ("mcp__list_items", json!({})),
+        ]);
+        let tools = RecordingTools(Mutex::new(vec![]));
+        exercise(&mut session, &calls, &tools).await;
+        assert_eq!(*service.0.lock().unwrap(), vec!["write_file"]);
+        assert_eq!(
+            *tools.0.lock().unwrap(),
+            vec!["write_file", "mcp__list_items"]
+        );
     }
 
     #[tokio::test]

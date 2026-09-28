@@ -1261,10 +1261,33 @@ pub async fn launch_subagent_handler(
             "invalid permission mode".to_string(),
         )
     })?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
-    // The direct CLI response isn't an SSE subscription; drain live events so
-    // inspection backpressure cannot stall the child.
-    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let run =
+        cade_store::sqlite::create_run(&state.db, &agent_id, payload.conversation_id.as_deref())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let run_id = run.id;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<
+        Result<runtime::RunEventEnvelope, std::convert::Infallible>,
+    >(128);
+    // The direct response cannot carry live events. Persist them under a
+    // streamable run ID, including events after a background launch returns.
+    let db = state.db.clone();
+    let relay_id = run_id.clone();
+    tokio::spawn(async move {
+        let mut status = "done";
+        while let Some(Ok(event)) = rx.recv().await {
+            if let Ok(payload) = serde_json::from_str::<Value>(&event.data)
+                && payload["message_type"] == "subagent_complete"
+                && payload["status"] != "success"
+                && payload["status"] != "done"
+            {
+                status = "error";
+            }
+            if let Err(error) = cade_store::sqlite::append_run_event(&db, &relay_id, &event.data) {
+                tracing::warn!(%relay_id, %error, "failed to persist CLI subagent event");
+            }
+        }
+        let _ = cade_store::sqlite::finish_run(&db, &relay_id, status);
+    });
     let result = subagent::handle_run_subagent_tool_inner(
         &state,
         &agent_id,
@@ -1276,7 +1299,7 @@ pub async fn launch_subagent_handler(
     )
     .await;
     Ok(Json(
-        json!({"output": result.output, "is_error": result.is_error}),
+        json!({"output": result.output, "is_error": result.is_error, "run_id": run_id}),
     ))
 }
 

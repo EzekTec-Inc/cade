@@ -191,6 +191,11 @@ impl Repl {
                 }
             }
         }
+        if let Some(run_id) = response["run_id"].as_str() {
+            result
+                .output
+                .push_str(&format!("\nInspection run: {run_id}"));
+        }
         Ok(result)
     }
 
