@@ -6,6 +6,162 @@ use super::*;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn parallel_child_with_background_flag_waits_for_terminal_result() {
+    struct BlockedLlm {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for BlockedLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(cade_ai::CompletionResponse {
+                content: Some("terminal child result".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("child uses complete")
+        }
+    }
+    let llm = Arc::new(BlockedLlm {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let state = build_state_with_llm(llm.clone());
+    approval_test_run(&state.db, "sync-parent");
+    let (tx, _events) = tokio::sync::mpsc::channel(128);
+    let runner = super::subagent::ServerSubagentRunner {
+        state,
+        parent_agent_id: "sync-parent".into(),
+        parent_conversation_id: None,
+        sse_tx: tx,
+        permission_mode: cade_core::permissions::PermissionMode::Default,
+    };
+    let run = tokio::spawn(async move {
+        cade_agent::subagents::SubagentSingleRunner::run_single(
+            &runner,
+            "parallel-child",
+            &json!({"prompt":"work", "background":true}),
+            true,
+        )
+        .await
+        .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), llm.entered.notified())
+        .await
+        .unwrap();
+    assert!(
+        !run.is_finished(),
+        "coordinator must not advance on launch acknowledgement"
+    );
+    llm.release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!result.is_error, "{}", result.output);
+    assert!(
+        result.output.contains("terminal child result"),
+        "{}",
+        result.output
+    );
+    assert!(!result.output.contains("launch acknowledged"));
+}
+
+#[tokio::test]
+async fn direct_cli_launch_persists_inspectable_child_events() {
+    struct TextLlm {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for TextLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(cade_ai::CompletionResponse {
+                content: Some("inspectable progress".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("child uses complete")
+        }
+    }
+    let llm = Arc::new(TextLlm {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let state = build_state_with_llm(llm.clone());
+    approval_test_run(&state.db, "inspect-parent");
+    let response = super::launch_subagent_handler(
+        State(state.clone()),
+        Path("inspect-parent".into()),
+        Json(super::LaunchSubagentPayload {
+            conversation_id: None,
+            args: json!({"prompt":"work", "background":true}),
+            mode: "default".into(),
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(response["is_error"], false, "{response}");
+    let run_id = response["run_id"].as_str().expect("CLI inspection run ID");
+    tokio::time::timeout(std::time::Duration::from_secs(2), llm.entered.notified())
+        .await
+        .unwrap();
+    assert!(
+        cade_store::sqlite::run_events_after(&state.db, run_id, -1)
+            .unwrap()
+            .iter()
+            .any(|(_, event)| event.contains("subagent_started"))
+    );
+    llm.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let events = cade_store::sqlite::run_events_after(&state.db, run_id, -1).unwrap();
+            if events
+                .iter()
+                .any(|(_, event)| event.contains("inspectable progress"))
+                && events
+                    .iter()
+                    .any(|(_, event)| event.contains("subagent_complete"))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
     struct SwapLlm {
         entered: tokio::sync::Notify,
@@ -15,7 +171,7 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
     #[async_trait::async_trait]
     impl cade_ai::LlmProvider for SwapLlm {
         fn validate_model(&self, model: &str) -> cade_ai::Result<()> {
-            if model == "provider-b/next" {
+            if model == "deepseek/deepseek-reasoner" {
                 Ok(())
             } else {
                 Err(cade_ai::Error::custom("model unavailable"))
@@ -98,7 +254,7 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
         State(state.clone()),
         Path(child_id.clone()),
         Json(SwapModelPayload {
-            model: "provider-b/next".into(),
+            model: "deepseek/deepseek-reasoner".into(),
         }),
     )
     .await
@@ -112,7 +268,7 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
         Some(conv.id.clone()),
         "subagent".into(),
         "control".into(),
-        json!({"action":"model", "id":child_id, "model":"provider-b/next"}),
+        json!({"action":"model", "id":child_id, "model":"deepseek/deepseek-reasoner"}),
         control_tx,
         cade_core::permissions::PermissionMode::Default,
         "model-control".into(),
@@ -135,18 +291,23 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
     assert_eq!(event["subagent_id"], child_id);
     let seen = llm.seen.lock().unwrap();
     assert_eq!(seen.len(), 2);
-    assert_ne!(seen[0].model, "provider-b/next");
-    assert_eq!(seen[1].model, "provider-b/next");
-    assert!(seen[1].tools.iter().any(|tool| tool["name"] == "finish"));
-    assert_eq!(seen[0].tools, seen[1].tools);
-    assert_eq!(seen[0].messages[0].content, seen[1].messages[0].content);
+    assert_ne!(seen[0].model, "deepseek/deepseek-reasoner");
+    assert_eq!(seen[1].model, "deepseek/deepseek-reasoner");
+    assert!(seen[0].tools.iter().any(|tool| tool["name"] == "finish"));
+    assert!(seen[1].tools.is_empty());
+    assert!(seen[1].messages[0].content.contains("no tool calling"));
+    assert!(
+        seen[1].messages[0]
+            .content
+            .contains(&seen[0].messages[0].content)
+    );
     assert!(seen[1].messages.iter().any(|m| m.content == "first turn"));
     drop(seen);
     let missing = swap_subagent_model_handler(
         State(state.clone()),
         Path("missing-child".into()),
         Json(SwapModelPayload {
-            model: "provider-b/next".into(),
+            model: "deepseek/deepseek-reasoner".into(),
         }),
     )
     .await;
@@ -158,7 +319,7 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
         Some(conv.id.clone()),
         "subagent".into(),
         "control-finished".into(),
-        json!({"action":"model", "id":child_id, "model":"provider-b/next"}),
+        json!({"action":"model", "id":child_id, "model":"deepseek/deepseek-reasoner"}),
         completed_tx,
         cade_core::permissions::PermissionMode::Default,
         "model-control".into(),
@@ -169,7 +330,7 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
         State(state),
         Path(child_id),
         Json(SwapModelPayload {
-            model: "provider-b/next".into(),
+            model: "deepseek/deepseek-reasoner".into(),
         }),
     )
     .await;
@@ -1629,7 +1790,7 @@ async fn pause_routes_report_requested_then_actual_boundary_and_resume() {
     );
     session.session_id = "pause-route-test".into();
     let gate = session.pause.clone();
-    super::subagent::register_pause_control(session.session_id.clone(), gate.clone());
+    session.register_control(true).running();
     assert_eq!(
         super::pause_subagent_handler(State(state.clone()), Path("pause-route-test".into()))
             .await
@@ -1726,7 +1887,6 @@ async fn pause_routes_report_requested_then_actual_boundary_and_resume() {
             .0,
         axum::http::StatusCode::NOT_FOUND
     );
-    super::subagent::unregister_pause_control("pause-route-test");
 }
 
 #[tokio::test]

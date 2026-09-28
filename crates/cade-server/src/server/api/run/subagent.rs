@@ -5,49 +5,15 @@ use crate::server::state::AppState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-static PAUSE_CONTROLS: OnceLock<Mutex<HashMap<String, cade_agent::subagents::SubagentPause>>> =
-    OnceLock::new();
-
-fn pause_controls() -> &'static Mutex<HashMap<String, cade_agent::subagents::SubagentPause>> {
-    PAUSE_CONTROLS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(super) fn register_pause_control(id: String, control: cade_agent::subagents::SubagentPause) {
-    pause_controls()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id, control);
-}
-
-pub(super) fn unregister_pause_control(id: &str) {
-    pause_controls()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(id);
-}
-
 pub(super) fn pause_state(id: &str) -> Option<cade_agent::subagents::SubagentPauseState> {
-    pause_controls()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(id)
-        .map(|control| control.state())
+    cade_agent::subagents::SubagentSession::pause_state(id)
 }
 
 pub(super) fn control_pause(
     id: &str,
     resume: bool,
 ) -> Result<cade_agent::subagents::SubagentPauseState, String> {
-    let controls = pause_controls().lock().unwrap_or_else(|e| e.into_inner());
-    let control = controls
-        .get(id)
-        .ok_or_else(|| format!("no active subagent found with ID {id}"))?;
-    (if resume {
-        control.resume()
-    } else {
-        control.pause()
-    })
-    .map_err(|reason| format!("subagent {id} {reason}"))
+    cade_agent::subagents::SubagentSession::control_pause(id, resume)
 }
 
 fn get_writeback_lock(parent_agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -64,25 +30,9 @@ pub fn steer_subagent(subagent_id: &str, message: String) -> Result<(), String> 
     cade_agent::subagents::SubagentSession::steer_child(subagent_id, message)
 }
 
-static HOTSWAP_MODELS: OnceLock<
-    Mutex<HashMap<String, cade_agent::subagents::session::SubagentModelControl>>,
-> = OnceLock::new();
-
-fn get_hotswap_models()
--> &'static Mutex<HashMap<String, cade_agent::subagents::session::SubagentModelControl>> {
-    HOTSWAP_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// Request a dynamic model hot-swap for an active subagent, taking effect on its next iteration turn.
 pub fn swap_subagent_model(subagent_id: &str, new_model: String) -> Result<(), String> {
-    let models = get_hotswap_models()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    models
-        .get(subagent_id)
-        .ok_or_else(|| format!("No active subagent found with ID {subagent_id}"))?
-        .request(new_model)
-        .map_err(str::to_string)
+    cade_agent::subagents::SubagentSession::swap_child_model(subagent_id, new_model)
 }
 
 /// Drop guard that deletes the ephemeral agent if the run does not succeed.
@@ -225,44 +175,7 @@ pub(super) fn filter_subagent_tools(
             if !allow_nesting && matches!(name, "run_subagent" | "run_parallel_subagents") {
                 return false;
             }
-            match allowed {
-                cade_agent::subagents::SubagentTools::All => true,
-                cade_agent::subagents::SubagentTools::Readonly => {
-                    matches!(
-                        name,
-                        "read_file"
-                            | "glob"
-                            | "grep"
-                            | "search_memory"
-                            | "conversation_search"
-                            | "archival_memory_search"
-                            | "recall"
-                            | "fetch_doc"
-                    ) || (name.contains("__")
-                        && (name.contains("read")
-                            || name.contains("find")
-                            || name.contains("get")
-                            || name.contains("list")
-                            || name.contains("search")
-                            || name.contains("inspect")
-                            || name.contains("describe")
-                            || name.contains("show")
-                            || name.contains("view")
-                            || name.contains("check")
-                            || name.contains("status")
-                            || name.contains("select")
-                            || name.contains("ask")
-                            || name.contains("query")
-                            || name.contains("skeleton")
-                            || name.contains("extract")))
-                }
-                cade_agent::subagents::SubagentTools::List(names) => {
-                    names.iter().any(|n| n == name)
-                }
-                cade_agent::subagents::SubagentTools::Restricted { allowed_tools, .. } => {
-                    allowed_tools.iter().any(|n| n == name)
-                }
-            }
+            cade_agent::subagents::SubagentToolPolicy::definition_allows(allowed, name)
         })
         .collect()
 }
@@ -429,12 +342,12 @@ impl SubagentExecutor for CadeSubagentExecutor {
     }
 }
 
-struct ServerSubagentRunner {
-    state: AppState,
-    parent_agent_id: String,
-    parent_conversation_id: Option<String>,
-    sse_tx: super::SseTx,
-    permission_mode: cade_core::permissions::PermissionMode,
+pub(super) struct ServerSubagentRunner {
+    pub(super) state: AppState,
+    pub(super) parent_agent_id: String,
+    pub(super) parent_conversation_id: Option<String>,
+    pub(super) sse_tx: super::SseTx,
+    pub(super) permission_mode: cade_core::permissions::PermissionMode,
 }
 
 #[async_trait]
@@ -443,14 +356,18 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
         &self,
         call_id: &str,
         args: &serde_json::Value,
-        _force_sync: bool,
+        force_sync: bool,
     ) -> Result<cade_agent::tools::ToolResult, cade_agent::Error> {
+        let mut args = args.clone();
+        if force_sync {
+            args["background"] = serde_json::Value::Bool(false);
+        }
         let res = handle_subagent_single_inner_tool_with_mode(
             &self.state,
             &self.parent_agent_id,
             self.parent_conversation_id.as_deref(),
             call_id,
-            args,
+            &args,
             self.sse_tx.clone(),
             self.permission_mode,
         )
@@ -715,6 +632,24 @@ struct ServerSubagentLlm<'a> {
 
 #[async_trait::async_trait]
 impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
+    fn prepare_turn(
+        &self,
+        model: &str,
+        prompt: &str,
+        tools: &[serde_json::Value],
+    ) -> (String, Vec<serde_json::Value>) {
+        if cade_ai::catalogue::supports_tools_for_model(model) {
+            (prompt.to_string(), tools.to_vec())
+        } else {
+            (
+                format!(
+                    "{prompt}\n\nThis model has no tool calling. Complete the task in a final text response."
+                ),
+                Vec::new(),
+            )
+        }
+    }
+
     async fn complete_turn(
         &self,
         model: &str,
@@ -915,7 +850,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
     session.session_id = subagent_id.clone();
     let control = session.register_control(true);
-    register_pause_control(subagent_id.clone(), session.pause.clone());
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
     let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
     state
@@ -962,7 +896,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
             },
             move |result| async move {
                 completion_cancel.close();
-                unregister_pause_control(&completion_id);
                 completion_state
                     .subagent_cancellations
                     .write()
@@ -1029,7 +962,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
         biased;
         Some(()) = cancel_rx.recv() => {
             cancellation.close();
-            unregister_pause_control(&subagent_id);
             state.subagent_cancellations.write().await.remove(&subagent_id);
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
@@ -1046,7 +978,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
     } {
         Ok(Ok(p)) => p,
         Ok(Err(_)) => {
-            unregister_pause_control(&subagent_id);
             state
                 .subagent_cancellations
                 .write()
@@ -1061,7 +992,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
             };
         }
         Err(_) => {
-            unregister_pause_control(&subagent_id);
             state
                 .subagent_cancellations
                 .write()
@@ -1104,7 +1034,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
         control.finished(status.as_str());
     }
     cancellation.close();
-    unregister_pause_control(&subagent_id);
     state
         .subagent_cancellations
         .write()
@@ -1507,25 +1436,6 @@ async fn run_subagent_with_permit(
     };
 
     let llm_executor = ServerSubagentLlm { state };
-    struct ModelCleanup {
-        subagent_id: String,
-    }
-    impl Drop for ModelCleanup {
-        fn drop(&mut self) {
-            let mut models = get_hotswap_models().lock().unwrap();
-            if let Some(control) = models.remove(&self.subagent_id) {
-                control.close();
-            }
-        }
-    }
-    let _model_cleanup = ModelCleanup {
-        subagent_id: subagent_id.clone(),
-    };
-    let model_control = cade_agent::subagents::session::SubagentModelControl::new();
-    get_hotswap_models()
-        .lock()
-        .unwrap()
-        .insert(subagent_id.clone(), model_control.clone());
     let tools_executor = ServerSubagentTools {
         state,
         subagent_id: subagent_id.clone(),
@@ -1563,38 +1473,14 @@ async fn run_subagent_with_permit(
         .with_parent_context(parent_context)
         .with_max_iters(max_iters)
         .with_max_tokens_budget(cfg.max_tokens_budget)
-        .with_tool_policy(policy)
-        .with_model_control(model_control);
+        .with_tool_policy(policy);
 
-    // A tool-level Ask is answered by the interactive approval queue, never by
-    // `human_review` (which applies only to the completed result).
-    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::channel(16);
-    session = session.with_approval_channel(
-        cade_agent::subagents::session::SubagentApprovalChannel::new(approval_tx),
-    );
-    let approval_adapter = HeadlessQueueAdapter {
+    // Only Ask reaches the existing PermissionService; Deny and Allow are
+    // decided by the effective policy before any approval request is made.
+    session = session.with_permission_service(Arc::new(HeadlessQueueAdapter {
         db: state.db.clone(),
         parent_agent_id: parent_agent_id.to_string(),
         subagent_id: subagent_id.clone(),
-    };
-    struct ApprovalForwarder(tokio::task::JoinHandle<()>);
-    impl Drop for ApprovalForwarder {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _approval_task = ApprovalForwarder(tokio::spawn(async move {
-        use cade_core::permissions::PermissionService;
-        while let Some((_, tool_name, args, reply)) = approval_rx.recv().await {
-            let approved = approval_adapter
-                .request_permission(&tool_name, &args)
-                .await
-                .unwrap_or(false);
-            let _ = reply.send(cade_agent::subagents::session::SubagentApprovalResponse {
-                approved,
-                feedback: None,
-            });
-        }
     }));
 
     // Event forwarder from SubagentSession to SSE stream
@@ -2324,6 +2210,7 @@ mod tests {
             serde_json::json!({ "name": "read_file" }),
             serde_json::json!({ "name": "serena__search_for_pattern" }),
             serde_json::json!({ "name": "serena__replace_content" }),
+            serde_json::json!({ "name": "read__replace_content" }),
             serde_json::json!({ "name": "desktop-commander-mcp__read_file" }),
             serde_json::json!({ "name": "run_subagent" }),
             serde_json::json!({ "name": "finish" }),
@@ -2351,6 +2238,10 @@ mod tests {
         assert!(
             !names.contains(&"serena__replace_content"),
             "mutating tools must be filtered in readonly mode"
+        );
+        assert!(
+            !names.contains(&"read__replace_content"),
+            "namespace cannot make a write tool read-only"
         );
         assert!(!names.contains(&"run_subagent"), "nesting tools filtered");
         assert!(
