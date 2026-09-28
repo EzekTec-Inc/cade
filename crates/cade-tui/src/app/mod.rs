@@ -639,13 +639,23 @@ pub struct ActiveQuestionDrawState {
     pub total_items: usize,
     pub other_idx: usize,
     pub submit_idx: usize,
+    pub custom_cursor_pos: usize,
+    pub scroll_offset: u16,
 }
 
 impl ActiveQuestionDrawState {
-    fn new(question: crate::question::Question) -> Self {
+    pub fn new(question: crate::question::Question) -> Self {
         let n_real = question.options.len();
         let has_other = question.allow_other;
         let has_submit = question.multi_select;
+        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
+        let other_idx = if has_other { n_real } else { usize::MAX };
+        let submit_idx = if has_submit {
+            n_real + usize::from(has_other)
+        } else {
+            usize::MAX
+        };
+
         Self {
             question,
             cursor_pos: 0,
@@ -655,13 +665,11 @@ impl ActiveQuestionDrawState {
             n_real,
             has_other,
             has_submit,
-            total_items: n_real + usize::from(has_other) + usize::from(has_submit),
-            other_idx: if has_other { n_real } else { usize::MAX },
-            submit_idx: if has_submit {
-                n_real + usize::from(has_other)
-            } else {
-                usize::MAX
-            },
+            total_items,
+            other_idx,
+            submit_idx,
+            custom_cursor_pos: 0,
+            scroll_offset: 0,
         }
     }
 }
@@ -693,11 +701,18 @@ impl OverlayComponent for ActiveQuestionState {
         "active_question"
     }
 
-    fn render_overlay(&mut self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
-
-    fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
-        crate::app::layout::question::render_question_inline(frame, &self.draw_state, area, colors);
+    fn render_overlay(&mut self, frame: &mut Frame, _area: Rect, colors: &ThemeColors) {
+        let full_area = frame.area();
+        crate::app::layout::helpers::render_backdrop(frame, full_area, colors);
+        crate::app::layout::question::render_question_modal(
+            frame,
+            &self.draw_state,
+            full_area,
+            colors,
+        );
     }
+
+    fn render_inline(&self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -752,8 +767,54 @@ impl OverlayComponent for ActiveQuestionState {
                     }
                 }
             }
+            (KeyCode::Char(' '), _) if st.question.multi_select => {
+                if st.cursor_pos < st.n_real {
+                    st.checked[st.cursor_pos] = !st.checked[st.cursor_pos];
+                } else if st.cursor_pos == st.submit_idx {
+                    let mut selected: Vec<String> = st
+                        .checked
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| **c)
+                        .map(|(i, _)| st.question.options[i].label.clone())
+                        .collect();
+                    if !st.custom_text.is_empty() {
+                        selected.push(st.custom_text.clone());
+                    }
+                    ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
+                }
+            }
+            (KeyCode::Left, _) if st.cursor_pos == st.other_idx => {
+                if st.custom_cursor_pos > 0 {
+                    st.custom_cursor_pos -= 1;
+                }
+            }
+            (KeyCode::Right, _) if st.cursor_pos == st.other_idx => {
+                if st.custom_cursor_pos < st.custom_text.chars().count() {
+                    st.custom_cursor_pos += 1;
+                }
+            }
+            (KeyCode::Home, _) if st.cursor_pos == st.other_idx => {
+                st.custom_cursor_pos = 0;
+            }
+            (KeyCode::End, _) if st.cursor_pos == st.other_idx => {
+                st.custom_cursor_pos = st.custom_text.chars().count();
+            }
+            (KeyCode::Delete, _) if st.cursor_pos == st.other_idx => {
+                let char_count = st.custom_text.chars().count();
+                if st.custom_cursor_pos < char_count {
+                    let mut chars: Vec<char> = st.custom_text.chars().collect();
+                    chars.remove(st.custom_cursor_pos);
+                    st.custom_text = chars.into_iter().collect();
+                }
+            }
             (KeyCode::Backspace, _) if st.cursor_pos == st.other_idx => {
-                st.custom_text.pop();
+                if st.custom_cursor_pos > 0 {
+                    let mut chars: Vec<char> = st.custom_text.chars().collect();
+                    chars.remove(st.custom_cursor_pos - 1);
+                    st.custom_text = chars.into_iter().collect();
+                    st.custom_cursor_pos -= 1;
+                }
             }
             (KeyCode::Enter, _) => {
                 if st.question.multi_select {
@@ -787,12 +848,17 @@ impl OverlayComponent for ActiveQuestionState {
             }
             (KeyCode::Char('u'), KeyModifiers::CONTROL) if st.cursor_pos == st.other_idx => {
                 st.custom_text.clear();
+                st.custom_cursor_pos = 0;
             }
             (KeyCode::Char(c), m)
                 if (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT)
                     && st.cursor_pos == st.other_idx =>
             {
-                st.custom_text.push(c);
+                let mut chars: Vec<char> = st.custom_text.chars().collect();
+                let pos = st.custom_cursor_pos.min(chars.len());
+                chars.insert(pos, c);
+                st.custom_text = chars.into_iter().collect();
+                st.custom_cursor_pos = pos + 1;
             }
             _ => return OverlayInputResult::NotHandled,
         }
@@ -812,8 +878,8 @@ impl OverlayComponent for ActiveQuestionState {
         self.result.take().map(|r| Box::new(r) as Box<dyn Any>)
     }
 
-    fn inline_height(&self, max_height: u16) -> u16 {
-        crate::app::layout::question::question_height(&self.draw_state, max_height)
+    fn inline_height(&self, _max_height: u16) -> u16 {
+        0
     }
 }
 

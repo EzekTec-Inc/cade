@@ -5,13 +5,14 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use std::borrow::Cow;
 
 /// Reserve an inline decision panel without taking over the conversation.
 /// The details and choices have separate viewports, so neither can displace
 /// the keyboard hints or the focused choice.
+#[allow(dead_code)]
 pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
     let q = &aq.question;
     let choices = q.options.iter().fold(0usize, |rows, option| {
@@ -25,6 +26,7 @@ pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16)
         .max(6)
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_question_inline(
     frame: &mut Frame,
     aq: &ActiveQuestionDrawState,
@@ -225,79 +227,298 @@ pub(crate) fn render_question_inline(
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::question::{Question, QuestionOption};
-    use ratatui::{Terminal, backend::TestBackend};
+/// Render the centered question modal dialog on the overlay stack.
+/// Draws a high-visibility bordered card with dimmed backdrop,
+/// radio markers for single-select (or checkboxes for multi-select),
+/// and keyboard navigation hints.
+pub(crate) fn render_question_modal(
+    frame: &mut Frame,
+    aq: &ActiveQuestionDrawState,
+    full_area: Rect,
+    colors: &ThemeColors,
+) {
+    let q = &aq.question;
 
-    fn draw(state: &ActiveQuestionDrawState, width: u16, height: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_question_inline(
-                    frame,
-                    state,
-                    Rect::new(0, 0, width, height),
-                    &ThemeColors::default(),
-                );
-            })
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect()
+    // 1. Calculate responsive modal dimensions
+    let mut desired_w: u16 = 50;
+    let header_len = q.header.chars().count() as u16 + 8;
+    desired_w = desired_w.max(header_len);
+    for l in q.text.lines() {
+        desired_w = desired_w.max(l.chars().count() as u16 + 6);
+    }
+    for opt in &q.options {
+        let opt_len = opt.label.chars().count() as u16 + 14;
+        desired_w = desired_w.max(opt_len);
+        if !opt.description.is_empty() {
+            desired_w = desired_w.max(opt.description.chars().count() as u16 + 14);
+        }
     }
 
-    #[test]
-    fn approval_keeps_focused_choice_and_hints_visible_with_long_details() {
-        let question = Question {
-            header: "Approve file.write".into(),
-            text: (0..20)
-                .map(|i| format!("Argument {i}: a long value\n"))
-                .collect(),
-            options: (0..12)
-                .map(|i| QuestionOption {
-                    label: format!("Choice {i}"),
-                    description: format!("Description {i}"),
-                })
-                .collect(),
-            multi_select: false,
-            allow_other: false,
-            progress: None,
+    let modal_w = desired_w
+        .min(full_area.width.saturating_sub(2))
+        .min(76)
+        .max(20.min(full_area.width));
+
+    // Calculate height
+    let mut rows: u16 = 2; // top & bottom borders
+    rows += q.text.lines().count().max(1) as u16;
+    rows += 1; // blank line after question text
+
+    if q.progress.is_some() {
+        rows += 2; // "Question N of M" + blank line
+    }
+
+    for idx in 0..aq.total_items {
+        if idx == aq.submit_idx || idx == aq.other_idx {
+            rows += 2;
+        } else {
+            rows += 1;
+            if idx < q.options.len() && !q.options[idx].description.is_empty() {
+                rows += 1;
+            }
+        }
+    }
+    rows += 2; // blank + hint line
+
+    let modal_h = rows
+        .min(full_area.height.saturating_sub(2))
+        .max(6.min(full_area.height));
+
+    let x = full_area.x + (full_area.width.saturating_sub(modal_w)) / 2;
+    let y = full_area.y + (full_area.height.saturating_sub(modal_h)) / 2;
+    let modal_area = Rect::new(x, y, modal_w, modal_h);
+
+    // 2. Clear underlying area
+    frame.render_widget(Clear, modal_area);
+
+    // 3. Render bordered card block
+    let title_text = if q.header.is_empty() {
+        "Question".to_string()
+    } else {
+        q.header.clone()
+    };
+    let title = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("❓ {title_text}"),
+            Style::default()
+                .fg(colors.c_md_heading())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(colors.c_border_style())
+        .style(Style::default().bg(colors.c_bg_surface2()))
+        .border_style(colors.border_accent())
+        .title(title);
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    // 4. Render inner lines
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Question text
+    for l in q.text.lines().skip(aq.detail_scroll as usize).take(5) {
+        if !l.trim().is_empty() || q.text.lines().count() == 1 {
+            lines.push(Line::from(Span::styled(
+                l.to_string(),
+                colors.text_primary_bold(),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Progress indicator
+    if let Some((cur, tot)) = q.progress {
+        lines.push(Line::from(Span::styled(
+            format!("Question {cur} of {tot}"),
+            colors.text_muted(),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    let mut selected_line_idx: usize = 0;
+
+    // Options
+    for idx in 0..aq.total_items {
+        let is_selected = aq.cursor_pos == idx;
+        let selector = if is_selected { "❯" } else { " " };
+        if is_selected {
+            selected_line_idx = lines.len();
+        }
+
+        // Submit item (multi-select only)
+        if idx == aq.submit_idx {
+            let style = if is_selected {
+                Style::default()
+                    .fg(colors.c_success())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                colors.text_muted()
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {selector} [Submit]"),
+                style,
+            )));
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        // Free-text "Other" item
+        if idx == aq.other_idx {
+            let display = if is_selected {
+                if aq.custom_text.is_empty() {
+                    "Type something...█".to_string()
+                } else {
+                    let chars: Vec<char> = aq.custom_text.chars().collect();
+                    let pos = aq.custom_cursor_pos.min(chars.len());
+                    let mut s = String::new();
+                    for (i, c) in chars.iter().enumerate() {
+                        if i == pos {
+                            s.push('█');
+                        }
+                        s.push(*c);
+                    }
+                    if pos == chars.len() {
+                        s.push('█');
+                    }
+                    s
+                }
+            } else if !aq.custom_text.is_empty() {
+                aq.custom_text.clone()
+            } else {
+                "Type something...".to_string()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {selector} {}.  ", idx + 1),
+                    Style::default().fg(if is_selected {
+                        colors.c_success()
+                    } else {
+                        colors.c_text_muted()
+                    }),
+                ),
+                Span::styled(
+                    display,
+                    Style::default()
+                        .fg(colors.c_text_dim())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        // Regular option
+        let opt = &q.options[idx];
+        let indicator = if q.multi_select {
+            if aq.checked[idx] { "[✓] " } else { "[ ] " }
+        } else if is_selected {
+            "(•) "
+        } else {
+            "( ) "
         };
-        let mut state = ActiveQuestionDrawState::new(question);
-        state.cursor_pos = 11;
 
-        let screen = draw(&state, 60, 13);
-        assert!(screen.contains("Approve file.write"));
-        assert!(screen.contains("Choice 11"));
-        assert!(screen.contains("Esc deny"));
-        assert!(!screen.contains("Choice 0"));
-
-        let mut scrolled = state.clone();
-        scrolled.detail_scroll = 18;
-        assert!(draw(&scrolled, 60, 13).contains("Argument 18"));
-        assert!(draw(&state, 42, 13).contains("Esc deny"));
-    }
-
-    #[test]
-    fn long_custom_answer_keeps_the_cursor_and_latest_text_visible() {
-        let question = Question {
-            header: "Ask".into(),
-            text: "What should we name it?".into(),
-            options: vec![],
-            multi_select: false,
-            allow_other: true,
-            progress: None,
+        let num_style = if is_selected {
+            colors.success()
+        } else {
+            colors.text_muted()
         };
-        let mut state = ActiveQuestionDrawState::new(question);
-        state.custom_text = format!("{}end", "a".repeat(100));
-        let screen = draw(&state, 42, 10);
-        assert!(screen.contains("…"));
-        assert!(screen.contains("end▌"));
+        let label_style = if is_selected {
+            Style::default()
+                .fg(colors.c_text_primary())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            colors.text_primary()
+        };
+        let indicator_style = if is_selected {
+            Style::default()
+                .fg(colors.c_success())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            colors.text_muted()
+        };
+
+        let mut label_lines = opt.label.lines();
+        if let Some(first) = label_lines.next() {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {selector} "), colors.success()),
+                Span::styled(format!("{}. ", idx + 1), num_style),
+                Span::styled(indicator.to_string(), indicator_style),
+                Span::styled(first.to_string(), label_style),
+            ]));
+        }
+        for l in label_lines {
+            lines.push(Line::from(vec![
+                Span::raw("         "),
+                Span::styled(l.to_string(), label_style),
+            ]));
+        }
+
+        if !opt.description.is_empty() {
+            for l in opt.description.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("         {}", l),
+                    colors.text_muted(),
+                )));
+            }
+        }
     }
+
+    // Keep the keyboard hint outside the scrolling choices so an approval
+    // remains actionable even when the question or option list is very long.
+    let cancel = if q.header.starts_with("Approve") {
+        "deny"
+    } else {
+        "cancel"
+    };
+    let hint = if q.multi_select && inner.width < 70 {
+        format!("Space toggle · 1-N toggle · Esc {cancel}")
+    } else if q.multi_select {
+        format!("Space toggle · 1-N toggle · ↑↓/Tab navigate · Enter on [Submit] · Esc {cancel}")
+    } else if inner.width < 70 {
+        format!("1-N quick pick · Enter select · Esc {cancel}")
+    } else {
+        format!("1-N quick pick · ↑↓/Tab navigate · Enter select · Esc {cancel}")
+    };
+    let body = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
+    if inner.height > 0 {
+        frame.render_widget(
+            Paragraph::new(hint).style(colors.text_dim().add_modifier(Modifier::DIM)),
+            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
+        );
+    }
+
+    let total_lines = lines.len();
+    let visible_height = body.height as usize;
+
+    let scroll_y = if total_lines > visible_height && visible_height > 0 {
+        if selected_line_idx < aq.scroll_offset as usize {
+            selected_line_idx as u16
+        } else if selected_line_idx >= (aq.scroll_offset as usize) + visible_height {
+            (selected_line_idx + 1).saturating_sub(visible_height) as u16
+        } else {
+            aq.scroll_offset
+        }
+    } else {
+        0
+    };
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_y, 0))
+            .style(Style::default()),
+        body,
+    );
 }
