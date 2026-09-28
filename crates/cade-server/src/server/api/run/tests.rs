@@ -289,20 +289,21 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
     .await
     .unwrap();
     assert_eq!(event["subagent_id"], child_id);
-    let seen = llm.seen.lock().unwrap();
-    assert_eq!(seen.len(), 2);
-    assert_ne!(seen[0].model, "deepseek/deepseek-reasoner");
-    assert_eq!(seen[1].model, "deepseek/deepseek-reasoner");
-    assert!(seen[0].tools.iter().any(|tool| tool["name"] == "finish"));
-    assert!(seen[1].tools.is_empty());
-    assert!(seen[1].messages[0].content.contains("no tool calling"));
-    assert!(
-        seen[1].messages[0]
-            .content
-            .contains(&seen[0].messages[0].content)
-    );
-    assert!(seen[1].messages.iter().any(|m| m.content == "first turn"));
-    drop(seen);
+    {
+        let seen = llm.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].model, "deepseek/deepseek-reasoner");
+        assert_eq!(seen[1].model, "deepseek/deepseek-reasoner");
+        assert!(seen[0].tools.iter().any(|tool| tool["name"] == "finish"));
+        assert!(seen[1].tools.is_empty());
+        assert!(seen[1].messages[0].content.contains("no tool calling"));
+        assert!(
+            seen[1].messages[0]
+                .content
+                .contains(&seen[0].messages[0].content)
+        );
+        assert!(seen[1].messages.iter().any(|m| m.content == "first turn"));
+    }
     let missing = swap_subagent_model_handler(
         State(state.clone()),
         Path("missing-child".into()),
