@@ -22,6 +22,18 @@ pub trait SubagentSingleRunner: Send + Sync {
     /// Cancels or interrupts an active subagent task.
     async fn cancel_subagent(&self, subagent_id: &str) -> Result<String>;
 
+    async fn pause_subagent(&self, _subagent_id: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "pause is unsupported by this subagent runner",
+        ))
+    }
+
+    async fn resume_subagent(&self, _subagent_id: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "resume is unsupported by this subagent runner",
+        ))
+    }
+
     /// Inspects the subagent system status.
     fn doctor_status(&self) -> Result<String>;
 
@@ -669,7 +681,7 @@ impl SubagentCoordinator {
                         });
                     }
                 }
-                "resume" => {
+                "pause" | "resume" => {
                     let subagent_id = cfg
                         .id
                         .clone()
@@ -680,29 +692,24 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'id' is required for 'resume' action".to_string(),
+                            output: "error: 'id' is required for pause/resume".to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
                     }
-                    let message = args["message"].as_str().unwrap_or("").to_string();
-                    if !message.is_empty() {
-                        return Ok(ToolResult {
-                            tool_call_id: call_id.to_string(),
-                            tool_name: "subagent".to_string(),
-                            output: format!(
-                                "Resumed subagent '{}' with guidance: {}",
-                                subagent_id, message
-                            ),
-                            is_error: false,
-                            ui_resource_uri: None,
-                        });
-                    }
+                    let result = if action == "pause" {
+                        runner.pause_subagent(&subagent_id).await
+                    } else {
+                        runner.resume_subagent(&subagent_id).await
+                    };
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: format!("Resumed subagent '{}'", subagent_id),
-                        is_error: false,
+                        output: match &result {
+                            Ok(state) => format!("Subagent '{subagent_id}': {state}"),
+                            Err(e) => format!("error: {e}"),
+                        },
+                        is_error: result.is_err(),
                         ui_resource_uri: None,
                     });
                 }
@@ -1062,7 +1069,7 @@ mod tests {
         assert!(!res.is_error);
         assert!(res.output.contains("agent-123"));
 
-        // Resume action with guidance
+        // A runner without a live control target must never claim a resume.
         let resume_args = json!({
             "action": "resume",
             "id": "agent-123",
@@ -1071,9 +1078,17 @@ mod tests {
         let res2 = SubagentCoordinator::coordinate(&runner, "call_3", &resume_args)
             .await
             .expect("coordinate resume");
-        assert!(!res2.is_error);
-        assert!(res2.output.contains("agent-123"));
-        assert!(res2.output.contains("continue with next step"));
+        assert!(res2.is_error);
+        assert!(res2.output.contains("unsupported"));
+        let pause = SubagentCoordinator::coordinate(
+            &runner,
+            "call_4",
+            &json!({"action":"pause", "id":"agent-123"}),
+        )
+        .await
+        .unwrap();
+        assert!(pause.is_error);
+        assert!(pause.output.contains("unsupported"));
     }
 
     #[tokio::test]

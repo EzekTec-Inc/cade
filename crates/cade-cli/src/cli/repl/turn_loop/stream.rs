@@ -589,6 +589,20 @@ impl Repl {
                             }
                         }
                     }
+                    "subagent_state" => {
+                        let subagent_id = msg.data["subagent_id"].as_str().unwrap_or("");
+                        let status = msg.data["status"].as_str().unwrap_or("unknown");
+                        let mut app = app_arc.lock();
+                        if let Some(t) = app
+                            .subagent_trackers
+                            .iter_mut()
+                            .find(|t| t.task_id == subagent_id)
+                        {
+                            t.push_output(format!("[STATE]: {status}"));
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
+                    }
                     "subagent_tool_start" => {
                         let subagent_id = msg.data["subagent_id"].as_str().unwrap_or("");
                         let tool = msg.data["tool"].as_str().unwrap_or("tool");

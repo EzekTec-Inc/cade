@@ -88,6 +88,14 @@ pub fn router(state: AppState) -> Router {
             post(run::cancel_subagent_handler),
         )
         .route(
+            "/v1/subagents/{id}/pause",
+            post(run::pause_subagent_handler).get(run::pause_subagent_state_handler),
+        )
+        .route(
+            "/v1/subagents/{id}/resume",
+            post(run::resume_subagent_handler),
+        )
+        .route(
             "/v1/subagents/{id}/model",
             post(run::swap_subagent_model_handler),
         )

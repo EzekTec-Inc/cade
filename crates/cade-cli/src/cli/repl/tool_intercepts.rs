@@ -86,6 +86,32 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
         cancel_registered_subagent(&self.subagent_cancellations, subagent_id).await
     }
 
+    async fn pause_subagent(&self, id: &str) -> std::result::Result<String, cade_agent::Error> {
+        if self.subagent_cancellations.lock().await.contains_key(id) {
+            return Err(cade_agent::Error::custom(
+                "pause is unsupported for CLI-local headless subagents",
+            ));
+        }
+        let value = self
+            .client
+            .raw_post(&format!("/subagents/{id}/pause"), &serde_json::json!({}))
+            .await?;
+        Ok(value["status"].as_str().unwrap_or("unknown").to_string())
+    }
+
+    async fn resume_subagent(&self, id: &str) -> std::result::Result<String, cade_agent::Error> {
+        if self.subagent_cancellations.lock().await.contains_key(id) {
+            return Err(cade_agent::Error::custom(
+                "resume is unsupported for CLI-local headless subagents",
+            ));
+        }
+        let value = self
+            .client
+            .raw_post(&format!("/subagents/{id}/resume"), &serde_json::json!({}))
+            .await?;
+        Ok(value["status"].as_str().unwrap_or("unknown").to_string())
+    }
+
     fn doctor_status(&self) -> std::result::Result<String, cade_agent::Error> {
         let report = cade_core::doctor::check_multiplexer_and_keys();
         let mut out =
@@ -193,23 +219,38 @@ impl Repl {
                     .await;
             }
             SubagentTrayAction::PauseResume { subagent_id } => {
+                let response = if self
+                    .subagent_cancellations
+                    .lock()
+                    .await
+                    .contains_key(&subagent_id)
                 {
-                    let mut app = self.app.lock();
-                    app.show_toast(
-                        format!("Pause/Resume signal sent to {subagent_id}"),
-                        cade_tui::ToastLevel::Info,
-                    );
-                    app.draw_dirty = true;
-                    let _ = app.draw();
-                }
-                let body = serde_json::json!({
-                    "action": "pause_resume",
-                    "id": subagent_id,
-                });
-                let _ = self
-                    .client
-                    .raw_post(&format!("/subagents/{subagent_id}/pause"), &body)
-                    .await;
+                    Err(cade_agent::Error::custom(
+                        "pause is unsupported for CLI-local headless subagents",
+                    ))
+                } else {
+                    match self
+                        .client
+                        .raw_get(&format!("/subagents/{subagent_id}/pause"))
+                        .await
+                    {
+                        Ok(state) if state["status"] == "paused" => {
+                            self.resume_subagent(&subagent_id).await
+                        }
+                        Ok(_) => self.pause_subagent(&subagent_id).await,
+                        Err(e) => Err(e),
+                    }
+                };
+                let mut app = self.app.lock();
+                app.show_toast(
+                    match response {
+                        Ok(state) => format!("Subagent {subagent_id}: {state}"),
+                        Err(e) => format!("Could not control {subagent_id}: {e}"),
+                    },
+                    cade_tui::ToastLevel::Info,
+                );
+                app.draw_dirty = true;
+                let _ = app.draw();
             }
         }
     }

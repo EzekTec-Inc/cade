@@ -5,6 +5,51 @@ use crate::server::state::AppState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+static PAUSE_CONTROLS: OnceLock<Mutex<HashMap<String, cade_agent::subagents::SubagentPause>>> =
+    OnceLock::new();
+
+fn pause_controls() -> &'static Mutex<HashMap<String, cade_agent::subagents::SubagentPause>> {
+    PAUSE_CONTROLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(super) fn register_pause_control(id: String, control: cade_agent::subagents::SubagentPause) {
+    pause_controls()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, control);
+}
+
+pub(super) fn unregister_pause_control(id: &str) {
+    pause_controls()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id);
+}
+
+pub(super) fn pause_state(id: &str) -> Option<cade_agent::subagents::SubagentPauseState> {
+    pause_controls()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .map(|control| control.state())
+}
+
+pub(super) fn control_pause(
+    id: &str,
+    resume: bool,
+) -> Result<cade_agent::subagents::SubagentPauseState, String> {
+    let controls = pause_controls().lock().unwrap_or_else(|e| e.into_inner());
+    let control = controls
+        .get(id)
+        .ok_or_else(|| format!("no active subagent found with ID {id}"))?;
+    (if resume {
+        control.resume()
+    } else {
+        control.pause()
+    })
+    .map_err(|reason| format!("subagent {id} {reason}"))
+}
+
 fn get_writeback_lock(parent_agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     let locks_map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -450,6 +495,18 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
         }
     }
 
+    async fn pause_subagent(&self, id: &str) -> Result<String, cade_agent::Error> {
+        control_pause(id, false)
+            .map(|state| state.as_str().to_string())
+            .map_err(cade_agent::Error::custom)
+    }
+
+    async fn resume_subagent(&self, id: &str) -> Result<String, cade_agent::Error> {
+        control_pause(id, true)
+            .map(|state| state.as_str().to_string())
+            .map_err(cade_agent::Error::custom)
+    }
+
     fn doctor_status(&self) -> Result<String, cade_agent::Error> {
         Ok("Subagent system status: OK. Multi-agent concurrency slots available.".to_string())
     }
@@ -881,6 +938,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let subagent_id = format!("sa_{}", uuid::Uuid::new_v4());
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
     session.session_id = subagent_id.clone();
+    register_pause_control(subagent_id.clone(), session.pause.clone());
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
     let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
     state
@@ -924,6 +982,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             },
             move |result| async move {
                 completion_cancel.close();
+                unregister_pause_control(&completion_id);
                 completion_state
                     .subagent_cancellations
                     .write()
@@ -975,6 +1034,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
         biased;
         Some(()) = cancel_rx.recv() => {
             cancellation.close();
+            unregister_pause_control(&subagent_id);
             state.subagent_cancellations.write().await.remove(&subagent_id);
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
@@ -991,6 +1051,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     } {
         Ok(Ok(p)) => p,
         Ok(Err(_)) => {
+            unregister_pause_control(&subagent_id);
             state
                 .subagent_cancellations
                 .write()
@@ -1005,6 +1066,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
             };
         }
         Err(_) => {
+            unregister_pause_control(&subagent_id);
             state
                 .subagent_cancellations
                 .write()
@@ -1042,6 +1104,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
     )
     .await;
     cancellation.close();
+    unregister_pause_control(&subagent_id);
     state
         .subagent_cancellations
         .write()
@@ -1555,6 +1618,30 @@ async fn run_subagent_with_permit(
     let raw_sse = emitter.raw_sse_tx();
     let s_id_c = subagent_id.clone();
     let max_it = max_iters;
+    let mut pause_states = session.pause.subscribe();
+    let pause_sse = raw_sse.clone();
+    let pause_id = subagent_id.clone();
+    tokio::spawn(async move {
+        while pause_states.changed().await.is_ok() {
+            let state = *pause_states.borrow_and_update();
+            // The session sends Paused as a distinct boundary event. Do not
+            // duplicate it through the watch observer.
+            if state == cade_agent::subagents::SubagentPauseState::Paused {
+                continue;
+            }
+            let event = serde_json::json!({
+                "message_type": "subagent_state",
+                "subagent_id": pause_id,
+                "status": state,
+            });
+            let _ = pause_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                data: event.to_string(),
+            }));
+            if state == cade_agent::subagents::SubagentPauseState::Finished {
+                break;
+            }
+        }
+    });
     tokio::spawn(async move {
         while let Some(evt) = session_evt_rx.recv().await {
             match evt {
@@ -1604,6 +1691,16 @@ async fn run_subagent_with_permit(
                         data: tool_ev.to_string(),
                     }));
                 }
+                cade_agent::subagents::SubagentEvent::PauseStateChanged { state } => {
+                    let event = serde_json::json!({
+                        "message_type": "subagent_state",
+                        "subagent_id": s_id_c,
+                        "status": state,
+                    });
+                    let _ = raw_sse.try_send(Ok(super::runtime::RunEventEnvelope {
+                        data: event.to_string(),
+                    }));
+                }
                 _ => {}
             }
         }
@@ -1633,6 +1730,9 @@ async fn run_subagent_with_permit(
             error: "Subagent cancelled by parent".to_string(),
         }),
     };
+    // Timeout/cancellation drops the loop future without calling finalize_outcome.
+    // Close the control gate before write-back so no late pause can be accepted.
+    session.pause.finish();
     // Dropping the guard discards changes if the run timed out or was cancelled.
     session.workspace_guard = None;
 
