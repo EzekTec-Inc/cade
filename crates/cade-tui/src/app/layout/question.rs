@@ -367,7 +367,7 @@ pub(crate) fn render_question_modal(
                 colors.text_muted()
             };
             lines.push(Line::from(Span::styled(
-                format!(" {selector} Submit"),
+                format!(" {selector} [Submit]"),
                 style,
             )));
             lines.push(Line::from(""));
@@ -467,7 +467,7 @@ pub(crate) fn render_question_modal(
     // Hint line
     lines.push(Line::from(""));
     let hint = if q.multi_select {
-        "Space toggle · ↑↓/Tab navigate · Enter on Submit to confirm · Esc cancel"
+        "Space toggle · 1-N toggle · ↑↓/Tab navigate · Enter on [Submit] to confirm · Esc cancel"
     } else {
         "1-N quick pick · ↑↓/Tab navigate · Enter select · Esc cancel"
     };

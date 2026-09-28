@@ -735,22 +735,40 @@ impl OverlayComponent for ActiveQuestionState {
                     }
                 }
             }
+            (KeyCode::Char(' '), _) if st.question.multi_select => {
+                if st.cursor_pos < st.n_real {
+                    st.checked[st.cursor_pos] = !st.checked[st.cursor_pos];
+                } else if st.cursor_pos == st.submit_idx {
+                    let mut selected: Vec<String> = st
+                        .checked
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| **c)
+                        .map(|(i, _)| st.question.options[i].label.clone())
+                        .collect();
+                    if !st.custom_text.is_empty() {
+                        selected.push(st.custom_text.clone());
+                    }
+                    ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
+                }
+            }
             (KeyCode::Backspace, _) if st.cursor_pos == st.other_idx => {
                 st.custom_text.pop();
             }
             (KeyCode::Enter, _) => {
                 if st.question.multi_select {
                     if st.cursor_pos == st.submit_idx {
-                        let selected: Vec<String> = st
+                        let mut selected: Vec<String> = st
                             .checked
                             .iter()
                             .enumerate()
                             .filter(|(_, c)| **c)
                             .map(|(i, _)| st.question.options[i].label.clone())
                             .collect();
-                        if !selected.is_empty() {
-                            ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
+                        if !st.custom_text.is_empty() {
+                            selected.push(st.custom_text.clone());
                         }
+                        ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
                     } else if st.cursor_pos == st.other_idx {
                         if !st.custom_text.is_empty() {
                             ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(vec![

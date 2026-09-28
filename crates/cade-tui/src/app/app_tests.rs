@@ -1259,3 +1259,146 @@ fn test_question_modal_esc_dismisses_cleanly() {
     let received = rx.try_recv().expect("must receive cancellation");
     assert_eq!(received, None);
 }
+
+#[test]
+fn test_question_modal_multi_select_spacebar_toggle() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::question::{Question, QuestionOption, QuestionAnswer};
+
+    let question = Question {
+        header: "Languages".to_string(),
+        text: "Select languages you know:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Rust".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Go".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Python".to_string(),
+                description: "".to_string(),
+            },
+        ],
+        multi_select: true,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    // 1. Press Space on Option 0 (Rust) -> toggles to true
+    let key_space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+    let res = state.handle_input(key_space);
+    assert!(matches!(res, OverlayInputResult::Consumed));
+    assert!(state.draw_state.checked[0]);
+
+    // 2. Navigate Down to Option 1 (Go)
+    let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    state.handle_input(key_down);
+    assert_eq!(state.draw_state.cursor_pos, 1);
+
+    // 3. Press Space on Option 1 -> toggles to true
+    state.handle_input(key_space);
+    assert!(state.draw_state.checked[1]);
+
+    // 4. Press Space again on Option 1 -> toggles back to false
+    state.handle_input(key_space);
+    assert!(!state.draw_state.checked[1]);
+
+    // 5. Press '3' to toggle Option 2 (Python) without submitting
+    let key_3 = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE);
+    let res3 = state.handle_input(key_3);
+    assert!(matches!(res3, OverlayInputResult::Consumed));
+    assert!(state.draw_state.checked[2]);
+    assert_eq!(state.draw_state.cursor_pos, 2);
+
+    // 6. Navigate to Submit button (submit_idx is 3)
+    state.handle_input(key_down);
+    assert_eq!(state.draw_state.cursor_pos, state.draw_state.submit_idx);
+
+    // 7. Press Enter on Submit button
+    let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    let res_enter = state.handle_input(key_enter);
+    assert!(matches!(res_enter, OverlayInputResult::Dismiss));
+
+    // Must receive both Rust and Python
+    let received = rx.try_recv().expect("must receive multi-selection");
+    assert_eq!(
+        received,
+        Some(QuestionAnswer::Multi(vec![
+            "Rust".to_string(),
+            "Python".to_string(),
+        ]))
+    );
+}
+
+#[test]
+fn test_question_modal_multi_select_renders_checkboxes() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use crate::question::{Question, QuestionOption};
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let question = Question {
+        header: "Tags".to_string(),
+        text: "Select applicable tags:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Backend".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Frontend".to_string(),
+                description: "".to_string(),
+            },
+        ],
+        multi_select: true,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    // Pre-check the first option
+    state.draw_state.checked[0] = true;
+
+    let colors = ThemeColors::default();
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rendered: String = (0..buffer.area.height)
+        .map(|y| {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("[✓]"), "checked option must show [✓]");
+    assert!(rendered.contains("[ ]"), "unchecked option must show [ ]");
+    assert!(rendered.contains("[Submit]"), "submit button must show [Submit]");
+    assert!(rendered.contains("Space toggle · 1-N toggle"));
+}
