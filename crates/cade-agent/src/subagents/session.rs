@@ -1703,10 +1703,17 @@ mod tests {
 
     #[tokio::test]
     async fn live_model_change_preserves_conversation_and_policy_on_next_turn() {
+        struct ObservedTurn {
+            model: String,
+            prompt: String,
+            messages: Vec<SubagentMessage>,
+            schemas: Vec<Value>,
+        }
+
         struct TwoTurns {
             first_started: tokio::sync::Notify,
             release_first: tokio::sync::Notify,
-            seen: Mutex<Vec<(String, String, Vec<SubagentMessage>, Vec<Value>)>>,
+            seen: Mutex<Vec<ObservedTurn>>,
         }
         #[async_trait]
         impl SubagentLlmExecutor for TwoTurns {
@@ -1719,12 +1726,12 @@ mod tests {
             ) -> Result<SubagentTurnResponse, String> {
                 let first = {
                     let mut seen = self.seen.lock().unwrap();
-                    seen.push((
-                        model.into(),
-                        prompt.into(),
-                        messages.to_vec(),
-                        schemas.to_vec(),
-                    ));
+                    seen.push(ObservedTurn {
+                        model: model.into(),
+                        prompt: prompt.into(),
+                        messages: messages.to_vec(),
+                        schemas: schemas.to_vec(),
+                    });
                     seen.len() == 1
                 };
                 if first {
@@ -1781,27 +1788,27 @@ mod tests {
             _ = &mut run => panic!("child finished before first call was released"),
         }
         control.request("provider-b/second".into()).unwrap();
-        assert_eq!(llm.seen.lock().unwrap()[0].0, "provider-a/first");
+        assert_eq!(llm.seen.lock().unwrap()[0].model, "provider-a/first");
         llm.release_first.notify_one();
         let outcome = run.await;
         assert_eq!(outcome.summary_text(), "changed model saw earlier turn");
         let seen = llm.seen.lock().unwrap();
         assert_eq!(
-            seen.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(),
+            seen.iter().map(|s| s.model.as_str()).collect::<Vec<_>>(),
             vec!["provider-a/first", "provider-b/second"]
         );
-        assert_eq!(seen[0].1, seen[1].1);
-        assert_eq!(seen[0].3, schemas);
-        assert_eq!(seen[1].3, schemas);
+        assert_eq!(seen[0].prompt, seen[1].prompt);
+        assert_eq!(seen[0].schemas, schemas);
+        assert_eq!(seen[1].schemas, schemas);
         assert!(
             seen[1]
-                .2
+                .messages
                 .iter()
                 .any(|m| m.role == "assistant" && m.content == "prior assistant turn")
         );
         assert!(
             seen[1]
-                .2
+                .messages
                 .iter()
                 .any(|m| m.role == "tool" && m.content == "Output from read_file")
         );

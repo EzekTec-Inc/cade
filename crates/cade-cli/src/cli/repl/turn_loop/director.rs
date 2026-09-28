@@ -309,10 +309,9 @@ impl<'a> TurnDirector<'a> {
                                                                         });
                                                                         let result = client.raw_post(&format!("/subagents/{subagent_id_c}/model"), &body).await;
                                                                         let mut app = ui.lock();
-                                                                        if result.is_ok() {
-                                                                            if let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id_c) {
-                                                                                t.push_output(format!("[MODEL HOT-SWAP QUEUED]: {model_c}"));
-                                                                            }
+                                                                        if result.is_ok()
+                                                                            && let Some(t) = app.subagent_trackers.iter_mut().find(|t| t.task_id == subagent_id_c) {
+                                                                            t.push_output(format!("[MODEL HOT-SWAP QUEUED]: {model_c}"));
                                                                         }
                                                                         let level = if result.is_ok() { cade_tui::ToastLevel::Info } else { cade_tui::ToastLevel::Error };
                                                                         app.show_toast(match result {
