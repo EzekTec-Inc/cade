@@ -5,6 +5,177 @@ use super::subagent::{filter_subagent_tools, handle_run_subagent_tool};
 use super::*;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
+    struct SwapLlm {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        seen: std::sync::Mutex<Vec<cade_ai::CompletionRequest>>,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for SwapLlm {
+        fn validate_model(&self, model: &str) -> cade_ai::Result<()> {
+            if model == "provider-b/next" {
+                Ok(())
+            } else {
+                Err(cade_ai::Error::custom("model unavailable"))
+            }
+        }
+        async fn complete(
+            &self,
+            req: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            let first = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(req.clone());
+                seen.len() == 1
+            };
+            if first {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("first turn".into()),
+                    tool_calls: vec![cade_ai::LlmToolCall {
+                        id: "read-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({}),
+                        thought_signature: None,
+                    }],
+                    finish_reason: "tool_calls".into(),
+                })
+            } else {
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("second turn with history".into()),
+                    tool_calls: vec![],
+                    finish_reason: "stop".into(),
+                })
+            }
+        }
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("child uses complete, not stream")
+        }
+    }
+    let llm = Arc::new(SwapLlm {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        seen: std::sync::Mutex::new(vec![]),
+    });
+    let state = build_state_with_llm(llm.clone());
+    approval_test_run(&state.db, "model-parent");
+    let conv = cade_store::sqlite::create_conversation(&state.db, "model-parent", "swap").unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+    let ack = handle_run_subagent_tool(
+        &state,
+        "model-parent",
+        Some(&conv.id),
+        "launch",
+        &json!({"prompt":"work", "background":true}),
+        tx,
+    )
+    .await;
+    assert!(!ack.is_error, "{}", ack.output);
+    let child_id = ack.output.split_whitespace().nth(2).unwrap().to_string();
+    tokio::time::timeout(std::time::Duration::from_secs(5), llm.entered.notified())
+        .await
+        .unwrap();
+    let bad = swap_subagent_model_handler(
+        State(state.clone()),
+        Path(child_id.clone()),
+        Json(SwapModelPayload {
+            model: "invalid".into(),
+        }),
+    )
+    .await;
+    assert_eq!(bad.unwrap_err().0, axum::http::StatusCode::BAD_REQUEST);
+    let accepted = swap_subagent_model_handler(
+        State(state.clone()),
+        Path(child_id.clone()),
+        Json(SwapModelPayload {
+            model: "provider-b/next".into(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(accepted.0["status"], "accepted");
+    assert_eq!(accepted.0["effective"], "next_turn");
+    let (control_tx, _control_rx) = tokio::sync::mpsc::channel(8);
+    let via_tool = super::subagent::handle_subagent_tool(
+        state.clone(),
+        "model-parent".into(),
+        Some(conv.id.clone()),
+        "subagent".into(),
+        "control".into(),
+        json!({"action":"model", "id":child_id, "model":"provider-b/next"}),
+        control_tx,
+        cade_core::permissions::PermissionMode::Default,
+        "model-control".into(),
+    )
+    .await;
+    assert!(!via_tool.is_error, "{}", via_tool.output);
+    assert!(via_tool.output.contains("next turn"));
+    llm.release.notify_one();
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.unwrap().unwrap();
+            let value: Value = serde_json::from_str(&event.data).unwrap();
+            if value["message_type"] == "subagent_complete" {
+                break value;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event["subagent_id"], child_id);
+    let seen = llm.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_ne!(seen[0].model, "provider-b/next");
+    assert_eq!(seen[1].model, "provider-b/next");
+    assert!(seen[1].tools.iter().any(|tool| tool["name"] == "finish"));
+    assert_eq!(seen[0].tools, seen[1].tools);
+    assert_eq!(seen[0].messages[0].content, seen[1].messages[0].content);
+    assert!(seen[1].messages.iter().any(|m| m.content == "first turn"));
+    drop(seen);
+    let missing = swap_subagent_model_handler(
+        State(state.clone()),
+        Path("missing-child".into()),
+        Json(SwapModelPayload {
+            model: "provider-b/next".into(),
+        }),
+    )
+    .await;
+    assert_eq!(missing.unwrap_err().0, axum::http::StatusCode::NOT_FOUND);
+    let (completed_tx, _completed_rx) = tokio::sync::mpsc::channel(8);
+    let completed_via_tool = super::subagent::handle_subagent_tool(
+        state.clone(),
+        "model-parent".into(),
+        Some(conv.id.clone()),
+        "subagent".into(),
+        "control-finished".into(),
+        json!({"action":"model", "id":child_id, "model":"provider-b/next"}),
+        completed_tx,
+        cade_core::permissions::PermissionMode::Default,
+        "model-control".into(),
+    )
+    .await;
+    assert!(completed_via_tool.is_error);
+    let finished = swap_subagent_model_handler(
+        State(state),
+        Path(child_id),
+        Json(SwapModelPayload {
+            model: "provider-b/next".into(),
+        }),
+    )
+    .await;
+    assert!(finished.is_err());
+}
+
 fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
     cade_store::sqlite::create_agent(
         db,

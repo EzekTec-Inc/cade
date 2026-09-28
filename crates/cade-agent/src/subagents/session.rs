@@ -233,7 +233,7 @@ pub enum SubagentEvent {
 }
 
 /// Asynchronous event broadcaster for subagents supporting unicast & broadcast subscribers.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SubagentEventEmitter {
     tx: Option<tokio::sync::mpsc::Sender<SubagentEvent>>,
     broadcast_tx: Option<tokio::sync::broadcast::Sender<SubagentEvent>>,
@@ -490,7 +490,36 @@ pub struct SubagentSession {
     pub tool_policy: Option<SubagentToolPolicy>,
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
+    model_control: Option<SubagentModelControl>,
     parent_context: Vec<SubagentMessage>,
+}
+
+/// Live next-turn model selection shared with the controlling client. Clones
+/// reference the same child; closing the handle rejects late deliveries.
+#[derive(Clone, Default)]
+pub struct SubagentModelControl(Arc<Mutex<(bool, Option<String>)>>);
+
+impl SubagentModelControl {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new((true, None))))
+    }
+
+    pub fn request(&self, model: String) -> Result<(), &'static str> {
+        let mut state = self.0.lock().unwrap();
+        if !state.0 {
+            return Err("subagent is no longer accepting model changes");
+        }
+        state.1 = Some(model);
+        Ok(())
+    }
+
+    fn take(&self) -> Option<String> {
+        self.0.lock().unwrap().1.take()
+    }
+
+    pub fn close(&self) {
+        self.0.lock().unwrap().0 = false;
+    }
 }
 
 /// Acknowledgement of an in-process child. `queued` describes the slot at
@@ -593,6 +622,7 @@ impl SubagentSession {
             tool_policy: None,
             steering_queue: Vec::new(),
             pending_model_swap: None,
+            model_control: None,
             parent_context: Vec::new(),
         }
     }
@@ -677,6 +707,11 @@ impl SubagentSession {
         self
     }
 
+    pub fn with_model_control(mut self, control: SubagentModelControl) -> Self {
+        self.model_control = Some(control);
+        self
+    }
+
     /// Record a structured finding to be synced back to the parent agent.
     pub fn record_finding(
         &mut self,
@@ -745,6 +780,9 @@ impl SubagentSession {
 
     /// Finalize execution outcome, committing workspace if successful and emitting event.
     pub async fn finalize_outcome(&mut self, outcome: SubagentOutcome) -> SubagentOutcome {
+        if let Some(control) = &self.model_control {
+            control.close();
+        }
         let outcome = if outcome.is_success() {
             if let Some(ref mut guard) = self.workspace_guard {
                 match guard.commit_and_merge().await {
@@ -787,7 +825,11 @@ impl SubagentSession {
     }
 
     pub fn take_pending_model_hot_swap(&mut self) -> Option<String> {
-        self.pending_model_swap.take()
+        let initial = self.pending_model_swap.take();
+        self.model_control
+            .as_ref()
+            .and_then(SubagentModelControl::take)
+            .or(initial)
     }
 
     /// Inspect a tool call to determine if it is the canonical `finish` or `finish_task` tool.
@@ -863,6 +905,7 @@ impl SubagentSession {
                 && new_model != model
             {
                 model = new_model;
+                failover_idx = 0;
             }
 
             // 2. Priority Steering Guidance Queue Drain
@@ -1102,6 +1145,114 @@ mod tests {
     use super::*;
     use cade_core::permissions::PermissionMode;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn live_model_change_preserves_conversation_and_policy_on_next_turn() {
+        struct TwoTurns {
+            first_started: tokio::sync::Notify,
+            release_first: tokio::sync::Notify,
+            seen: Mutex<Vec<(String, String, Vec<SubagentMessage>, Vec<Value>)>>,
+        }
+        #[async_trait]
+        impl SubagentLlmExecutor for TwoTurns {
+            async fn complete_turn(
+                &self,
+                model: &str,
+                prompt: &str,
+                messages: &[SubagentMessage],
+                schemas: &[Value],
+            ) -> Result<SubagentTurnResponse, String> {
+                let first = {
+                    let mut seen = self.seen.lock().unwrap();
+                    seen.push((
+                        model.into(),
+                        prompt.into(),
+                        messages.to_vec(),
+                        schemas.to_vec(),
+                    ));
+                    seen.len() == 1
+                };
+                if first {
+                    self.first_started.notify_one();
+                    self.release_first.notified().await;
+                    Ok(SubagentTurnResponse {
+                        content: Some("prior assistant turn".into()),
+                        tool_calls: vec![SubagentToolCall {
+                            id: "read-1".into(),
+                            name: "read_file".into(),
+                            arguments: json!({}),
+                        }],
+                        tokens_used: 2,
+                    })
+                } else {
+                    Ok(SubagentTurnResponse {
+                        content: None,
+                        tool_calls: vec![SubagentToolCall {
+                            id: "finish-2".into(),
+                            name: "finish".into(),
+                            arguments: json!({"status":"done", "summary":"changed model saw earlier turn"}),
+                        }],
+                        tokens_used: 3,
+                    })
+                }
+            }
+        }
+        let llm = TwoTurns {
+            first_started: tokio::sync::Notify::new(),
+            release_first: tokio::sync::Notify::new(),
+            seen: Mutex::new(vec![]),
+        };
+        let control = SubagentModelControl::new();
+        let mut session = SubagentSession::new(
+            SubagentConfig::from_args(&json!({"prompt":"task"})),
+            "parent",
+        )
+        .with_model_control(control.clone())
+        .with_tool_policy(policy("build"));
+        let schemas = vec![json!({"name":"read_file", "parameters":{"type":"object"}})];
+        let run = session.run_autonomous_loop(
+            &llm,
+            &MockToolExecutor,
+            "provider-a/first".into(),
+            "system instructions".into(),
+            "task".into(),
+            schemas.clone(),
+            vec![],
+            Path::new("."),
+        );
+        tokio::pin!(run);
+        tokio::select! {
+            _ = llm.first_started.notified() => {}
+            _ = &mut run => panic!("child finished before first call was released"),
+        }
+        control.request("provider-b/second".into()).unwrap();
+        // The request cannot mutate the already in-flight completion.
+        assert_eq!(llm.seen.lock().unwrap()[0].0, "provider-a/first");
+        llm.release_first.notify_one();
+        let outcome = run.await;
+        assert_eq!(outcome.summary_text(), "changed model saw earlier turn");
+        let seen = llm.seen.lock().unwrap();
+        assert_eq!(
+            seen.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(),
+            vec!["provider-a/first", "provider-b/second"]
+        );
+        assert_eq!(seen[0].1, seen[1].1);
+        assert_eq!(seen[0].3, schemas);
+        assert_eq!(seen[1].3, schemas);
+        assert!(
+            seen[1]
+                .2
+                .iter()
+                .any(|m| m.role == "assistant" && m.content == "prior assistant turn")
+        );
+        assert!(
+            seen[1]
+                .2
+                .iter()
+                .any(|m| m.role == "tool" && m.content == "Output from read_file")
+        );
+        assert!(control.request("third".into()).is_err());
+    }
 
     #[tokio::test]
     async fn cancelling_running_child_interrupts_blocked_tool_and_delivers_once() {

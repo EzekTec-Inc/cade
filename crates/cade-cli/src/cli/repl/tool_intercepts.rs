@@ -93,6 +93,25 @@ impl cade_agent::subagents::SubagentSingleRunner for Repl {
         out.push_str(&report.to_formatted_summary());
         Ok(out)
     }
+
+    async fn hot_swap_model(
+        &self,
+        subagent_id: &str,
+        new_model: &str,
+    ) -> std::result::Result<String, cade_agent::Error> {
+        let response = self
+            .client
+            .raw_post(
+                &format!("/subagents/{subagent_id}/model"),
+                &serde_json::json!({"model": new_model}),
+            )
+            .await
+            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        Ok(format!(
+            "Model for subagent '{subagent_id}' queued to swap to '{}' on its next turn",
+            response["model"].as_str().unwrap_or(new_model)
+        ))
+    }
 }
 
 impl Repl {
@@ -166,31 +185,40 @@ impl Repl {
                     .await;
             }
             SubagentTrayAction::HotSwapModel { subagent_id, model } => {
+                let result = self
+                    .client
+                    .raw_post(
+                        &format!("/subagents/{subagent_id}/model"),
+                        &serde_json::json!({ "model": model }),
+                    )
+                    .await;
                 {
                     let mut app = self.app.lock();
-                    if let Some(t) = app
-                        .subagent_trackers
-                        .iter_mut()
-                        .find(|t| t.task_id == subagent_id)
-                    {
-                        t.push_output(format!("[MODEL HOT-SWAP]: {model}"));
+                    if result.is_ok() {
+                        if let Some(t) = app
+                            .subagent_trackers
+                            .iter_mut()
+                            .find(|t| t.task_id == subagent_id)
+                        {
+                            t.push_output(format!("[MODEL HOT-SWAP QUEUED]: {model}"));
+                        }
                     }
                     app.show_toast(
-                        format!("Model hot-swap to {model} for {subagent_id}"),
-                        cade_tui::ToastLevel::Info,
+                        match &result {
+                            Ok(_) => format!(
+                                "Model hot-swap to {model} accepted for {subagent_id} (next turn)"
+                            ),
+                            Err(e) => format!("Could not change model for {subagent_id}: {e}"),
+                        },
+                        if result.is_ok() {
+                            cade_tui::ToastLevel::Info
+                        } else {
+                            cade_tui::ToastLevel::Error
+                        },
                     );
                     app.draw_dirty = true;
                     let _ = app.draw();
                 }
-                let body = serde_json::json!({
-                    "action": "hot_swap",
-                    "id": subagent_id,
-                    "model": model,
-                });
-                let _ = self
-                    .client
-                    .raw_post(&format!("/subagents/{subagent_id}/model"), &body)
-                    .await;
             }
             SubagentTrayAction::PauseResume { subagent_id } => {
                 {

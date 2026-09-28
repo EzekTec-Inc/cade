@@ -105,6 +105,16 @@ pub enum StreamChunk {
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
+    /// Validate a requested model before acknowledging a live control action.
+    fn validate_model(&self, model: &str) -> Result<()> {
+        if model.trim().is_empty() || model != model.trim() || model.ends_with('/') {
+            return Err(crate::Error::custom(
+                "Model ID must be a nonempty, valid model name",
+            ));
+        }
+        Ok(())
+    }
+
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse>;
     async fn stream(
         &self,

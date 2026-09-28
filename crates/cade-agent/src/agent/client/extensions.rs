@@ -54,9 +54,10 @@ impl HttpTransport {
             .send()
             .await?;
         if !resp.status().is_success() {
+            let status = resp.status();
+            let detail = resp.text().await.unwrap_or_default();
             return Err(crate::Error::custom(format!(
-                "POST {path} failed {}",
-                resp.status()
+                "POST {path} failed {status}: {detail}",
             )));
         }
         Ok(resp.json().await?)

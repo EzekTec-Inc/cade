@@ -35,19 +35,25 @@ pub fn steer_subagent(subagent_id: &str, message: String) -> bool {
     }
 }
 
-static HOTSWAP_MODELS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static HOTSWAP_MODELS: OnceLock<
+    Mutex<HashMap<String, cade_agent::subagents::session::SubagentModelControl>>,
+> = OnceLock::new();
 
-fn get_hotswap_models() -> &'static Mutex<HashMap<String, String>> {
+fn get_hotswap_models()
+-> &'static Mutex<HashMap<String, cade_agent::subagents::session::SubagentModelControl>> {
     HOTSWAP_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Request a dynamic model hot-swap for an active subagent, taking effect on its next iteration turn.
-pub fn swap_subagent_model(subagent_id: &str, new_model: String) -> bool {
-    let mut models = get_hotswap_models()
+pub fn swap_subagent_model(subagent_id: &str, new_model: String) -> Result<(), String> {
+    let models = get_hotswap_models()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    models.insert(subagent_id.to_string(), new_model);
-    true
+    models
+        .get(subagent_id)
+        .ok_or_else(|| format!("No active subagent found with ID {subagent_id}"))?
+        .request(new_model)
+        .map_err(str::to_string)
 }
 
 /// REC-2: Drop guard that ensures the ephemeral agent DB row is cleaned
@@ -453,6 +459,22 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
     fn doctor_status(&self) -> Result<String, cade_agent::Error> {
         Ok("Subagent system status: OK. Multi-agent concurrency slots available.".to_string())
     }
+
+    async fn hot_swap_model(
+        &self,
+        subagent_id: &str,
+        new_model: &str,
+    ) -> Result<String, cade_agent::Error> {
+        self.state
+            .llm
+            .validate_model(new_model)
+            .map_err(|e| cade_agent::Error::custom(e.to_string()))?;
+        swap_subagent_model(subagent_id, new_model.to_string())
+            .map_err(cade_agent::Error::custom)?;
+        Ok(format!(
+            "Model for subagent '{subagent_id}' queued to swap to '{new_model}' on its next turn"
+        ))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -638,7 +660,6 @@ pub(super) async fn handle_run_subagent_tool(
 
 struct ServerSubagentLlm<'a> {
     state: &'a AppState,
-    subagent_id: String,
     steer_rx: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>,
 }
 
@@ -651,21 +672,6 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
         messages: &[cade_agent::subagents::SubagentMessage],
         tools: &[serde_json::Value],
     ) -> Result<cade_agent::subagents::SubagentTurnResponse, String> {
-        let active_model = if let Some(new_m) = {
-            let mut map = get_hotswap_models().lock().unwrap();
-            map.remove(&self.subagent_id)
-        } {
-            tracing::info!(
-                subagent_id = %self.subagent_id,
-                from = %model,
-                to = %new_m,
-                "Subagent model hot-swapped mid-flight for next turn"
-            );
-            new_m
-        } else {
-            model.to_string()
-        };
-
         let mut ai_messages = vec![cade_ai::LlmMessage {
             role: "system".to_string(),
             content: system_prompt.to_string(),
@@ -720,7 +726,7 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
         }
 
         let req = cade_ai::CompletionRequest {
-            model: active_model.clone(),
+            model: model.to_string(),
             messages: ai_messages,
             tools: tools.to_vec(),
             max_tokens: 8192,
@@ -747,7 +753,7 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
         let tokens_used = resp
             .content
             .as_deref()
-            .map(|t| cade_ai::count_tokens(&active_model, t))
+            .map(|t| cade_ai::count_tokens(model, t))
             .unwrap_or(0) as u64;
 
         Ok(cade_agent::subagents::SubagentTurnResponse {
@@ -1468,7 +1474,9 @@ async fn run_subagent_with_permit(
             let mut queues = get_steering_queues().lock().unwrap();
             queues.remove(&self.subagent_id);
             let mut models = get_hotswap_models().lock().unwrap();
-            models.remove(&self.subagent_id);
+            if let Some(control) = models.remove(&self.subagent_id) {
+                control.close();
+            }
         }
     }
     let _steering_cleanup = SteeringCleanup {
@@ -1477,9 +1485,13 @@ async fn run_subagent_with_permit(
 
     let llm_executor = ServerSubagentLlm {
         state,
-        subagent_id: subagent_id.clone(),
         steer_rx: std::sync::Arc::new(tokio::sync::Mutex::new(steer_rx)),
     };
+    let model_control = cade_agent::subagents::session::SubagentModelControl::new();
+    get_hotswap_models()
+        .lock()
+        .unwrap()
+        .insert(subagent_id.clone(), model_control.clone());
     let tools_executor = ServerSubagentTools {
         state,
         subagent_id: subagent_id.clone(),
@@ -1517,7 +1529,8 @@ async fn run_subagent_with_permit(
         .with_parent_context(parent_context)
         .with_max_iters(max_iters)
         .with_max_tokens_budget(cfg.max_tokens_budget)
-        .with_tool_policy(policy);
+        .with_tool_policy(policy)
+        .with_model_control(model_control);
 
     // A tool-level Ask is answered by the interactive approval queue, never by
     // `human_review` (which applies only to the completed result).
