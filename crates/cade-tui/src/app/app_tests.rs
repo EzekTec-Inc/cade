@@ -1071,3 +1071,191 @@ fn test_plan_update_json_event_payload_conformance() {
     let step2_done = steps_arr[1].get("is_done").and_then(|v| v.as_bool()).unwrap();
     assert!(step2_done);
 }
+
+#[test]
+fn test_question_modal_renders_centered_with_radios_and_backdrop() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use crate::question::{Question, QuestionOption};
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let question = Question {
+        header: "Database".to_string(),
+        text: "Select a persistent storage backend:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "PostgreSQL".to_string(),
+                description: "Standard ACID relational store".to_string(),
+            },
+            QuestionOption {
+                label: "SQLite".to_string(),
+                description: "Zero-config embedded store".to_string(),
+            },
+        ],
+        multi_select: false,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    let colors = ThemeColors::default();
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rendered: String = (0..buffer.area.height)
+        .map(|y| {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Modal title & questions
+    assert!(rendered.contains("Database"), "must contain header in title");
+    assert!(rendered.contains("Select a persistent storage backend:"));
+
+    // Options with radio indicators
+    assert!(rendered.contains("(•)"), "initial selected option has (•) radio");
+    assert!(rendered.contains("( )"), "unselected option has ( ) radio");
+    assert!(rendered.contains("PostgreSQL"));
+    assert!(rendered.contains("SQLite"));
+    assert!(rendered.contains("Standard ACID relational store"));
+
+    // Navigation and quick-pick hint
+    assert!(rendered.contains("1-N quick pick"));
+
+    // Inline height must be 0 to decouple from input box
+    assert_eq!(state.inline_height(24), 0);
+}
+
+#[test]
+fn test_question_modal_single_select_number_key_resolves() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::question::{Question, QuestionOption, QuestionAnswer};
+
+    let question = Question {
+        header: "Choice".to_string(),
+        text: "Pick an environment:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Staging".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Production".to_string(),
+                description: "".to_string(),
+            },
+        ],
+        multi_select: false,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    // Press '2' to pick Production immediately
+    let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE);
+    let res = state.handle_input(key);
+
+    assert!(matches!(res, OverlayInputResult::Dismiss));
+    let received = rx.try_recv().expect("must receive answer on channel");
+    assert_eq!(
+        received,
+        Some(QuestionAnswer::Single("Production".to_string()))
+    );
+}
+
+#[test]
+fn test_question_modal_navigation_and_enter_select() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::question::{Question, QuestionOption, QuestionAnswer};
+
+    let question = Question {
+        header: "Choice".to_string(),
+        text: "Select item:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Alpha".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Beta".to_string(),
+                description: "".to_string(),
+            },
+        ],
+        multi_select: false,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    // Navigate down to item 1 (Beta)
+    let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    let res = state.handle_input(key_down);
+    assert!(matches!(res, OverlayInputResult::Consumed));
+    assert_eq!(state.draw_state.cursor_pos, 1);
+
+    // Press Enter to confirm
+    let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    let res2 = state.handle_input(key_enter);
+    assert!(matches!(res2, OverlayInputResult::Dismiss));
+
+    let received = rx.try_recv().expect("must receive answer");
+    assert_eq!(received, Some(QuestionAnswer::Single("Beta".to_string())));
+}
+
+#[test]
+fn test_question_modal_esc_dismisses_cleanly() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::question::Question;
+
+    let question = Question {
+        header: "Confirm".to_string(),
+        text: "Proceed?".to_string(),
+        options: vec![],
+        multi_select: false,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+    };
+
+    let key_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    let res = state.handle_input(key_esc);
+    assert!(matches!(res, OverlayInputResult::Dismiss));
+
+    let received = rx.try_recv().expect("must receive cancellation");
+    assert_eq!(received, None);
+}

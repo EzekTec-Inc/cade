@@ -66,7 +66,7 @@ pub struct Question {
 }
 
 /// The answer returned by the widget.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuestionAnswer {
     /// Single option selected (label or custom typed text).
     Single(String),

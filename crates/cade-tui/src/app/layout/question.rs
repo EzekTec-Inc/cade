@@ -1,10 +1,12 @@
 use crate::app::*;
 use crate::colors::ThemeColorsExt;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 /// Calculate the number of rows needed for the inline question panel.
 /// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank
 ///       + per-option rows (label + optional description)
 ///       + submit row (multi-select) + other row + 1 blank + 1 hint.
 /// Clamped to at most half the content viewport so content is never fully hidden.
+#[allow(dead_code)]
 pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
     let q = &aq.question;
 
@@ -49,6 +51,7 @@ pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16)
 /// of the content viewport via the layout split in `render_frame`.
 /// `sep_area`  — the single row reserved for the dashed separator (chunks[1]).
 /// `body_area` — the panel body rows (chunks[2]).
+#[allow(dead_code)]
 pub(crate) fn render_question_inline(
     frame: &mut Frame,
     aq: &ActiveQuestionDrawState,
@@ -232,5 +235,251 @@ pub(crate) fn render_question_inline(
             .wrap(Wrap { trim: false })
             .style(Style::default()),
         body_area,
+    );
+}
+
+/// Render the centered question modal dialog on the overlay stack.
+/// Draws a high-visibility bordered card with dimmed backdrop,
+/// radio markers for single-select (or checkboxes for multi-select),
+/// and keyboard navigation hints.
+pub(crate) fn render_question_modal(
+    frame: &mut Frame,
+    aq: &ActiveQuestionDrawState,
+    full_area: Rect,
+    colors: &ThemeColors,
+) {
+    let q = &aq.question;
+
+    // 1. Calculate responsive modal dimensions
+    let mut desired_w: u16 = 50;
+    let header_len = q.header.chars().count() as u16 + 8;
+    desired_w = desired_w.max(header_len);
+    for l in q.text.lines() {
+        desired_w = desired_w.max(l.chars().count() as u16 + 6);
+    }
+    for opt in &q.options {
+        let opt_len = opt.label.chars().count() as u16 + 14;
+        desired_w = desired_w.max(opt_len);
+        if !opt.description.is_empty() {
+            desired_w = desired_w.max(opt.description.chars().count() as u16 + 14);
+        }
+    }
+
+    let modal_w = desired_w
+        .min(full_area.width.saturating_sub(4))
+        .min(76)
+        .max(40.min(full_area.width));
+
+    // Calculate height
+    let mut rows: u16 = 2; // top & bottom borders
+    rows += q.text.lines().count().max(1) as u16;
+    rows += 1; // blank line after question text
+
+    if q.progress.is_some() {
+        rows += 2; // "Question N of M" + blank line
+    }
+
+    for idx in 0..aq.total_items {
+        if idx == aq.submit_idx || idx == aq.other_idx {
+            rows += 2;
+        } else {
+            rows += 1;
+            if idx < q.options.len() && !q.options[idx].description.is_empty() {
+                rows += 1;
+            }
+        }
+    }
+    rows += 2; // blank + hint line
+
+    let modal_h = rows
+        .min(full_area.height.saturating_sub(2))
+        .max(8.min(full_area.height));
+
+    let x = full_area.x + (full_area.width.saturating_sub(modal_w)) / 2;
+    let y = full_area.y + (full_area.height.saturating_sub(modal_h)) / 2;
+    let modal_area = Rect::new(x, y, modal_w, modal_h);
+
+    // 2. Clear underlying area
+    frame.render_widget(Clear, modal_area);
+
+    // 3. Render bordered card block
+    let title_text = if q.header.is_empty() {
+        "Question".to_string()
+    } else {
+        q.header.clone()
+    };
+    let title = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("❓ {title_text}"),
+            Style::default()
+                .fg(colors.c_md_heading())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(colors.c_border_style())
+        .style(Style::default().bg(colors.c_bg_surface2()))
+        .border_style(colors.border_accent())
+        .title(title);
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    // 4. Render inner lines
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Question text
+    for l in q.text.lines() {
+        if !l.trim().is_empty() || q.text.lines().count() == 1 {
+            lines.push(Line::from(Span::styled(
+                l.to_string(),
+                colors.text_primary_bold(),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Progress indicator
+    if let Some((cur, tot)) = q.progress {
+        lines.push(Line::from(Span::styled(
+            format!("Question {cur} of {tot}"),
+            colors.text_muted(),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    // Options
+    for idx in 0..aq.total_items {
+        let is_selected = aq.cursor_pos == idx;
+        let selector = if is_selected { "❯" } else { " " };
+
+        // Submit item (multi-select only)
+        if idx == aq.submit_idx {
+            let style = if is_selected {
+                Style::default()
+                    .fg(colors.c_success())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                colors.text_muted()
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {selector} Submit"),
+                style,
+            )));
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        // Free-text "Other" item
+        if idx == aq.other_idx {
+            let display = if is_selected {
+                if aq.custom_text.is_empty() {
+                    "Type something.█".to_string()
+                } else {
+                    format!("{}█", aq.custom_text)
+                }
+            } else if !aq.custom_text.is_empty() {
+                aq.custom_text.clone()
+            } else {
+                "Type something.".to_string()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {selector} {}.  ", idx + 1),
+                    Style::default().fg(if is_selected {
+                        colors.c_success()
+                    } else {
+                        colors.c_text_muted()
+                    }),
+                ),
+                Span::styled(
+                    display,
+                    Style::default()
+                        .fg(colors.c_text_dim())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        // Regular option
+        let opt = &q.options[idx];
+        let indicator = if q.multi_select {
+            if aq.checked[idx] { "[✓] " } else { "[ ] " }
+        } else if is_selected {
+            "(•) "
+        } else {
+            "( ) "
+        };
+
+        let num_style = if is_selected {
+            colors.success()
+        } else {
+            colors.text_muted()
+        };
+        let label_style = if is_selected {
+            Style::default()
+                .fg(colors.c_text_primary())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            colors.text_primary()
+        };
+        let indicator_style = if is_selected {
+            Style::default()
+                .fg(colors.c_success())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            colors.text_muted()
+        };
+
+        let mut label_lines = opt.label.lines();
+        if let Some(first) = label_lines.next() {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {selector} "), colors.success()),
+                Span::styled(format!("{}. ", idx + 1), num_style),
+                Span::styled(indicator.to_string(), indicator_style),
+                Span::styled(first.to_string(), label_style),
+            ]));
+        }
+        for l in label_lines {
+            lines.push(Line::from(vec![
+                Span::raw("         "),
+                Span::styled(l.to_string(), label_style),
+            ]));
+        }
+
+        if !opt.description.is_empty() {
+            for l in opt.description.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("         {}", l),
+                    colors.text_muted(),
+                )));
+            }
+        }
+    }
+
+    // Hint line
+    lines.push(Line::from(""));
+    let hint = if q.multi_select {
+        "Space toggle · ↑↓/Tab navigate · Enter on Submit to confirm · Esc cancel"
+    } else {
+        "1-N quick pick · ↑↓/Tab navigate · Enter select · Esc cancel"
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
+        colors.text_dim().add_modifier(Modifier::DIM),
+    )));
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .style(Style::default()),
+        inner,
     );
 }

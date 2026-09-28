@@ -635,6 +635,34 @@ pub struct ActiveQuestionDrawState {
     pub submit_idx: usize,
 }
 
+impl ActiveQuestionDrawState {
+    pub fn new(question: crate::question::Question) -> Self {
+        let n_real = question.options.len();
+        let has_other = question.allow_other;
+        let has_submit = question.multi_select;
+        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
+        let other_idx = if has_other { n_real } else { usize::MAX };
+        let submit_idx = if has_submit {
+            n_real + usize::from(has_other)
+        } else {
+            usize::MAX
+        };
+
+        Self {
+            question,
+            cursor_pos: 0,
+            custom_text: String::new(),
+            checked: vec![false; n_real],
+            n_real,
+            has_other,
+            has_submit,
+            total_items,
+            other_idx,
+            submit_idx,
+        }
+    }
+}
+
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
 use std::any::Any;
 
@@ -649,24 +677,18 @@ impl OverlayComponent for ActiveQuestionState {
         "active_question"
     }
 
-    fn render_overlay(&mut self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
-
-    fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
-        let sep_area = Rect::new(area.x, area.y, area.width, 1);
-        let body_area = Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        );
-        crate::app::layout::question::render_question_inline(
+    fn render_overlay(&mut self, frame: &mut Frame, _area: Rect, colors: &ThemeColors) {
+        let full_area = frame.area();
+        crate::app::layout::helpers::render_backdrop(frame, full_area, colors);
+        crate::app::layout::question::render_question_modal(
             frame,
             &self.draw_state,
-            sep_area,
-            body_area,
+            full_area,
             colors,
         );
     }
+
+    fn render_inline(&self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -776,8 +798,8 @@ impl OverlayComponent for ActiveQuestionState {
         self.result.take().map(|r| Box::new(r) as Box<dyn Any>)
     }
 
-    fn inline_height(&self, max_height: u16) -> u16 {
-        crate::app::layout::question::question_height(&self.draw_state, max_height)
+    fn inline_height(&self, _max_height: u16) -> u16 {
+        0
     }
 }
 
