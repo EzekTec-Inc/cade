@@ -1532,3 +1532,140 @@ fn test_question_modal_overflow_scrolling_and_small_viewport() {
         })
         .unwrap();
 }
+
+#[test]
+fn test_question_modal_sequence_progression_and_draft_preservation() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use crate::question::{Question, QuestionOption, QuestionAnswer};
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let colors = ThemeColors::default();
+
+    // 1. Question 1 of 2
+    let q1 = Question {
+        header: "Step 1".to_string(),
+        text: "Select environment:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Dev".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Prod".to_string(),
+                description: "".to_string(),
+            },
+        ],
+        multi_select: false,
+        allow_other: false,
+        progress: Some((1, 2)),
+    };
+
+    let (tx1, mut rx1) = tokio::sync::oneshot::channel();
+    let mut state1 = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(q1),
+        tx: Some(tx1),
+        result: None,
+    };
+
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state1.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+
+    let buffer1 = terminal.backend().buffer();
+    let rendered1: String = (0..buffer1.area.height)
+        .map(|y| {
+            let mut line = String::new();
+            for x in 0..buffer1.area.width {
+                line.push_str(buffer1[(x, y)].symbol());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered1.contains("Question 1 of 2"));
+    assert!(rendered1.contains("Dev"));
+
+    // Select option 1 via key '1'
+    let res1 = state1.handle_input(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    assert!(matches!(res1, OverlayInputResult::Dismiss));
+    assert_eq!(
+        rx1.try_recv().unwrap(),
+        Some(QuestionAnswer::Single("Dev".to_string()))
+    );
+
+    // 2. Question 2 of 2
+    let q2 = Question {
+        header: "Step 2".to_string(),
+        text: "Select features:".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Auth".to_string(),
+                description: "".to_string(),
+            },
+            QuestionOption {
+                label: "Metrics".to_string(),
+                description: "".to_string(),
+            },
+        ],
+        multi_select: true,
+        allow_other: false,
+        progress: Some((2, 2)),
+    };
+
+    let (tx2, mut rx2) = tokio::sync::oneshot::channel();
+    let mut state2 = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(q2),
+        tx: Some(tx2),
+        result: None,
+    };
+
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state2.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+
+    let buffer2 = terminal.backend().buffer();
+    let rendered2: String = (0..buffer2.area.height)
+        .map(|y| {
+            let mut line = String::new();
+            for x in 0..buffer2.area.width {
+                line.push_str(buffer2[(x, y)].symbol());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered2.contains("Question 2 of 2"));
+    assert!(rendered2.contains("Auth"));
+    assert!(rendered2.contains("Metrics"));
+
+    // Toggle both Auth and Metrics via '1' and '2', navigate to Submit, and Enter
+    state2.handle_input(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    state2.handle_input(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    state2.handle_input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    state2.handle_input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let res2 = state2.handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(res2, OverlayInputResult::Dismiss));
+
+    assert_eq!(
+        rx2.try_recv().unwrap(),
+        Some(QuestionAnswer::Multi(vec![
+            "Auth".to_string(),
+            "Metrics".to_string(),
+        ]))
+    );
+
+    // Verify inline_height remains decoupled at 0
+    assert_eq!(state1.inline_height(24), 0);
+    assert_eq!(state2.inline_height(24), 0);
+}
