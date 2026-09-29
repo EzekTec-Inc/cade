@@ -22,14 +22,38 @@ pub trait SubagentSingleRunner: Send + Sync {
     /// Cancels or interrupts an active subagent task.
     async fn cancel_subagent(&self, subagent_id: &str) -> Result<String>;
 
+    async fn pause_subagent(&self, _subagent_id: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "pause is unsupported by this subagent runner",
+        ))
+    }
+
+    async fn resume_subagent(&self, _subagent_id: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "resume is unsupported by this subagent runner",
+        ))
+    }
+
     /// Inspects the subagent system status.
     fn doctor_status(&self) -> Result<String>;
 
-    /// Dynamically hot-swaps the model of an active subagent for its next turn.
-    fn hot_swap_model(&self, subagent_id: &str, new_model: &str) -> Result<String> {
-        Ok(format!(
-            "Model for subagent '{subagent_id}' queued to swap to '{new_model}'"
+    async fn child_status(&self, _id: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "Child status is unsupported by this adapter",
         ))
+    }
+
+    async fn steer_child(&self, _id: &str, _message: &str) -> Result<String> {
+        Err(crate::Error::custom(
+            "Child steering is unsupported by this adapter",
+        ))
+    }
+
+    /// Dynamically hot-swaps the model of an active subagent for its next turn.
+    async fn hot_swap_model(&self, subagent_id: &str, new_model: &str) -> Result<String> {
+        Err(crate::Error::custom(format!(
+            "Model hot-swap is unsupported for subagent '{subagent_id}' on this route (requested '{new_model}')"
+        )))
     }
 }
 
@@ -80,7 +104,7 @@ impl SubagentCoordinator {
                         &std::env::current_dir().unwrap_or_default(),
                     );
                     let mut out = String::from("Executable agents:\n");
-                    for d in defs {
+                    for d in crate::subagents::visible_subagents(&defs) {
                         out.push_str(&format!(
                             "- {} ({}): {} ({})\n",
                             d.name, d.scope, d.description, d.tools
@@ -145,7 +169,7 @@ impl SubagentCoordinator {
                         &std::env::current_dir().unwrap_or_default(),
                     );
                     let mut out = String::from("Registered subagent models:\n");
-                    for d in defs {
+                    for d in crate::subagents::visible_subagents(&defs) {
                         out.push_str(&format!(
                             "- {}: {}\n",
                             d.name,
@@ -621,11 +645,12 @@ impl SubagentCoordinator {
                             ui_resource_uri: None,
                         });
                     }
+                    let result = runner.steer_child(&subagent_id, &message).await;
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: format!("Guidance sent to subagent '{}'", subagent_id),
-                        is_error: false,
+                        output: result.as_ref().map_or_else(|e| e.to_string(), Clone::clone),
+                        is_error: result.is_err(),
                         ui_resource_uri: None,
                     });
                 }
@@ -669,7 +694,7 @@ impl SubagentCoordinator {
                         });
                     }
                 }
-                "resume" => {
+                "pause" | "resume" => {
                     let subagent_id = cfg
                         .id
                         .clone()
@@ -680,29 +705,24 @@ impl SubagentCoordinator {
                         return Ok(ToolResult {
                             tool_call_id: call_id.to_string(),
                             tool_name: "subagent".to_string(),
-                            output: "error: 'id' is required for 'resume' action".to_string(),
+                            output: "error: 'id' is required for pause/resume".to_string(),
                             is_error: true,
                             ui_resource_uri: None,
                         });
                     }
-                    let message = args["message"].as_str().unwrap_or("").to_string();
-                    if !message.is_empty() {
-                        return Ok(ToolResult {
-                            tool_call_id: call_id.to_string(),
-                            tool_name: "subagent".to_string(),
-                            output: format!(
-                                "Resumed subagent '{}' with guidance: {}",
-                                subagent_id, message
-                            ),
-                            is_error: false,
-                            ui_resource_uri: None,
-                        });
-                    }
+                    let result = if action == "pause" {
+                        runner.pause_subagent(&subagent_id).await
+                    } else {
+                        runner.resume_subagent(&subagent_id).await
+                    };
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: format!("Resumed subagent '{}'", subagent_id),
-                        is_error: false,
+                        output: match &result {
+                            Ok(state) => format!("Subagent '{subagent_id}': {state}"),
+                            Err(e) => format!("error: {e}"),
+                        },
+                        is_error: result.is_err(),
                         ui_resource_uri: None,
                     });
                 }
@@ -712,16 +732,18 @@ impl SubagentCoordinator {
                         .clone()
                         .or_else(|| cfg.agent_id.clone())
                         .or_else(|| args["id"].as_str().map(|s| s.to_string()));
-                    let out = if let Some(id) = subagent_id {
-                        format!("Subagent '{id}' is registered")
+                    let result = if let Some(id) = subagent_id.as_deref() {
+                        runner.child_status(id).await
                     } else {
-                        runner.doctor_status()?
+                        Err(crate::Error::custom(
+                            "'id' is required for child status; use 'doctor' for system status",
+                        ))
                     };
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: out,
-                        is_error: false,
+                        output: result.as_ref().map_or_else(|e| e.to_string(), Clone::clone),
+                        is_error: result.is_err(),
                         ui_resource_uri: None,
                     });
                 }
@@ -743,12 +765,12 @@ impl SubagentCoordinator {
                             ui_resource_uri: None,
                         });
                     }
-                    let out = runner.hot_swap_model(&subagent_id, &new_model)?;
+                    let result = runner.hot_swap_model(&subagent_id, &new_model).await;
                     return Ok(ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "subagent".to_string(),
-                        output: out,
-                        is_error: false,
+                        is_error: result.is_err(),
+                        output: result.unwrap_or_else(|e| format!("error: {e}")),
                         ui_resource_uri: None,
                     });
                 }
@@ -1059,10 +1081,20 @@ mod tests {
         let res = SubagentCoordinator::coordinate(&runner, "call_2", &status_args)
             .await
             .expect("coordinate status");
-        assert!(!res.is_error);
-        assert!(res.output.contains("agent-123"));
+        assert!(res.is_error);
+        assert!(res.output.contains("unsupported"));
 
-        // Resume action with guidance
+        let steer = SubagentCoordinator::coordinate(
+            &runner,
+            "steer",
+            &json!({"action":"steer", "id":"agent-123", "message":"focus"}),
+        )
+        .await
+        .unwrap();
+        assert!(steer.is_error);
+        assert!(steer.output.contains("unsupported"));
+
+        // A runner without a live control target must never claim a resume.
         let resume_args = json!({
             "action": "resume",
             "id": "agent-123",
@@ -1071,9 +1103,17 @@ mod tests {
         let res2 = SubagentCoordinator::coordinate(&runner, "call_3", &resume_args)
             .await
             .expect("coordinate resume");
-        assert!(!res2.is_error);
-        assert!(res2.output.contains("agent-123"));
-        assert!(res2.output.contains("continue with next step"));
+        assert!(res2.is_error);
+        assert!(res2.output.contains("unsupported"));
+        let pause = SubagentCoordinator::coordinate(
+            &runner,
+            "call_4",
+            &json!({"action":"pause", "id":"agent-123"}),
+        )
+        .await
+        .unwrap();
+        assert!(pause.is_error);
+        assert!(pause.output.contains("unsupported"));
     }
 
     #[tokio::test]
@@ -1087,7 +1127,8 @@ mod tests {
         let res = SubagentCoordinator::coordinate(&runner, "call_4", &model_args)
             .await
             .expect("coordinate model hot-swap");
-        assert!(!res.is_error);
+        assert!(res.is_error);
+        assert!(res.output.contains("unsupported"));
         assert!(res.output.contains("agent-123"));
         assert!(res.output.contains("anthropic/claude-3-7-sonnet"));
     }

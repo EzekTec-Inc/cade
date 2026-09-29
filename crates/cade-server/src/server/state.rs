@@ -291,6 +291,25 @@ pub struct ContextTelemetry {
 
 /// Result of a completed background subagent, waiting for injection
 /// into the parent agent's next agentic loop iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentTerminalStatus {
+    Done,
+    Error,
+    Cancelled,
+    Timeout,
+}
+
+impl SubagentTerminalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Error => "error",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubagentResult {
     pub subagent_id: String,
@@ -298,6 +317,7 @@ pub struct SubagentResult {
     pub task_preview: String,
     pub result: String,
     pub is_error: bool,
+    pub status: SubagentTerminalStatus,
     pub elapsed_secs: u32,
 }
 
@@ -351,13 +371,13 @@ pub struct AppState {
     // ── Subagents ───────────────────────────────────────────────────────────
     /// Completed background subagent results waiting to be injected into the
     /// parent agent's next agentic loop iteration.
-    /// Key: parent agent_id, Value: vec of completed results.
+    /// Key: (invoking agent_id, invoking conversation_id).
     pub pending_subagent_results:
-        Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
+        Arc<RwLock<std::collections::HashMap<(String, Option<String>), Vec<SubagentResult>>>>,
     /// Cancellation channels for actively running subagents.
     /// Key: subagent_id, Value: sender to abort the subagent loop.
     pub subagent_cancellations:
-        Arc<RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<()>>>>,
+        Arc<RwLock<std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
 

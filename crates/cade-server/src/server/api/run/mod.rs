@@ -571,6 +571,46 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             }
         }
 
+        // Deliver only outcomes from this conversation, before building the
+        // next turn's context (also covers outcomes completed between runs).
+        let delivery_error = {
+            let mut map = state2.pending_subagent_results.write().await;
+            let key = (agent_id2.clone(), conv_id2.clone());
+            let mut failure = None;
+            if let Some(results) = map.get_mut(&key) {
+                while let Some(sr) = results.first() {
+                    match subagent::store_background_outcome(
+                        &state2,
+                        &agent_id2,
+                        conv_id2.as_deref(),
+                        sr,
+                    ) {
+                        Ok(()) => {
+                            results.remove(0);
+                        }
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if results.is_empty() {
+                    map.remove(&key);
+                }
+            }
+            failure
+        };
+        if let Some(error) = delivery_error {
+            tracing::error!(%error, "background outcome still pending; refusing to continue parent run");
+            send(json!({
+                "message_type": "error",
+                "error": "Background outcome could not be delivered; it remains pending for retry",
+            }))
+            .await;
+            exit_status = RunExitStatus::Error;
+            break;
+        }
+
         // ── Build context ─────────────────────────────────────────────
         // Fix: only increment the turn counter on the first iteration
         // (the actual user message). Subsequent iterations are tool-return
@@ -1013,55 +1053,6 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             );
         }
 
-        // ── Background subagent write-back ─────────────────────────────────
-        // Drain completed background results for this agent so the parent
-        // sees them on the next LLM iteration.  Each result is persisted as a
-        // `tool` message only when no tool result for that tool_call_id is
-        // already in the conversation — server-side background runs also
-        // return their result synchronously, so this dedupes instead of
-        // double-delivering, and the queue can no longer grow unbounded.
-        let pending_results = {
-            let mut map = state2.pending_subagent_results.write().await;
-            map.remove(&agent_id2).unwrap_or_default()
-        };
-        if !pending_results.is_empty() {
-            let existing_ids: std::collections::HashSet<String> =
-                cade_store::sqlite::list_messages(
-                    &state2.db,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    10000,
-                )
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|m| m.role == "tool")
-                .filter_map(|m| m.content["tool_call_id"].as_str().map(String::from))
-                .collect();
-
-            for sr in pending_results {
-                if existing_ids.contains(&sr.tool_call_id) {
-                    continue;
-                }
-                let body = format!(
-                    "[background subagent {} {}]\n{}",
-                    sr.subagent_id,
-                    if sr.is_error { "failed" } else { "completed" },
-                    sr.result
-                );
-                persist(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    "tool",
-                    json!({
-                        "content": body,
-                        "tool_call_id": sr.tool_call_id,
-                        "tool_name": "run_subagent",
-                    }),
-                );
-            }
-        }
-
         // Loop → re-invoke LLM with tool results
     }
 
@@ -1234,24 +1225,178 @@ pub struct SteerPayload {
     pub message: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct LaunchSubagentPayload {
+    pub conversation_id: Option<String>,
+    pub args: Value,
+    pub mode: String,
+}
+
+/// CLI direct invocation uses the same server-owned session, permissions and
+/// workspace setup as a subagent invoked from a parent run.
+pub async fn launch_subagent_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<LaunchSubagentPayload>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    use axum::http::StatusCode;
+    let agent = cade_store::sqlite::get_agent(&state.db, &agent_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if agent.is_none() {
+        return Err((StatusCode::NOT_FOUND, "parent agent not found".into()));
+    }
+    if let Some(ref id) = payload.conversation_id {
+        let conversation = cade_store::sqlite::get_conversation(&state.db, id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if !conversation.is_some_and(|c| c.agent_id == agent_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "conversation not found for parent agent".into(),
+            ));
+        }
+    }
+    let mode = payload.mode.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid permission mode".to_string(),
+        )
+    })?;
+    let run =
+        cade_store::sqlite::create_run(&state.db, &agent_id, payload.conversation_id.as_deref())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let run_id = run.id;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<
+        Result<runtime::RunEventEnvelope, std::convert::Infallible>,
+    >(128);
+    // The direct response cannot carry live events. Persist them under a
+    // streamable run ID, including events after a background launch returns.
+    let db = state.db.clone();
+    let relay_id = run_id.clone();
+    tokio::spawn(async move {
+        let mut status = "done";
+        while let Some(Ok(event)) = rx.recv().await {
+            if let Ok(payload) = serde_json::from_str::<Value>(&event.data)
+                && payload["message_type"] == "subagent_complete"
+                && payload["status"] != "success"
+                && payload["status"] != "done"
+            {
+                status = "error";
+            }
+            if let Err(error) = cade_store::sqlite::append_run_event(&db, &relay_id, &event.data) {
+                tracing::warn!(%relay_id, %error, "failed to persist CLI subagent event");
+            }
+        }
+        let _ = cade_store::sqlite::finish_run(&db, &relay_id, status);
+    });
+    let result = subagent::handle_run_subagent_tool_inner(
+        &state,
+        &agent_id,
+        payload.conversation_id.as_deref(),
+        &format!("cli-{}", uuid::Uuid::new_v4()),
+        &payload.args,
+        Box::new(subagent::SseEventEmitter { tx }),
+        mode,
+    )
+    .await;
+    Ok(Json(
+        json!({"output": result.output, "is_error": result.is_error, "run_id": run_id}),
+    ))
+}
+
 pub async fn steer_subagent_handler(
     State(_state): State<AppState>,
     Path(subagent_id): Path<String>,
     Json(payload): Json<SteerPayload>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
-    if subagent::steer_subagent(&subagent_id, payload.message) {
-        Ok(Json(
-            json!({ "status": "success", "subagent_id": subagent_id }),
-        ))
-    } else {
-        Err((
+    subagent::steer_subagent(&subagent_id, payload.message)
+        .map_err(|e| (axum::http::StatusCode::CONFLICT, e))?;
+    Ok(Json(
+        json!({ "status": "accepted", "subagent_id": subagent_id }),
+    ))
+}
+
+pub async fn subagent_status_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let status = cade_agent::subagents::SubagentSession::child_status(&subagent_id)
+        .map_err(|e| (axum::http::StatusCode::NOT_FOUND, e))?;
+    Ok(Json(
+        json!({ "subagent_id": subagent_id, "status": status.to_string() }),
+    ))
+}
+
+pub async fn cancel_subagent_handler(
+    State(state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let cancellation = state
+        .subagent_cancellations
+        .read()
+        .await
+        .get(&subagent_id)
+        .cloned()
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("No active subagent found with ID {subagent_id}"),
+            )
+        })?;
+    cancellation.cancel().map_err(|_| {
+        (
+            axum::http::StatusCode::CONFLICT,
+            format!("Subagent {subagent_id} is no longer accepting cancellation"),
+        )
+    })?;
+    Ok(Json(
+        json!({ "status": "cancelling", "subagent_id": subagent_id }),
+    ))
+}
+
+pub async fn pause_subagent_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    control_subagent_pause(&subagent_id, false)
+}
+
+pub async fn pause_subagent_state_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let status = subagent::pause_state(&subagent_id).ok_or_else(|| {
+        (
             axum::http::StatusCode::NOT_FOUND,
-            format!(
-                "Subagent '{}' not active or steering queue closed.",
-                subagent_id
-            ),
-        ))
-    }
+            format!("No active subagent found with ID {subagent_id}"),
+        )
+    })?;
+    Ok(Json(
+        json!({ "subagent_id": subagent_id, "status": status }),
+    ))
+}
+
+pub async fn resume_subagent_handler(
+    State(_state): State<AppState>,
+    Path(subagent_id): Path<String>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    control_subagent_pause(&subagent_id, true)
+}
+
+fn control_subagent_pause(
+    id: &str,
+    resume: bool,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let state = subagent::control_pause(id, resume).map_err(|reason| {
+        (
+            if reason.starts_with("no active") {
+                axum::http::StatusCode::NOT_FOUND
+            } else {
+                axum::http::StatusCode::CONFLICT
+            },
+            reason,
+        )
+    })?;
+    Ok(Json(json!({ "subagent_id": id, "status": state })))
 }
 
 #[derive(serde::Deserialize)]
@@ -1260,18 +1405,27 @@ pub struct SwapModelPayload {
 }
 
 pub async fn swap_subagent_model_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(subagent_id): Path<String>,
     Json(payload): Json<SwapModelPayload>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
-    if subagent::swap_subagent_model(&subagent_id, payload.model.clone()) {
-        Ok(Json(
-            json!({ "status": "success", "subagent_id": subagent_id, "model": payload.model }),
-        ))
-    } else {
-        Err((
-            axum::http::StatusCode::NOT_FOUND,
-            format!("Subagent '{}' not active.", subagent_id),
-        ))
-    }
+    state.llm.validate_model(&payload.model).map_err(|e| {
+        (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("Invalid model '{}': {e}", payload.model),
+        )
+    })?;
+    subagent::swap_subagent_model(&subagent_id, payload.model.clone()).map_err(|e| {
+        (
+            if e.contains("no longer accepting") {
+                axum::http::StatusCode::CONFLICT
+            } else {
+                axum::http::StatusCode::NOT_FOUND
+            },
+            e,
+        )
+    })?;
+    Ok(Json(
+        json!({ "status": "accepted", "subagent_id": subagent_id, "model": payload.model, "effective": "next_turn" }),
+    ))
 }

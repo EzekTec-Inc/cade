@@ -660,14 +660,16 @@ impl Repl {
                     return Ok(false);
                 }
                 let all = discover_all_subagents(&self.cwd);
+                let visible: Vec<_> = cade_agent::subagents::visible_subagents(&all)
+                    .cloned()
+                    .collect();
                 match self
-                    .subagent_picker(std::sync::Arc::clone(&self.app), &all)
+                    .subagent_picker(std::sync::Arc::clone(&self.app), &visible)
                     .await?
                 {
                     Some(SubagentPickerResult::Run(name)) => {
-                        *pending_input = Some(format!(
-                            "run_subagent(subagent_type=\"{name}\", prompt=\"\")"
-                        ));
+                        *pending_input =
+                            Some(format!("run_subagent(mode=\"{name}\", prompt=\"\")"));
                     }
                     Some(SubagentPickerResult::Edit(path)) => {
                         // Drop the TUI temporarily, open $EDITOR, then return
