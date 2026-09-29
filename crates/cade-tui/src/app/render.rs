@@ -246,16 +246,7 @@ pub(crate) fn render_frame(
     let (input_badge, _input_badge_color) = input_mode_badge(ctx.input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
     let available_w = content_area.width;
-    let inline_h = ctx
-        .top_overlay
-        .map(|o| o.inline_height(content_area.height))
-        .unwrap_or(0);
-    let mut input_rows =
-        calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
-
-    if inline_h > 0 {
-        input_rows = inline_h;
-    }
+    let input_rows = calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };

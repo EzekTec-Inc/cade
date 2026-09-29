@@ -6,6 +6,24 @@ use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
 
+/// Keep typed instructions distinct from option labels: arbitrary input must
+/// never turn a denial into an approval by matching a displayed label.
+fn approval_decision(answer: Option<cade_tui::question::QuestionAnswer>) -> serde_json::Value {
+    use cade_tui::question::QuestionAnswer;
+    match answer {
+        Some(QuestionAnswer::Single(label)) if label == "Allow once" => {
+            serde_json::json!({"action": "approve"})
+        }
+        Some(QuestionAnswer::Single(label)) if label == "Allow for this session" => {
+            serde_json::json!({"action": "approve_session"})
+        }
+        Some(QuestionAnswer::Custom(instructions)) => {
+            serde_json::json!({"action": "deny", "feedback": instructions})
+        }
+        _ => serde_json::json!({"action": "deny"}),
+    }
+}
+
 /// Build a compact one-line argument preview for a tool call header row.
 fn tool_args_preview(args: &serde_json::Value) -> String {
     fn short(s: &str, n: usize) -> String {
@@ -417,12 +435,17 @@ impl Repl {
                                             .to_string(),
                                     },
                                     cade_tui::question::QuestionOption {
+                                        label: "Allow for this session".to_string(),
+                                        description: "Allow this exact call in this conversation"
+                                            .to_string(),
+                                    },
+                                    cade_tui::question::QuestionOption {
                                         label: "Deny".to_string(),
                                         description: "Reject execution of this tool".to_string(),
                                     },
                                 ],
                                 multi_select: false,
-                                allow_other: false,
+                                allow_other: true,
                                 progress: None,
                             };
 
@@ -437,13 +460,7 @@ impl Repl {
 
                             if let Some(rx) = rx_opt {
                                 tokio::spawn(async move {
-                                    let action = match rx.await {
-                                        Ok(Some(cade_tui::question::QuestionAnswer::Single(
-                                            ref label,
-                                        ))) if label == "Allow once" => "approve",
-                                        _ => "deny",
-                                    };
-                                    let body = serde_json::json!({ "action": action });
+                                    let body = approval_decision(rx.await.ok().flatten());
                                     let _ = client_c
                                         .raw_post(
                                             &format!("/approvals/{approval_id_c}/action"),
@@ -463,91 +480,133 @@ impl Repl {
                             .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
 
                         if !id.is_empty()
-                            && let Some(first_q) =
-                                questions_val.as_array().and_then(|arr| arr.first())
+                            && let Some(arr) = questions_val.as_array()
+                            && !arr.is_empty()
                         {
-                            let header = first_q
-                                .get("header")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Question")
-                                .to_string();
-                            let text = first_q
-                                .get("question")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let multi_select = first_q
-                                .get("multiSelect")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
-                            let options = first_q
-                                .get("options")
-                                .and_then(|v| v.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|opt| {
-                                            let label = opt
-                                                .get("label")
-                                                .and_then(|v| v.as_str())?
-                                                .to_string();
-                                            let desc = opt
-                                                .get("description")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("")
-                                                .to_string();
-                                            Some(cade_tui::question::QuestionOption {
-                                                label,
-                                                description: desc,
-                                            })
+                            let questions_list: Vec<cade_tui::question::Question> = arr
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, q_val)| {
+                                    let header = q_val
+                                        .get("header")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Question")
+                                        .to_string();
+                                    let text = q_val
+                                        .get("question")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let multi_select = q_val
+                                        .get("multiSelect")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let options = q_val
+                                        .get("options")
+                                        .and_then(|v| v.as_array())
+                                        .map(|opts| {
+                                            opts.iter()
+                                                .filter_map(|opt| {
+                                                    let label = opt
+                                                        .get("label")
+                                                        .and_then(|v| v.as_str())?
+                                                        .to_string();
+                                                    let desc = opt
+                                                        .get("description")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("")
+                                                        .to_string();
+                                                    Some(cade_tui::question::QuestionOption {
+                                                        label,
+                                                        description: desc,
+                                                    })
+                                                })
+                                                .collect()
                                         })
-                                        .collect()
-                                })
-                                .unwrap_or_default();
+                                        .unwrap_or_default();
 
-                            let question = cade_tui::question::Question {
-                                header,
-                                text,
-                                options,
-                                multi_select,
-                                allow_other: true,
-                                progress: None,
-                            };
+                                    cade_tui::question::Question {
+                                        header,
+                                        text,
+                                        options,
+                                        multi_select,
+                                        allow_other: true,
+                                        progress: if arr.len() > 1 {
+                                            Some((idx + 1, arr.len()))
+                                        } else {
+                                            None
+                                        },
+                                    }
+                                })
+                                .collect();
 
                             let client_c = client_for_ui.clone();
                             let question_id_c = id.clone();
+                            let app_arc_c = std::sync::Arc::clone(&app_arc);
 
-                            let rx_opt = {
-                                let mut app = app_arc.lock();
-                                app.show_toast(
-                                    "❓ Clarifying question from agent".to_string(),
-                                    crate::ui::ToastLevel::Info,
-                                );
-                                app.ask_question_async(question).ok()
-                            };
+                            tokio::spawn(async move {
+                                let mut answers: std::collections::HashMap<String, String> =
+                                    std::collections::HashMap::new();
+                                let mut cancelled = false;
 
-                            if let Some(rx) = rx_opt {
-                                tokio::spawn(async move {
-                                    let (action, feedback) = match rx.await {
+                                for q in questions_list {
+                                    let header = q.header.clone();
+                                    let rx_opt = {
+                                        let mut app = app_arc_c.lock();
+                                        app.show_toast(
+                                            format!("❓ Question: {header}"),
+                                            crate::ui::ToastLevel::Info,
+                                        );
+                                        app.ask_question_async(q).ok()
+                                    };
+
+                                    let Some(rx) = rx_opt else {
+                                        cancelled = true;
+                                        break;
+                                    };
+
+                                    let answer_str = match rx.await {
                                         Ok(Some(cade_tui::question::QuestionAnswer::Single(
                                             ref label,
-                                        ))) => ("approve", Some(label.clone())),
+                                        ))) => label.clone(),
+                                        Ok(Some(cade_tui::question::QuestionAnswer::Custom(
+                                            ref answer,
+                                        ))) => answer.clone(),
                                         Ok(Some(cade_tui::question::QuestionAnswer::Multi(
                                             ref labels,
-                                        ))) => ("approve", Some(labels.join(", "))),
-                                        _ => ("deny", None),
+                                        ))) => labels.join(", "),
+                                        _ => {
+                                            cancelled = true;
+                                            break;
+                                        }
                                     };
-                                    let mut body = serde_json::json!({ "action": action });
-                                    if let Some(fb) = feedback {
-                                        body["feedback"] = fb.into();
-                                    }
+
+                                    answers.insert(header, answer_str);
+                                }
+
+                                if cancelled || answers.is_empty() {
+                                    let body = serde_json::json!({ "action": "deny" });
                                     let _ = client_c
                                         .raw_post(
                                             &format!("/approvals/{question_id_c}/action"),
                                             &body,
                                         )
                                         .await;
-                                });
-                            }
+                                } else {
+                                    let feedback = serde_json::to_string(&answers)
+                                        .unwrap_or_else(|_| "".to_string());
+                                    let body = serde_json::json!({
+                                        "action": "approve",
+                                        "feedback": feedback,
+                                    });
+                                    let _ = client_c
+                                        .raw_post(
+                                            &format!("/approvals/{question_id_c}/action"),
+                                            &body,
+                                        )
+                                        .await;
+                                }
+                            });
                         }
                     }
                     "subagent_started" => {
@@ -681,6 +740,17 @@ impl Repl {
         let agent_id = self.agent_id();
         let cancel = &self.cancel_turn;
 
+        // A new REPL needs a real conversation identity before it can make
+        // conversation-scoped approval decisions on its very first turn.
+        if self.conversation_id().is_none() {
+            let conversation = self.client.create_conversation(&agent_id, "").await?;
+            let id = conversation["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| crate::Error::custom("Server did not return a conversation ID"))?;
+            *self.conversation_id.lock() = Some(id.to_owned());
+            self.session.lock().set_conversation(Some(id.to_owned()))?;
+        }
         let conv_id = self.conversation_id();
         let conv_ref = conv_id.as_deref();
 
@@ -794,5 +864,34 @@ impl Repl {
         }
 
         Ok(messages)
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+    use cade_tui::question::QuestionAnswer;
+
+    #[test]
+    fn approval_choices_never_interpret_instructions_as_labels() {
+        assert_eq!(
+            approval_decision(Some(QuestionAnswer::Single("Allow once".into())))["action"],
+            "approve"
+        );
+        assert_eq!(
+            approval_decision(Some(QuestionAnswer::Single(
+                "Allow for this session".into()
+            )))["action"],
+            "approve_session"
+        );
+        assert_eq!(
+            approval_decision(Some(QuestionAnswer::Single("Deny".into())))["action"],
+            "deny"
+        );
+        assert_eq!(approval_decision(None)["action"], "deny");
+        assert_eq!(
+            approval_decision(Some(QuestionAnswer::Custom("Allow once".into()))),
+            serde_json::json!({"action":"deny", "feedback":"Allow once"})
+        );
     }
 }

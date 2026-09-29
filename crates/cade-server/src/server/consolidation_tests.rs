@@ -565,6 +565,7 @@ fn mk_state(db: cade_store::sqlite::Db, llm: Arc<dyn LlmProvider>) -> AppState {
     };
 
     AppState {
+        conversation_approvals: Default::default(),
         db,
         llm,
         llm_router: router,

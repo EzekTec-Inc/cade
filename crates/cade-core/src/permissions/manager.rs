@@ -1,6 +1,7 @@
 use crate::permissions::checks::*;
 use crate::permissions::rules::*;
 use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 // -- PermissionManager
@@ -9,6 +10,7 @@ use std::sync::Arc;
 pub struct PermissionManager {
     mode: Arc<Mutex<PermissionMode>>,
     allow_rules: Arc<Mutex<Vec<PermissionRule>>>,
+    session_allow_calls: Arc<Mutex<HashSet<(String, String)>>>,
     deny_rules: Arc<Mutex<Vec<PermissionRule>>>,
     /// SEC-B1: When true, bash tools are never auto-approved.
     strict_bash: bool,
@@ -19,6 +21,7 @@ impl PermissionManager {
         Self {
             mode: Arc::new(Mutex::new(mode)),
             allow_rules: Arc::new(Mutex::new(Vec::new())),
+            session_allow_calls: Arc::new(Mutex::new(HashSet::new())),
             deny_rules: Arc::new(Mutex::new(Vec::new())),
             strict_bash: false,
         }
@@ -29,6 +32,7 @@ impl PermissionManager {
         Self {
             mode: Arc::new(Mutex::new(mode)),
             allow_rules: Arc::new(Mutex::new(Vec::new())),
+            session_allow_calls: Arc::new(Mutex::new(HashSet::new())),
             deny_rules: Arc::new(Mutex::new(Vec::new())),
             strict_bash,
         }
@@ -63,18 +67,30 @@ impl PermissionManager {
         }
     }
 
+    /// Grant this exact tool invocation for the lifetime of this manager.
+    /// The caller owns the conversation boundary; an argument change needs a new decision.
+    pub fn add_session_allow_call(&self, tool_name: &str, args: &serde_json::Value) {
+        self.session_allow_calls
+            .lock()
+            .insert((tool_name.to_lowercase(), args.to_string()));
+    }
+
     /// Invalidate/remove all session allow rules matching a tool prefix (e.g. "github__" or "serena__").
     /// Called when an asset or server disconnects to prevent stale permissions.
     pub fn remove_session_allows_for_prefix(&self, prefix: &str) {
         let prefix_lower = prefix.to_lowercase();
         let mut rules = self.allow_rules.lock();
         rules.retain(|r| !r.tool.starts_with(&prefix_lower));
+        self.session_allow_calls
+            .lock()
+            .retain(|(tool, _)| !tool.starts_with(&prefix_lower));
     }
 
     /// Clear all rules, then load new ones from the given settings.
     /// Note: This resets any session-level allow rules.
     pub fn reload_from_settings(&self, settings: &crate::settings::models::PermissionSettings) {
         self.allow_rules.lock().clear();
+        self.session_allow_calls.lock().clear();
         self.deny_rules.lock().clear();
         for raw in &settings.allow {
             if let Some(rule) = PermissionRule::parse(raw) {
@@ -185,6 +201,10 @@ impl PermissionManager {
             .lock()
             .iter()
             .any(|r| r.matches(tool_name, arg_ref))
+            || self
+                .session_allow_calls
+                .lock()
+                .contains(&(tool_name.to_lowercase(), args.to_string()))
         {
             // SEC-B1: strict_bash overrides allow rules for bash tools
             if self.strict_bash && is_bash {

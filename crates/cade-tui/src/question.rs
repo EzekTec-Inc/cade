@@ -42,14 +42,14 @@ use ratatui::{
 // -- Public types
 
 /// One labelled option in a question.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionOption {
     pub label: String,
     pub description: String,
 }
 
 /// A single question to present to the user.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     /// Short chip/tag label shown above the question text (≤12 chars).
     pub header: String,
@@ -59,17 +59,19 @@ pub struct Question {
     pub options: Vec<QuestionOption>,
     /// If true, checkboxes are shown and a "Submit" option is appended.
     pub multi_select: bool,
-    /// Append a free-text "Type something." option (omit for approval dialogs).
+    /// Append a free-text option (for approvals this is "Type your instructions").
     pub allow_other: bool,
     /// Optional progress indicator `(current, total)` — shows "Question N of M".
     pub progress: Option<(usize, usize)>,
 }
 
 /// The answer returned by the widget.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuestionAnswer {
     /// Single option selected (label or custom typed text).
     Single(String),
+    /// User-entered free text, distinct from a labelled option with the same text.
+    Custom(String),
     /// Multiple options selected (multi-select mode).
     Multi(Vec<String>),
 }
@@ -78,7 +80,7 @@ impl QuestionAnswer {
     /// Flat string representation (multi joined with ", ").
     pub fn as_str(&self) -> String {
         match self {
-            Self::Single(s) => s.clone(),
+            Self::Single(s) | Self::Custom(s) => s.clone(),
             Self::Multi(v) => v.join(", "),
         }
     }
@@ -355,7 +357,7 @@ impl QuestionWidget {
                             }
                         } else if cursor_pos == other_idx {
                             if !custom_text.is_empty() {
-                                break 'widget Some(QuestionAnswer::Single(custom_text.clone()));
+                                break 'widget Some(QuestionAnswer::Custom(custom_text.clone()));
                             }
                         } else {
                             let label = question.options[cursor_pos].label.clone();
