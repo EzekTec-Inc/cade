@@ -1260,8 +1260,8 @@ fn test_question_modal_renders_centered_with_radios_and_backdrop() {
     // Navigation and quick-pick hint
     assert!(rendered.contains("1-N quick pick"));
 
-    // Inline height must be 0 to decouple from input box
-    assert_eq!(state.inline_height(24), 0);
+    // The active decision reserves the input region rather than the timeline.
+    assert!(state.inline_height(24) > 0);
 }
 
 #[test]
@@ -1894,7 +1894,6 @@ fn test_question_modal_sequence_progression_and_draft_preservation() {
         ]))
     );
 
-    // Verify inline_height remains decoupled at 0
-    assert_eq!(state1.inline_height(24), 0);
-    assert_eq!(state2.inline_height(24), 0);
+    assert!(state1.inline_height(24) > 0);
+    assert!(state2.inline_height(24) > 0);
 }

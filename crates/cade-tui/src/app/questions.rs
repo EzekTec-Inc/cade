@@ -72,7 +72,7 @@ impl TuiApp {
         Ok(answer)
     }
 
-    /// Blocking question modal — driven by key events forwarded through `key_rx`.
+    /// Blocking question in the input region, driven by keys from `key_rx`.
     ///
     /// Safe to call from `tokio::task::spawn_blocking`.  Does NOT poll the
     /// crossterm event queue directly; instead the tick task forwards
@@ -81,7 +81,7 @@ impl TuiApp {
     /// this function is waiting on `event::read()`.
     ///
     /// Sets `active_question.tx = None` so the tick task's spin-wait branch
-    /// is never entered for this modal.
+    /// is never entered for this question.
     ///
     /// This is the canonical path for `prompt_approval` and `handle_ask_user_question`.
     pub fn ask_question_blocking(

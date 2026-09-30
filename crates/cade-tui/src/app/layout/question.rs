@@ -9,10 +9,8 @@ use ratatui::{
 };
 use std::borrow::Cow;
 
-/// Reserve an inline decision panel without taking over the conversation.
-/// The details and choices have separate viewports, so neither can displace
-/// the keyboard hints or the focused choice.
-#[allow(dead_code)]
+/// Reserve room for the decision in the input region while keeping the
+/// conversation visible. Details and choices scroll independently.
 pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
     let q = &aq.question;
     let choices = q.options.iter().fold(0usize, |rows, option| {
@@ -23,10 +21,9 @@ pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16)
     let desired = details + choices + 2; // separator and keyboard hints
     (desired.min(u16::MAX as usize) as u16)
         .min(content_height / 2)
-        .max(6)
+        .max(6.min(content_height))
 }
 
-#[allow(dead_code)]
 pub(crate) fn render_question_inline(
     frame: &mut Frame,
     aq: &ActiveQuestionDrawState,

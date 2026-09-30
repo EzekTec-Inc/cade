@@ -712,7 +712,9 @@ impl OverlayComponent for ActiveQuestionState {
         );
     }
 
-    fn render_inline(&self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
+    fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
+        crate::app::layout::question::render_question_inline(frame, &self.draw_state, area, colors);
+    }
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -860,7 +862,9 @@ impl OverlayComponent for ActiveQuestionState {
                 st.custom_text = chars.into_iter().collect();
                 st.custom_cursor_pos = pos + 1;
             }
-            _ => return OverlayInputResult::NotHandled,
+            // A pending decision owns the input region. Unrecognized keys must
+            // not fall through to the hidden draft in the normal composer.
+            _ => return OverlayInputResult::Consumed,
         }
 
         if let Some(ans) = ans_opt {
@@ -878,8 +882,8 @@ impl OverlayComponent for ActiveQuestionState {
         self.result.take().map(|r| Box::new(r) as Box<dyn Any>)
     }
 
-    fn inline_height(&self, _max_height: u16) -> u16 {
-        0
+    fn inline_height(&self, max_height: u16) -> u16 {
+        crate::app::layout::question::question_height(&self.draw_state, max_height)
     }
 }
 
@@ -2032,8 +2036,17 @@ impl TuiApp {
             // -- Dynamic overlay stack (Phase 3: renders on top of everything)
             if !overlay_stack.is_empty() {
                 let full_area = frame.area();
-                for overlay in overlay_stack.iter_mut() {
-                    overlay.render_overlay(frame, full_area, colors);
+                // An inline decision is the topmost prompt. Keep older floating
+                // overlays in the stack, but do not draw them over its input.
+                if overlay_stack
+                    .last()
+                    .is_some_and(|top| top.inline_height(full_area.height) == 0)
+                {
+                    for overlay in overlay_stack.iter_mut() {
+                        if overlay.inline_height(full_area.height) == 0 {
+                            overlay.render_overlay(frame, full_area, colors);
+                        }
+                    }
                 }
                 // When any overlay is open, hide the main cursor
                 // (the overlay is responsible for its own cursor, if any).

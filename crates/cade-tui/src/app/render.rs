@@ -251,17 +251,16 @@ pub(crate) fn render_frame(
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
     let hotkey_bar_h: u16 = 1;
-    let bottom_rows = FIXED_ROWS + input_rows + 2 + footer_extra_h + hotkey_bar_h;
+    let footer_h = 1 + footer_extra_h + hotkey_bar_h;
 
-    if content_area.height <= bottom_rows + 1 {
-        frame.render_widget(
-            Paragraph::new("Terminal too small").style(colors.error()),
-            content_area,
-        );
-        return (0, None, ratatui::layout::Rect::default());
-    }
-
-    let plan_h = if let Some(plan) = active_plan {
+    let has_inline_prompt = ctx
+        .top_overlay
+        .is_some_and(|overlay| overlay.inline_height(content_area.height) > 0);
+    let plan_h = if has_inline_prompt {
+        // The decision needs room for a focused choice even on short screens.
+        // The plan state stays intact and reappears as soon as the prompt closes.
+        0
+    } else if let Some(plan) = active_plan {
         if plan.is_visible {
             (plan.steps.len() as u16 + 2).min(10).max(4)
         } else {
@@ -271,10 +270,37 @@ pub(crate) fn render_frame(
         0
     };
 
+    // Inline prompts take over the input region, not the message viewport.
+    // Reserve enough rows to keep the selected choice and its hint visible,
+    // while leaving room for the timeline and footer on smaller terminals.
+    let inline_max = content_area.height.saturating_sub(footer_h + plan_h + 2);
+    let inline_h = ctx
+        .top_overlay
+        .map(|overlay| overlay.inline_height(inline_max))
+        .unwrap_or(0);
+    let input_h = if inline_h > 0 {
+        inline_h
+    } else {
+        input_rows + 2
+    };
+    let bottom_rows = if inline_h > 0 {
+        input_h + footer_h + plan_h
+    } else {
+        FIXED_ROWS + input_rows + 2 + footer_extra_h + hotkey_bar_h
+    };
+
+    if content_area.height <= bottom_rows + 1 {
+        frame.render_widget(
+            Paragraph::new("Terminal too small").style(colors.error()),
+            content_area,
+        );
+        return (0, None, ratatui::layout::Rect::default());
+    }
+
     let chunks = Layout::vertical([
         Constraint::Fill(1),                                   // [0] content  (fluid)
         Constraint::Length(plan_h),                            // [1] plan panel (0 when hidden)
-        Constraint::Length(input_rows + 2),                    // [2] floating rounded input box
+        Constraint::Length(input_h),                           // [2] input or inline decision
         Constraint::Length(1 + footer_extra_h + hotkey_bar_h), // [3] footer
     ])
     .split(content_area);
@@ -361,6 +387,7 @@ pub(crate) fn render_frame(
     // -- Todos / Active Plan checklist
     if let Some(plan) = active_plan
         && plan.is_visible
+        && plan_h > 0
     {
         render_active_plan(frame, chunks[1], plan, colors);
     }
@@ -991,6 +1018,195 @@ fn render_subagent_task_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::app::ActiveQuestionState;
+    use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+    use crate::question::{Question, QuestionAnswer, QuestionOption};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    /// Exercise the same frame seam as TuiApp::draw, including overlay placement.
+    fn draw_with_prompt(
+        terminal: &mut Terminal<TestBackend>,
+        prompt: Option<&dyn OverlayComponent>,
+        textarea: &mut tui_textarea::TextArea<'static>,
+        layout_engine: &mut TimelineLayoutEngine,
+    ) -> (Vec<String>, Rect) {
+        let colors = ThemeColors::default();
+        let lines = [RenderLine::SystemMsg("Earlier conversation".to_string())];
+        let expanded = std::collections::HashSet::new();
+        let mut input_width = 0;
+        let mut messages_area = Rect::default();
+        terminal
+            .draw(|frame| {
+                let ctx = RenderContext {
+                    lines: &lines,
+                    streaming: None,
+                    reasoning: None,
+                    scroll: 0,
+                    expand_all: false,
+                    input_mode: InputMode::Regular,
+                    mode: PermissionMode::Default,
+                    agent_name: "CADE",
+                    model: "test-model",
+                    last_status: &None,
+                    thinking_text: None,
+                    thinking_elapsed: None,
+                    top_overlay: prompt,
+                    queued_count: 0,
+                    cwd: "/tmp",
+                    context_pct: None,
+                    session_tokens: (0, 0),
+                    session_cost_usd: 0.0,
+                    session_cost_cap_usd: 0.0,
+                    turn_count: 0,
+                    token_history: &[],
+                    header_lines: &[],
+                    footer_extra: None,
+                    reasoning_effort: None,
+                    active_plan: None,
+                    sidebar_hidden: true,
+                    toast: None,
+                    is_processing: true,
+                    copy_highlight: None,
+                    mouse_selection: None,
+                    expanded_items: &expanded,
+                    colors: &colors,
+                    nerd: false,
+                    subagent_trackers: &[],
+                    content_version: 0,
+                    modified_files: &[],
+                    streaming_metrics: None,
+                    proxy_status: None,
+                    subagent_tray: None,
+                };
+                messages_area =
+                    render_frame(frame, ctx, textarea, &mut input_width, layout_engine).2;
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        (rows, messages_area)
+    }
+
+    #[test]
+    fn approval_replaces_composer_below_visible_conversation_and_restores_draft() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.insert_str("unsent draft");
+        let mut layout_engine = TimelineLayoutEngine::new();
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut prompt = ActiveQuestionState::new(
+            Question {
+                header: "Approve bash".to_string(),
+                text: "Allow the requested command?".to_string(),
+                options: vec![
+                    QuestionOption {
+                        label: "Allow once".into(),
+                        description: String::new(),
+                    },
+                    QuestionOption {
+                        label: "Deny".into(),
+                        description: String::new(),
+                    },
+                ],
+                multi_select: false,
+                allow_other: false,
+                progress: None,
+            },
+            tx,
+        );
+        let (rows, messages) = draw_with_prompt(
+            &mut terminal,
+            Some(&prompt),
+            &mut textarea,
+            &mut layout_engine,
+        );
+        let prompt_row = rows
+            .iter()
+            .position(|row| row.contains("Approve bash"))
+            .unwrap();
+        let conversation_row = rows
+            .iter()
+            .position(|row| row.contains("Earlier conversation"))
+            .unwrap();
+        assert!(conversation_row < prompt_row);
+        assert!(prompt_row >= usize::from(messages.bottom()));
+        assert!(rows.join("\n").contains("Allow once"));
+        assert!(rows.join("\n").contains("Esc deny"));
+        assert!(!rows.join("\n").contains("unsent draft"));
+
+        assert_eq!(
+            prompt.handle_input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            OverlayInputResult::Consumed,
+            "unrecognized keys must not reach the hidden composer"
+        );
+
+        assert_eq!(
+            prompt.handle_input(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+            OverlayInputResult::Dismiss
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Some(QuestionAnswer::Single("Deny".into()))
+        );
+        let (rows, _) = draw_with_prompt(&mut terminal, None, &mut textarea, &mut layout_engine);
+        assert!(rows.join("\n").contains("unsent draft"));
+    }
+
+    #[test]
+    fn question_with_long_choices_keeps_focus_and_hint_near_input_on_short_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(55, 13)).unwrap();
+        let mut textarea = tui_textarea::TextArea::default();
+        let mut layout_engine = TimelineLayoutEngine::new();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let mut prompt = ActiveQuestionState::new(
+            Question {
+                header: "Pick a target".into(),
+                text: "Select one target from the list".into(),
+                options: (0..12)
+                    .map(|i| QuestionOption {
+                        label: format!("Choice {i}"),
+                        description: String::new(),
+                    })
+                    .collect(),
+                multi_select: true,
+                allow_other: false,
+                progress: None,
+            },
+            tx,
+        );
+        prompt.draw_state.checked[11] = true;
+        for _ in 0..11 {
+            prompt.handle_input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        let (rows, messages) = draw_with_prompt(
+            &mut terminal,
+            Some(&prompt),
+            &mut textarea,
+            &mut layout_engine,
+        );
+        let screen = rows.join("\n");
+        assert!(screen.contains("Earlier conversation"));
+        assert!(
+            screen.contains("Choice 11"),
+            "focused choice missing: {screen}"
+        );
+        assert!(screen.contains("[✓]"), "checked choice missing: {screen}");
+        assert!(screen.contains("Esc cancel"), "hint missing: {screen}");
+        assert!(
+            rows.iter()
+                .position(|row| row.contains("Pick a target"))
+                .unwrap()
+                >= usize::from(messages.bottom())
+        );
+    }
 
     #[test]
     fn animate_live_status_rotates_spinner_over_time() {

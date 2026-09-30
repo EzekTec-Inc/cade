@@ -409,66 +409,57 @@ impl Repl {
                         let args_val = request.arguments;
                         let subagent = msg.data.get("subagent_id").and_then(|v| v.as_str());
 
-                        if let Some(subagent_id) = subagent {
-                            let text = format!(
-                                "⚠️ Background Subagent [{}] requests permission to run {}. Type /approvals to review.",
-                                subagent_id, tool
-                            );
+                        let client_c = client_for_ui.clone();
+                        let approval_id_c = id.clone();
+                        let args_preview = serde_json::to_string_pretty(args_val)
+                            .unwrap_or_else(|_| args_val.to_string());
+
+                        let question = cade_tui::question::Question {
+                            header: match subagent {
+                                Some(subagent_id) => {
+                                    format!("Approve {tool} · Subagent {subagent_id}")
+                                }
+                                None => format!("Approve {tool}"),
+                            },
+                            text: format!(
+                                "Approval {id}: allow '{tool}' to run?\nArguments: {args_preview}\nReason: {reason}"
+                            ),
+                            options: vec![
+                                cade_tui::question::QuestionOption {
+                                    label: "Allow once".to_string(),
+                                    description: "Approve this single tool execution".to_string(),
+                                },
+                                cade_tui::question::QuestionOption {
+                                    label: "Allow for this session".to_string(),
+                                    description: "Allow this exact call in this conversation"
+                                        .to_string(),
+                                },
+                                cade_tui::question::QuestionOption {
+                                    label: "Deny".to_string(),
+                                    description: "Reject execution of this tool".to_string(),
+                                },
+                            ],
+                            multi_select: false,
+                            allow_other: true,
+                            progress: None,
+                        };
+
+                        let rx_opt = {
                             let mut app = app_arc.lock();
-                            app.show_toast(text.clone(), crate::ui::ToastLevel::Warning);
-                            let _ = app.push(RenderLine::SystemMsg(text.clone()));
-                        } else {
-                            let client_c = client_for_ui.clone();
-                            let approval_id_c = id.clone();
-                            let args_preview = serde_json::to_string_pretty(args_val)
-                                .unwrap_or_else(|_| args_val.to_string());
+                            app.show_toast(
+                                format!("🔒 Approval required for {tool}"),
+                                crate::ui::ToastLevel::Warning,
+                            );
+                            app.ask_question_async(question).ok()
+                        };
 
-                            let question = cade_tui::question::Question {
-                                header: format!("Approve {tool}"),
-                                text: format!(
-                                    "Approval {id}: allow '{tool}' to run?\nArguments: {args_preview}\nReason: {reason}"
-                                ),
-                                options: vec![
-                                    cade_tui::question::QuestionOption {
-                                        label: "Allow once".to_string(),
-                                        description: "Approve this single tool execution"
-                                            .to_string(),
-                                    },
-                                    cade_tui::question::QuestionOption {
-                                        label: "Allow for this session".to_string(),
-                                        description: "Allow this exact call in this conversation"
-                                            .to_string(),
-                                    },
-                                    cade_tui::question::QuestionOption {
-                                        label: "Deny".to_string(),
-                                        description: "Reject execution of this tool".to_string(),
-                                    },
-                                ],
-                                multi_select: false,
-                                allow_other: true,
-                                progress: None,
-                            };
-
-                            let rx_opt = {
-                                let mut app = app_arc.lock();
-                                app.show_toast(
-                                    format!("🔒 Approval required for {tool}"),
-                                    crate::ui::ToastLevel::Warning,
-                                );
-                                app.ask_question_async(question).ok()
-                            };
-
-                            if let Some(rx) = rx_opt {
-                                tokio::spawn(async move {
-                                    let body = approval_decision(rx.await.ok().flatten());
-                                    let _ = client_c
-                                        .raw_post(
-                                            &format!("/approvals/{approval_id_c}/action"),
-                                            &body,
-                                        )
-                                        .await;
-                                });
-                            }
+                        if let Some(rx) = rx_opt {
+                            tokio::spawn(async move {
+                                let body = approval_decision(rx.await.ok().flatten());
+                                let _ = client_c
+                                    .raw_post(&format!("/approvals/{approval_id_c}/action"), &body)
+                                    .await;
+                            });
                         }
                     }
                     "question_required" | "question_requested" => {
