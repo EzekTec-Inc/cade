@@ -592,9 +592,13 @@ impl HttpTransport {
     /// invokes the same `consolidate_agent` flow used by the Sleeptime
     /// background task and the P1-3 recovery loop.
     ///
-    /// Returns the size (chars) of the resulting `session_summary` block,
-    /// suitable for surfacing in a toast to the user.
-    pub async fn compact(&self, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
+    /// Returns `CompactResponse` describing resulting summary characters,
+    /// whether compaction was skipped, and the reason.
+    pub async fn compact(
+        &self,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<CompactResponse> {
         let mut url = self.url(&format!("/agents/{agent_id}/compact"));
         if let Some(c) = conversation_id {
             url.push_str(&format!("?conversation_id={c}"));
@@ -610,8 +614,8 @@ impl HttpTransport {
             let txt = resp.text().await.unwrap_or_default();
             return Err(crate::Error::custom(format!("compact failed: {txt}")));
         }
-        let v: serde_json::Value = resp.json().await?;
-        Ok(v["session_summary_chars"].as_u64().unwrap_or(0) as usize)
+        let v: CompactResponse = resp.json().await?;
+        Ok(v)
     }
 
     /// Trigger a reflection pass over recent conversation history.
@@ -655,4 +659,21 @@ impl HttpTransport {
         }
         Ok(resp.json().await?)
     }
+}
+
+/// Response from a manual `/compact` consolidation request.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct CompactResponse {
+    #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub session_summary_chars: usize,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub skipped: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
 }

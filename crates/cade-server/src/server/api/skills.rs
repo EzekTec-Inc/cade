@@ -108,17 +108,7 @@ pub async fn load_skill(
     }
 
     // Invalidate context cache for this agent so next build_context picks up the skill
-    {
-        let mut cache = state.context_cache.lock();
-        let keys_to_remove: Vec<String> = cache
-            .iter()
-            .filter(|(k, _)| k.starts_with(&format!("{agent_id}:")))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in keys_to_remove {
-            cache.pop(&k);
-        }
-    }
+    state.invalidate_context_cache(&agent_id, None);
 
     Json(json!({
         "id": skill.id,

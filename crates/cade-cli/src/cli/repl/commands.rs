@@ -404,15 +404,38 @@ impl Repl {
                 );
                 let _ = self.app.lock().draw();
                 let agent_id = self.agent_id();
-                match self.client.compact(&agent_id, None).await {
-                    Ok(chars) => {
-                        let msg = if chars > 0 {
-                            format!("✓ Context compacted (session_summary: {chars} chars)")
+                let conv_id = self.conversation_id();
+                match self.client.compact(&agent_id, conv_id.as_deref()).await {
+                    Ok(res) => {
+                        let msg = if res.session_summary_chars > 0 {
+                            format!(
+                                "✓ Context compacted (session_summary: {} chars)",
+                                res.session_summary_chars
+                            )
+                        } else if res.skipped {
+                            let reason = res
+                                .reason
+                                .as_deref()
+                                .unwrap_or("no dropped turns to consolidate");
+                            format!("✓ Compact skipped: {reason}")
                         } else {
                             "✓ Compact triggered (nothing to consolidate yet)".to_string()
                         };
                         self.app.lock().show_toast(&msg, ToastLevel::Success);
                         self.tui_ok(msg);
+
+                        if let Ok(stats) =
+                            self.client.get_context_stats(&agent_id, conv_id.as_deref()).await
+                        {
+                            if let Some(total) = stats.get("total_tokens").and_then(|v| v.as_u64()) {
+                                let window =
+                                    stats.get("window_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                if window > 0 {
+                                    let pct = ((total * 100) / window).min(100) as u8;
+                                    self.app.lock().set_context_pct(pct);
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         let msg = format!("Compact failed: {e}");

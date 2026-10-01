@@ -218,7 +218,12 @@ impl<'a> TurnDirector<'a> {
                                                 .store(now_epoch_ms(), Ordering::SeqCst);
                                         }
                                         if let Some(Some(command)) = action {
-                                            tick_queued_followup.lock().push_back(command);
+                                            let count = {
+                                                let mut q = tick_queued_followup.lock();
+                                                q.push_back(command);
+                                                q.len()
+                                            };
+                                            app.queued_count = count;
                                         }
                                         let _ = app.draw();
                                     } else if app.handle_focused_slot_key(k)
@@ -432,6 +437,7 @@ impl<'a> TurnDirector<'a> {
                                                 let msg = app.editor.text().trim().to_string();
                                                 if !msg.is_empty() {
                                                     *tick_queued_steering.lock() = Some(msg);
+                                                    app.queued_count = tick_queued_followup.lock().len() + 1;
                                                     app.editor.clear();
                                                     app.editor.set_cursor_pos(0);
                                                     app.set_last_status(None);
@@ -443,7 +449,12 @@ impl<'a> TurnDirector<'a> {
                                                 app.editor.expand_pastes();
                                                 let msg = app.editor.text().trim().to_string();
                                                 if !msg.is_empty() {
-                                                    tick_queued_followup.lock().push_back(msg);
+                                                    let count = {
+                                                        let mut q = tick_queued_followup.lock();
+                                                        q.push_back(msg);
+                                                        q.len()
+                                                    };
+                                                    app.queued_count = count;
                                                     app.editor.clear();
                                                     app.editor.set_cursor_pos(0);
                                                     app.set_last_status(None);

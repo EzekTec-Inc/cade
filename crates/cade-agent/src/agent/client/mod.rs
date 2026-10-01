@@ -821,6 +821,7 @@ impl HttpTransport {
 }
 
 pub mod extensions;
+pub use extensions::CompactResponse;
 pub mod memory;
 pub mod messages;
 mod working_session;

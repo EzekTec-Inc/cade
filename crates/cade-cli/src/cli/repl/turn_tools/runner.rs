@@ -78,6 +78,9 @@ impl Repl {
         let file_path_target = if is_file_edit {
             args.get("file_path")
                 .or_else(|| args.get("path"))
+                .or_else(|| args.get("relative_path"))
+                .or_else(|| args.get("filePath"))
+                .or_else(|| args.get("target_path"))
                 .and_then(|p| p.as_str())
                 .map(std::path::PathBuf::from)
         } else {
@@ -157,9 +160,13 @@ impl Repl {
                 a.draw_dirty = true;
             }
 
-            let path = args["file_path"]
-                .as_str()
-                .or(args["path"].as_str())
+            let path = args
+                .get("file_path")
+                .or_else(|| args.get("path"))
+                .or_else(|| args.get("relative_path"))
+                .or_else(|| args.get("filePath"))
+                .or_else(|| args.get("target_path"))
+                .and_then(|p| p.as_str())
                 .unwrap_or("unknown")
                 .to_string();
             let c = runtime.storage.clone();

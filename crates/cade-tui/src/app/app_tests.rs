@@ -1360,6 +1360,42 @@ fn test_question_modal_single_select_number_key_resolves() {
 }
 
 #[test]
+#[ignore = "requires tty"]
+fn test_turn_count_increments_on_user_message_and_queued_count() {
+    use crate::app::RenderLine;
+    use crate::app::TuiApp;
+
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test-agent".to_string(),
+        "test-model".to_string(),
+        None,
+    );
+
+    assert_eq!(app.turn_count, 0);
+    assert_eq!(app.queued_count, 0);
+
+    // Push non-user message
+    app.push_silent(RenderLine::SystemMsg("Welcome".to_string()));
+    assert_eq!(app.turn_count, 0);
+
+    // Push user message via push_silent
+    app.push_silent(RenderLine::UserMessage("Hello agent".to_string()));
+    assert_eq!(app.turn_count, 1);
+
+    // Set and increment turn count
+    app.increment_turn();
+    assert_eq!(app.turn_count, 2);
+
+    app.set_turn_count(10);
+    assert_eq!(app.turn_count, 10);
+
+    // Test queued count tracking
+    app.queued_count = 3;
+    assert_eq!(app.queued_count, 3);
+}
+
+#[test]
 fn test_question_modal_navigation_and_enter_select() {
     use crate::question::{Question, QuestionAnswer, QuestionOption};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

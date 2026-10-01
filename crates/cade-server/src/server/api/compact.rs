@@ -37,10 +37,10 @@ pub async fn compact_handler(
     let cx = ConsolidationContext::new().with_conversation_id(conversation_id.map(String::from));
 
     let report_res = engine.consolidate(&state, &agent_id, &cx).await;
-    let (chars, ok) = match report_res {
-        Ok(r) => (r.summary_length_chars, true),
-        Err(ConsolidationError::Skipped(_)) => (0, true),
-        Err(_) => (0, false),
+    let (chars, ok, skipped, reason) = match &report_res {
+        Ok(r) => (r.summary_length_chars, true, false, None),
+        Err(ConsolidationError::Skipped(msg)) => (0, true, true, Some(msg.clone())),
+        Err(e) => (0, false, false, Some(e.to_string())),
     };
 
     Ok(Json(json!({
@@ -48,6 +48,8 @@ pub async fn compact_handler(
         "conversation_id":      conversation_id,
         "session_summary_chars": chars,
         "ok":                   ok,
+        "skipped":              skipped,
+        "reason":               reason,
     })))
 }
 
@@ -179,6 +181,8 @@ mod tests {
         let body: Value = res.0;
         assert_eq!(body["agent_id"], agent_id);
         assert_eq!(body["ok"], true);
+        assert_eq!(body["skipped"], true);
+        assert!(body["reason"].as_str().is_some());
         assert!(body["session_summary_chars"].is_number());
     }
 }

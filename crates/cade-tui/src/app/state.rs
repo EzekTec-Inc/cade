@@ -8,6 +8,7 @@ impl TuiApp {
         self.commit_reasoning_inner();
         if matches!(line, RenderLine::UserMessage(_)) {
             self.turn_start_time = Some(std::time::Instant::now());
+            self.increment_turn();
         }
         self.lines.push(line);
         self.content_version += 1;
@@ -38,6 +39,9 @@ impl TuiApp {
     pub fn push_silent(&mut self, line: RenderLine) {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
+        if matches!(line, RenderLine::UserMessage(_)) {
+            self.increment_turn();
+        }
         self.lines.push(line);
         self.content_version += 1;
     }
@@ -466,6 +470,11 @@ impl TuiApp {
     /// Increment the turn counter (called when a user message is submitted).
     pub fn increment_turn(&mut self) {
         self.turn_count = self.turn_count.saturating_add(1);
+    }
+
+    /// Set the turn counter explicitly (e.g. when restoring session history).
+    pub fn set_turn_count(&mut self, count: u32) {
+        self.turn_count = count;
     }
 
     // -- ImageChannel (side-channel for image pastes) --

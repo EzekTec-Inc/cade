@@ -213,6 +213,15 @@ pub fn is_file_edit_tool(name: &str) -> bool {
             | "apply_edit"
             | "replace_in_file"
             | "edit_block"
+            | "create_text_file"
+            | "replace_content"
+            | "replace_in_files"
+            | "insert_before_symbol"
+            | "insert_after_symbol"
+            | "replace_symbol_body"
+            | "safe_delete_symbol"
+            | "undo_file_edit"
+            | "lql_apply_patch"
     )
 }
 
@@ -675,6 +684,9 @@ mod tests {
         assert!(is_file_edit_tool("desktop-commander__write_file"));
         assert!(is_file_edit_tool("desktop-commander__edit_block"));
         assert!(is_file_edit_tool("cade-ide-mcp__apply_edit"));
+        assert!(is_file_edit_tool("serena__replace_content"));
+        assert!(is_file_edit_tool("serena__create_text_file"));
+        assert!(is_file_edit_tool("serena__insert_after_symbol"));
     }
 
     #[test]

@@ -1233,7 +1233,10 @@ impl Repl {
                 self.app.lock().queued_count = count;
                 pending_input = Some(follow);
             } else if let Some(steer) = self.queued_steering.lock().take() {
+                self.app.lock().queued_count = self.queued_followup.lock().len();
                 pending_input = Some(steer);
+            } else {
+                self.app.lock().queued_count = 0;
             }
         }
 

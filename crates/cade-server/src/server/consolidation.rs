@@ -373,7 +373,17 @@ impl<'a> ContextCompactionEngine<'a> {
         override_history_budget: Option<usize>,
     ) -> Result<ConsolidationReport, ConsolidationError> {
         let result = self.compact_snapshot(override_history_budget).await;
-        if matches!(
+        if result.is_ok() {
+            if let Some(activity) = self
+                .state
+                .agent_activity
+                .write()
+                .await
+                .get_mut(&self.agent_id)
+            {
+                activity.needs_consolidation = false;
+            }
+        } else if matches!(
             &result,
             Err(ConsolidationError::Busy
                 | ConsolidationError::Db(_)
@@ -797,10 +807,15 @@ impl<'a> ContextCompactionEngine<'a> {
         // Publication is complete before optional knowledge lifting/export. The
         // claim and all DB connections are released before further LLM awaits.
         drop(snapshot);
-        state
-            .context_cache
-            .lock()
-            .pop(&format!("{agent_id}:{conversation_id:?}"));
+        state.invalidate_context_cache(agent_id, conversation_id);
+        {
+            let mut telemetry_guard = state.agent_context_telemetry.write().await;
+            if let Some(telemetry) = telemetry_guard.get_mut(agent_id) {
+                telemetry.turns_omitted = telemetry.turns_omitted.saturating_sub(dropped);
+                telemetry.consolidation_reason = None;
+                telemetry.eager_consolidation_triggered = false;
+            }
+        }
         crate::server::api::agents::broadcast_global_event(serde_json::json!({
             "event_type": "compaction_completed",
             "agent_id": agent_id,

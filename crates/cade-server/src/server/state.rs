@@ -53,6 +53,13 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> SafeLruCache<K, V> {
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.map.iter().map(|(k, (_, v))| (k, v))
     }
+
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        self.map.retain(|k, (_, v)| f(k, v));
+    }
 }
 
 use tokio::sync::RwLock;
@@ -379,6 +386,25 @@ impl AppState {
             subagent_cancellations: Arc::new(RwLock::new(std::collections::HashMap::new())),
             subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             embedder: None,
+        }
+    }
+
+    /// Invalidate context cache entries for an agent.
+    /// If `conversation_id` is provided, invalidates all cache entries for that agent and conversation
+    /// (including all workspace/worktree variants).
+    /// If `conversation_id` is None, invalidates all cache entries for the agent across all conversations.
+    pub fn invalidate_context_cache(&self, agent_id: &str, conversation_id: Option<&str>) {
+        let mut cache = self.context_cache.lock();
+        match conversation_id {
+            Some(cid) => {
+                let target = format!("{agent_id}:{cid:?}");
+                let target_some = format!("{agent_id}:Some({cid:?})");
+                cache.retain(|k, _| !k.starts_with(&target) && !k.starts_with(&target_some));
+            }
+            None => {
+                let prefix = format!("{agent_id}:");
+                cache.retain(|k, _| !k.starts_with(&prefix));
+            }
         }
     }
 }

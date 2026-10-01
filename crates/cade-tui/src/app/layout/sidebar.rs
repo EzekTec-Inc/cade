@@ -33,11 +33,16 @@ impl<'a> SidebarState<'a> {
     pub(crate) fn format_activity(&self) -> String {
         if let Some(elapsed) = self.thinking_elapsed {
             let secs = elapsed.as_secs();
-            format!(
+            let base = format!(
                 "{} · {}s",
                 self.thinking_text.unwrap_or("thinking…"),
                 secs.max(1)
-            )
+            );
+            if self.queued_count > 0 {
+                format!("{base} · {} queued", self.queued_count)
+            } else {
+                base
+            }
         } else if self.queued_count > 0 {
             format!("idle · {} queued", self.queued_count)
         } else {
