@@ -174,120 +174,117 @@ async fn async_main() -> Result<()> {
     }
 
     // -- Package subcommand (runs before server connection, no server needed)
-    let is_eval_subcommand = matches!(&args.package, Some(PackageSubcommand::Eval { .. }));
-    if let Some(PackageSubcommand::Package { action }) = args.package.take() {
-        match action {
-            PackageAction::Install {
-                source,
-                project_local,
-            } => {
-                cade::cli::package::cmd_install(
-                    &source,
+    // Consume the subcommand once; failed `if let` matches must not drop it.
+    let eval_action = match args.package.take() {
+        Some(PackageSubcommand::Package { action }) => {
+            match action {
+                PackageAction::Install {
+                    source,
                     project_local,
-                    &mut settings,
-                    &cwd,
-                    &agent_dir,
-                )
-                .await
-                .map_err(|e| Error::custom(format!("package install: {e}")))?;
-            }
-            PackageAction::Remove { source } => {
-                cade::cli::package::cmd_remove(&source, &agent_dir)
-                    .map_err(|e| Error::custom(format!("package remove: {e}")))?;
-            }
-            PackageAction::List => {
-                cade::cli::package::cmd_list(&agent_dir)
-                    .map_err(|e| Error::custom(format!("package list: {e}")))?;
-            }
-            PackageAction::Update => {
-                cade::cli::package::cmd_update(&agent_dir)
+                } => {
+                    cade::cli::package::cmd_install(
+                        &source,
+                        project_local,
+                        &mut settings,
+                        &cwd,
+                        &agent_dir,
+                    )
                     .await
-                    .map_err(|e| Error::custom(format!("package update: {e}")))?;
-            }
-        }
-        return Ok(());
-    }
-
-    if let Some(PackageSubcommand::Plugin { action }) = args.package.take() {
-        match action {
-            PluginAction::Init { name, toml, dir } => {
-                let target_dir = dir.unwrap_or_else(|| cwd.clone());
-                let created = cade_plugin::init_plugin(&target_dir, &name, toml)
-                    .map_err(|e| Error::custom(format!("plugin init: {e}")))?;
-                println!("✓ Initialized CADE plugin at {}", created.display());
-            }
-            PluginAction::Validate { path } => {
-                let root = path.unwrap_or_else(|| cwd.clone());
-                let report = cade_plugin::validate_plugin(&root)
-                    .map_err(|e| Error::custom(format!("plugin validate: {e}")))?;
-                if report.is_valid {
-                    println!(
-                        "✓ Plugin '{}-{}' is valid and conforms to specification.",
-                        report.name, report.version
-                    );
-                } else {
-                    eprintln!("✕ Plugin validation failed for '{}':", report.name);
-                    for issue in report.issues {
-                        eprintln!("  • {issue}");
-                    }
-                    std::process::exit(1);
+                    .map_err(|e| Error::custom(format!("package install: {e}")))?;
+                }
+                PackageAction::Remove { source } => {
+                    cade::cli::package::cmd_remove(&source, &agent_dir)
+                        .map_err(|e| Error::custom(format!("package remove: {e}")))?;
+                }
+                PackageAction::List => {
+                    cade::cli::package::cmd_list(&agent_dir)
+                        .map_err(|e| Error::custom(format!("package list: {e}")))?;
+                }
+                PackageAction::Update => {
+                    cade::cli::package::cmd_update(&agent_dir)
+                        .await
+                        .map_err(|e| Error::custom(format!("package update: {e}")))?;
                 }
             }
-            PluginAction::Pack { path, output } => {
-                let root = path.unwrap_or_else(|| cwd.clone());
-                let packed = cade_plugin::pack_plugin(&root, output.as_deref())
-                    .map_err(|e| Error::custom(format!("plugin pack: {e}")))?;
-                println!("✓ Successfully packed plugin:");
-                println!("  Archive: {}", packed.archive_path.display());
-                println!("  Size:    {} bytes", packed.file_size_bytes);
-                println!("  SHA-256: {}", packed.sha256);
+            return Ok(());
+        }
+        Some(PackageSubcommand::Plugin { action }) => {
+            match action {
+                PluginAction::Init { name, toml, dir } => {
+                    let target_dir = dir.unwrap_or_else(|| cwd.clone());
+                    let created = cade_plugin::init_plugin(&target_dir, &name, toml)
+                        .map_err(|e| Error::custom(format!("plugin init: {e}")))?;
+                    println!("✓ Initialized CADE plugin at {}", created.display());
+                }
+                PluginAction::Validate { path } => {
+                    let root = path.unwrap_or_else(|| cwd.clone());
+                    let report = cade_plugin::validate_plugin(&root)
+                        .map_err(|e| Error::custom(format!("plugin validate: {e}")))?;
+                    if report.is_valid {
+                        println!(
+                            "✓ Plugin '{}-{}' is valid and conforms to specification.",
+                            report.name, report.version
+                        );
+                    } else {
+                        eprintln!("✕ Plugin validation failed for '{}':", report.name);
+                        for issue in report.issues {
+                            eprintln!("  • {issue}");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                PluginAction::Pack { path, output } => {
+                    let root = path.unwrap_or_else(|| cwd.clone());
+                    let packed = cade_plugin::pack_plugin(&root, output.as_deref())
+                        .map_err(|e| Error::custom(format!("plugin pack: {e}")))?;
+                    println!("✓ Successfully packed plugin:");
+                    println!("  Archive: {}", packed.archive_path.display());
+                    println!("  Size:    {} bytes", packed.file_size_bytes);
+                    println!("  SHA-256: {}", packed.sha256);
+                }
             }
+            return Ok(());
         }
-        return Ok(());
-    }
+        Some(PackageSubcommand::Serve { port }) => {
+            let server_bin_name = if cfg!(windows) {
+                "cade-server.exe"
+            } else {
+                "cade-server"
+            };
+            let server_bin = std::env::current_exe()
+                .ok()
+                .map(|p| p.with_file_name(server_bin_name))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| std::path::PathBuf::from(server_bin_name));
 
-    if let Some(PackageSubcommand::Serve { port }) = &args.package {
-        let port = *port;
-        let server_bin_name = if cfg!(windows) {
-            "cade-server.exe"
-        } else {
-            "cade-server"
-        };
-        let server_bin = std::env::current_exe()
-            .ok()
-            .map(|p| p.with_file_name(server_bin_name))
-            .filter(|p| p.exists())
-            .unwrap_or_else(|| std::path::PathBuf::from(server_bin_name));
-
-        println!("Starting CADE server on port {port} in foreground...");
-        let mut cmd = std::process::Command::new(&server_bin);
-        cmd.arg("--port").arg(port.to_string());
-        cade_core::agent_env::apply_agent_env(&mut cmd);
-        let status = cmd
-            .status()
-            .map_err(|e| Error::custom(format!("failed to run {}: {e}", server_bin.display())))?;
-        std::process::exit(status.code().unwrap_or(0));
-    }
-
-    if let Some(PackageSubcommand::Web { port }) = &args.package {
-        let port = *port;
-        let base_url = format!("http://127.0.0.1:{port}");
-        let dashboard_url = format!("{base_url}/dashboard");
-        println!("Checking CADE server at {base_url}...");
-
-        let client = HttpTransport::new(base_url.clone(), "".to_string())
-            .map_err(|e| Error::custom(format!("create HTTP transport: {e}")))?;
-
-        if !client.health().await.unwrap_or(false) {
-            println!("Starting CADE server daemon...");
-            auto_start_server(&base_url).await?;
+            println!("Starting CADE server on port {port} in foreground...");
+            let mut cmd = std::process::Command::new(&server_bin);
+            cmd.arg("--port").arg(port.to_string());
+            cade_core::agent_env::apply_agent_env(&mut cmd);
+            let status = cmd.status().map_err(|e| {
+                Error::custom(format!("failed to run {}: {e}", server_bin.display()))
+            })?;
+            std::process::exit(status.code().unwrap_or(0));
         }
-
-        println!("Opening CADE Web Dashboard: {dashboard_url}");
-        open_browser(&dashboard_url);
-        return Ok(());
-    }
-    // Eval subcommand deferred — needs server connection (handled after agent resolution below)
+        Some(PackageSubcommand::Web { port }) => {
+            let base_url = format!("http://127.0.0.1:{port}");
+            let dashboard_url = format!("{base_url}/dashboard");
+            println!("Checking CADE server at {base_url}...");
+            let client = HttpTransport::new(base_url.clone(), "".to_string())
+                .map_err(|e| Error::custom(format!("create HTTP transport: {e}")))?;
+            if !client.health().await.unwrap_or(false) {
+                println!("Starting CADE server daemon...");
+                auto_start_server(&base_url).await?;
+            }
+            println!("Opening CADE Web Dashboard: {dashboard_url}");
+            open_browser(&dashboard_url);
+            return Ok(());
+        }
+        Some(PackageSubcommand::Eval { action }) => Some(action),
+        None => None,
+    };
+    let is_eval_subcommand = eval_action.is_some();
+    // Eval needs a server, but creates its own ephemeral agents.
     let mut session = SessionStore::load(&cwd);
 
     // API credentials
@@ -374,10 +371,57 @@ async fn async_main() -> Result<()> {
     // when they actually try to use the model (not here at startup).
     push_env_providers_to_server(&client).await;
 
+    if let Some(action) = eval_action {
+        match action {
+            EvalAction::List => cli::eval::cmd_list(&client).await?,
+            EvalAction::Show { id } => cli::eval::cmd_show(&client, &id).await?,
+            EvalAction::Run { task, model } => {
+                let result = cli::eval::cmd_run(
+                    &client,
+                    &task,
+                    model.as_deref().or(args.model.as_deref()),
+                    &cwd,
+                )
+                .await?;
+                result.print_summary();
+                if !result.passed {
+                    return Err(Error::custom("eval task failed"));
+                }
+            }
+            EvalAction::Bench {
+                dir,
+                model,
+                concurrency,
+            } => {
+                let results = cli::eval::cmd_bench(
+                    &client,
+                    &dir,
+                    model.as_deref().or(args.model.as_deref()),
+                    concurrency,
+                    &cwd,
+                )
+                .await?;
+                if results.iter().any(|result| !result.passed) {
+                    return Err(Error::custom("eval benchmark failed"));
+                }
+            }
+        }
+        return Ok(());
+    }
+
     // Fetch server's detected provider + model — shown in banner + used for agent creation
     let server_info = {
-        let resp = client.server_default_model().await;
-        // server_default_model returns "provider/model" — split for display
+        let preferred = args
+            .model
+            .clone()
+            .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok());
+        let resp = match preferred {
+            Some(model) if !model.trim().is_empty() => model,
+            Some(_) => return Err(Error::custom("model must not be empty")),
+            None => client.server_default_model_checked().await
+                .map_err(|error| Error::custom(format!("Cannot select the server default model: {error}. Specify --model or CADE_DEFAULT_MODEL, or configure default_model on the server.")))?,
+        };
+        // Server resolution returns "provider/model" — split for display.
         let (prov, mdl) = resp.split_once('/').unwrap_or(("unknown", &resp));
         (prov.to_string(), mdl.to_string(), resp)
     };
@@ -447,11 +491,7 @@ async fn async_main() -> Result<()> {
     let initial_loaded_skills = discover_all_skills(&cwd, None, None);
 
     // Default model: CLI flag > CADE_DEFAULT_MODEL env > server's detected model
-    let default_model = args
-        .model
-        .clone()
-        .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok())
-        .unwrap_or(server_info.2);
+    let default_model = server_info.2;
 
     // Detect toolset: --toolset flag > model family auto-detection
     let toolset = args
@@ -517,6 +557,7 @@ async fn async_main() -> Result<()> {
     let bg_toolset = toolset;
     let bg_effective_system_prompt = effective_system_prompt.clone();
     let bg_args_unlink = args.unlink;
+    let bg_tool_filter = args.tool_filter();
     let bg_startup_ready = startup_ready.clone();
     let bg_mcp_boot_status = mcp_boot_status.clone();
     let bg_lazy_mcp = args.lazy_mcp || settings.lazy_mcp();
@@ -538,7 +579,7 @@ async fn async_main() -> Result<()> {
             tracing::warn!(
                 "DEBUG: Bypassing McpManager::start (lazy or disabled or empty configs or server manages MCP)"
             );
-            if bg_server_connected {
+            if bg_server_connected && bg_mcp_enabled {
                 if let Ok(statuses) = bg_client.get_mcp_statuses().await {
                     let mut guard = bg_mcp_boot_status.lock();
                     guard.clear();
@@ -590,55 +631,6 @@ async fn async_main() -> Result<()> {
             std::sync::Arc::new(mgr)
         };
 
-        let non_mcp_ids: Vec<String> = bg_client
-            .get_agent_tools(&bg_agent.id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(_, name)| !name.contains("__"))
-            .map(|(id, _)| id)
-            .collect();
-        let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
-        if !non_mcp_ids.is_empty() {
-            let _ = bg_client
-                .attach_agent_tools(&bg_agent.id, &non_mcp_ids)
-                .await;
-        }
-
-        if !mgr.is_empty().await && !bg_lazy_mcp {
-            use agent::tools::register_mcp_tools;
-            let mcp_tool_ids: Vec<String> =
-                register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|t| t.id)
-                    .collect();
-            if !mcp_tool_ids.is_empty() {
-                let _ = bg_client
-                    .attach_agent_tools(&bg_agent.id, &mcp_tool_ids)
-                    .await;
-            }
-        } else if bg_server_connected && !bg_lazy_mcp {
-            // cade-server already started MCP servers and registered their tools.
-            // Find and attach the already-registered tools by name convention.
-            let all_tools = bg_client.list_tools().await.unwrap_or_default();
-            let mcp_tool_ids: Vec<String> = all_tools
-                .into_iter()
-                .filter(|t| t.name.contains("__"))
-                .map(|t| t.id)
-                .collect();
-            if !mcp_tool_ids.is_empty() {
-                tracing::info!(
-                    "Attaching {} MCP tools already registered by cade-server",
-                    mcp_tool_ids.len()
-                );
-                let _ = bg_client
-                    .attach_agent_tools(&bg_agent.id, &mcp_tool_ids)
-                    .await;
-            }
-        }
-
         cade_core::agent_env::set_agent_id(bg_agent.id.clone());
 
         if bg_args_unlink {
@@ -648,25 +640,61 @@ async fn async_main() -> Result<()> {
             // so updates to Toolsets or MCP configs apply immediately without needing --new.
             let _ = bg_client.detach_agent_tools(&bg_agent.id).await;
 
-            register_and_attach_with_caps(&bg_client, &bg_agent.id, bg_toolset, &bg_capabilities)
-                .await;
-            if !mgr.is_empty().await && !bg_lazy_mcp {
+            match bg_tool_filter.as_deref() {
+                None => {
+                    register_and_attach_with_caps(
+                        &bg_client,
+                        &bg_agent.id,
+                        bg_toolset,
+                        &bg_capabilities,
+                    )
+                    .await
+                }
+                filter => {
+                    register_and_attach_with_caps_filtered(
+                        &bg_client,
+                        &bg_agent.id,
+                        bg_toolset,
+                        &bg_capabilities,
+                        filter,
+                    )
+                    .await
+                }
+            }
+            if bg_mcp_enabled && !mgr.is_empty().await && !bg_lazy_mcp {
                 use agent::tools::register_mcp_tools;
-                let mcp_ids: Vec<String> =
-                    register_mcp_tools(&bg_client, mgr.all_tool_schemas().await)
+                let mcp_ids: Vec<String> = register_mcp_tools(
+                    &bg_client,
+                    mgr.all_tool_schemas()
                         .await
-                        .unwrap_or_default()
                         .into_iter()
-                        .map(|t| t.id)
-                        .collect();
+                        .filter(|schema| {
+                            bg_tool_filter.as_ref().is_none_or(|names| {
+                                schema["name"]
+                                    .as_str()
+                                    .is_some_and(|name| names.iter().any(|n| n == name))
+                            })
+                        })
+                        .collect(),
+                )
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.id)
+                .collect();
                 if !mcp_ids.is_empty() {
                     let _ = bg_client.attach_agent_tools(&bg_agent.id, &mcp_ids).await;
                 }
-            } else if bg_server_connected && !bg_lazy_mcp {
+            } else if bg_mcp_enabled && bg_server_connected && !bg_lazy_mcp {
                 let all_tools = bg_client.list_tools().await.unwrap_or_default();
                 let mcp_ids: Vec<String> = all_tools
                     .into_iter()
                     .filter(|t| t.name.contains("__"))
+                    .filter(|t| {
+                        bg_tool_filter
+                            .as_ref()
+                            .is_none_or(|names| names.contains(&t.name))
+                    })
                     .map(|t| t.id)
                     .collect();
                 if !mcp_ids.is_empty() {
@@ -717,51 +745,6 @@ async fn async_main() -> Result<()> {
         bg_startup_ready.store(true, std::sync::atomic::Ordering::SeqCst);
     });
 
-    // Headless — --prompt flag OR piped stdin
-    let piped_stdin: Option<String> = if !std::io::stdin().is_terminal() {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).ok();
-        let s = buf.trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
-    } else {
-        None
-    };
-
-    // -- Eval subcommand (needs server + agent)
-    if is_eval_subcommand {
-        if let Some(PackageSubcommand::Eval { action }) = args.package.take() {
-            match action {
-                EvalAction::List => {
-                    cade::cli::eval::cmd_list(&client)
-                        .await
-                        .map_err(|e| Error::custom(format!("eval list: {e}")))?;
-                }
-                EvalAction::Show { id } => {
-                    cade::cli::eval::cmd_show(&client, &id)
-                        .await
-                        .map_err(|e| Error::custom(format!("eval show: {e}")))?;
-                }
-                EvalAction::Run { task, model } => {
-                    let result = cade::cli::eval::cmd_run(&client, &task, model.as_deref(), &cwd)
-                        .await
-                        .map_err(|e| Error::custom(format!("eval run: {e}")))?;
-                    result.print_summary();
-                }
-                EvalAction::Bench {
-                    dir,
-                    model,
-                    concurrency,
-                } => {
-                    cade::cli::eval::cmd_bench(&client, &dir, model.as_deref(), concurrency, &cwd)
-                        .await
-                        .map_err(|e| Error::custom(format!("eval bench: {e}")))?;
-                }
-            }
-        }
-        return Ok(());
-    }
-
     // -- RPC mode: JSON-RPC over stdin/stdout for embedding CADE in other processes
     #[cfg(feature = "integration")]
     if args.mode.as_deref() == Some("rpc") {
@@ -780,6 +763,21 @@ async fn async_main() -> Result<()> {
             Err(e) => return Err(Error::custom(format!("RPC session init: {e}"))),
         }
     }
+
+    // RPC owns stdin. Only ordinary headless invocation consumes piped input.
+    let piped_stdin: Option<String> = if !args.info
+        && args.export_agent.is_none()
+        && args.import_agent.is_none()
+        && !std::io::stdin().is_terminal()
+    {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).ok();
+        let s = buf.trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    } else {
+        None
+    };
 
     let headless_prompt: Option<String> = match (&args.prompt, &piped_stdin) {
         (Some(p), Some(stdin)) => Some(format!("{stdin}\n\n{p}")),

@@ -62,10 +62,7 @@ impl Repl {
                 allow_other: false,
                 progress: None,
             };
-            let ans = {
-                let mut app = self.app.lock();
-                app.ask_question(&q)?
-            };
+            let ans = self.ask_repl_question(q).await?;
             let Some(chosen) = ans else {
                 return Ok(());
             };
@@ -98,10 +95,7 @@ impl Repl {
                 allow_other: true,
                 progress: None,
             };
-            let ans = {
-                let mut app = self.app.lock();
-                app.ask_question(&kq)?
-            };
+            let ans = self.ask_repl_question(kq).await?;
             match &ans {
                 Some(a) if a.as_str() != "Skip (no key)" && !a.as_str().is_empty() => {
                     Some(a.as_str().to_string())
@@ -126,10 +120,7 @@ impl Repl {
                 allow_other: true,
                 progress: None,
             };
-            let ans = {
-                let mut app = self.app.lock();
-                app.ask_question(&uq)?
-            };
+            let ans = self.ask_repl_question(uq).await?;
             match &ans {
                 Some(a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => {
                     Some(a.as_str().to_string())

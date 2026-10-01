@@ -48,13 +48,8 @@ impl Repl {
             progress: None,
         };
 
-        let should_summarize = {
-            let mut app = self.app.lock();
-            let r = app.ask_question(&q_widget)?;
-            app.scroll = 0;
-            let _ = app.draw();
-            matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-        };
+        let answer = self.ask_repl_question(q_widget).await?;
+        let should_summarize = matches!(&answer, Some(a) if a.as_str().starts_with("Yes"));
 
         if should_summarize {
             self.tui_dim("  Compacting and archiving current branch...");

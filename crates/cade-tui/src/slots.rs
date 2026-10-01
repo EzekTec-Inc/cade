@@ -82,6 +82,9 @@ impl FocusRegion {
 /// `Vec<RenderedLine>`) because slot widgets draw directly into a
 /// [`ratatui::Frame`], the same surface the rest of the TUI uses.
 pub trait SlotComponent: Send + Sync {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
     /// Inform the component whether its parent slot has keyboard focus.
     fn set_focused(&mut self, _focused: bool) {}
 
@@ -172,12 +175,19 @@ impl SlotManager {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
-        for slot in self.slots.values_mut() {
-            if slot.handle_mouse(mouse) {
-                return true;
+        self.route_mouse(mouse).is_some()
+    }
+
+    pub fn route_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> Option<UiSlot> {
+        // Reverse paint order: the sidebar is painted over header/footer slots.
+        for slot in [UiSlot::Sidebar, UiSlot::Footer, UiSlot::Header] {
+            if let Some(widget) = self.slots.get_mut(&slot)
+                && widget.handle_mouse(mouse)
+            {
+                return Some(slot);
             }
         }
-        false
+        None
     }
 }
 

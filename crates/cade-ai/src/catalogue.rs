@@ -1,233 +1,18 @@
-/// Static model catalogue — known-good models per provider.
-///
-/// Format: (provider_key, display_name, full_model_id, toolset_label, max_tokens, context_window_tokens)
-///   toolset_label: "default" | "codex" | "gemini"  (maps to Toolset::from_str)
-///   context_window_tokens: model's input context length in tokens
-pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
-    // -- Anthropic
-    (
-        "anthropic",
-        "Claude Opus 4.7",
-        "anthropic/claude-opus-4-7",
-        "default",
-        128_000,
-        1_048_576,
-    ),
-    (
-        "anthropic",
-        "Claude Opus 4.5",
-        "anthropic/claude-opus-4-5",
-        "default",
-        128_000,
-        1_048_576,
-    ),
-    (
-        "anthropic",
-        "Claude Sonnet 4.6",
-        "anthropic/claude-sonnet-4-6",
-        "default",
-        128_000,
-        1_048_576,
-    ),
-    (
-        "anthropic",
-        "Claude Sonnet 4.5",
-        "anthropic/claude-sonnet-4-5-20250929",
-        "default",
-        128_000,
-        1_048_576,
-    ),
-    (
-        "anthropic",
-        "Claude Haiku 4.5",
-        "anthropic/claude-haiku-4-5",
-        "default",
-        128_000,
-        200_000,
-    ),
-    (
-        "anthropic",
-        "Claude Sonnet 3.7",
-        "anthropic/claude-3-7-sonnet-20250219",
-        "default",
-        128_000,
-        1_048_576,
-    ),
-    (
-        "anthropic",
-        "Claude Haiku 3.5",
-        "anthropic/claude-3-5-haiku-20241022",
-        "default",
-        8192,
-        200_000,
-    ),
-    (
-        "anthropic",
-        "Claude Opus 3",
-        "anthropic/claude-3-opus-20240229",
-        "default",
-        4096,
-        200_000,
-    ),
-    // -- OpenAI
-    (
-        "openai",
-        "GPT-6 Sol",
-        "openai/gpt-6-sol",
-        "codex",
-        32768,
-        200_000,
-    ),
-    ("openai", "GPT-5", "openai/gpt-5", "codex", 16384, 200_000),
-    (
-        "openai",
-        "GPT-5.6",
-        "openai/gpt-5.6",
-        "codex",
-        16384,
-        200_000,
-    ),
-    (
-        "openai",
-        "GPT-5.6 Luna",
-        "openai/gpt-5.6-luna",
-        "codex",
-        16384,
-        200_000,
-    ),
-    (
-        "openai",
-        "GPT-5.5",
-        "openai/gpt-5.5",
-        "codex",
-        16384,
-        200_000,
-    ),
-    (
-        "openai",
-        "GPT-5.5 Pro",
-        "openai/gpt-5.5-pro",
-        "codex",
-        16384,
-        200_000,
-    ),
-    (
-        "openai",
-        "GPT-4.5",
-        "openai/gpt-4.5",
-        "codex",
-        16384,
-        128_000,
-    ),
-    (
-        "openai",
-        "GPT-4.5 Preview",
-        "openai/gpt-4.5-preview",
-        "codex",
-        16384,
-        128_000,
-    ),
-    ("openai", "GPT-4o", "openai/gpt-4o", "codex", 16384, 128_000),
-    (
-        "openai",
-        "GPT-4o Mini",
-        "openai/gpt-4o-mini",
-        "codex",
-        16384,
-        128_000,
-    ),
-    (
-        "openai",
-        "o4 Mini",
-        "openai/o4-mini",
-        "codex",
-        100_000,
-        200_000,
-    ),
-    ("openai", "o3", "openai/o3", "codex", 100_000, 200_000),
-    (
-        "openai",
-        "o3 Mini",
-        "openai/o3-mini",
-        "codex",
-        100_000,
-        200_000,
-    ),
-    // -- Google Gemini
-    (
-        "gemini",
-        "Gemini 2.5 Pro",
-        "gemini/gemini-2.5-pro",
-        "gemini",
-        8192,
-        1_048_576,
-    ),
-    (
-        "gemini",
-        "Gemini 2.5 Flash",
-        "gemini/gemini-2.5-flash",
-        "gemini",
-        8192,
-        1_048_576,
-    ),
-    (
-        "gemini",
-        "Gemini 2.0 Flash",
-        "gemini/gemini-2.0-flash",
-        "gemini",
-        8192,
-        1_048_576,
-    ),
-    (
-        "gemini",
-        "Gemini 1.5 Pro",
-        "gemini/gemini-1.5-pro",
-        "gemini",
-        8192,
-        2_097_152,
-    ),
-    (
-        "gemini",
-        "Gemini 1.5 Flash",
-        "gemini/gemini-1.5-flash",
-        "gemini",
-        8192,
-        1_048_576,
-    ),
-    // -- DeepSeek
-    (
-        "deepseek",
-        "DeepSeek-V3",
-        "deepseek/deepseek-chat",
-        "codex",
-        8192,
-        64_000,
-    ),
-    (
-        "deepseek",
-        "DeepSeek-R1",
-        "deepseek/deepseek-reasoner",
-        "none",
-        8192,
-        64_000,
-    ),
-    (
-        "deepseek",
-        "DeepSeek-V4-Flash",
-        "deepseek/deepseek-flash",
-        "codex",
-        32_768,
-        1_000_000,
-    ),
-    (
-        "deepseek",
-        "DeepSeek-V4-Pro",
-        "deepseek/deepseek-v4-pro",
-        "codex",
-        32_768,
-        1_000_000,
-    ),
-];
+/// Owned compatibility row: (provider, display name, routing ID, toolset,
+/// output budget, context budget). No model records are duplicated in Rust.
+pub type CatalogueRow = (String, String, String, String, u32, u32);
+
+/// First-use compatibility snapshot from configured JSON and runtime observations.
+/// `.iter()`, indexing and slice methods remain available. Use `catalogue_snapshot`
+/// for a fresh view after discovery or SDK registration.
+pub static CATALOGUE: std::sync::LazyLock<Vec<CatalogueRow>> =
+    std::sync::LazyLock::new(catalogue_snapshot);
+
+pub fn catalogue_snapshot() -> Vec<CatalogueRow> {
+    crate::runtime::shared_registry()
+        .read()
+        .catalogue_snapshot()
+}
 
 /// A model entry returned by `GET /v1/models`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -245,12 +30,12 @@ pub struct ModelEntry {
 }
 
 impl ModelEntry {
-    pub fn from_catalogue(e: &(&str, &str, &str, &str, u32, u32)) -> Self {
+    pub fn from_catalogue<S: AsRef<str>>(e: &(S, S, S, S, u32, u32)) -> Self {
         Self {
-            provider: e.0.to_string(),
-            id: e.2.to_string(),
-            display_name: e.1.to_string(),
-            toolset: e.3.to_string(),
+            provider: e.0.as_ref().into(),
+            id: e.2.as_ref().into(),
+            display_name: e.1.as_ref().into(),
+            toolset: e.3.as_ref().into(),
             max_tokens: e.4,
             context_window: e.5,
             dynamic: false,
@@ -261,7 +46,9 @@ impl ModelEntry {
 pub(crate) fn strip_model_snapshot_suffix(id: &str) -> &str {
     // Check -YYYY-MM-DD (11 chars: '-' + 4 digits + '-' + 2 digits + '-' + 2 digits)
     if id.len() > 11 {
-        let suffix = &id[id.len() - 11..];
+        let Some(suffix) = id.get(id.len() - 11..) else {
+            return id;
+        };
         let bytes = suffix.as_bytes();
         if bytes[0] == b'-'
             && bytes[1..5].iter().all(u8::is_ascii_digit)
@@ -275,7 +62,9 @@ pub(crate) fn strip_model_snapshot_suffix(id: &str) -> &str {
     }
     // Check -MMDD (5 chars: '-' + 4 digits, e.g. -0613, -0125)
     if id.len() > 5 {
-        let suffix = &id[id.len() - 5..];
+        let Some(suffix) = id.get(id.len() - 5..) else {
+            return id;
+        };
         let bytes = suffix.as_bytes();
         if bytes[0] == b'-' && bytes[1..5].iter().all(u8::is_ascii_digit) {
             return &id[..id.len() - 5];
@@ -285,194 +74,73 @@ pub(crate) fn strip_model_snapshot_suffix(id: &str) -> &str {
 }
 
 pub fn normalize_model_id_for_lookup(model_id: &str) -> String {
-    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    let id_stripped = strip_model_snapshot_suffix(id);
-
-    if id_stripped.contains('/') {
-        return id_stripped.to_string();
-    }
-
-    let lower = id_stripped.to_ascii_lowercase();
-    if lower.starts_with("gpt-")
-        || lower.starts_with("chatgpt")
-        || lower.starts_with("o1")
-        || lower.starts_with("o3")
-        || lower.starts_with("o4")
-    {
-        return format!("openai/{id_stripped}");
-    }
-
-    id_stripped.to_string()
-}
-
-fn parse_cade_model_id(model_id: &str) -> Option<(String, String)> {
-    let normalized = normalize_model_id_for_lookup(model_id);
-    let id = normalized
-        .strip_prefix("openrouter/")
-        .unwrap_or(&normalized);
-    let (provider, model) = id.split_once('/')?;
-    Some((provider.to_string(), model.to_string()))
+    crate::runtime::shared_registry()
+        .read()
+        .canonical_model_id(model_id)
 }
 
 /// Determine the toolset for a specific model ID. Defaults to "default" if unknown.
 pub fn toolset_for_model(model_id: &str) -> String {
-    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    let bare = id.strip_prefix("deepseek/").unwrap_or(id);
-    if bare == "deepseek-reasoner" {
-        return "none".to_string();
-    }
-    if let Some(m) = CATALOGUE
-        .iter()
-        .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
-    {
-        m.3.to_string()
-    } else if id.starts_with("gemini/") || id.starts_with("google/") {
-        "gemini".to_string()
-    } else if id.starts_with("openai/") || id.starts_with("deepseek/") {
-        "codex".to_string()
-    } else {
-        "default".to_string() // Groq, Ollama default to generic openai/anthropic style
-    }
+    metadata_for_model(model_id)
+        .toolset
+        .unwrap_or_else(|| "default".into())
+}
+
+pub(crate) fn metadata_for_model(model_id: &str) -> crate::runtime::ModelMetadata {
+    crate::runtime::shared_registry()
+        .read()
+        .metadata_for_id(model_id)
 }
 
 /// Returns false if the model explicitly does not support tool calling (e.g. deepseek-reasoner).
 pub fn supports_tools_for_model(model_id: &str) -> bool {
-    let toolset = toolset_for_model(model_id);
-    toolset != "none" && toolset != "unsupported"
+    metadata_for_model(model_id).tools != Some(false)
 }
 
 /// Determine the max output tokens for a specific model ID. Defaults to 4096 if unknown.
 pub fn max_tokens_for_model(model_id: &str) -> u32 {
-    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-    if let Some(m) = CATALOGUE
-        .iter()
-        .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
-    {
-        m.4
-    } else if id.starts_with("anthropic/claude-") {
-        128_000
-    } else if id.starts_with("openai/o") {
-        100_000
-    } else if id.starts_with("openai/gpt-5") || id.starts_with("gpt-5") {
-        16384
-    } else if id.starts_with("gemini/")
-        || id.starts_with("google/gemini")
-        || id.starts_with("openai/")
-    {
-        8192
-    } else {
-        4096 // Safe default for older models / unknown providers
-    }
+    metadata_for_model(model_id).max_tokens.unwrap_or(0)
 }
 
 /// Determine the context window (input tokens) for a specific model ID.
 ///
 /// Used to compute the character budget for message history trimming.
-/// Falls back by provider prefix, then to a conservative 32 K default.
+/// Falls back to editable conservative budgeting defaults for unknown models.
 ///
 /// The env var `CADE_CONTEXT_BUDGET` (in chars) overrides everything when set.
 pub fn context_window_for_model(model_id: &str) -> u32 {
     // Env var hard-override (useful for testing or unusual deployments)
     if let Ok(val) = std::env::var("CADE_CONTEXT_BUDGET")
         && let Ok(n) = val.parse::<u32>()
+        && n > 0
     {
         return n;
     }
 
-    let normalized_model_id = normalize_model_id_for_lookup(model_id);
-    let model_id = normalized_model_id.as_str();
-    let id = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-
-    // Exact catalogue match
-    if let Some(m) = CATALOGUE
-        .iter()
-        .find(|(_, _, id_cat, _, _, _)| *id_cat == id)
-    {
-        return m.5;
-    }
-
-    // Try llm_providers database
-    if let Some(cl) = parse_cade_model_id(model_id)
-        .and_then(|(p, m)| llm_providers::get_model(&p, &m))
-        .and_then(|m| m.context_length)
-    {
-        return cl as u32;
-    }
-    // Provider-prefix heuristics for dynamic / uncatalogued models
-    if id.starts_with("anthropic/") {
-        // 1M-token windows are current-generation Opus/Sonnet only;
-        // legacy claude-2/claude-3 models cap at 200K.
-        let modern = !(id.contains("claude-2") || id.contains("claude-3"));
-        if modern && (id.contains("opus") || id.contains("sonnet")) {
-            return 1_048_576;
-        }
-        return 200_000;
-    }
-    if id.starts_with("gemini/") || id.starts_with("google/gemini") {
-        return 1_048_576;
-    }
-    if id.starts_with("openai/") {
-        if id.starts_with("openai/o") || id.starts_with("openai/gpt-5") {
-            return 200_000; // o-series and gpt-5 models have a 200k context window
-        }
-        return 128_000;
-    }
-    if id.starts_with("deepseek/") {
-        if id.contains("flash") || id.contains("v4") {
-            return 1_000_000;
-        }
-        return 64_000;
-    }
-    // Groq models (fast inference, smaller windows)
-    if id.contains("llama") {
-        return 128_000;
-    }
-    if model_id.contains("mixtral") {
-        return 32_000;
-    }
-    // Conservative fallback for anything else (Ollama local models, unknown)
-    32_000
+    metadata_for_model(model_id).context_window.unwrap_or(0)
 }
 
 /// Returns a fast, cost-effective reasoning model from the same provider as the main model.
 /// Ideal for subagents (like heuristic evaluators) that run frequently and synchronously.
 pub fn fast_model_for_main_model(main_model: &str) -> String {
-    let provider = main_model.split('/').next().unwrap_or(main_model);
-    match provider {
-        // Bug 6 fix: updated stale defaults.
-        // - Haiku 4.5 (current generation, supports adaptive thinking).
-        // - o4-mini (better tool-calling than gpt-4o-mini).
-        // - gemini-2.0-flash (actually fast — 2.5-pro is the large reasoning model).
-        "anthropic" => "anthropic/claude-haiku-4-5".to_string(),
-        "openai" => "openai/o4-mini".to_string(),
-        "gemini" => "gemini/gemini-2.0-flash".to_string(),
-        "deepseek" => "deepseek/deepseek-chat".to_string(),
-        _ => main_model.to_string(), // Fallback: use exactly what the user is using
-    }
+    let providers = crate::provider_registry::ProviderRegistry::configured();
+    providers.fast_model_for(main_model, &crate::runtime::shared_registry().read())
+}
+
+/// Configured background selection, with any per-model passthrough policy.
+pub fn background_model_for_main_model(main_model: &str) -> String {
+    let providers = crate::provider_registry::ProviderRegistry::configured();
+    providers.background_model_for(main_model, &crate::runtime::shared_registry().read())
 }
 
 /// Inspect environment variables to detect which LLM providers have keys configured.
 pub fn available_env_providers() -> Vec<String> {
-    let mut provs = Vec::new();
-    let has_val = |k: &str| {
-        std::env::var(k)
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-    };
-
-    if has_val("GOOGLE_API_KEY") || has_val("GEMINI_API_KEY") {
-        provs.push("gemini".to_string());
-    }
-    if has_val("ANTHROPIC_API_KEY") || has_val("CLAUDE_API_KEY") {
-        provs.push("anthropic".to_string());
-    }
-    if has_val("OPENAI_API_KEY") {
-        provs.push("openai".to_string());
-    }
-    if has_val("DEEPSEEK_API_KEY") {
-        provs.push("deepseek".to_string());
-    }
-    provs
+    crate::provider_registry::ProviderRegistry::configured()
+        .get_all_providers()
+        .iter()
+        .filter(|p| p.env_key().is_some())
+        .map(|p| p.name.clone())
+        .collect()
 }
 
 /// Select a fast subagent model given a parent model and optionally a list of available/authenticated providers.
@@ -505,22 +173,22 @@ pub fn select_fast_subagent_model(
         return fast_default;
     }
 
-    // Preferred fast model order across providers
-    const PREFERRED_FAST_ORDER: &[(&str, &str)] = &[
-        ("gemini", "gemini/gemini-2.0-flash"),
-        ("openai", "openai/gpt-4o-mini"),
-        ("anthropic", "anthropic/claude-haiku-4-5"),
-        ("deepseek", "deepseek/deepseek-chat"),
-        ("ollama", "ollama/qwen2.5-coder:7b"),
-    ];
-
-    for &(p, model) in PREFERRED_FAST_ORDER {
-        if providers.iter().any(|avail| avail.eq_ignore_ascii_case(p)) {
-            return model.to_string();
-        }
-    }
-
-    fast_default
+    crate::provider_registry::ProviderRegistry::configured()
+        .get_all_providers()
+        .iter()
+        .filter(|p| {
+            p.fast_model.is_some()
+                && providers
+                    .iter()
+                    .any(|avail| avail == &p.name || p.aliases.contains(avail))
+        })
+        .min_by_key(|p| (p.fast_priority, &p.name))
+        .and_then(|p| {
+            p.fast_model
+                .as_ref()
+                .map(|model| format!("{}/{model}", p.name))
+        })
+        .unwrap_or(fast_default)
 }
 
 // endregion: --- Tests
@@ -543,12 +211,12 @@ mod tests {
 
     #[test]
     fn catalogue_all_entries_have_valid_fields() {
-        for (provider, display, id, toolset, max_tok, ctx) in CATALOGUE {
+        for (provider, display, id, toolset, max_tok, ctx) in CATALOGUE.iter() {
             assert!(!provider.is_empty(), "empty provider for {id}");
             assert!(!display.is_empty(), "empty display for {id}");
             assert!(!id.is_empty(), "empty id");
             assert!(
-                ["default", "codex", "gemini", "none"].contains(toolset),
+                ["default", "codex", "gemini", "none"].contains(&toolset.as_str()),
                 "invalid toolset '{toolset}' for {id}"
             );
             assert!(*max_tok > 0, "zero max_tokens for {id}");
@@ -558,7 +226,7 @@ mod tests {
 
     #[test]
     fn catalogue_ids_are_prefixed_with_provider() {
-        for (provider, _, id, _, _, _) in CATALOGUE {
+        for (provider, _, id, _, _, _) in CATALOGUE.iter() {
             assert!(
                 id.starts_with(&format!("{provider}/")),
                 "id '{id}' should start with '{provider}/'"
@@ -629,7 +297,7 @@ mod tests {
 
     #[test]
     fn toolset_unknown_gemini_prefix() {
-        assert_eq!(toolset_for_model("gemini/gemini-999"), "gemini");
+        assert_eq!(toolset_for_model("gemini/gemini-999"), "default");
     }
 
     #[test]
@@ -650,12 +318,12 @@ mod tests {
 
     #[test]
     fn max_tokens_unknown_gemini() {
-        assert_eq!(max_tokens_for_model("gemini/future-model"), 8192);
+        assert_eq!(max_tokens_for_model("gemini/future-model"), 4096);
     }
 
     #[test]
     fn max_tokens_unknown_gpt5() {
-        assert_eq!(max_tokens_for_model("openai/gpt-5.5-preview"), 16384);
+        assert_eq!(max_tokens_for_model("openai/gpt-5.5-preview"), 4096);
         assert_eq!(max_tokens_for_model("openai/gpt-5.6-luna"), 16384);
         assert_eq!(max_tokens_for_model("openai/gpt-5.5-pro"), 16384);
     }
@@ -687,7 +355,7 @@ mod tests {
 
     #[test]
     fn max_tokens_unknown_openai() {
-        assert_eq!(max_tokens_for_model("openai/future-model"), 8192);
+        assert_eq!(max_tokens_for_model("openai/future-model"), 4096);
     }
 
     #[test]
@@ -697,9 +365,9 @@ mod tests {
 
     #[test]
     fn max_tokens_bare_gpt5_defaults_to_safe_budget() {
-        // Bare OpenAI model IDs should clamp to safe 16384 ceiling to prevent upstream schema rejection.
+        // Exact offline metadata wins; unknown names use configurable fallback budgets.
         assert_eq!(max_tokens_for_model("gpt-5"), 16384);
-        assert_eq!(max_tokens_for_model("gpt-5.1-preview"), 16384);
+        assert_eq!(max_tokens_for_model("gpt-5.1-preview"), 4096);
         assert_eq!(max_tokens_for_model("gpt-5.5-pro"), 16384);
     }
     // -- context_window_for_model
@@ -716,9 +384,9 @@ mod tests {
 
     #[test]
     fn context_window_provider_prefix_fallback() {
-        assert_eq!(context_window_for_model("anthropic/future-claude"), 200_000);
-        assert_eq!(context_window_for_model("gemini/future-gemini"), 1_048_576);
-        assert_eq!(context_window_for_model("openai/future-gpt"), 128_000);
+        assert_eq!(context_window_for_model("anthropic/future-claude"), 32_000);
+        assert_eq!(context_window_for_model("gemini/future-gemini"), 32_000);
+        assert_eq!(context_window_for_model("openai/future-gpt"), 32_000);
     }
 
     #[test]
@@ -729,16 +397,16 @@ mod tests {
             context_window_for_model("anthropic/claude-3-5-sonnet-20241022"),
             200_000
         );
-        // Current-generation opus/sonnet keep the 1M assumption.
+        // A future version has no known context length merely because it is named Sonnet.
         assert_eq!(
             context_window_for_model("anthropic/claude-sonnet-4-9"),
-            1_048_576
+            32_000
         );
     }
 
     #[test]
     fn context_window_llama_model() {
-        assert_eq!(context_window_for_model("groq/llama-3-70b"), 128_000);
+        assert_eq!(context_window_for_model("groq/llama-3-70b"), 32_000);
     }
 
     #[test]

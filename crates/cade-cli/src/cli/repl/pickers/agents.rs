@@ -207,13 +207,8 @@ impl Repl {
                             allow_other: false,
                             progress: None,
                         };
-                        let confirmed = {
-                            let mut app = app_arc.lock();
-                            let r = app.ask_question(&q)?;
-                            app.scroll = 0;
-                            let _ = app.draw();
-                            matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-                        };
+                        let answer = self.ask_repl_question(q).await?;
+                        let confirmed = matches!(&answer, Some(a) if a.as_str().starts_with("Yes"));
                         if confirmed {
                             if targets.len() == 1 {
                                 let orig_idx = targets[0];
@@ -258,10 +253,7 @@ impl Repl {
                             progress: None,
                         };
                         let name = {
-                            let mut app = app_arc.lock();
-                            let ans = app.ask_question(&q)?;
-                            app.scroll = 0;
-                            let _ = app.draw();
+                            let ans = self.ask_repl_question(q).await?;
                             match ans {
                                 Some(n) if n.as_str() != "Cancel" && !n.as_str().is_empty() => {
                                     n.as_str().to_string()

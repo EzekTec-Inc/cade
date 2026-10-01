@@ -222,12 +222,50 @@ impl HttpTransport {
     where
         F: Fn(&CadeMessage),
     {
-        let mut body = json!({ "input": input });
+        let mut options = json!({});
+        if let Some(mode) = permission_mode {
+            options["permission_mode"] = mode.into();
+        }
+        self.start_run_cancellable_with_options(
+            agent_id,
+            input,
+            conversation_id,
+            &options,
+            on_event,
+            cancel,
+        )
+        .await
+    }
+
+    /// Explicit workspace, policy, backend profile, reasoning and hard turn limit.
+    /// The server snapshots these once at run acceptance. Options use the same
+    /// JSON keys as `RunExecutionOptions` on the server.
+    pub async fn start_run_cancellable_with_options<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        conversation_id: Option<&str>,
+        options: &Value,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let mut body = options
+            .as_object()
+            .cloned()
+            .map(Value::Object)
+            .ok_or_else(|| crate::Error::custom("Run options must be an object"))?;
+        if body.get("cwd").is_none() && body.get("workspace").is_none() {
+            body["cwd"] = std::env::current_dir()?
+                .to_string_lossy()
+                .into_owned()
+                .into();
+        }
+        body["input"] = input.into();
         if let Some(conversation_id) = conversation_id {
             body["conversation_id"] = conversation_id.into();
-        }
-        if let Some(permission_mode) = permission_mode {
-            body["permission_mode"] = permission_mode.into();
         }
         self.consume_run_stream(
             EventSource::new(
@@ -536,9 +574,36 @@ impl HttpTransport {
                     let message: CadeMessage = serde_json::from_str(data).map_err(|error| {
                         crate::Error::custom(format!("invalid run event: {error}"))
                     })?;
+                    if let Some(sequence) = message.seq_id() {
+                        if sequence <= last_seq_id {
+                            continue;
+                        }
+                        if sequence > last_seq_id + 1 {
+                            // Bounded live delivery may skip a frame under backpressure.
+                            // Recover the exact ordered log instead of losing output.
+                            if let Some(id) = run_id.as_deref().or_else(|| message.run_id()) {
+                                events.close();
+                                return self
+                                    .backfill_follow_run(
+                                        id,
+                                        last_seq_id,
+                                        messages,
+                                        &on_event,
+                                        cancel,
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
                     deliver(&message, &mut messages, &mut run_id, &mut last_seq_id);
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(reqwest_eventsource::Error::InvalidStatusCode(status, response)) => {
+                    events.close();
+                    return Err(crate::Error::custom(
+                        describe_status_error(status, response).await,
+                    ));
+                }
                 Err(error) => {
                     events.close();
                     tracing::warn!("SSE run transport error: {error:?}");
@@ -649,7 +714,7 @@ impl HttpTransport {
         F: Fn(&CadeMessage),
     {
         let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
-        let mut body = json!({ "input": input });
+        let mut body = json!({ "input": input, "cwd": std::env::current_dir()?.to_string_lossy() });
         if let Some(cid) = conversation_id {
             body["conversation_id"] = cid.into();
         }
@@ -915,11 +980,18 @@ impl HttpTransport {
     }
 
     async fn post_messages(&self, agent_id: &str, body: &Value) -> Result<Vec<CadeMessage>> {
+        let mut body = body.clone();
+        if body.get("cwd").is_none() && body.get("workspace").is_none() {
+            body["cwd"] = std::env::current_dir()?
+                .to_string_lossy()
+                .into_owned()
+                .into();
+        }
         let resp = self
             .client
             .post(self.url(&format!("/agents/{agent_id}/messages")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(body)
+            .json(&body)
             .send()
             .await?;
 

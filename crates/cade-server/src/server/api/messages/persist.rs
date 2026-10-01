@@ -94,6 +94,19 @@ pub(crate) fn persist(
     role: &str,
     content: Value,
 ) {
+    if let Err(error) = persist_checked(state, agent_id, conversation_id, role, content) {
+        tracing::error!(target: "cade::persist", "{error}");
+    }
+}
+
+/// Persist a message before publishing it; durable runtime paths propagate failure.
+pub(crate) fn persist_checked(
+    state: &AppState,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    role: &str,
+    content: Value,
+) -> Result<(), String> {
     let mut row = MessageRow {
         id: new_msg_id(),
         agent_id: agent_id.to_string(),
@@ -119,13 +132,10 @@ pub(crate) fn persist(
         .sum();
     row.char_count = char_count;
 
-    if let Err(e) = sqlite::insert_message(&state.db, &row) {
-        tracing::error!(
-            target: "cade::persist",
-            "{}",
-            fmt_persist_error("insert_message", role, agent_id, conversation_id, &e)
-        );
-    } else {
+    sqlite::insert_message(&state.db, &row).map_err(|error| {
+        fmt_persist_error("insert_message", role, agent_id, conversation_id, &error)
+    })?;
+    {
         let payload = serde_json::json!({
             "id": row.id,
             "agent_id": row.agent_id,
@@ -151,6 +161,7 @@ pub(crate) fn persist(
             fmt_persist_error("touch_conversation", role, agent_id, Some(conv_id), &e)
         );
     }
+    Ok(())
 }
 
 /// Extract and validate conversation_id from request body.
@@ -165,7 +176,11 @@ pub(crate) fn resolve_conversation(
     match conv_id {
         None => Ok(None),
         Some(id) => match sqlite::get_conversation(&state.db, id) {
-            Ok(Some(_)) => Ok(Some(id.to_string())),
+            Ok(Some(conversation)) if conversation.agent_id == agent_id => Ok(Some(id.to_string())),
+            Ok(Some(_)) => Err(err(
+                axum::http::StatusCode::NOT_FOUND,
+                &format!("conversation '{id}' not found for agent '{agent_id}'"),
+            )),
             Ok(None) => Err(err(
                 axum::http::StatusCode::NOT_FOUND,
                 &format!("conversation '{id}' not found for agent '{agent_id}'"),

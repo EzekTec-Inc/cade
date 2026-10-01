@@ -945,6 +945,84 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 22", [])?;
     }
 
+    if current_version < 23 {
+        // ADR 7: keep marker timestamps pinned to historical source messages.
+        // Old markers cannot tell us which same-second rows were dropped. NULL
+        // anchors deliberately replay that second rather than guessing from the
+        // marker's insertion rowid (which could hide concurrent messages).
+        // Backfill a stable insertion sequence in the same order as the old
+        // rowids. Subsequent inserts cannot reuse that order after deletion or
+        // VACUUM, and message IDs, content and pinned timestamps remain intact.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE messages ADD COLUMN compaction_anchor_seq INTEGER;
+             ALTER TABLE messages ADD COLUMN compaction_snapshot_seq INTEGER;
+             ALTER TABLE messages ADD COLUMN history_seq INTEGER;
+             UPDATE messages SET history_seq = rowid;
+             CREATE UNIQUE INDEX idx_messages_history_seq ON messages(history_seq);
+             CREATE TABLE message_history_sequence (
+                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                 value INTEGER NOT NULL
+             );
+             INSERT INTO message_history_sequence SELECT 1, COALESCE(MAX(history_seq), 0) FROM messages;
+             CREATE TRIGGER messages_history_sequence AFTER INSERT ON messages
+             WHEN NEW.history_seq IS NULL BEGIN
+                 UPDATE message_history_sequence SET value = value + 1 WHERE singleton = 1;
+                 UPDATE messages SET history_seq = (SELECT value FROM message_history_sequence WHERE singleton = 1)
+                 WHERE id = NEW.id;
+             END;
+             -- Sequence stamping is not a content update. In particular the
+             -- content FTS insert may not yet have fired when we stamp a row.
+             DROP TRIGGER IF EXISTS messages_au;
+             CREATE TRIGGER messages_au AFTER UPDATE OF content ON messages BEGIN
+                 INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+                 INSERT INTO messages_fts(rowid, content) VALUES(new.rowid, new.content);
+             END;
+             CREATE TABLE consolidation_claims (
+                 agent_id TEXT NOT NULL,
+                 conversation_key TEXT NOT NULL,
+                 token TEXT NOT NULL,
+                 expires_at INTEGER NOT NULL,
+                 PRIMARY KEY (agent_id, conversation_key),
+                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+             );
+             PRAGMA user_version = 23;",
+        )?;
+        tx.commit()?;
+    }
+
+    if current_version < 24 {
+        // Version 23's timestamp high-water mark cannot represent a summarized
+        // prefix after clock regression. Freeze unambiguous legacy exclusions;
+        // replay only new backdated intervals hidden by repeated v23 anchors.
+        // Subsequent publications record exact stable source sequences.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE compaction_coverage (
+                 message_seq INTEGER PRIMARY KEY,
+                 FOREIGN KEY (message_seq) REFERENCES messages(history_seq) ON DELETE CASCADE
+             );
+             CREATE TABLE compaction_horizons (
+                 marker_id TEXT PRIMARY KEY,
+                 FOREIGN KEY (marker_id) REFERENCES messages(id) ON DELETE CASCADE
+             );",
+        )?;
+        let scopes = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT agent_id, conversation_id FROM messages WHERE role = 'compaction'",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (agent_id, conversation_id) in scopes {
+            horizon::cover_legacy_on(&tx, &agent_id, conversation_id.as_deref())?;
+        }
+        tx.execute("PRAGMA user_version = 24", [])?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -986,6 +1064,7 @@ pub struct AgentRow {
 
 pub mod agents;
 pub mod approvals;
+pub mod consolidation;
 pub mod conversations;
 pub mod embedding;
 pub mod event_log;

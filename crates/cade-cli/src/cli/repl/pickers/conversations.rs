@@ -120,10 +120,7 @@ impl Repl {
                             allow_other: false,
                             progress: None,
                         };
-                        let ans = {
-                            let mut app = app_arc.lock();
-                            app.ask_question(&q)?
-                        };
+                        let ans = self.ask_repl_question(q).await?;
                         if matches!(&ans, Some(a) if a.as_str().starts_with("Yes")) {
                             let _ = self.client.delete_conversation(agent_id, &conv_id).await;
                         }

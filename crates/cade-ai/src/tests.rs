@@ -1514,7 +1514,7 @@ fn test_llm_router_openrouter_failover_mapping() {
 // -- DeepSeek reasoning tests (Issue #170)
 
 #[test]
-fn test_openai_provider_deepseek_label() {
+fn test_openai_provider_configured_label() {
     let p_ds = OpenAiProvider::new(
         "test-key".into(),
         Some("https://api.deepseek.com/chat/completions".into()),
@@ -1524,11 +1524,34 @@ fn test_openai_provider_deepseek_label() {
     let p_openai = OpenAiProvider::new("test-key".into(), None);
     assert_eq!(p_openai.provider_label(), "OpenAI");
 
-    let p_groq = OpenAiProvider::new(
+    let configured = crate::provider_registry::ProviderRegistry::from_json(
+        &json!([{
+            "name":"workspace-gateway", "kind":"openai-compatible",
+            "chat_url":"http://127.0.0.1:1/v1", "display_name":"Workspace gateway"
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    let serialized =
+        serde_json::to_string(&vec![configured.get("workspace-gateway").unwrap()]).unwrap();
+    let reloaded = crate::provider_registry::ProviderRegistry::from_json(&serialized).unwrap();
+    let definition = reloaded.get("workspace-gateway").unwrap();
+    let provider = OpenAiProvider::new("test-key".into(), Some(definition.chat_url.clone()))
+        .with_registry(
+            definition.name.clone(),
+            std::sync::Arc::new(parking_lot::RwLock::new(
+                crate::runtime::RuntimeRegistry::default(),
+            )),
+        )
+        .with_provider_definition(definition);
+    assert_eq!(provider.provider_label(), "Workspace gateway");
+
+    // A familiar hostname on an unregistered endpoint is not a provider identity.
+    let unregistered = OpenAiProvider::new(
         "test-key".into(),
         Some("https://api.groq.com/openai/v1".into()),
     );
-    assert_eq!(p_groq.provider_label(), "Groq");
+    assert_eq!(unregistered.provider_label(), "openai-compatible");
 }
 
 #[test]
@@ -1856,7 +1879,7 @@ fn test_catalogue_deepseek_v4_models() {
 
     // Router candidate inference for bare model names
     let flash_cands = infer_provider_candidates("deepseek-flash");
-    assert!(flash_cands.contains(&"deepseek"));
+    assert!(flash_cands.iter().any(|p| p == "deepseek"));
     let pro_cands = infer_provider_candidates("deepseek-v4-pro");
-    assert!(pro_cands.contains(&"deepseek"));
+    assert!(pro_cands.iter().any(|p| p == "deepseek"));
 }

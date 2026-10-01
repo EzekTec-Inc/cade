@@ -473,14 +473,76 @@ pub fn MemoryBlocksView() -> Element {
     }
 }
 
-/// Dynamic visual context window allocation bar.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+struct MemoryModelMetadata {
+    context_tokens: Option<u64>,
+    chars_per_token: Option<u64>,
+}
+
+fn memory_model_metadata(
+    data: &serde_json::Value,
+    model: Option<&str>,
+    provider: Option<&str>,
+) -> MemoryModelMetadata {
+    let Some(model) = model.filter(|model| !model.trim().is_empty()) else {
+        return MemoryModelMetadata::default();
+    };
+    let qualified = provider
+        .filter(|provider| !provider.is_empty())
+        .map(|provider| format!("{provider}/{model}"));
+    let entry = data["metadata"]
+        .get(model)
+        .or_else(|| qualified.as_deref().and_then(|id| data["metadata"].get(id)));
+    let Some(entry) = entry else {
+        return MemoryModelMetadata::default();
+    };
+    let capabilities = &entry["capabilities"];
+    MemoryModelMetadata {
+        context_tokens: if entry["limits_are_fallback"].as_bool() == Some(true) {
+            None
+        } else {
+            capabilities["context_window"]
+                .as_u64()
+                .filter(|limit| *limit > 0)
+        },
+        chars_per_token: capabilities["chars_per_token"]
+            .as_u64()
+            .filter(|ratio| *ratio > 0),
+    }
+}
+
+/// Memory footprint using reported model metadata, with explicit unknowns.
 #[component]
 pub fn TokenHeatmapWidget(
     blocks: Signal<Vec<serde_json::Value>>,
     model_name: Option<String>,
 ) -> Element {
+    let state = use_context::<AppState>();
+    let client = use_context::<Memo<crate::api::CadeApiClient>>();
+    let selected = (state.selected_agent)();
+    let model_name = model_name
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| {
+            selected
+                .as_ref()
+                .and_then(|agent| agent.model.clone())
+                .filter(|model| !model.trim().is_empty())
+        });
+    let provider = selected
+        .as_ref()
+        .and_then(|agent| agent.provider.as_deref());
+    let models = use_resource(move || {
+        let api = client();
+        async move { api.list_models().await.ok() }
+    });
+    let limits = models
+        .read()
+        .as_ref()
+        .and_then(|data| data.as_ref())
+        .map(|data| memory_model_metadata(data, model_name.as_deref(), provider))
+        .unwrap_or_default();
     let raw_blocks = blocks();
-    let model = model_name.unwrap_or_else(|| "claude-3-5-sonnet".to_string());
+    let model = model_name.as_deref().unwrap_or("Unknown");
 
     let mut pinned_chars = 0usize;
     let mut short_chars = 0usize;
@@ -501,30 +563,39 @@ pub fn TokenHeatmapWidget(
     }
 
     let total_chars = pinned_chars + short_chars + long_chars;
-    let total_tokens = total_chars / 4;
-    let context_limit_tokens: usize = 128_000;
-    let context_limit_chars: usize = context_limit_tokens * 4;
-
-    let pinned_pct = ((pinned_chars as f64 / context_limit_chars as f64) * 100.0).clamp(0.5, 100.0);
-    let short_pct = ((short_chars as f64 / context_limit_chars as f64) * 100.0).clamp(0.5, 100.0);
-    let long_pct = ((long_chars as f64 / context_limit_chars as f64) * 100.0).clamp(0.5, 100.0);
-    let usage_pct = (total_chars as f64 / context_limit_chars as f64) * 100.0;
-    let is_warning = usage_pct >= 70.0;
+    let total_tokens = limits
+        .chars_per_token
+        .map(|ratio| (total_chars as u64).div_ceil(ratio));
+    let context_limit = limits
+        .context_tokens
+        .map(|limit| format!("{limit} tokens"))
+        .unwrap_or_else(|| "unknown".into());
+    let footprint = total_tokens
+        .map(|tokens| format!("~{tokens} tokens"))
+        .unwrap_or_else(|| format!("{total_chars} characters"));
+    let context_chars = limits
+        .context_tokens
+        .zip(limits.chars_per_token)
+        .map(|(tokens, ratio)| tokens as f64 * ratio as f64);
+    let denominator = context_chars.unwrap_or(total_chars.max(1) as f64);
+    let pinned_pct = (pinned_chars as f64 / denominator * 100.0).clamp(0.0, 100.0);
+    let short_pct = (short_chars as f64 / denominator * 100.0).clamp(0.0, 100.0);
+    let long_pct = (long_chars as f64 / denominator * 100.0).clamp(0.0, 100.0);
+    let bar_description = if context_chars.is_some() {
+        "Estimated memory share of reported context"
+    } else {
+        "Memory character composition"
+    };
 
     rsx! {
         div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 mb-6 space-y-4 shadow-lg",
             div { class: "flex items-center justify-between",
                 div { class: "flex items-center space-x-2.5",
-                    span { class: "text-slate-100 font-semibold text-sm", "Context Window Token Heatmap" }
+                    span { class: "text-slate-100 font-semibold text-sm", "Memory Context Footprint" }
                     span { class: "text-[11px] font-mono text-slate-400 px-2 py-0.5 bg-[#16171d] rounded border border-[#1e293b]", "{model}" }
                 }
                 div { class: "flex items-center space-x-3 text-xs font-mono",
-                    span { class: if is_warning { "text-amber-400 font-semibold" } else { "text-slate-400" },
-                        "{total_tokens} / {context_limit_tokens} tokens ({usage_pct:.1}%)"
-                    }
-                    if is_warning {
-                        span { class: "bg-amber-500/10 text-amber-400 text-[10px] px-2 py-0.5 rounded-full border border-amber-500/20", "Consolidation Near" }
-                    }
+                    span { class: "text-slate-400", "{footprint} · Context limit: {context_limit}" }
                 }
             }
 
@@ -556,19 +627,61 @@ pub fn TokenHeatmapWidget(
                 div { class: "flex items-center space-x-4",
                     div { class: "flex items-center space-x-1.5",
                         span { class: "w-2 h-2 rounded-full bg-purple-500" }
-                        span { "Pinned ({pinned_chars / 4} tok)" }
+                        span { "Pinned ({pinned_chars} chars)" }
                     }
                     div { class: "flex items-center space-x-1.5",
                         span { class: "w-2 h-2 rounded-full bg-cyan-500" }
-                        span { "Active ({short_chars / 4} tok)" }
+                        span { "Active ({short_chars} chars)" }
                     }
                     div { class: "flex items-center space-x-1.5",
                         span { class: "w-2 h-2 rounded-full bg-slate-500" }
-                        span { "Archival ({long_chars / 4} tok)" }
+                        span { "Archival ({long_chars} chars)" }
                     }
                 }
-                span { class: "text-slate-500 font-mono text-[10px]", "Threshold @ 70%" }
+                span { class: "text-slate-500 font-mono text-[10px]", "{bar_description}" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn selected_model_context_uses_reported_metadata_without_inventing_limits() {
+        let data = json!({"metadata":{
+            "private/custom-model":{"capabilities":{"context_window":65432,"chars_per_token":3},"limits_are_fallback":false},
+            "private/fallback":{"capabilities":{"context_window":99999},"limits_are_fallback":true},
+            "other/custom-model":{"capabilities":{"context_window":12345},"limits_are_fallback":false}
+        }});
+        assert_eq!(
+            memory_model_metadata(&data, Some("custom-model"), Some("private")),
+            MemoryModelMetadata {
+                context_tokens: Some(65432),
+                chars_per_token: Some(3)
+            }
+        );
+        assert_eq!(
+            memory_model_metadata(&data, Some("private/custom-model"), None).context_tokens,
+            Some(65432)
+        );
+        assert_eq!(
+            memory_model_metadata(&data, Some("custom-model"), None),
+            MemoryModelMetadata::default()
+        );
+        assert_eq!(
+            memory_model_metadata(&data, Some("missing"), Some("private")),
+            MemoryModelMetadata::default()
+        );
+        assert_eq!(
+            memory_model_metadata(&data, Some("fallback"), Some("private")).context_tokens,
+            None
+        );
+        assert_eq!(
+            memory_model_metadata(&data, None, Some("private")),
+            MemoryModelMetadata::default()
+        );
     }
 }

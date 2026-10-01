@@ -21,9 +21,7 @@ pub struct PackedPlugin {
 /// Scaffolds a compliant CADE plugin directory structure.
 pub fn init_plugin(dir: &Path, name: &str, use_toml: bool) -> crate::Result<PathBuf> {
     let clean_name = name.trim();
-    if clean_name.is_empty() {
-        return Err(crate::Error::custom("Plugin name cannot be empty"));
-    }
+    crate::marketplace::validate_plugin_id(clean_name)?;
 
     let plugin_dir = dir.join(clean_name);
     if plugin_dir.exists() {
@@ -141,8 +139,7 @@ pub fn validate_plugin(root: &Path) -> crate::Result<PluginValidationReport> {
 
     // Check declared skills
     for skill_path in &manifest.skills {
-        let full = root.join(skill_path);
-        if !full.exists() {
+        if crate::registry::package_path(root, skill_path).is_err() {
             issues.push(format!(
                 "Declared skill path does not exist: {}",
                 skill_path.display()
@@ -152,8 +149,7 @@ pub fn validate_plugin(root: &Path) -> crate::Result<PluginValidationReport> {
 
     // Check declared subagents
     for subagent_path in &manifest.subagents {
-        let full = root.join(subagent_path);
-        if !full.exists() {
+        if crate::registry::package_path(root, subagent_path).is_err() {
             issues.push(format!(
                 "Declared subagent path does not exist: {}",
                 subagent_path.display()
@@ -163,8 +159,7 @@ pub fn validate_plugin(root: &Path) -> crate::Result<PluginValidationReport> {
 
     // Check declared themes
     for theme_path in &manifest.themes {
-        let full = root.join(theme_path);
-        if !full.exists() {
+        if crate::registry::package_path(root, theme_path).is_err() {
             issues.push(format!(
                 "Declared theme path does not exist: {}",
                 theme_path.display()
@@ -172,6 +167,24 @@ pub fn validate_plugin(root: &Path) -> crate::Result<PluginValidationReport> {
         }
     }
 
+    for path in &manifest.prompts {
+        if let Err(error) = crate::registry::package_path(root, path) {
+            issues.push(format!("Invalid prompt path {}: {error}", path.display()));
+        }
+    }
+    let mut tool_names = std::collections::HashSet::new();
+    for definition in &manifest.tools {
+        match crate::registry::resolve_tool(root, &manifest.name, definition) {
+            Err(error) => issues.push(format!(
+                "Invalid tool {}: {error}",
+                definition.schema.display()
+            )),
+            Ok(Some(tool)) if !tool_names.insert(tool.name.clone()) => {
+                issues.push(format!("Duplicate plugin tool: {}", tool.name))
+            }
+            _ => {}
+        }
+    }
     let is_valid = issues.is_empty();
 
     Ok(PluginValidationReport {

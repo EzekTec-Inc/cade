@@ -641,6 +641,7 @@ pub struct ActiveQuestionDrawState {
     pub submit_idx: usize,
     pub custom_cursor_pos: usize,
     pub scroll_offset: u16,
+    pub(crate) geometry: std::sync::Arc<std::sync::Mutex<layout::question::DialogGeometry>>,
 }
 
 impl ActiveQuestionDrawState {
@@ -670,6 +671,7 @@ impl ActiveQuestionDrawState {
             submit_idx,
             custom_cursor_pos: 0,
             scroll_offset: 0,
+            geometry: Default::default(),
         }
     }
 }
@@ -677,6 +679,7 @@ impl ActiveQuestionDrawState {
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
 use std::any::Any;
 
+#[derive(Debug)]
 pub struct ActiveQuestionState {
     pub draw_state: ActiveQuestionDrawState,
     pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::question::QuestionAnswer>>>,
@@ -718,6 +721,23 @@ impl OverlayComponent for ActiveQuestionState {
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
         use crossterm::event::{KeyCode, KeyModifiers};
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return OverlayInputResult::Consumed;
+        }
+        // Confirming a multi-selection uses one path for Space, Enter and
+        // pointer activation, including empty/free-text validation.
+        let key = if key.code == KeyCode::Char(' ')
+            && key.modifiers == KeyModifiers::NONE
+            && self.draw_state.question.multi_select
+            && self.draw_state.cursor_pos == self.draw_state.submit_idx
+        {
+            crossterm::event::KeyEvent {
+                code: KeyCode::Enter,
+                ..key
+            }
+        } else {
+            key
+        };
         let st = &mut self.draw_state;
         let mut ans_opt: Option<Option<crate::question::QuestionAnswer>> = None;
 
@@ -730,6 +750,10 @@ impl OverlayComponent for ActiveQuestionState {
             }
             (KeyCode::PageDown, _) => {
                 st.detail_scroll = st.detail_scroll.saturating_add(3);
+                let geometry = st.geometry.lock().unwrap_or_else(|e| e.into_inner());
+                if geometry.details.height > 0 {
+                    st.detail_scroll = st.detail_scroll.min(geometry.detail_max);
+                }
             }
             (KeyCode::Up, _) => {
                 if st.cursor_pos > 0 {
@@ -742,7 +766,9 @@ impl OverlayComponent for ActiveQuestionState {
                 }
             }
             (KeyCode::Tab, _) => {
-                st.cursor_pos = (st.cursor_pos + 1) % st.total_items;
+                if st.total_items > 0 {
+                    st.cursor_pos = (st.cursor_pos + 1) % st.total_items;
+                }
             }
             (KeyCode::BackTab, _) => {
                 st.cursor_pos = if st.cursor_pos == 0 {
@@ -757,11 +783,12 @@ impl OverlayComponent for ActiveQuestionState {
                 let idx = (c as usize) - ('0' as usize) - 1;
                 if idx < st.total_items {
                     if st.question.multi_select {
+                        st.cursor_pos = idx;
                         if idx < st.n_real {
                             st.checked[idx] = !st.checked[idx];
-                            st.cursor_pos = idx;
                         }
                     } else if idx != st.other_idx {
+                        st.cursor_pos = idx;
                         let label = st.question.options[idx].label.clone();
                         ans_opt = Some(Some(crate::question::QuestionAnswer::Single(label)));
                     } else {
@@ -769,21 +796,11 @@ impl OverlayComponent for ActiveQuestionState {
                     }
                 }
             }
-            (KeyCode::Char(' '), _) if st.question.multi_select => {
+            (KeyCode::Char(' '), KeyModifiers::NONE)
+                if st.question.multi_select && st.cursor_pos != st.other_idx =>
+            {
                 if st.cursor_pos < st.n_real {
                     st.checked[st.cursor_pos] = !st.checked[st.cursor_pos];
-                } else if st.cursor_pos == st.submit_idx {
-                    let mut selected: Vec<String> = st
-                        .checked
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, c)| **c)
-                        .map(|(i, _)| st.question.options[i].label.clone())
-                        .collect();
-                    if !st.custom_text.is_empty() {
-                        selected.push(st.custom_text.clone());
-                    }
-                    ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
                 }
             }
             (KeyCode::Left, _) if st.cursor_pos == st.other_idx => {
@@ -843,7 +860,7 @@ impl OverlayComponent for ActiveQuestionState {
                             st.custom_text.trim().to_string(),
                         )));
                     }
-                } else {
+                } else if st.cursor_pos < st.n_real {
                     let label = st.question.options[st.cursor_pos].label.clone();
                     ans_opt = Some(Some(crate::question::QuestionAnswer::Single(label)));
                 }
@@ -882,8 +899,108 @@ impl OverlayComponent for ActiveQuestionState {
         self.result.take().map(|r| Box::new(r) as Box<dyn Any>)
     }
 
+    fn is_dismissed(&self) -> bool {
+        self.tx.as_ref().is_some_and(|tx| tx.is_closed())
+    }
+
     fn inline_height(&self, max_height: u16) -> u16 {
         crate::app::layout::question::question_height(&self.draw_state, max_height)
+    }
+
+    fn inline_height_for(&self, area: Rect) -> u16 {
+        if layout::question::is_spacious(area) {
+            0
+        } else {
+            self.inline_height(area.height)
+        }
+    }
+
+    fn inline_area(&self) -> Option<Rect> {
+        Some(
+            self.draw_state
+                .geometry
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .panel,
+        )
+    }
+
+    fn handle_event(&mut self, event: &crossterm::event::Event) -> OverlayInputResult {
+        use crossterm::event::{
+            Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind,
+        };
+        match event {
+            Event::Key(key) => self.handle_input(*key),
+            Event::Paste(text) => {
+                let st = &mut self.draw_state;
+                if st.cursor_pos == st.other_idx {
+                    let byte = st
+                        .custom_text
+                        .char_indices()
+                        .nth(st.custom_cursor_pos)
+                        .map(|(i, _)| i)
+                        .unwrap_or(st.custom_text.len());
+                    st.custom_text.insert_str(byte, text);
+                    st.custom_cursor_pos += text.chars().count();
+                }
+                OverlayInputResult::Consumed
+            }
+            Event::Mouse(mouse) => {
+                let (panel, detail_area, detail_max, choices) = {
+                    let geometry = self
+                        .draw_state
+                        .geometry
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    (
+                        geometry.panel,
+                        geometry.details,
+                        geometry.detail_max,
+                        geometry.choices.clone(),
+                    )
+                };
+                let point = ratatui::layout::Position::new(mouse.column, mouse.row);
+                if !panel.contains(point) {
+                    return OverlayInputResult::Consumed;
+                }
+                let details = detail_area.contains(point);
+                match mouse.kind {
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if details => {
+                        let st = &mut self.draw_state;
+                        st.detail_scroll = if mouse.kind == MouseEventKind::ScrollUp {
+                            st.detail_scroll.saturating_sub(3)
+                        } else {
+                            st.detail_scroll.saturating_add(3).min(detail_max)
+                        };
+                    }
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        let code = if mouse.kind == MouseEventKind::ScrollUp {
+                            KeyCode::Up
+                        } else {
+                            KeyCode::Down
+                        };
+                        return self.handle_input(KeyEvent::new(code, KeyModifiers::NONE));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        if let Some((index, _)) =
+                            choices.iter().find(|(_, rect)| rect.contains(point))
+                        {
+                            self.draw_state.cursor_pos = *index;
+                            // Free text is focused, never submitted by a click.
+                            if *index != self.draw_state.other_idx {
+                                return self.handle_input(KeyEvent::new(
+                                    KeyCode::Enter,
+                                    KeyModifiers::NONE,
+                                ));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                OverlayInputResult::Consumed
+            }
+            _ => OverlayInputResult::NotHandled,
+        }
     }
 }
 
@@ -1303,10 +1420,10 @@ impl TuiApp {
         let lua_engine = crate::lua_engine::LuaEngine::new().ok();
         let mut slots = crate::slots::SlotManager::new();
         if let Some(engine) = &lua_engine {
-            let sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(
-                false,
-                engine.ui_event_queue.clone(),
-            ));
+            let sidebar = Box::new(
+                crate::lua_ui::LuaUiSlot::new(false, engine.ui_event_queue.clone())
+                    .with_wakeup(engine.work_ready.clone()),
+            );
             slots.set(crate::slots::UiSlot::Sidebar, sidebar);
         }
 
@@ -1525,24 +1642,45 @@ impl TuiApp {
             }
 
             if let Some(sidebar_widget) = lua.get_sidebar_ui() {
-                let mut new_sidebar = Box::new(crate::lua_ui::LuaUiSlot::new(
-                    false,
-                    lua.ui_event_queue.clone(),
-                ));
-                new_sidebar.update(Some(sidebar_widget));
-                self.slots.set(crate::slots::UiSlot::Sidebar, new_sidebar);
+                if let Some(slot) = self
+                    .slots
+                    .get_mut(crate::slots::UiSlot::Sidebar)
+                    .and_then(|slot| slot.as_any_mut())
+                    .and_then(|slot| slot.downcast_mut::<crate::lua_ui::LuaUiSlot>())
+                {
+                    slot.event_queue = lua.ui_event_queue.clone();
+                    slot.work_ready = Some(lua.work_ready.clone());
+                    slot.update(Some(sidebar_widget));
+                } else {
+                    let mut slot = crate::lua_ui::LuaUiSlot::new(false, lua.ui_event_queue.clone())
+                        .with_wakeup(lua.work_ready.clone());
+                    slot.is_focused = self.focused_region == crate::slots::FocusRegion::Sidebar;
+                    slot.update(Some(sidebar_widget));
+                    self.slots
+                        .set(crate::slots::UiSlot::Sidebar, Box::new(slot));
+                }
             } else {
                 let _ = self.slots.take(crate::slots::UiSlot::Sidebar);
             }
 
             if let Some(header_widget) = lua.get_header_ui() {
                 tracing::info!("Found CADE_UI.header with {} widgets", header_widget.len());
-                let mut new_header = Box::new(crate::lua_ui::LuaUiSlot::new(
-                    true,
-                    lua.ui_event_queue.clone(),
-                ));
-                new_header.update(Some(header_widget));
-                self.slots.set(crate::slots::UiSlot::Header, new_header);
+                if let Some(slot) = self
+                    .slots
+                    .get_mut(crate::slots::UiSlot::Header)
+                    .and_then(|slot| slot.as_any_mut())
+                    .and_then(|slot| slot.downcast_mut::<crate::lua_ui::LuaUiSlot>())
+                {
+                    slot.event_queue = lua.ui_event_queue.clone();
+                    slot.work_ready = Some(lua.work_ready.clone());
+                    slot.update(Some(header_widget));
+                } else {
+                    let mut slot = crate::lua_ui::LuaUiSlot::new(true, lua.ui_event_queue.clone())
+                        .with_wakeup(lua.work_ready.clone());
+                    slot.is_focused = self.focused_region == crate::slots::FocusRegion::Header;
+                    slot.update(Some(header_widget));
+                    self.slots.set(crate::slots::UiSlot::Header, Box::new(slot));
+                }
             } else {
                 let _ = self.slots.take(crate::slots::UiSlot::Header);
             }
@@ -1559,6 +1697,11 @@ impl TuiApp {
     }
 
     pub fn draw(&mut self) -> Result<()> {
+        let overlay_count = self.overlays.len();
+        self.overlays.retain(|overlay| !overlay.is_dismissed());
+        if self.overlays.len() != overlay_count {
+            self.draw_dirty = true;
+        }
         // R-01/Perf: while live output is streaming (assistant chunks or
         // thinking), cap redraws at ~30 FPS.  The 16 ms tick task keeps
         // `draw_dirty` set so we retry; content still animates smoothly,
@@ -2040,13 +2183,17 @@ impl TuiApp {
                 // overlays in the stack, but do not draw them over its input.
                 if overlay_stack
                     .last()
-                    .is_some_and(|top| top.inline_height(full_area.height) == 0)
+                    .is_some_and(|top| top.inline_height_for(full_area) == 0)
                 {
                     for overlay in overlay_stack.iter_mut() {
-                        if overlay.inline_height(full_area.height) == 0 {
+                        if overlay.inline_height_for(full_area) == 0 {
                             overlay.render_overlay(frame, full_area, colors);
                         }
                     }
+                } else if let Some(top) = overlay_stack.last()
+                    && let Some(area) = top.inline_area()
+                {
+                    top.render_inline(frame, area, colors);
                 }
                 // When any overlay is open, hide the main cursor
                 // (the overlay is responsible for its own cursor, if any).
@@ -2846,5 +2993,8 @@ impl Drop for TuiApp {
 #[cfg(test)]
 #[path = "app_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod candidate6_tests;
 
 // endregion: --- Tests

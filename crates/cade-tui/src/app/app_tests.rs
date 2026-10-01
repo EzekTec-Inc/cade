@@ -1258,7 +1258,7 @@ fn test_question_modal_renders_centered_with_radios_and_backdrop() {
     assert!(rendered.contains("Standard ACID relational store"));
 
     // Navigation and quick-pick hint
-    assert!(rendered.contains("1-N quick pick"));
+    assert!(rendered.contains("PgUp/PgDn details"));
 
     // The active decision reserves the input region rather than the timeline.
     assert!(state.inline_height(24) > 0);
@@ -1629,10 +1629,10 @@ fn test_question_modal_multi_select_renders_checkboxes() {
     assert!(rendered.contains("[✓]"), "checked option must show [✓]");
     assert!(rendered.contains("[ ]"), "unchecked option must show [ ]");
     assert!(
-        rendered.contains("[Submit]"),
-        "submit button must show [Submit]"
+        rendered.contains("Confirm selection"),
+        "submit choice must remain visible"
     );
-    assert!(rendered.contains("Space toggle · 1-N toggle"));
+    assert!(rendered.contains("Enter"));
 }
 
 #[test]
@@ -1818,7 +1818,7 @@ fn test_question_modal_sequence_progression_and_draft_preservation() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered1.contains("Question 1 of 2"));
+    assert!(rendered1.contains("1/2"));
     assert!(rendered1.contains("Dev"));
 
     // Select option 1 via key '1'
@@ -1874,7 +1874,7 @@ fn test_question_modal_sequence_progression_and_draft_preservation() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered2.contains("Question 2 of 2"));
+    assert!(rendered2.contains("2/2"));
     assert!(rendered2.contains("Auth"));
     assert!(rendered2.contains("Metrics"));
 

@@ -12,6 +12,7 @@ use cade_ai::{CompletionRequest, LlmMessage, catalogue};
 use crate::server::state::AppState;
 use cade_store::sqlite;
 
+#[path = "summary_accumulator.rs"]
 pub mod accumulator;
 pub mod knowledge_lifting;
 
@@ -74,6 +75,10 @@ pub enum ConsolidationError {
     Db(String),
     #[display("LLM distillation failed: {_0}")]
     Llm(String),
+    #[display("Source preserved in archival {_0}; distillation failed: {_1}")]
+    ArchivedOnly(String, String),
+    #[display("Consolidation already claimed")]
+    Busy,
     #[display("Consolidation skipped: {_0}")]
     Skipped(String),
 }
@@ -111,36 +116,22 @@ impl MemoryConsolidationEngine for DefaultMemoryConsolidationEngine {
         agent_id: &str,
         cx: &ConsolidationContext,
     ) -> Result<ConsolidationReport, ConsolidationError> {
-        let compacted_chars = consolidate_agent(
-            state.clone(),
-            agent_id.to_string(),
-            cx.conversation_id.clone(),
-            cx.override_history_budget,
-        )
-        .await;
-
-        match compacted_chars {
-            Some(chars) => Ok(ConsolidationReport {
-                agent_id: agent_id.to_string(),
-                turns_summarized: 0,
-                input_tokens_used: 0,
-                output_tokens_used: 0,
-                summary_length_chars: chars,
-                knowledge_nodes_lifted: 0,
-                ring_rotation_applied: false,
-            }),
-            None => Err(ConsolidationError::Skipped(
-                "No consolidation performed (below threshold or unchanged)".to_string(),
-            )),
-        }
+        ContextCompactionEngine::new(state, agent_id, cx.conversation_id.as_deref())
+            .compact_report(cx.override_history_budget)
+            .await
     }
 
     async fn check_need(
         &self,
         state: &AppState,
         agent_id: &str,
-        _cx: &ConsolidationContext,
+        cx: &ConsolidationContext,
     ) -> ConsolidationNeed {
+        if sqlite::consolidation::is_claimed(&state.db, agent_id, cx.conversation_id.as_deref())
+            .unwrap_or(false)
+        {
+            return ConsolidationNeed::Busy;
+        }
         let activities = state.agent_activity.read().await;
         if let Some(act) = activities.get(agent_id) {
             if act.needs_consolidation {
@@ -251,27 +242,10 @@ const MAX_SUMMARY_INPUT_CHARS: usize = 48_000;
 /// error details, and reasoning chains.
 const SUMMARY_MAX_TOKENS: u32 = 1_500;
 
-/// Maximum chars stored in the `session_summary` memory block.
-/// P5: raised from 4,500 → 8,000. The extra 3.5k of prompt budget is
-/// acceptable on 128k+ context windows and dramatically reduces detail loss.
-const SESSION_SUMMARY_MAX_CHARS: usize = 8_000;
-
-/// Phase C: maximum number of rotated `session_summary_N` blocks to keep in
-/// the long-term tier. When the ring fills, the oldest is evicted and a
-/// one-line excerpt is appended to the pinned `session_index` block.
-/// P5: raised from 5 → 8 for longer project continuity.
-#[allow(dead_code)]
-const SESSION_SUMMARY_RING_CAP: usize = 8;
-
-/// Max chars retained per rotated `session_summary_N` block. Lower than the
-/// live cap because older phases get less frequent attention.
-/// P5: raised from 2,000 → 4,000 to preserve more cross-session history.
-const SESSION_SUMMARY_ARCHIVED_MAX_CHARS: usize = 4_000;
-
-/// Max chars retained in the `session_index` pinned block. When the FIFO
-/// line-buffer exceeds this, the oldest lines are dropped.
-/// A7: raised from 5,000 → 10,000 for richer session continuity.
-const SESSION_INDEX_MAX_CHARS: usize = 10_000;
+#[cfg(test)]
+use sqlite::consolidation::{
+    ARCHIVED_CAP as SESSION_SUMMARY_ARCHIVED_MAX_CHARS, INDEX_CAP as SESSION_INDEX_MAX_CHARS,
+};
 
 /// Maximum tokens for the P7 active_goal auto-update LLM call.
 // const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
@@ -285,50 +259,11 @@ const HISTORY_BUDGET_FRACTION: f64 =
 /// Characters per token approximation (conservative).
 const CHARS_PER_TOKEN: usize = 3;
 
-/// Resolve the cheapest capable summarisation model for a given primary model.
-///
-/// Compaction is structurally simple (single-shot summarisation, ~900 output
-/// tokens) — it does not need a frontier model.  Auto-defaulting to a cheap
-/// variant cuts ongoing background cost by 10–20× without measurable quality
-/// loss on the summary task.
-///
-/// Mapping rules (provider prefix match):
-///   * `anthropic/*`  → `anthropic/claude-haiku-4-5`
-///   * `openai/*`     → `openai/gpt-4o-mini`
-///   * `gemini/*`     → `gemini/gemini-2.0-flash`
-///   * `openrouter/*:<free>` → passthrough (free-tier models share the same
-///     strict 20 RPM / 200 RPD rate limit; using a different free model for
-///     compaction would compete with the primary for the same quota).
-///   * `openrouter/*` → `openrouter/z-ai/glm-4.5-air:free` (paid tier — cheap
-///     enough to keep costs low without competing for the primary quota).
-///   * anything else  → passthrough (e.g. `ollama/*` runs locally; unknown
-///     providers don't have a guaranteed cheaper variant).
-///
-/// Idempotent: if the input is already a known cheap variant the same string
-/// is returned, so this can be called unconditionally without the risk of
-/// degrading an already-cheap configuration.
+/// Resolve an implicit compaction model through shared configuration. Explicit
+/// agent compaction choices are preserved by the caller; compatibility choices
+/// and passthrough policies are editable JSON, not provider/model checks here.
 pub(crate) fn default_compaction_model(primary_model: &str) -> String {
-    if primary_model.starts_with("openrouter/") {
-        // Free-tier OpenRouter models (ending in `:free`) share a strict
-        // 20 RPM / 200 RPD rate limit.  Using a different free model for
-        // compaction would compete for the same limited quota, so passthrough.
-        if primary_model.ends_with(":free") {
-            return primary_model.to_string();
-        }
-        return "openrouter/z-ai/glm-4.5-air:free".to_string();
-    }
-    if primary_model.starts_with("anthropic/") {
-        return "anthropic/claude-haiku-4-5".to_string();
-    }
-    if primary_model.starts_with("openai/") {
-        return "openai/gpt-4o-mini".to_string();
-    }
-    if primary_model.starts_with("gemini/") {
-        return "gemini/gemini-2.0-flash".to_string();
-    }
-    // Unknown provider (incl. ollama/*, custom): preserve passthrough — local
-    // models cost nothing and unknown providers may not have a cheaper SKU.
-    primary_model.to_string()
+    cade_ai::catalogue::background_model_for_main_model(primary_model)
 }
 
 // ── preview / filter helpers (M2) ────────────────────────────────────────────
@@ -398,8 +333,8 @@ pub(crate) fn should_eager_consolidate(
 /// Summarise older conversation turns that are no longer in the active context
 /// window and write the result to the agent's `session_summary` memory block.
 ///
-/// This is safe to call concurrently for different agents; all DB access is
-/// through the existing `Arc<parking_lot::Mutex<Connection>>` pool.
+/// The store captures a fenced history and memory snapshot before LLM work,
+/// then atomically publishes its summary and historical boundary.
 /// A stateful context compaction engine that unifies context consolidation,
 /// prompt budgeting, LLM summary generation, and SQLite transactions behind
 /// a high-leverage interface.
@@ -424,6 +359,47 @@ impl<'a> ContextCompactionEngine<'a> {
     ///
     /// Returns the number of characters in the newly updated summary block.
     pub async fn compact_context(&self, override_history_budget: Option<usize>) -> Option<usize> {
+        match self.compact_report(override_history_budget).await {
+            Ok(report) => Some(report.summary_length_chars),
+            Err(error) => {
+                tracing::debug!(agent_id = %self.agent_id, %error, "consolidation did not publish");
+                None
+            }
+        }
+    }
+
+    pub async fn compact_report(
+        &self,
+        override_history_budget: Option<usize>,
+    ) -> Result<ConsolidationReport, ConsolidationError> {
+        let result = self.compact_snapshot(override_history_budget).await;
+        if matches!(
+            &result,
+            Err(ConsolidationError::Busy
+                | ConsolidationError::Db(_)
+                | ConsolidationError::Llm(_)
+                | ConsolidationError::ArchivedOnly(_, _))
+        ) {
+            // Background/eager callers clear their signal before dispatching.
+            // A fenced/stale/failed attempt must remain eligible for retry.
+            if let Some(activity) = self
+                .state
+                .agent_activity
+                .write()
+                .await
+                .get_mut(&self.agent_id)
+                && activity.conversation_id == self.conversation_id
+            {
+                activity.needs_consolidation = true;
+            }
+        }
+        result
+    }
+
+    async fn compact_snapshot(
+        &self,
+        override_history_budget: Option<usize>,
+    ) -> Result<ConsolidationReport, ConsolidationError> {
         let state = self.state;
         let agent_id = &self.agent_id;
         let conversation_id = self.conversation_id.as_deref();
@@ -432,35 +408,48 @@ impl<'a> ContextCompactionEngine<'a> {
             Ok(Some(a)) => a,
             Ok(None) => {
                 tracing::warn!(agent_id = %agent_id, "consolidate:  agent not found — skipping");
-                return None;
+                return Err(ConsolidationError::AgentNotFound(agent_id.clone()));
             }
             Err(e) => {
                 tracing::warn!("consolidate [{}]: DB error: {}", agent_id, e);
-                return None;
+                return Err(ConsolidationError::Db(e.to_string()));
             }
         };
 
         // ── 1. Fetch messages since the last compaction marker ───────────────────
-        let all_rows =
-            sqlite::list_messages_since_last_compaction(&state.db, agent_id, conversation_id, 500)
-                .unwrap_or_default();
+        let snapshot = sqlite::consolidation::ConsolidationSnapshot::capture(
+            &state.db,
+            agent_id,
+            conversation_id,
+        )
+        .map_err(|e| ConsolidationError::Db(e.to_string()))?
+        .ok_or(ConsolidationError::Busy)?;
+        let all_rows = snapshot.messages();
 
         // Convert rows to (role, text) pairs for turn grouping.
         let flat: Vec<(String, String)> = all_rows
             .iter()
             .map(|row| {
                 let role = row.role.clone();
-                let text = row.content["content"]
+                let text = row
+                    .content
                     .as_str()
+                    .or_else(|| {
+                        row.content
+                            .get("content")
+                            .and_then(serde_json::Value::as_str)
+                    })
                     .map(String::from)
-                    .unwrap_or_else(|| {
-                        let raw = row.content.to_string();
-                        if raw.len() > 400 {
-                            format!("{}…", &raw[..400])
-                        } else {
-                            raw
-                        }
-                    });
+                    .unwrap_or_else(|| row.content.to_string());
+                let text = if let Some(calls) = row
+                    .content
+                    .get("tool_calls")
+                    .filter(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+                {
+                    format!("{text}\n[tool_calls] {calls}")
+                } else {
+                    text
+                };
                 (role, text)
             })
             .collect();
@@ -485,7 +474,7 @@ impl<'a> ContextCompactionEngine<'a> {
 
         let mut in_context = 0usize;
         let mut used = 0usize;
-        for turn in turns.iter().rev() {
+        for (i, turn) in turns.iter().rev().enumerate() {
             let mut total_tokens = 0usize;
             let mut fallback_chars = 0usize;
             for (_, text) in turn {
@@ -500,7 +489,8 @@ impl<'a> ContextCompactionEngine<'a> {
                 budget_manager.chars_for_tokens(total_tokens)
             };
 
-            if used + chars <= history_budget {
+            // Always retain the newest turn, matching inline compaction.
+            if i == 0 || used + chars <= history_budget {
                 in_context += 1;
                 used += chars;
             } else {
@@ -515,7 +505,9 @@ impl<'a> ContextCompactionEngine<'a> {
                 agent_id,
                 total_turns
             );
-            return None;
+            return Err(ConsolidationError::Skipped(
+                "All turns fit in history budget".to_string(),
+            ));
         }
 
         let dropped_chars: usize = turns[..dropped]
@@ -532,17 +524,17 @@ impl<'a> ContextCompactionEngine<'a> {
                 all_rows.len(),
                 dropped_chars,
             );
-            return None;
+            return Err(ConsolidationError::Skipped(
+                "Dropped history below consolidation threshold".to_string(),
+            ));
         }
 
         // ── 3. Format dropped turns into a text block for the LLM ────────────────
         let mut history_text = String::new();
-        'outer: for turn in &turns[..dropped] {
+        let mut summarized_turns = 0;
+        for turn in &turns[..dropped] {
+            let mut formatted_turn = String::new();
             for (role, text) in turn {
-                if history_text.chars().count() >= MAX_SUMMARY_INPUT_CHARS {
-                    history_text.push_str("\n[...older history truncated...]");
-                    break 'outer;
-                }
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -565,20 +557,33 @@ impl<'a> ContextCompactionEngine<'a> {
                 } else {
                     trimmed.to_string()
                 };
-                history_text.push_str(&format!("[{role}{artifact_prefix}] {preview}\n"));
+                formatted_turn.push_str(&format!("[{role}{artifact_prefix}] {preview}\n"));
             }
+            if history_text.chars().count() + formatted_turn.chars().count()
+                > MAX_SUMMARY_INPUT_CHARS
+            {
+                break;
+            }
+            history_text.push_str(&formatted_turn);
+            summarized_turns += 1;
         }
+        // Advance only over complete turns actually represented in this LLM
+        // request. Remaining dropped turns stay visible for a subsequent pass.
+        let dropped = summarized_turns;
 
         if history_text.trim().is_empty() {
             tracing::debug!(agent_id = %agent_id, "consolidate:  dropped turns have no useful text — skipping");
-            return None;
+            return Err(ConsolidationError::Skipped(
+                "No complete useful turn fits summary input cap".to_string(),
+            ));
         }
 
         // ── 3b. F2: Cache full dropped turns into archival memory ────────────────
         let mut files_touched_block = String::new();
+        let archival_id;
+        let dropped_msg_count: usize = turns[..dropped].iter().map(|t| t.len()).sum();
         {
             const MAX_ARCHIVAL_PAYLOAD_CHARS: usize = 64_000;
-            let dropped_msg_count: usize = turns[..dropped].iter().map(|t| t.len()).sum();
             let mut payload = String::with_capacity(8_192);
             payload.push_str(&format!(
                 "Dropped turns from agent {agent_id} (consolidation pass).\n\
@@ -587,22 +592,16 @@ impl<'a> ContextCompactionEngine<'a> {
                  ---\n\n"
             ));
             let mut truncated = false;
-            'outer: for turn in &turns[..dropped] {
-                for (role, text) in turn {
-                    let trimmed = text.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let entry = format!("[{role}] {trimmed}\n\n");
-                    if payload.chars().count() + entry.chars().count() > MAX_ARCHIVAL_PAYLOAD_CHARS
-                    {
-                        payload
-                            .push_str("\n[…remaining dropped turns truncated for archival cap…]");
-                        truncated = true;
-                        break 'outer;
-                    }
-                    payload.push_str(&entry);
+            for row in &all_rows[..dropped_msg_count] {
+                // Archive the stored content, including tool-call arguments and
+                // IDs, rather than the summarizer's role-capped text previews.
+                let entry = format!("[{}] {}\n\n", row.role, row.content);
+                if payload.chars().count() + entry.chars().count() > MAX_ARCHIVAL_PAYLOAD_CHARS {
+                    payload.push_str("\n[…remaining dropped turns truncated for archival cap…]");
+                    truncated = true;
+                    break;
                 }
+                payload.push_str(&entry);
             }
 
             let mut tags = vec![
@@ -616,20 +615,9 @@ impl<'a> ContextCompactionEngine<'a> {
             if truncated {
                 tags.push("truncated".to_string());
             }
-            match sqlite::insert_archival_memory(&state.db, agent_id, payload.trim_end(), &tags) {
-                Ok(id) => tracing::debug!(
-                    "consolidate [{}]: cached {} dropped turn(s) ({} chars) to archival id={}",
-                    agent_id,
-                    dropped,
-                    payload.chars().count(),
-                    id,
-                ),
-                Err(e) => tracing::warn!(
-                    "consolidate [{}]: failed to cache dropped turns to archival: {}",
-                    agent_id,
-                    e,
-                ),
-            }
+            archival_id = snapshot
+                .archive_source(payload.trim_end(), &tags)
+                .map_err(|e| ConsolidationError::Db(e.to_string()))?;
 
             // ── 3c. Cumulative Deterministic File Tracking ───────────────────────────
             let mut files = std::collections::HashSet::new();
@@ -703,17 +691,24 @@ impl<'a> ContextCompactionEngine<'a> {
             reasoning_effort: None,
         };
 
-        let summary = match state.llm.complete(&req).await {
-            Ok(resp) => resp.content.unwrap_or_default().trim().to_string(),
+        let response = match state.llm.complete(&req).await {
+            Ok(resp) => resp,
             Err(e) => {
                 tracing::warn!("consolidate [{}]: LLM call failed: {}", agent_id, e);
-                return None;
+                return Err(ConsolidationError::ArchivedOnly(archival_id, e.to_string()));
             }
         };
+        // CompletionResponse does not carry provider usage (only streaming does).
+        let input_tokens_used = 0;
+        let output_tokens_used = 0;
+        let summary = response.content.unwrap_or_default().trim().to_string();
 
         if summary.is_empty() {
             tracing::debug!(agent_id = %agent_id, "consolidate:  LLM returned empty summary");
-            return None;
+            return Err(ConsolidationError::ArchivedOnly(
+                archival_id,
+                "Empty summary".to_string(),
+            ));
         }
 
         // ── 4b. Inflation Guard & Regex Fallback ──
@@ -767,141 +762,60 @@ impl<'a> ContextCompactionEngine<'a> {
         };
 
         if final_summary.is_empty() {
-            return None;
+            return Err(ConsolidationError::ArchivedOnly(
+                archival_id,
+                "No useful summary".to_string(),
+            ));
         }
 
         // ── 5. Write to the `session_summary` memory block ───────────────────────
-        let existing_blocks = sqlite::get_memory_blocks(&state.db, agent_id).unwrap_or_default();
+        let existing_blocks = snapshot.block_values();
         let existing = existing_blocks
             .iter()
-            .find(|(label, _, _)| label == "session_summary")
-            .map(|(_, val, _)| val.as_str())
+            .find(|(label, _)| label == "session_summary")
+            .map(|(_, val)| val.as_str())
             .unwrap_or("");
 
-        let (new_read, new_mod) = extract_touched_files(&all_rows);
+        let (new_read, new_mod) = extract_touched_files(&all_rows[..dropped_msg_count]);
         let touched_files = accumulator::TouchedFiles {
             read: new_read,
             modified: new_mod,
         };
 
-        let compaction_model = agent
-            .compaction_model
-            .as_deref()
-            .filter(|m| !m.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| default_compaction_model(&agent.model));
-
         // Construct functional core accumulator
         let acc = accumulator::SummaryAccumulator::new(state.llm.clone(), compaction_model.clone());
 
-        // Convert existing blocks to (label, value) pairs
-        let existing_blocks_pairs: Vec<(String, String)> = existing_blocks
-            .iter()
-            .map(|(label, val, _)| (label.clone(), val.clone()))
-            .collect();
-
         // Run in-memory accumulation
         let acc_result = acc
-            .accumulate(
-                existing,
-                &final_summary,
-                touched_files,
-                &existing_blocks_pairs,
-            )
+            .accumulate(existing, &final_summary, touched_files, existing_blocks)
             .await;
 
-        let new_value = match acc_result {
-            accumulator::AccumulationResult::Merged(val) => {
-                // Simply upsert
-                if let Err(e) = sqlite::upsert_memory_block(
-                    &state.db,
-                    agent_id,
-                    "session_summary",
-                    &val,
-                    Some(
-                        "Auto-generated summary of older conversation turns (Sleeptime consolidation)",
-                    ),
-                    Some(SESSION_SUMMARY_MAX_CHARS),
-                ) {
-                    tracing::warn!(
-                        "consolidate [{}]: failed to write session_summary: {}",
-                        agent_id,
-                        e
-                    );
-                    return None;
-                }
-                val
-            }
-            accumulator::AccumulationResult::Rotated(plan) => {
-                // Execute rotation plan in safe transactional order
-                if let Some(ref archive) = plan.archive_content {
-                    let tags = vec!["evicted-session-summary".to_string()];
-                    let _ = sqlite::insert_archival_memory(&state.db, agent_id, archive, &tags);
-                }
-
-                if let Some(ref index_line) = plan.append_to_index {
-                    append_to_session_index_db(&state.db, agent_id, index_line);
-                }
-
-                // Delete old blocks
-                for del_label in plan.deletes {
-                    let _ = sqlite::delete_memory_block(&state.db, agent_id, &del_label);
-                }
-
-                // Upsert new blocks
-                for (up_label, up_val) in &plan.upserts {
-                    let cap_limit = if up_label == "session_summary" {
-                        SESSION_SUMMARY_MAX_CHARS
-                    } else {
-                        SESSION_SUMMARY_ARCHIVED_MAX_CHARS
-                    };
-                    if let Err(e) = sqlite::upsert_memory_block(
-                        &state.db,
-                        agent_id,
-                        up_label,
-                        up_val,
-                        Some("Rotated session summary (Phase C ring)"),
-                        Some(cap_limit),
-                    ) {
-                        tracing::warn!(
-                            "consolidate [{}]: failed to upsert {}: {}",
-                            agent_id,
-                            up_label,
-                            e
-                        );
-                    }
-                    if up_label != "session_summary" {
-                        let _ =
-                            sqlite::set_memory_tier(&state.db, agent_id, up_label, "long", false);
-                    }
-                }
-
-                // Extract new live value
-                plan.upserts
-                    .iter()
-                    .find(|(l, _)| l == "session_summary")
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or_default()
-            }
-        };
-
-        let _ = sqlite::set_memory_tier(&state.db, agent_id, "session_summary", "pinned", true);
-
-        let has_active_goal = existing_blocks
-            .iter()
-            .any(|(label, val, _)| label == "active_goal" && !val.trim().is_empty());
-        if has_active_goal {
-            let _ = sqlite::set_memory_tier(&state.db, agent_id, "active_goal", "pinned", true);
-        }
+        let (plan, ring_rotation_applied) = acc_result.into_plan();
+        let summary_length_chars = snapshot
+            .commit(dropped_msg_count, dropped, &plan)
+            .map_err(|e| ConsolidationError::Db(e.to_string()))?;
+        // Publication is complete before optional knowledge lifting/export. The
+        // claim and all DB connections are released before further LLM awaits.
+        drop(snapshot);
+        state
+            .context_cache
+            .lock()
+            .pop(&format!("{agent_id}:{conversation_id:?}"));
+        crate::server::api::agents::broadcast_global_event(serde_json::json!({
+            "event_type": "compaction_completed",
+            "agent_id": agent_id,
+            "conversation_id": conversation_id,
+            "dropped_turns": dropped,
+        }));
 
         tracing::info!(
             "consolidate [{}]: session_summary updated ({} chars; {} dropped turns summarised)",
             agent_id,
-            new_value.chars().count(),
+            summary_length_chars,
             dropped,
         );
 
-        Box::pin(auto_extract_facts(
+        let knowledge_nodes_lifted = Box::pin(auto_extract_facts(
             state,
             agent_id,
             &summary,
@@ -920,38 +834,6 @@ impl<'a> ContextCompactionEngine<'a> {
                 ),
                 Err(e) => tracing::debug!("consolidate [{}]: rag export skipped: {}", agent_id, e),
             }
-        }
-
-        let dropped_msg_count: usize = turns[..dropped].iter().map(|t| t.len()).sum();
-
-        let boundary_msg_id = if dropped_msg_count > 0 && dropped_msg_count <= all_rows.len() {
-            Some(all_rows[dropped_msg_count - 1].id.clone())
-        } else {
-            None
-        };
-
-        if let Some(ref bid) = boundary_msg_id {
-            if let Err(e) =
-                sqlite::TimelineHorizon::advance(&state.db, agent_id, conversation_id, bid, dropped)
-            {
-                tracing::warn!(
-                    "consolidate [{}]: failed to advance timeline horizon: {}",
-                    agent_id,
-                    e
-                );
-                return None;
-            }
-            tracing::debug!(
-                "consolidate [{}]: successfully advanced timeline horizon to boundary_msg_id='{}'",
-                agent_id,
-                bid,
-            );
-            crate::server::api::agents::broadcast_global_event(serde_json::json!({
-                "event_type": "compaction_completed",
-                "agent_id": agent_id,
-                "conversation_id": conversation_id,
-                "dropped_turns": dropped,
-            }));
         }
 
         let metrics = state.agent_metrics.clone();
@@ -991,7 +873,15 @@ impl<'a> ContextCompactionEngine<'a> {
             );
         }
 
-        Some(new_value.chars().count())
+        Ok(ConsolidationReport {
+            agent_id: agent_id.clone(),
+            turns_summarized: dropped,
+            input_tokens_used,
+            output_tokens_used,
+            summary_length_chars,
+            knowledge_nodes_lifted,
+            ring_rotation_applied,
+        })
     }
 }
 
@@ -999,7 +889,7 @@ impl<'a> ContextCompactionEngine<'a> {
 /// window and write the result to the agent's `session_summary` memory block.
 ///
 /// This is safe to call concurrently for different agents; all DB access is
-/// through the existing `Arc<parking_lot::Mutex<Connection>>` pool.
+/// through a captured SQLite snapshot and fenced per-conversation claim.
 pub async fn consolidate_agent(
     state: AppState,
     agent_id: String,
@@ -1072,9 +962,9 @@ async fn auto_extract_facts(
     agent_id: &str,
     summary: &str,
     compaction_model: &str,
-) {
+) -> usize {
     if summary.trim().is_empty() {
-        return;
+        return 0;
     }
 
     let engine = knowledge_lifting::KnowledgeLiftingEngine::new(
@@ -1089,7 +979,7 @@ async fn auto_extract_facts(
                 agent_id,
                 e
             );
-            return;
+            return 0;
         }
     };
 
@@ -1142,73 +1032,16 @@ async fn auto_extract_facts(
             count
         );
     }
+    count
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Phase C: rotate the live `session_summary` into the `session_summary_N`
-/// ring before it is overwritten by a fresh consolidation pass.
-///
-/// Behavior:
-///   1. If `session_summary_{RING_CAP}` already exists, extract its first
-///      non-empty line and append it to the pinned `session_index` block,
-///      then delete the evicted block.
-///   2. Shift blocks up by one: `session_summary_{N}` → `session_summary_{N+1}`
-///      for N = RING_CAP-1 down to 1.
-///   3. Write `prev_live` (capped at SESSION_SUMMARY_ARCHIVED_MAX_CHARS,
-///      truncated head-first to preserve the tail / most-recent content)
-///      to `session_summary_1` at tier `long`.
-///
-/// All DB errors are logged at debug/warn and swallowed — rotation is
-/// best-effort and must never break the main consolidation path.
-
 /// Append a one-line excerpt to the pinned `session_index` block, evicting
 /// oldest lines FIFO when the block exceeds `SESSION_INDEX_MAX_CHARS`.
+#[cfg(test)]
 fn append_to_session_index_db(db: &cade_store::sqlite::Db, agent_id: &str, excerpt: &str) {
-    let blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
-    let existing = blocks
-        .iter()
-        .find(|(l, _, _)| l == "session_index")
-        .map(|(_, v, _)| v.as_str())
-        .unwrap_or("");
-
-    let line = sanitize_index_line(excerpt);
-    if line.is_empty() {
-        return;
-    }
-
-    let mut combined = if existing.is_empty() {
-        line
-    } else {
-        format!("{existing}\n{line}")
-    };
-
-    // FIFO truncation: drop leading lines until within cap.
-    while combined.chars().count() > SESSION_INDEX_MAX_CHARS {
-        match combined.find('\n') {
-            Some(i) => {
-                combined.drain(..=i);
-            }
-            None => break,
-        };
-    }
-
-    if let Err(e) = sqlite::upsert_memory_block(
-        db,
-        agent_id,
-        "session_index",
-        &combined,
-        Some("Timeline index of evicted session summaries (Phase C)"),
-        Some(SESSION_INDEX_MAX_CHARS),
-    ) {
-        tracing::debug!(
-            "consolidate [{}]: failed to update session_index: {}",
-            agent_id,
-            e
-        );
-        return;
-    }
-    let _ = sqlite::set_memory_tier(db, agent_id, "session_index", "pinned", false);
+    sqlite::consolidation::append_session_index(db, agent_id, excerpt).unwrap();
 }
 
 /// Return the first non-empty, trimmed line of `s`, capped at 200 chars.
@@ -1279,10 +1112,8 @@ fn extract_touched_files(rows: &[sqlite::MessageRow]) -> (Vec<String>, Vec<Strin
 
 /// Sanitize a line for inclusion in `session_index`: strip newlines,
 /// collapse internal whitespace, cap at 200 chars.
-fn sanitize_index_line(s: &str) -> String {
-    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(200).collect()
-}
+#[cfg(test)]
+use accumulator::sanitize_index_line;
 
 /// Returns `true` if the summary is inflated relative to the source text — i.e.,
 /// the summary is ≥ 80% of the dropped-content size and should be rejected.

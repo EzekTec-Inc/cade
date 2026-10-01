@@ -66,13 +66,15 @@ pub extern "C" fn cade_embedded_session_create(
     };
 
     let db_opt = c_str_to_opt_string(db_path);
-    let model_opt =
-        c_str_to_opt_string(model).unwrap_or_else(|| "anthropic/claude-sonnet-4-5".to_string());
+    let model_opt = c_str_to_opt_string(model);
     let sys_opt = c_str_to_opt_string(system_prompt);
 
     let rt_c = rt.clone();
     let session_res = rt.block_on(async move {
-        let mut builder = EmbeddedSession::builder().model(model_opt);
+        let mut builder = EmbeddedSession::builder();
+        if let Some(model) = model_opt {
+            builder = builder.model(model);
+        }
         if let Some(db) = db_opt {
             builder = builder.db_path(db);
         } else {

@@ -179,14 +179,14 @@ impl Repl {
                     allow_other: true,
                     progress: None,
                 };
-                if let Some(answer) = self.app.lock().ask_question(&question).unwrap_or(None)
-                    && answer.as_str() != "Approve"
-                {
+                // The active event driver owns the terminal. Await the shared
+                // dialog channel with no app lock held and no second reader.
+                let answer = self.ask_repl_question(question).await.unwrap_or(None);
+                if let Some(feedback) = human_review_feedback(answer) {
                     result.is_error = true;
                     result.output = format!(
                         "HUMAN REVIEW REJECTED: The user rejected the subagent's work with feedback: {}\n\nPrevious output:\n{}",
-                        answer.as_str(),
-                        result.output
+                        feedback, result.output
                     );
                 }
             }
@@ -281,5 +281,32 @@ impl Repl {
         };
         app.show_toast(message, cade_tui::ToastLevel::Info);
         app.draw_dirty = true;
+    }
+}
+
+fn human_review_feedback(answer: Option<cade_tui::question::QuestionAnswer>) -> Option<String> {
+    match answer {
+        Some(cade_tui::question::QuestionAnswer::Single(label)) if label == "Approve" => None,
+        Some(answer) => Some(answer.as_str()),
+        None => Some("Review cancelled".into()),
+    }
+}
+
+#[cfg(test)]
+mod candidate6_tests {
+    use super::*;
+    use cade_tui::question::QuestionAnswer;
+
+    #[test]
+    fn candidate6_human_review_preserves_typed_rejection() {
+        assert_eq!(
+            human_review_feedback(Some(QuestionAnswer::Single("Approve".into()))),
+            None
+        );
+        assert_eq!(
+            human_review_feedback(Some(QuestionAnswer::Custom("Approve".into()))),
+            Some("Approve".into())
+        );
+        assert!(human_review_feedback(None).is_some());
     }
 }

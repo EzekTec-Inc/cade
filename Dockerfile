@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM rust:1.80-slim-bookworm AS builder
+FROM rust:1.94-slim-bookworm AS builder
 
 # Install build dependencies (required for SQLite, crypto, fastembed, etc.)
 RUN apt-get update && apt-get install -y pkg-config libssl-dev build-essential cmake clang libclang-dev
@@ -20,6 +20,7 @@ RUN apt-get update \
     && useradd --uid 10001 --create-home --home-dir /home/cade cade
 
 WORKDIR /workspace
+RUN mkdir -p /home/cade/.cade && chown -R cade:cade /workspace /home/cade/.cade
 
 # Copy the compiled binaries from the builder stage
 COPY --from=builder /app/target/release/cade-server /usr/local/bin/cade-server
@@ -29,6 +30,9 @@ COPY --from=builder /app/target/release/cade /usr/local/bin/cade
 EXPOSE 8284
 
 ENV RUST_LOG=info
+ENV CADE_SERVER_HOST=0.0.0.0
+ENV HOME=/home/cade
+ENV CADE_AGENT_DIR=/home/cade/.cade
 
 USER cade
 

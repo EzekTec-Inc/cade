@@ -76,13 +76,8 @@ impl Repl {
                 allow_other: false,
                 progress: None,
             };
-            let save = {
-                let mut app = self.app.lock();
-                let r = app.ask_question(&q)?;
-                app.scroll = 0;
-                let _ = app.draw();
-                matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-            };
+            let answer = self.ask_repl_question(q).await?;
+            let save = matches!(&answer, Some(a) if a.as_str().starts_with("Yes"));
             if save {
                 let mut settings = self.settings.lock();
                 let res: std::result::Result<(), cade_core::Error> =
@@ -130,13 +125,8 @@ impl Repl {
                 allow_other: false,
                 progress: None,
             };
-            let save = {
-                let mut app = self.app.lock();
-                let r = app.ask_question(&q)?;
-                app.scroll = 0;
-                let _ = app.draw();
-                matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-            };
+            let answer = self.ask_repl_question(q).await?;
+            let save = matches!(&answer, Some(a) if a.as_str().starts_with("Yes"));
             if save {
                 let mut settings = self.settings.lock();
                 let res: std::result::Result<(), cade_core::Error> =

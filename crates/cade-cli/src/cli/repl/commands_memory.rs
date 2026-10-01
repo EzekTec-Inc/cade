@@ -100,10 +100,7 @@ impl Repl {
                     allow_other: true,
                     progress: None,
                 };
-                let ans = {
-                    let mut app = self.app.lock();
-                    app.ask_question(&q)?
-                };
+                let ans = self.ask_repl_question(q).await?;
                 if let Some(a) = &ans {
                     let val = a.as_str();
                     let new_value = if val.starts_with("Clear") {

@@ -1,140 +1,154 @@
+use crate::provider_registry::{ProviderDef, ProviderRegistry};
+use crate::runtime::{RegisteredModel, RuntimeRegistry};
 use crate::*;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-// -- LLM Router
-//
-// Owns all configured providers and selects the right one at request time
-// based on the `provider/model` prefix in `CompletionRequest.model`.
-// This lets /model switching work transparently without a server restart.
+pub type SharedModelRegistry = Arc<parking_lot::RwLock<RuntimeRegistry>>;
 
 pub fn openai_compat_presets() -> Vec<(String, String)> {
-    crate::provider_registry::ProviderRegistry::new()
+    ProviderRegistry::configured()
         .get_all_providers()
         .iter()
-        .map(|p| (p.name.clone(), p.chat_url.clone()))
+        .filter(|p| p.kind == "openai-compatible")
+        .map(|p| (p.name.clone(), p.endpoint()))
         .collect()
 }
 
+/// Cloneable routing snapshot: provider Arcs survive replacement/disconnection,
+/// and no router lock needs to cover network I/O or stream consumption.
+#[derive(Clone)]
 pub struct LlmRouter {
-    providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
-    /// API keys stored per provider name — used for live model listing calls.
-    provider_keys: std::collections::HashMap<String, String>,
+    providers: HashMap<String, Arc<dyn LlmProvider>>,
     default_provider: String,
-    /// Base URL for the Ollama instance (used by /v1/models to query /api/tags).
+    definitions: ProviderRegistry,
+    pub models: SharedModelRegistry,
     pub ollama_base_url: String,
 }
 
 impl LlmRouter {
-    pub fn build(config: &AiConfig) -> Self {
-        let mut providers: std::collections::HashMap<String, Arc<dyn LlmProvider>> =
-            std::collections::HashMap::new();
-        let mut provider_keys: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let mut default_provider = config.llm_provider.to_string();
-
-        // -- Core providers (from AiConfig)
-        if let Some(key) = &config.anthropic_api_key {
-            providers.insert(
-                "anthropic".to_string(),
-                Arc::new(anthropic::AnthropicProvider::new(key.clone(), None)),
-            );
-            provider_keys.insert("anthropic".to_string(), key.clone());
-        }
-        if let Some(key) = &config.openai_api_key {
-            providers.insert(
-                "openai".to_string(),
-                Arc::new(openai::OpenAiProvider::new(key.clone(), None)),
-            );
-            provider_keys.insert("openai".to_string(), key.clone());
-        }
-        if let Some(key) = &config.google_api_key {
-            providers.insert(
-                "gemini".to_string(),
-                Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
-            );
-            providers.insert(
-                "google".to_string(),
-                Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
-            );
-            provider_keys.insert("gemini".to_string(), key.clone());
-            provider_keys.insert("google".to_string(), key.clone());
-        }
-        if let Some(key) = &config.deepseek_api_key {
-            providers.insert(
-                "deepseek".to_string(),
-                Arc::new(openai::OpenAiProvider::new(
-                    key.clone(),
-                    Some("https://api.deepseek.com/chat/completions".to_string()),
-                )),
-            );
-            provider_keys.insert("deepseek".to_string(), key.clone());
-        }
-        // Ollama is always available as a local fallback
-        providers.insert(
-            "ollama".to_string(),
-            Arc::new(ollama::OllamaProvider::new(config.ollama_base_url.clone())),
-        );
-
-        // -- Preset providers auto-detected from env vars
-        for preset in crate::provider_registry::ProviderRegistry::new().get_all_providers() {
-            // Skip if already registered (avoid overwriting a core provider)
-            if providers.contains_key(&preset.name) {
-                continue;
-            }
-            let key = preset
-                .env_vars
-                .iter()
-                .find_map(|var| std::env::var(var).ok().filter(|k| !k.is_empty()));
-            if let Some(key) = key {
-                tracing::info!(
-                    "Auto-detected provider '{}' from env var '{}'",
-                    preset.name,
-                    preset
-                        .env_vars
-                        .iter()
-                        .find(|v| std::env::var(v).is_ok())
-                        .unwrap_or(&"?".to_string())
-                );
-                providers.insert(
-                    preset.name.to_string(),
-                    Arc::new(openai::OpenAiProvider::new(
-                        key.clone(),
-                        Some(preset.chat_url.to_string()),
-                    )),
-                );
-                provider_keys.insert(preset.name.to_string(), key);
-            }
-        }
-
-        // Ensure the configured default is actually available; fall back gracefully
-        if !providers.contains_key(&default_provider)
-            && let Some(first) = providers.keys().next()
-        {
-            default_provider = first.clone();
-        }
-
+    /// Embedded/manual registration without environment credential discovery.
+    pub fn empty(default_provider: String, models: SharedModelRegistry) -> Self {
         Self {
-            providers,
-            provider_keys,
+            providers: HashMap::new(),
             default_provider,
-            ollama_base_url: config.ollama_base_url.clone(),
+            definitions: ProviderRegistry::new(),
+            models,
+            ollama_base_url: String::new(),
         }
     }
 
-    /// Add or replace a provider at runtime (hot-reload via /connect).
-    /// Add or replace a provider at runtime (hot-reload via /connect or DB load).
-    /// `key` is stored in provider_keys for live model listing; pass empty if not applicable.
-    ///
-    /// Note: always prefer `add_provider_with_key` when the API key is known — the key
-    /// must be in `provider_keys` for `list_dynamic_models` to fetch live model lists.
-    pub fn add_provider(&mut self, name: String, provider: Arc<dyn LlmProvider>) {
-        tracing::info!("Provider hot-loaded: {name}");
-        self.providers.insert(name, provider);
-        // NOTE: provider_keys is NOT updated here — caller must use add_provider_with_key
-        // when the API key is known, or live model listing will fall back to catalogue.
+    pub fn with_provider_registry(mut self, definitions: ProviderRegistry) -> Self {
+        self.models.write().set_provider_registry(&definitions);
+        self.definitions = definitions;
+        self
     }
 
-    /// Add an optional Rig-compatible provider
+    pub fn build(config: &AiConfig) -> Self {
+        Self::build_with_registry(config, crate::runtime::shared_registry())
+    }
+
+    pub fn build_with_registry(config: &AiConfig, models: SharedModelRegistry) -> Self {
+        let mut router = Self {
+            providers: HashMap::new(),
+            default_provider: config.llm_provider.clone(),
+            definitions: ProviderRegistry::configured(),
+            models,
+            ollama_base_url: config.ollama_base_url.clone(),
+        };
+        router
+            .models
+            .write()
+            .set_provider_registry(&router.definitions);
+        let definitions = router.definitions.get_all_providers().to_vec();
+        for def in definitions {
+            let configured_key = match def.config_key.as_deref() {
+                Some("anthropic") => config.anthropic_api_key.clone(),
+                Some("openai") => config.openai_api_key.clone(),
+                Some("google") => config.google_api_key.clone(),
+                Some("deepseek") => config.deepseek_api_key.clone(),
+                _ => None,
+            };
+            if let Some(key) = configured_key
+                .or_else(|| def.env_key())
+                .or_else(|| def.local.then(String::new))
+            {
+                let endpoint = if def.config_key.as_deref() == Some("ollama") {
+                    config.ollama_base_url.clone()
+                } else {
+                    def.endpoint()
+                };
+                router.add_configured_provider(
+                    &def.name,
+                    &def.kind,
+                    Some(key),
+                    Some(endpoint),
+                    config,
+                );
+            }
+        }
+        router.default_provider = config.llm_provider.clone();
+        // Config names may be aliases. Never choose a randomized HashMap iteration default.
+        if let Some(def) = router.definitions.get(&router.default_provider) {
+            router.default_provider = def.name.clone();
+        }
+        router.ensure_default();
+        router
+    }
+
+    fn ensure_default(&mut self) {
+        if !self.providers.contains_key(&self.default_provider) {
+            self.default_provider = self.provider_names().into_iter().next().unwrap_or_default();
+        }
+    }
+
+    pub fn add_provider(&mut self, name: String, provider: Arc<dyn LlmProvider>) {
+        if let Some(definition) = self.definitions.get(&name).cloned() {
+            self.providers
+                .insert(definition.name.clone(), Arc::clone(&provider));
+            for alias in definition.aliases {
+                if self
+                    .definitions
+                    .get(&alias)
+                    .is_some_and(|owner| owner.name == definition.name)
+                {
+                    self.providers.insert(alias, Arc::clone(&provider));
+                }
+            }
+        }
+        self.providers.insert(name, provider);
+        self.ensure_default();
+    }
+
+    /// Compatibility registration. Prefer add_configured_provider for endpoints
+    /// loaded from DB so discovery uses the same gateway as execution.
+    pub fn add_provider_with_key(
+        &mut self,
+        name: String,
+        provider: Arc<dyn LlmProvider>,
+        key: String,
+    ) {
+        if let Some(def) = self.definitions.get(&name).cloned() {
+            let registered = RegisteredProvider::new(
+                provider,
+                def.kind.clone(),
+                if def.discovery {
+                    def.models_url
+                        .clone()
+                        .or_else(|| crate::discovery::models_endpoint(&def.kind, &def.endpoint()))
+                } else {
+                    None
+                },
+                key,
+                name.clone(),
+                Arc::clone(&self.models),
+            )
+            .with_headers(def.headers.clone());
+            self.add_provider(name, Arc::new(registered));
+        } else {
+            self.add_provider(name, provider);
+        }
+    }
+
     #[cfg(feature = "rig-compat")]
     pub fn add_rig_provider<M: rig::completion::CompletionModel + Clone + Send + Sync + 'static>(
         &mut self,
@@ -147,596 +161,585 @@ impl LlmRouter {
         );
     }
 
-    /// Add a provider with its API key. Prefer this over add_provider whenever the key
-    /// is available so that list_dynamic_models() can fetch live model lists.
-    pub fn add_provider_with_key(
+    pub fn register_model(&mut self, model: RegisteredModel) {
+        self.models.write().register(model);
+    }
+
+    /// Canonical endpoint-aware registration used by the server and embedded SDK.
+    pub fn add_configured_provider(
         &mut self,
-        name: String,
-        provider: Arc<dyn LlmProvider>,
-        key: String,
-    ) {
-        tracing::info!("Provider hot-loaded with key: {name}");
-        self.providers.insert(name.clone(), provider);
-        if !key.is_empty() {
-            self.provider_keys.insert(name, key);
+        name: &str,
+        kind: &str,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        config: &AiConfig,
+    ) -> bool {
+        if !crate::provider_registry::valid_provider_name(name) {
+            return false;
         }
-    }
-
-    /// Re-scan current shell env vars and hot-register any newly available providers.
-    ///
-    /// Scan the server's environment and register/update any newly available providers.
-    ///
-    /// Called from `GET /v1/models` so the picker reflects current env state.
-    /// Now handles two cases:
-    ///   1. Provider not yet registered → create it from env key
-    ///   2. Provider registered but `provider_keys` is missing its key → fill it in
-    ///      (happens when provider was loaded from DB without the key being stored)
-    pub fn hot_sync_env_providers(&mut self) {
-        // Helper: check if provider is missing from provider_keys (key not stored)
-        let needs_key = |p: &std::collections::HashMap<String, String>, name: &str| -> bool {
-            p.get(name).map(|k| k.is_empty()).unwrap_or(true)
+        let def = self.definitions.get(name).cloned();
+        let canonical_name = def.as_ref().map(|d| d.name.as_str()).unwrap_or(name);
+        let endpoint = base_url
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| def.as_ref().map(ProviderDef::endpoint))
+            .or_else(|| self.definitions.get(kind).map(ProviderDef::endpoint));
+        let api_key = api_key.or_else(|| def.as_ref().and_then(ProviderDef::env_key));
+        let Some(provider) = Self::provider_with_registry(
+            kind,
+            api_key.clone(),
+            endpoint.clone(),
+            config,
+            canonical_name,
+            Arc::clone(&self.models),
+            def.as_ref(),
+        ) else {
+            return false;
         };
-
-        // -- Core providers
-        let missing_anthropic = !self.providers.contains_key("anthropic")
-            || needs_key(&self.provider_keys, "anthropic");
-        if missing_anthropic {
-            let key = std::env::var("ANTHROPIC_API_KEY")
-                .or_else(|_| std::env::var("CLAUDE_API_KEY"))
-                .ok()
-                .filter(|k| !k.is_empty());
-            if let Some(key) = key {
-                tracing::info!("hot_sync: registering/updating anthropic from env");
-                self.providers.insert(
-                    "anthropic".into(),
-                    Arc::new(anthropic::AnthropicProvider::new(key.clone(), None)),
-                );
-                self.provider_keys.insert("anthropic".into(), key);
-            }
-        }
-
-        let missing_openai =
-            !self.providers.contains_key("openai") || needs_key(&self.provider_keys, "openai");
-        if missing_openai {
-            let key = std::env::var("OPENAI_API_KEY")
-                .ok()
-                .filter(|k| !k.is_empty());
-            if let Some(key) = key {
-                tracing::info!("hot_sync: registering/updating openai from env");
-                self.providers.insert(
-                    "openai".into(),
-                    Arc::new(openai::OpenAiProvider::new(key.clone(), None)),
-                );
-                self.provider_keys.insert("openai".into(), key);
-            }
-        }
-
-        let missing_gemini =
-            !self.providers.contains_key("gemini") || needs_key(&self.provider_keys, "gemini");
-        if missing_gemini {
-            let key = std::env::var("GOOGLE_API_KEY")
-                .or_else(|_| std::env::var("GEMINI_API_KEY"))
-                .ok()
-                .filter(|k| !k.is_empty());
-            if let Some(key) = key {
-                tracing::info!("hot_sync: registering/updating gemini/google from env");
-                self.providers.insert(
-                    "gemini".into(),
-                    Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
-                );
-                self.providers.insert(
-                    "google".into(),
-                    Arc::new(gemini::GeminiProvider::new(key.clone(), None)),
-                );
-                self.provider_keys.insert("gemini".into(), key.clone());
-                self.provider_keys.insert("google".into(), key);
-            }
-        }
-
-        // -- Preset providers (Groq, OpenRouter, Together, etc.)
-        for preset in crate::provider_registry::ProviderRegistry::new().get_all_providers() {
-            let missing = !self.providers.contains_key(&preset.name)
-                || needs_key(&self.provider_keys, &preset.name);
-            if !missing {
-                continue;
-            }
-            let key = preset
-                .env_vars
-                .iter()
-                .find_map(|var| std::env::var(var).ok().filter(|k| !k.is_empty()));
-            if let Some(key) = key {
-                tracing::info!("hot_sync: registering/updating {} from env", preset.name);
-                self.providers.insert(
-                    preset.name.clone(),
-                    Arc::new(openai::OpenAiProvider::new(
-                        key.clone(),
-                        Some(preset.chat_url.to_string()),
-                    )),
-                );
-                self.provider_keys.insert(preset.name.clone(), key);
-            }
-        }
-    }
-
-    /// Remove a provider at runtime (via /disconnect).
-    /// Returns false if the name was not found.
-    pub fn remove_provider(&mut self, name: &str) -> bool {
-        if self.providers.remove(name).is_some() {
-            self.provider_keys.remove(name);
-            tracing::info!("Provider removed: {name}");
-            // Reset default if we just removed it
-            if self.default_provider == name {
-                self.default_provider = self.providers.keys().next().cloned().unwrap_or_default();
-            }
-            true
+        let models_url = if def.as_ref().is_some_and(|d| !d.discovery) {
+            None
+        } else if def
+            .as_ref()
+            .is_some_and(|d| endpoint.as_ref().is_none_or(|e| e == &d.chat_url))
+        {
+            def.as_ref().and_then(|d| d.models_url.clone()).or_else(|| {
+                endpoint
+                    .as_deref()
+                    .and_then(|url| crate::discovery::models_endpoint(kind, url))
+            })
         } else {
-            false
+            endpoint
+                .as_deref()
+                .and_then(|url| crate::discovery::models_endpoint(kind, url))
+        };
+        let key = api_key.unwrap_or_else(|| match kind {
+            "anthropic" => config.anthropic_api_key.clone().unwrap_or_default(),
+            "openai" => config.openai_api_key.clone().unwrap_or_default(),
+            "gemini" => config.google_api_key.clone().unwrap_or_default(),
+            _ => String::new(),
+        });
+        let registered: Arc<dyn LlmProvider> = Arc::new(
+            RegisteredProvider::new(
+                provider,
+                kind.into(),
+                models_url,
+                key,
+                canonical_name.into(),
+                Arc::clone(&self.models),
+            )
+            .with_headers(def.as_ref().map(|d| d.headers.clone()).unwrap_or_default()),
+        );
+        self.add_provider(name.into(), registered);
+        if name == config.llm_provider || canonical_name == config.llm_provider {
+            self.default_provider = canonical_name.into();
+        }
+        self.ensure_default();
+        true
+    }
+
+    pub fn hot_sync_env_providers(&mut self) {
+        self.definitions = ProviderRegistry::configured();
+        self.models.write().set_provider_registry(&self.definitions);
+        let config = AiConfig {
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            deepseek_api_key: None,
+            ollama_base_url: self.ollama_base_url.clone(),
+            llm_provider: self.default_provider.clone(),
+        };
+        for def in self.definitions.get_all_providers().to_vec() {
+            // Explicit DB/SDK registration wins over environment rescan.
+            if !self.providers.contains_key(&def.name)
+                && let Some(key) = def.env_key()
+            {
+                self.add_configured_provider(
+                    &def.name,
+                    &def.kind,
+                    Some(key),
+                    Some(def.endpoint()),
+                    &config,
+                );
+            }
         }
     }
 
-    /// Names of all currently registered providers.
+    pub fn remove_provider(&mut self, name: &str) -> bool {
+        let canonical = self
+            .definitions
+            .get(name)
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| name.into());
+        let Some(removed) = self
+            .providers
+            .get(&canonical)
+            .or_else(|| self.providers.get(name))
+            .cloned()
+        else {
+            return false;
+        };
+        self.providers.retain(|_, p| !Arc::ptr_eq(p, &removed));
+        self.ensure_default();
+        true
+    }
+
     pub fn provider_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.providers.keys().cloned().collect();
+        let mut names: Vec<_> = self.providers.keys().cloned().collect();
         names.sort();
         names
     }
 
-    /// Fetch live model lists from all providers that support it (Ollama + preset providers
-    /// with a `models_url`). Queries are run **concurrently** — one task per provider.
-    /// Results are returned as `ModelEntry { dynamic: true }`.
-    ///
-    /// Called by `GET /v1/models` to populate the dynamic section of the model picker.
-    pub async fn list_dynamic_models(&self) -> Vec<catalogue::ModelEntry> {
-        use catalogue::ModelEntry;
-        use futures::future::join_all;
-
-        // Build one future per provider that supports live model listing
-        type ModelFut =
-            std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ModelEntry>> + Send>>;
-        let mut tasks: Vec<ModelFut> = Vec::new();
-
-        for name in self.providers.keys() {
-            let key = self
-                .provider_keys
-                .get(name.as_str())
-                .cloned()
-                .unwrap_or_default();
-
-            match name.as_str() {
-                // -- Local Ollama
-                "ollama" => {
-                    let url = self.ollama_base_url.clone();
-                    tasks.push(Box::pin(async move {
-                        let ol = ollama::OllamaProvider::new(url);
-                        ol.list_models()
-                            .await
-                            .into_iter()
-                            .map(|m| {
-                                let id = format!("ollama/{m}");
-                                ModelEntry {
-                                    provider: "ollama".into(),
-                                    id: id.clone(),
-                                    display_name: m,
-                                    toolset: "default".into(),
-                                    max_tokens: catalogue::max_tokens_for_model(&id),
-                                    context_window: catalogue::context_window_for_model(&id),
-                                    dynamic: true,
-                                }
-                            })
-                            .collect()
-                    }));
-                }
-
-                // -- Anthropic — live /v1/models, fallback to catalogue
-                "anthropic" => {
-                    tasks.push(Box::pin(async move {
-                        let live = anthropic::fetch_anthropic_models(&key).await;
-                        if live.is_empty() {
-                            // Provider is configured but endpoint unreachable — use catalogue
-                            CATALOGUE
-                                .iter()
-                                .filter(|(p, ..)| *p == "anthropic")
-                                .map(catalogue::ModelEntry::from_catalogue)
-                                .collect()
-                        } else {
-                            live.into_iter()
-                                .map(|(id, display)| {
-                                    let full_id = format!("anthropic/{id}");
-                                    ModelEntry {
-                                        provider: "anthropic".into(),
-                                        id: full_id.clone(),
-                                        display_name: display,
-                                        toolset: "default".into(),
-                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
-                                        context_window: catalogue::context_window_for_model(
-                                            &full_id,
-                                        ),
-                                        dynamic: true,
-                                    }
-                                })
-                                .collect()
-                        }
-                    }));
-                }
-
-                // ── OpenAI — live /v1/models (chat only), fallback to catalogue
-                "openai" => {
-                    tasks.push(Box::pin(async move {
-                        let ids = openai::fetch_openai_chat_models(&key).await;
-                        if ids.is_empty() {
-                            CATALOGUE
-                                .iter()
-                                .filter(|(p, ..)| *p == "openai")
-                                .map(catalogue::ModelEntry::from_catalogue)
-                                .collect()
-                        } else {
-                            ids.into_iter()
-                                .map(|id| {
-                                    let full_id = format!("openai/{id}");
-                                    ModelEntry {
-                                        provider: "openai".into(),
-                                        id: full_id.clone(),
-                                        display_name: id.clone(),
-                                        toolset: "codex".into(),
-                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
-                                        context_window: catalogue::context_window_for_model(
-                                            &full_id,
-                                        ),
-                                        dynamic: true,
-                                    }
-                                })
-                                .collect()
-                        }
-                    }));
-                }
-
-                // -- Gemini — live models list, fallback to catalogue
-                "gemini" | "google" => {
-                    // "google" is an alias of "gemini"; skip the duplicate listing so
-                    // models don't show up twice in the picker (both prefixes stay routable).
-                    if name == "google" && self.providers.contains_key("gemini") {
-                        continue;
-                    }
-                    let n = name.clone();
-                    tasks.push(Box::pin(async move {
-                        let live = gemini::fetch_gemini_models(&key).await;
-                        if live.is_empty() {
-                            CATALOGUE
-                                .iter()
-                                .filter(|(p, ..)| *p == "gemini")
-                                .map(catalogue::ModelEntry::from_catalogue)
-                                .collect()
-                        } else {
-                            live.into_iter()
-                                .map(|(id, display)| {
-                                    let full_id = format!("{n}/{id}");
-                                    ModelEntry {
-                                        provider: n.clone(),
-                                        id: full_id.clone(),
-                                        display_name: display,
-                                        toolset: "gemini".into(),
-                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
-                                        context_window: catalogue::context_window_for_model(
-                                            &full_id,
-                                        ),
-                                        dynamic: true,
-                                    }
-                                })
-                                .collect()
-                        }
-                    }));
-                }
-
-                // -- Preset providers (Groq, OpenRouter, etc.)
-                _ => {
-                    if let Some(preset) = crate::provider_registry::ProviderRegistry::new()
-                        .get_all_providers()
-                        .iter()
-                        .find(|p| p.name == name.as_str())
-                        && let Some(models_url) = &preset.models_url
-                    {
-                        let n = name.clone();
-                        let url = models_url.to_string();
-                        tasks.push(Box::pin(async move {
-                            let live = openai::fetch_model_ids(&url, &key).await;
-                            if live.is_empty() {
-                                CATALOGUE
-                                    .iter()
-                                    .filter(|(p, ..)| *p == n.as_str())
-                                    .map(catalogue::ModelEntry::from_catalogue)
-                                    .collect()
-                            } else {
-                                live.into_iter()
-                                    .map(|id| {
-                                        let full_id = format!("{n}/{id}");
-                                        ModelEntry {
-                                            provider: n.clone(),
-                                            id: full_id.clone(),
-                                            display_name: id,
-                                            toolset: catalogue::toolset_for_model(&full_id),
-                                            max_tokens: catalogue::max_tokens_for_model(&full_id),
-                                            context_window: catalogue::context_window_for_model(
-                                                &full_id,
-                                            ),
-                                            dynamic: true,
-                                        }
-                                    })
-                                    .collect()
-                            }
-                        }));
-                    }
-                }
+    pub async fn list_dynamic_models(&self) -> Vec<ModelEntry> {
+        let mut seen = Vec::<Arc<dyn LlmProvider>>::new();
+        let mut tasks = Vec::new();
+        for name in self.provider_names() {
+            if self
+                .definitions
+                .get(&name)
+                .is_some_and(|d| d.name != name && self.providers.contains_key(&d.name))
+            {
+                continue;
             }
+            let provider = Arc::clone(&self.providers[&name]);
+            if seen.iter().any(|p| Arc::ptr_eq(p, &provider)) {
+                continue;
+            }
+            seen.push(Arc::clone(&provider));
+            let models = Arc::clone(&self.models);
+            tasks.push(async move {
+                match provider.discover_models().await {
+                    Ok(live) if !live.is_empty() => live,
+                    Ok(_) => models.read().offline_models(&name),
+                    Err(e) => {
+                        tracing::warn!("Model discovery for {name}: {e}");
+                        models.read().offline_models(&name)
+                    }
+                }
+            });
         }
-
-        let mut out: Vec<ModelEntry> = join_all(tasks).await.into_iter().flatten().collect();
-        out.sort_by(|a, b| a.provider.cmp(&b.provider).then(a.id.cmp(&b.id)));
-        out
+        let mut entries: Vec<_> = futures::future::join_all(tasks)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        entries.sort_by(|a, b| a.provider.cmp(&b.provider).then(a.id.cmp(&b.id)));
+        entries.dedup_by(|a, b| a.id == b.id);
+        entries
     }
 
-    /// Build an `Arc<dyn LlmProvider>` from DB `ProviderRow` fields.
     pub fn provider_from_row(
         kind: &str,
         api_key: Option<String>,
         base_url: Option<String>,
         config: &AiConfig,
     ) -> Option<Arc<dyn LlmProvider>> {
+        Self::provider_with_registry(
+            kind,
+            api_key,
+            base_url,
+            config,
+            kind,
+            crate::runtime::shared_registry(),
+            None,
+        )
+    }
+
+    fn provider_with_registry(
+        kind: &str,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        config: &AiConfig,
+        name: &str,
+        models: SharedModelRegistry,
+        definition: Option<&ProviderDef>,
+    ) -> Option<Arc<dyn LlmProvider>> {
         match kind {
             "anthropic" => {
-                let key = api_key
-                    .clone()
-                    .or_else(|| config.anthropic_api_key.clone())?;
-                Some(Arc::new(anthropic::AnthropicProvider::new(key, base_url)))
+                let mut provider = anthropic::AnthropicProvider::new(
+                    api_key.or_else(|| config.anthropic_api_key.clone())?,
+                    base_url,
+                )
+                .with_registry(name.into(), models);
+                if let Some(definition) = definition {
+                    provider = provider.with_provider_definition(definition);
+                }
+                Some(Arc::new(provider))
             }
-            "openai" => {
-                let key = api_key.clone().or_else(|| config.openai_api_key.clone())?;
-                Some(Arc::new(openai::OpenAiProvider::new(key, base_url.clone())))
+            "openai" | "openai-compatible" => {
+                let key = if kind == "openai" {
+                    api_key.or_else(|| config.openai_api_key.clone())?
+                } else {
+                    api_key.unwrap_or_default()
+                };
+                let url = if kind == "openai-compatible" {
+                    Some(
+                        base_url
+                            .filter(|s| !s.trim().is_empty())
+                            .or_else(|| std::env::var("OPENAI_COMPATIBLE_BASE_URL").ok())?,
+                    )
+                } else {
+                    base_url
+                };
+                let mut provider =
+                    openai::OpenAiProvider::new(key, url).with_registry(name.into(), models);
+                if let Some(definition) = definition {
+                    provider = provider.with_provider_definition(definition);
+                }
+                Some(Arc::new(provider))
             }
-            "gemini" => {
-                let key = api_key.clone().or_else(|| config.google_api_key.clone())?;
-                Some(Arc::new(gemini::GeminiProvider::new(key, base_url)))
+            "gemini" | "google" => {
+                let mut provider = gemini::GeminiProvider::new(
+                    api_key.or_else(|| config.google_api_key.clone())?,
+                    base_url,
+                )
+                .with_registry(name.into(), models);
+                if let Some(definition) = definition {
+                    provider = provider.with_provider_definition(definition);
+                }
+                Some(Arc::new(provider))
             }
             "ollama" => {
-                let base = base_url
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| {
-                        std::env::var("OLLAMA_BASE_URL")
-                            .ok()
-                            .filter(|s| !s.trim().is_empty())
-                    })
-                    .unwrap_or_else(|| config.ollama_base_url.clone());
-                Some(Arc::new(ollama::OllamaProvider::new(base)))
-            }
-            "openai-compatible" => {
-                let key = api_key.clone().unwrap_or_default();
-                let url = base_url.filter(|s| !s.trim().is_empty()).or_else(|| {
-                    std::env::var("OPENAI_COMPATIBLE_BASE_URL")
-                        .ok()
+                let mut provider = ollama::OllamaProvider::new(
+                    base_url
                         .filter(|s| !s.trim().is_empty())
-                })?;
-                Some(Arc::new(openai::OpenAiProvider::new(key, Some(url))))
+                        .unwrap_or_else(|| config.ollama_base_url.clone()),
+                )
+                .with_registry(name.into(), models);
+                if let Some(definition) = definition {
+                    provider = provider.with_provider_definition(definition);
+                }
+                Some(Arc::new(provider))
             }
             _ => None,
         }
     }
 
-    /// Select provider and bare model name for a `provider/model` or bare `model` string.
-    ///
-    /// Resolution order:
-    ///   1. Explicit `provider/model` prefix — error if prefix unknown
-    ///   2. Auto-detect provider from well-known model name patterns — error if provider not configured
-    ///   3. Fall back to the configured default provider (only for truly unknown model names)
-    ///
-    /// Public so `RouterAdapter` in `cade-server.rs` can resolve a provider Arc while
-    /// holding the lock for only this call, then drop the lock before making HTTP calls.
-    pub fn resolve_provider(&self, model: &str) -> Result<(Arc<dyn LlmProvider>, String)> {
-        let (name, bare) = self.resolve_provider_name(model)?;
-        let provider = Arc::clone(
-            self.providers
-                .get(&name)
-                .ok_or_else(|| Error::custom(format!("Provider '{name}' vanished mid-resolve")))?,
-        );
-        Ok((provider, bare))
-    }
-
-    /// Like [`LlmRouter::resolve_provider`] but returns the provider *name* instead of
-    /// the provider instance. Useful for diagnostics, tests, and callers that only need
-    /// to know where a model would be routed.
     pub fn resolve_provider_name(&self, model: &str) -> Result<(String, String)> {
-        // 1. Explicit prefix: `gemini/gemini-2.5-pro`
-        if let Some(slash) = model.find('/') {
-            let prefix = &model[..slash];
-            let bare = model[slash + 1..].to_string();
-            if !self.providers.contains_key(prefix) {
-                return Err(Error::custom(format!(
-                    "Provider '{prefix}' is not configured. Run /connect {prefix} to add it."
-                )));
+        crate::types::validate_model_id(model)?;
+        let models = self.models.read();
+        let model = models.registered_id(model);
+        if let Some((prefix, bare)) = model.split_once('/') {
+            if self.providers.contains_key(prefix) {
+                return Ok((prefix.into(), bare.into()));
             }
-            return Ok((prefix.to_string(), bare));
+            return Err(Error::custom(format!(
+                "Provider '{prefix}' is not configured. Run /connect {prefix} to add it."
+            )));
         }
-
-        // 2. Infer provider from model name pattern — pick the first candidate that is
-        //    actually configured, so e.g. `deepseek-chat` routes to the DeepSeek API when
-        //    its key is set instead of always falling back to local Ollama.
-        let candidates = infer_provider_candidates(model);
+        let candidates = models.candidates(model);
         if !candidates.is_empty() {
-            return match candidates.iter().find(|c| self.providers.contains_key(**c)) {
-                Some(&prefix) => Ok((prefix.to_string(), model.to_string())),
-                None => Err(Error::custom(format!(
-                    "Model '{model}' requires one of these providers: {}. Run /connect <provider> or set its API key.",
-                    candidates.join(", ")
-                ))),
-            };
+            return candidates
+                .iter()
+                .find(|p| self.providers.contains_key(*p))
+                .map(|p| (p.clone(), model.into()))
+                .ok_or_else(|| {
+                    Error::custom(format!(
+                        "Model '{model}' requires a configured provider: {}",
+                        candidates.join(", ")
+                    ))
+                });
         }
-
-        // 3. Truly unknown model — use the default provider
         if self.providers.contains_key(&self.default_provider) {
-            return Ok((self.default_provider.clone(), model.to_string()));
+            return Ok((self.default_provider.clone(), model.into()));
         }
         Err(Error::custom("No LLM provider available"))
     }
 
-    /// Validate that the given model string can be routed.
+    pub fn resolve_provider(&self, model: &str) -> Result<(Arc<dyn LlmProvider>, String)> {
+        let (name, bare) = self.resolve_provider_name(model)?;
+        let provider = Arc::clone(&self.providers[&name]);
+        provider.validate_model(&bare)?;
+        Ok((provider, bare))
+    }
+
     pub fn validate_model(&self, model: &str) -> Result<()> {
         self.resolve_provider(model).map(|_| ())
     }
-}
 
-/// Ordered candidate providers for a bare model name, most preferred first.
-///
-/// The router picks the first candidate that is actually configured. Open-weight
-/// families (`llama`, `qwen`, `deepseek`, …) list hosted presets before Ollama so a
-/// configured API key wins over the local fallback, while `ollama` stays in every
-/// open-weight candidate list so purely local setups keep working unchanged.
-pub(crate) fn infer_provider_candidates(model: &str) -> &'static [&'static str] {
-    let m = model.to_lowercase();
-    if m.starts_with("claude") {
-        &["anthropic"]
-    } else if m.starts_with("gemini") {
-        &["gemini", "google"]
-    } else if m.starts_with("gpt-")
-        || m.starts_with("chatgpt")
-        || m.starts_with("o1")
-        || m.starts_with("o3")
-        || m.starts_with("o4")
-    {
-        &["openai"]
-    } else if m.starts_with("grok") {
-        &["xai"]
-    } else if m.starts_with("deepseek") {
-        &["deepseek", "ollama"]
-    } else if m.starts_with("llama")
-        || m.starts_with("mistral")
-        || m.starts_with("mixtral")
-        || m.starts_with("phi")
-        || m.starts_with("qwen")
-        || m.starts_with("gemma")
-    {
-        &["groq", "together", "fireworks", "deepinfra", "ollama"]
-    } else {
-        &[]
-    }
-}
-
-impl LlmRouter {
-    /// Attempt to translate an OpenRouter model ID into a native provider key and native model name (ADR 8).
-    /// Returns `Some((native_provider, native_model_id))` if a direct provider is available and mapped.
-    pub fn map_openrouter_to_native(&self, openrouter_bare: &str) -> Option<(String, String)> {
-        let slash_idx = openrouter_bare.find('/')?;
-        let provider = &openrouter_bare[..slash_idx];
-        let model = &openrouter_bare[slash_idx + 1..];
-
+    /// Exact normalized compatibility mapping; never strip or rewrite arbitrary native IDs.
+    pub fn map_openrouter_to_native(&self, bare: &str) -> Option<(String, String)> {
+        let (provider, model) = bare.split_once('/')?;
+        let provider = self
+            .definitions
+            .get(provider)
+            .map(|d| d.name.as_str())
+            .unwrap_or(provider);
         if !self.providers.contains_key(provider) {
             return None;
         }
-
-        // Strip OpenRouter variant suffix (`:free`, `:extended`) and normalize
-        // separators/dots so catalogue IDs compare reliably.
-        let clean_model = model.split(':').next().unwrap_or(model);
+        let clean = model.split(':').next().unwrap_or(model);
         let norm = |s: &str| s.to_lowercase().replace('.', "-");
+        let models = self.models.read();
+        let exact = models.offline_models(provider).into_iter().find(|m| {
+            m.id.split_once('/')
+                .is_some_and(|(_, id)| norm(id) == norm(clean))
+        });
+        Some((
+            provider.into(),
+            exact
+                .and_then(|m| m.id.split_once('/').map(|(_, id)| id.to_owned()))
+                .unwrap_or_else(|| clean.into()),
+        ))
+    }
 
-        // Exact normalized match against the catalogue only. Wildcard substring
-        // matching used to resolve wrong versions (e.g. bare "gemini" matching the
-        // first gemini entry), which silently rerouted requests to a different model.
-        let matched_id = CATALOGUE
-            .iter()
-            .find(|(cat_provider, _, full_id, ..)| {
-                *cat_provider == provider
-                    && full_id
-                        .rsplit('/')
-                        .next()
-                        .is_some_and(|m| norm(m) == norm(clean_model))
-            })
-            .map(|(_, _, full_id, ..)| full_id.to_string());
-
-        // No catalogue match → pass the OpenRouter ID through verbatim.
-        let final_model_id = matched_id.unwrap_or_else(|| format!("{}/{}", provider, clean_model));
-
-        let (native_provider, native_bare) = if let Some(idx) = final_model_id.find('/') {
-            (
-                final_model_id[..idx].to_string(),
-                final_model_id[idx + 1..].to_string(),
-            )
+    fn route(&self, req: &CompletionRequest) -> Result<Route> {
+        let (name, bare) = self.resolve_provider_name(&req.model)?;
+        let provider = Arc::clone(&self.providers[&name]);
+        provider.validate_model(&bare)?;
+        let may_failover = self.models.read().failover_providers.contains(&name);
+        let fallback = if may_failover {
+            self.map_openrouter_to_native(&bare)
+                .and_then(|(name, model)| {
+                    self.providers
+                        .get(&name)
+                        .map(|p| (Arc::clone(p), model.clone(), format!("{name}/{model}")))
+                })
         } else {
-            (provider.to_string(), clean_model.to_string())
+            None
         };
+        Ok(Route {
+            provider,
+            usage_model: format!("{name}/{bare}"),
+            request: CompletionRequest {
+                model: bare,
+                ..req.clone()
+            },
+            fallback,
+        })
+    }
+}
 
-        Some((native_provider, native_bare))
+struct Route {
+    provider: Arc<dyn LlmProvider>,
+    request: CompletionRequest,
+    usage_model: String,
+    fallback: Option<(Arc<dyn LlmProvider>, String, String)>,
+}
+
+impl Route {
+    fn failover(&self, error: &Error) -> Option<(Arc<dyn LlmProvider>, CompletionRequest, String)> {
+        // Only upstream connection/status failures qualify; parsing/schema errors do not.
+        let eligible = match error {
+            Error::Provider { .. } => true,
+            Error::Reqwest(error) => error.is_connect() || error.is_timeout() || error.is_request(),
+            _ => false,
+        };
+        if !eligible {
+            return None;
+        }
+        let (provider, model, usage_model) = self.fallback.as_ref()?;
+        if provider.validate_model(model).is_err() {
+            return None;
+        }
+        tracing::warn!("Upstream failed: {error}; trying configured native route {model}");
+        Some((
+            Arc::clone(provider),
+            CompletionRequest {
+                model: model.clone(),
+                ..self.request.clone()
+            },
+            usage_model.clone(),
+        ))
     }
 }
 
 #[async_trait::async_trait]
 impl LlmProvider for LlmRouter {
-    fn validate_model(&self, model: &str) -> Result<()> {
-        if model.trim().is_empty() || model != model.trim() || model.ends_with('/') {
-            return Err(Error::custom(
-                "Model ID must be a nonempty, valid model name",
-            ));
+    fn default_model(&self) -> Option<String> {
+        if !self.providers.contains_key(&self.default_provider) {
+            return None;
         }
+        self.definitions
+            .default_model_id_for(&self.default_provider)
+            .or_else(|| {
+                self.models
+                    .read()
+                    .offline_models(&self.default_provider)
+                    .first()
+                    .map(|model| model.id.clone())
+            })
+    }
+    async fn discover_models(&self) -> Result<Vec<ModelEntry>> {
+        Ok(self.list_dynamic_models().await)
+    }
+    fn validate_model(&self, model: &str) -> Result<()> {
         LlmRouter::validate_model(self, model)
     }
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let (provider, bare_model) = self.resolve_provider(&req.model)?;
-        let routed = CompletionRequest {
-            model: bare_model.clone(),
-            ..req.clone()
-        };
-
-        match provider.complete(&routed).await {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                if req.model.starts_with("openrouter/")
-                    && let Some((native_provider_name, native_bare)) =
-                        self.map_openrouter_to_native(&bare_model)
-                    && let Some(native_provider) = self.providers.get(&native_provider_name)
-                {
-                    tracing::warn!(
-                        "OpenRouter call failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
-                        native_provider_name,
-                        native_bare
-                    );
-                    let failover_req = CompletionRequest {
-                        model: native_bare,
-                        ..req.clone()
-                    };
-                    return native_provider.complete(&failover_req).await;
-                }
-                Err(e)
-            }
+        let route = self.route(req)?;
+        match route.provider.complete(&route.request).await {
+            Ok(result) => Ok(result),
+            Err(e) => match route.failover(&e) {
+                Some((p, req, _)) => p.complete(&req).await,
+                None => Err(e),
+            },
         }
     }
-
     async fn stream(
         &self,
         req: &CompletionRequest,
     ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
-        let (provider, bare_model) = self.resolve_provider(&req.model)?;
-        let routed = CompletionRequest {
-            model: bare_model.clone(),
-            ..req.clone()
-        };
-
-        match provider.stream(&routed).await {
-            Ok(stream) => Ok(stream),
-            Err(e) => {
-                if req.model.starts_with("openrouter/")
-                    && let Some((native_provider_name, native_bare)) =
-                        self.map_openrouter_to_native(&bare_model)
-                    && let Some(native_provider) = self.providers.get(&native_provider_name)
-                {
-                    tracing::warn!(
-                        "OpenRouter streaming connection failed: {e}. Falling back cleanly to native provider '{}' with model '{}' (ADR 8)",
-                        native_provider_name,
-                        native_bare
-                    );
-                    let failover_req = CompletionRequest {
-                        model: native_bare,
-                        ..req.clone()
-                    };
-                    return native_provider.stream(&failover_req).await;
-                }
-                Err(e)
-            }
+        let route = self.route(req)?;
+        match route.provider.stream(&route.request).await {
+            Ok(stream) => Ok(tag_stream_usage(stream, route.usage_model.clone())),
+            Err(e) => match route.failover(&e) {
+                Some((p, req, model)) => Ok(tag_stream_usage(p.stream(&req).await?, model)),
+                None => Err(e),
+            },
         }
     }
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let route = self.route(req)?;
+        match route
+            .provider
+            .complete_structured(&route.request, schema.clone())
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(e) => match route.failover(&e) {
+                Some((p, req, _)) => p.complete_structured(&req, schema).await,
+                None => Err(e),
+            },
+        }
+    }
+}
+
+fn tag_stream_usage(
+    stream: std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>,
+    model: String,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>> {
+    use futures::StreamExt;
+    Box::pin(stream.map(move |chunk| {
+        chunk.map(|chunk| match chunk {
+            StreamChunk::Usage(mut usage) => {
+                usage.model = model.clone();
+                StreamChunk::Usage(usage)
+            }
+            other => other,
+        })
+    }))
+}
+
+/// Shared adapter used by server and SDK. Sync validation uses try_read and reports
+/// a transient busy error instead of silently accepting an unvalidated model.
+pub struct ConcurrentRouter(pub Arc<tokio::sync::RwLock<LlmRouter>>);
+
+#[async_trait::async_trait]
+impl LlmProvider for ConcurrentRouter {
+    fn default_model(&self) -> Option<String> {
+        self.0
+            .try_read()
+            .ok()
+            .and_then(|router| LlmProvider::default_model(&*router))
+    }
+    async fn discover_models(&self) -> Result<Vec<ModelEntry>> {
+        let router = self.0.read().await.clone();
+        Ok(router.list_dynamic_models().await)
+    }
+    fn validate_model(&self, model: &str) -> Result<()> {
+        self.0
+            .try_read()
+            .map_err(|_| {
+                Error::custom("Provider configuration is being updated; retry model validation")
+            })?
+            .validate_model(model)
+    }
+    async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
+        let router = self.0.read().await.clone();
+        router.complete(req).await
+    }
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
+        let router = self.0.read().await.clone();
+        router.stream(req).await
+    }
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let router = self.0.read().await.clone();
+        router.complete_structured(req, schema).await
+    }
+}
+
+struct RegisteredProvider {
+    inner: Arc<dyn LlmProvider>,
+    kind: String,
+    models_url: Option<String>,
+    key: String,
+    name: String,
+    models: SharedModelRegistry,
+    headers: std::collections::BTreeMap<String, String>,
+}
+impl RegisteredProvider {
+    fn new(
+        inner: Arc<dyn LlmProvider>,
+        kind: String,
+        models_url: Option<String>,
+        key: String,
+        name: String,
+        models: SharedModelRegistry,
+    ) -> Self {
+        Self {
+            inner,
+            kind,
+            models_url,
+            key,
+            name,
+            models,
+            headers: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn with_headers(mut self, headers: std::collections::BTreeMap<String, String>) -> Self {
+        self.headers = headers;
+        self
+    }
+}
+#[async_trait::async_trait]
+impl LlmProvider for RegisteredProvider {
+    fn validate_model(&self, model: &str) -> Result<()> {
+        self.inner.validate_model(model)
+    }
+    async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
+        self.inner.complete(req).await
+    }
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
+        self.inner.stream(req).await
+    }
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.inner.complete_structured(req, schema).await
+    }
+    async fn discover_models(&self) -> Result<Vec<ModelEntry>> {
+        let Some(url) = &self.models_url else {
+            return Ok(Vec::new());
+        };
+        crate::discovery::discover_with_headers(
+            &self.kind,
+            url,
+            &self.key,
+            &self.name,
+            &self.models,
+            &self.headers,
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn infer_provider_candidates(model: &str) -> Vec<String> {
+    RuntimeRegistry::default().candidates(model)
 }

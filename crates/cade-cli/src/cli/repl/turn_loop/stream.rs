@@ -413,6 +413,11 @@ impl Repl {
                         let approval_id_c = id.clone();
                         let args_preview = serde_json::to_string_pretty(args_val)
                             .unwrap_or_else(|_| args_val.to_string());
+                        let command_preview = args_val
+                            .get("command")
+                            .and_then(|value| value.as_str())
+                            .map(|command| format!("\n\nCommand:\n```bash\n{command}\n```"))
+                            .unwrap_or_default();
 
                         let question = cade_tui::question::Question {
                             header: match subagent {
@@ -422,7 +427,7 @@ impl Repl {
                                 None => format!("Approve {tool}"),
                             },
                             text: format!(
-                                "Approval {id}: allow '{tool}' to run?\nArguments: {args_preview}\nReason: {reason}"
+                                "Approval {id}: allow '{tool}' to run?\n\nReason: {reason}{command_preview}\n\nArguments:\n```json\n{args_preview}\n```"
                             ),
                             options: vec![
                                 cade_tui::question::QuestionOption {

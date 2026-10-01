@@ -58,13 +58,7 @@ impl Repl {
                 allow_other: false,
                 progress: None,
             };
-            let ans = {
-                let mut app = self.app.lock();
-                let r = app.ask_question(&q);
-                app.scroll = 0;
-                let _ = app.draw();
-                r
-            };
+            let ans = self.ask_repl_question(q).await;
             matches!(&ans, Ok(Some(a)) if a.as_str().starts_with("Yes"))
         } else {
             false

@@ -493,7 +493,7 @@ pub async fn stream_message(
     let is_tool_return = body["role"].as_str() == Some("tool");
     let input = if is_tool_return {
         let tr = &body["tool_return"];
-        persist(
+        if let Err(error) = persist_checked(
             &state,
             &agent_id,
             conv_id.as_deref(),
@@ -503,7 +503,9 @@ pub async fn stream_message(
                 "tool_call_id": tr["tool_call_id"].as_str().unwrap_or(""),
                 "tool_name": tr["tool_name"].as_str().unwrap_or("")
             }),
-        );
+        ) {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &error);
+        }
         String::new()
     } else {
         match body["input"].as_str().filter(|s| !s.is_empty()) {
@@ -512,15 +514,29 @@ pub async fn stream_message(
         }
     };
 
+    let options = match serde_json::from_value::<
+        crate::server::api::run::runtime::RunExecutionOptions,
+    >(body.clone())
+    {
+        Ok(options) => options,
+        Err(error) => return err(StatusCode::BAD_REQUEST, &error.to_string()),
+    };
     let runtime = crate::server::api::run::runtime::ServerAgentRuntime::new(state);
-    let handle = runtime
-        .start(crate::server::api::run::runtime::RunRequest {
-            agent_id,
-            conversation_id: conv_id,
-            input,
-            permission_mode: None,
-        })
-        .await;
+    let handle = match runtime
+        .start_with_options(
+            crate::server::api::run::runtime::RunRequest {
+                agent_id,
+                conversation_id: conv_id,
+                input,
+                permission_mode: options.permission_mode.clone(),
+            },
+            options,
+        )
+        .await
+    {
+        Ok(handle) => handle,
+        Err(error) => return err(error.status, &error.message),
+    };
 
     let stream = tokio_stream::StreamExt::map(
         tokio_stream::wrappers::ReceiverStream::new(handle.events),

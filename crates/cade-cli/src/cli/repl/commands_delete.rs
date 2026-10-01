@@ -49,13 +49,8 @@ impl Repl {
                         allow_other: false,
                         progress: None,
                     };
-                    let confirmed = {
-                        let mut app = self.app.lock();
-                        let r = app.ask_question(&q_widget)?;
-                        app.scroll = 0;
-                        let _ = app.draw();
-                        matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-                    };
+                    let answer = self.ask_repl_question(q_widget).await?;
+                    let confirmed = matches!(&answer, Some(a) if a.as_str().starts_with("Yes"));
                     if confirmed {
                         match self.client.delete_agent(&a.id).await {
                             Ok(_) => {

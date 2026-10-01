@@ -9,6 +9,7 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::Repl;
+use super::super::input_driver::{DriverWake, EventPump};
 use super::now_epoch_ms;
 use crate::error::Result;
 use cade_tui::RenderLine;
@@ -134,14 +135,37 @@ impl<'a> TurnDirector<'a> {
         let tick_modal_close_ms = self.repl.last_modal_close_ms.clone();
         let tick_permissions = self.repl.permissions.clone();
         let tick_client = self.repl.client.clone();
+        let pump_lua_work = self.repl.lua_work_pump();
+        let lua_wake = self
+            .repl
+            .app
+            .lock()
+            .lua_engine
+            .as_ref()
+            .map(|lua| lua.work_ready.clone())
+            .unwrap_or_else(|| std::sync::Arc::new(tokio::sync::Notify::new()));
+        let input_owner = super::super::input_driver::TerminalInputGuard::claim(
+            self.repl.terminal_driver_active.clone(),
+        )?;
+        let pending_event = self.repl.pending_terminal_event.clone();
 
         let tick_handle = tokio::spawn(async move {
             use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
-            use futures::StreamExt;
-            let mut reader = EventStream::new();
+            let _owner = input_owner;
+            let mut reader = EventPump::active(EventStream::new(), lua_wake, pending_event);
             loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(16)) => {
+                match reader.next().await {
+                    DriverWake::Work => {
+                        pump_lua_work();
+                        if let Some(mut app) = tick_app.try_lock() {
+                            app.pump_lua_ui_events();
+                            if app.draw_dirty {
+                                let _ = app.draw();
+                            }
+                        }
+                    }
+                    DriverWake::Tick => {
+                        pump_lua_work();
                         let secs = tick_start.elapsed().as_secs();
                         let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
                         {
@@ -155,107 +179,149 @@ impl<'a> TurnDirector<'a> {
                                 } else {
                                     &cur
                                 };
-                                *tick_bar.lock() = format!("{base} (Ctrl+c to interrupt · {secs}s)");
+                                *tick_bar.lock() =
+                                    format!("{base} (Ctrl+c to interrupt · {secs}s)");
                             }
                         }
-                        if let Some(mut app) = tick_app.try_lock()
-                            && (app.draw_dirty || app.thinking.is_some() || app.toast.is_some()) {
+                        if let Some(mut app) = tick_app.try_lock() {
+                            app.pump_lua_ui_events();
+                            if app.draw_dirty
+                                || app.thinking.is_some()
+                                || app.toast.is_some()
+                                || app.slots.requires_tick()
+                            {
                                 let _ = app.draw();
                             }
+                        }
                     }
-                    Some(Ok(evt)) = reader.next() => {
-                        let needs_question_key = matches!(translate_turn_event(&evt), TurnInputEvent::Key)
-                            && matches!(&evt, Event::Key(KeyEvent { kind: KeyEventKind::Press, .. }));
+                    DriverWake::Terminal(Ok(evt)) => {
+                        let needs_question_key =
+                            matches!(translate_turn_event(&evt), TurnInputEvent::Key)
+                                && matches!(
+                                    &evt,
+                                    Event::Key(KeyEvent {
+                                        kind: KeyEventKind::Press,
+                                        ..
+                                    })
+                                );
 
                         if needs_question_key {
                             if let Event::Key(k) = evt {
-                                loop {
-                                    if let Some(mut app) = tick_app.try_lock() {
-                                        let has_async_overlay = app.overlays.last().is_some_and(|o| o.id() == "active_question" || o.id() == "password");
-                                        if has_async_overlay {
-                                            if let Some(top) = app.overlays.last_mut() {
-                                                let res = top.handle_input(k);
-                                                if matches!(res, cade_tui::overlay_component::OverlayInputResult::Dismiss) {
-                                                    app.overlays.pop();
-                                                    app.draw_dirty = true;
+                                if let Some(mut app) = tick_app.try_lock() {
+                                    let overlay_count = app.overlays.len();
+                                    let (owned, action) = app
+                                        .dispatch_overlay_event(&Event::Key(k))
+                                        .unwrap_or((true, None));
+                                    if owned {
+                                        if app.overlays.len() < overlay_count {
+                                            tick_modal_close_ms
+                                                .store(now_epoch_ms(), Ordering::SeqCst);
+                                        }
+                                        if let Some(Some(command)) = action {
+                                            tick_queued_followup.lock().push_back(command);
+                                        }
+                                        let _ = app.draw();
+                                    } else if app.handle_focused_slot_key(k)
+                                        || app.handle_lua_key(k)
+                                        || app.handle_scroll_key(k.code, k.modifiers)
+                                    {
+                                        let _ = app.draw();
+                                    } else {
+                                        match (k.code, k.modifiers) {
+                                            _ if route_turn_hotkey(k)
+                                                == Some(TurnHotkey::Cancel) =>
+                                            {
+                                                app.editor.expand_pastes();
+                                                let msg = app.editor.text().trim().to_string();
+                                                if !msg.is_empty() {
+                                                    *tick_queued_steering.lock() = Some(msg);
+                                                    app.editor.clear();
+                                                    app.editor.set_cursor_pos(0);
+                                                    app.set_last_status(None);
                                                     let _ = app.draw();
-                                                } else if matches!(res, cade_tui::overlay_component::OverlayInputResult::Consumed) {
+                                                }
+                                                tick_cancel.store(true, Ordering::SeqCst);
+                                                app.set_last_status(Some(
+                                                    "Cancelling...".to_string(),
+                                                ));
+                                                let _ = app.draw();
+                                            }
+                                            (KeyCode::Esc, _) => {
+                                                let esc_now_ms = now_epoch_ms();
+                                                let esc_last_close =
+                                                    tick_modal_close_ms.load(Ordering::SeqCst);
+                                                let esc_post_modal = esc_last_close > 0
+                                                    && esc_now_ms.saturating_sub(esc_last_close)
+                                                        < 500;
+                                                if !esc_post_modal
+                                                    && tick_start.elapsed().as_millis() >= 200
+                                                    && !app.editor.is_empty()
+                                                {
+                                                    app.editor.clear();
+                                                    app.editor.set_cursor_pos(0);
+                                                    app.set_last_status(None);
+                                                    let _ = app.draw();
+                                                }
+                                            }
+                                            (KeyCode::Char('v') | KeyCode::Char('V'), m)
+                                                if m.contains(KeyModifiers::CONTROL)
+                                                    || m.contains(KeyModifiers::ALT) =>
+                                            {
+                                                if app.paste_from_clipboard() {
+                                                    let _ = app.draw();
+                                                }
+                                            }
+                                            _ if route_turn_hotkey(k)
+                                                == Some(TurnHotkey::ToggleReasoning) =>
+                                            {
+                                                if let Some(plan) = &mut app.active_plan {
+                                                    plan.is_visible = !plan.is_visible;
                                                     app.draw_dirty = true;
                                                     let _ = app.draw();
                                                 }
                                             }
-                                        } else {
-                                            match (k.code, k.modifiers) {
-                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::Cancel) => {
-                                                    app.editor.expand_pastes();
-                                                    let msg = app.editor.text().trim().to_string();
-                                                    if !msg.is_empty() {
-                                                        *tick_queued_steering.lock() = Some(msg);
-                                                        app.editor.clear();
-                                                        app.editor.set_cursor_pos(0);
-                                                        app.set_last_status(None);
-                                                        let _ = app.draw();
-                                                    }
-                                                    tick_cancel.store(true, Ordering::SeqCst);
-                                                    app.set_last_status(Some("Cancelling...".to_string()));
+                                            _ if route_turn_hotkey(k)
+                                                == Some(TurnHotkey::ClearAndRedraw) =>
+                                            {
+                                                let _ = app.terminal.clear();
+                                                app.draw_dirty = true;
+                                                let _ = app.draw();
+                                            }
+                                            _ if route_turn_hotkey(k)
+                                                == Some(TurnHotkey::ToggleExpandAll) =>
+                                            {
+                                                app.expand_all = !app.expand_all;
+                                                app.content_version += 1;
+                                                let msg = if app.expand_all {
+                                                    "All blocks expanded"
+                                                } else {
+                                                    "All blocks collapsed"
+                                                };
+                                                app.show_toast(msg, cade_tui::ToastLevel::Info);
+                                                app.draw_dirty = true;
+                                                let _ = app.draw();
+                                            }
+                                            _ if route_turn_hotkey(k)
+                                                == Some(TurnHotkey::ToggleSubagentTray) =>
+                                            {
+                                                app.toggle_subagent_tray();
+                                                let _ = app.draw();
+                                            }
+                                            _ if route_turn_hotkey(k)
+                                                == Some(TurnHotkey::ToggleSubagentTrayFocus) =>
+                                            {
+                                                app.toggle_subagent_tray_focus();
+                                                let _ = app.draw();
+                                            }
+                                            _ if app.subagent_tray.is_visible
+                                                && app.subagent_tray.is_focused =>
+                                            {
+                                                let trackers = app.subagent_trackers.clone();
+                                                if app.subagent_tray.handle_key(k, &trackers) {
+                                                    let action =
+                                                        app.subagent_tray.take_pending_action();
                                                     let _ = app.draw();
-                                                }
-                                                (KeyCode::Esc, _) => {
-                                                    let esc_now_ms = now_epoch_ms();
-                                                    let esc_last_close = tick_modal_close_ms.load(Ordering::SeqCst);
-                                                    let esc_post_modal = esc_last_close > 0 && esc_now_ms.saturating_sub(esc_last_close) < 500;
-                                                    if !esc_post_modal && tick_start.elapsed().as_millis() >= 200 && !app.editor.is_empty() {
-                                                        app.editor.clear();
-                                                        app.editor.set_cursor_pos(0);
-                                                        app.set_last_status(None);
-                                                        let _ = app.draw();
-                                                    }
-                                                }
-                                                (KeyCode::Char('v') | KeyCode::Char('V'), m)
-                                                    if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-                                                {
-                                                    if app.paste_from_clipboard() {
-                                                        let _ = app.draw();
-                                                    }
-                                                }
-                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleReasoning) => {
-                                                    if let Some(plan) = &mut app.active_plan {
-                                                        plan.is_visible = !plan.is_visible;
-                                                        app.draw_dirty = true;
-                                                        let _ = app.draw();
-                                                    }
-                                                }
-                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ClearAndRedraw) => {
-                                                    let _ = app.terminal.clear();
-                                                    app.draw_dirty = true;
-                                                    let _ = app.draw();
-                                                }
-                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleExpandAll) => {
-                                                    app.expand_all = !app.expand_all;
-                                                    app.content_version += 1;
-                                                    let msg = if app.expand_all {
-                                                        "All blocks expanded"
-                                                    } else {
-                                                        "All blocks collapsed"
-                                                    };
-                                                    app.show_toast(msg, cade_tui::ToastLevel::Info);
-                                                    app.draw_dirty = true;
-                                                    let _ = app.draw();
-                                                }
-                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleSubagentTray) => {
-                                                    app.toggle_subagent_tray();
-                                                    let _ = app.draw();
-                                                }
-                                                _ if route_turn_hotkey(k) == Some(TurnHotkey::ToggleSubagentTrayFocus) => {
-                                                    app.toggle_subagent_tray_focus();
-                                                    let _ = app.draw();
-                                                }
-                                                _ if app.subagent_tray.is_visible && app.subagent_tray.is_focused => {
-                                                    let trackers = app.subagent_trackers.clone();
-                                                    if app.subagent_tray.handle_key(k, &trackers) {
-                                                        let action = app.subagent_tray.take_pending_action();
-                                                        let _ = app.draw();
-                                                        if action != cade_tui::app::subagent_tray::SubagentTrayAction::None {
+                                                    if action != cade_tui::app::subagent_tray::SubagentTrayAction::None {
                                                             match action {
                                                                 cade_tui::app::subagent_tray::SubagentTrayAction::None => {}
                                                                 cade_tui::app::subagent_tray::SubagentTrayAction::Kill { subagent_id } => {
@@ -346,71 +412,102 @@ impl<'a> TurnDirector<'a> {
                                                                 }
                                                             }
                                                         }
-                                                    }
                                                 }
-                                                (KeyCode::Tab, _) if app.editor.is_empty() => {
-                                                    let next_mode = cade_tui::app::cycle_mode(app.mode);
-                                                    app.update_mode(next_mode);
-                                                    tick_permissions.set_mode(next_mode);
-                                                    let _ = app.draw();
-                                                }
-                                                (KeyCode::BackTab, _) => {
-                                                    let next_mode = cade_tui::app::cycle_mode_back(app.mode);
-                                                    app.update_mode(next_mode);
-                                                    tick_permissions.set_mode(next_mode);
-                                                    let _ = app.draw();
-                                                }
-                                                (KeyCode::Enter, m) if m == KeyModifiers::CONTROL => {
-                                                    app.editor.expand_pastes();
-                                                    let msg = app.editor.text().trim().to_string();
-                                                    if !msg.is_empty() {
-                                                        *tick_queued_steering.lock() = Some(msg);
-                                                        app.editor.clear();
-                                                        app.editor.set_cursor_pos(0);
-                                                        app.set_last_status(None);
-                                                        let _ = app.draw();
-                                                        tick_cancel.store(true, Ordering::SeqCst);
-                                                    }
-                                                }
-                                                (KeyCode::Enter, _) => {
-                                                    app.editor.expand_pastes();
-                                                    let msg = app.editor.text().trim().to_string();
-                                                    if !msg.is_empty() {
-                                                        tick_queued_followup.lock().push_back(msg);
-                                                        app.editor.clear();
-                                                        app.editor.set_cursor_pos(0);
-                                                        app.set_last_status(None);
-                                                        let _ = app.draw();
-                                                    }
-                                                }
-                                                (KeyCode::Char(_), _) | (KeyCode::Backspace, _) | (KeyCode::Delete, _) | (KeyCode::Left, _) | (KeyCode::Right, _) | (KeyCode::Home, _) | (KeyCode::End, _) | (KeyCode::Up, _) | (KeyCode::Down, _) => {
-                                                    let w = app.last_input_width;
-                                                    app.editor.handle_input(k, w);
-                                                    let _ = app.draw();
-                                                }
-                                                _ => {}
                                             }
+                                            (KeyCode::Tab, _) if app.editor.is_empty() => {
+                                                let next_mode = cade_tui::app::cycle_mode(app.mode);
+                                                app.update_mode(next_mode);
+                                                tick_permissions.set_mode(next_mode);
+                                                let _ = app.draw();
+                                            }
+                                            (KeyCode::BackTab, _) => {
+                                                let next_mode =
+                                                    cade_tui::app::cycle_mode_back(app.mode);
+                                                app.update_mode(next_mode);
+                                                tick_permissions.set_mode(next_mode);
+                                                let _ = app.draw();
+                                            }
+                                            (KeyCode::Enter, m) if m == KeyModifiers::CONTROL => {
+                                                app.editor.expand_pastes();
+                                                let msg = app.editor.text().trim().to_string();
+                                                if !msg.is_empty() {
+                                                    *tick_queued_steering.lock() = Some(msg);
+                                                    app.editor.clear();
+                                                    app.editor.set_cursor_pos(0);
+                                                    app.set_last_status(None);
+                                                    let _ = app.draw();
+                                                    tick_cancel.store(true, Ordering::SeqCst);
+                                                }
+                                            }
+                                            (KeyCode::Enter, _) => {
+                                                app.editor.expand_pastes();
+                                                let msg = app.editor.text().trim().to_string();
+                                                if !msg.is_empty() {
+                                                    tick_queued_followup.lock().push_back(msg);
+                                                    app.editor.clear();
+                                                    app.editor.set_cursor_pos(0);
+                                                    app.set_last_status(None);
+                                                    let _ = app.draw();
+                                                }
+                                            }
+                                            (KeyCode::Char(_), _)
+                                            | (KeyCode::Backspace, _)
+                                            | (KeyCode::Delete, _)
+                                            | (KeyCode::Left, _)
+                                            | (KeyCode::Right, _)
+                                            | (KeyCode::Home, _)
+                                            | (KeyCode::End, _)
+                                            | (KeyCode::Up, _)
+                                            | (KeyCode::Down, _) => {
+                                                let w = app.last_input_width;
+                                                app.editor.handle_input(k, w);
+                                                let _ = app.draw();
+                                            }
+                                            _ => {}
                                         }
-                                        break;
                                     }
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                                } else {
+                                    reader.defer(Event::Key(k));
                                 }
                             }
                         } else if let Some(mut app) = tick_app.try_lock() {
-                            match evt {
-                                Event::Mouse(m) => {
-                                    let _ = app.handle_message_area_mouse_event(m);
+                            let overlay_count = app.overlays.len();
+                            let (owned, _) =
+                                app.dispatch_overlay_event(&evt).unwrap_or((true, None));
+                            if owned {
+                                if app.overlays.len() < overlay_count {
+                                    tick_modal_close_ms.store(now_epoch_ms(), Ordering::SeqCst);
                                 }
-                                Event::Paste(text) => {
-                                    app.handle_bracketed_paste_text(&text);
-                                    let _ = app.draw();
+                                let _ = app.draw();
+                            } else {
+                                match evt {
+                                    Event::Mouse(m) => {
+                                        let _ = app.handle_message_area_mouse_event(m);
+                                    }
+                                    Event::Paste(text) => {
+                                        app.handle_bracketed_paste_text(&text);
+                                        let _ = app.draw();
+                                    }
+                                    Event::Resize(_w, _h) => {
+                                        let _ = app.handle_resize();
+                                    }
+                                    Event::FocusGained => app.has_focus = true,
+                                    Event::FocusLost => app.has_focus = false,
+                                    _ => {}
                                 }
-                                Event::Resize(_w, _h) => {
-                                    let _ = app.handle_resize();
-                                }
-                                _ => {}
                             }
+                        } else {
+                            reader.defer(evt);
                         }
+                    }
+                    DriverWake::Terminal(Err(error)) => {
+                        tracing::warn!("Terminal input failed during active turn: {error}");
+                        tick_cancel.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    DriverWake::Closed => {
+                        tick_cancel.store(true, Ordering::SeqCst);
+                        break;
                     }
                 }
             }

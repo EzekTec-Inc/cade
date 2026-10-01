@@ -239,6 +239,7 @@ impl ShellExecutionEngine {
         }
 
         let mut cmd = self.adapter.build_command(req.command);
+        cmd.kill_on_drop(true);
         if let Some(dir) = req.working_dir {
             cmd.current_dir(dir);
         }

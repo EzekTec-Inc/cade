@@ -1,6 +1,6 @@
 //! Plugin management API handlers:
 //! - `GET    /v1/plugins`         — list all installed plugins
-//! - `POST   /v1/plugins/install` — download & install a WebAssembly plugin
+//! - `POST   /v1/plugins/install` — validate and activate a native plugin package
 //! - `DELETE /v1/plugins/:id`     — uninstall a plugin
 //! - `GET    /v1/plugins/events`  — SSE stream of plugin lifecycle events
 
@@ -14,11 +14,11 @@ use axum::{
     },
 };
 use cade_plugin::{NativePluginEngine, PluginEngine};
-use futures::stream::{self, Stream};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
-use std::path::{Path as StdPath, PathBuf};
+use std::path::Path as StdPath;
 
 use crate::server::state::AppState;
 
@@ -31,12 +31,13 @@ pub struct InstallPluginPayload {
     pub url: String,
     pub plugin_id: Option<String>,
     pub agent_id: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 /// `GET /v1/plugins` — list the canonical manifest-derived Plugin inventory.
 pub async fn list_plugins_handler(State(_state): State<AppState>) -> Response {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let engine = NativePluginEngine::from_default_dirs(&cwd);
+    let engine = default_engine();
     let reports = match engine.load_all() {
         Ok(reports) => reports,
         Err(error) => {
@@ -53,7 +54,10 @@ pub async fn list_plugins_handler(State(_state): State<AppState>) -> Response {
         .map(|report| {
             let exported_tools = tools
                 .iter()
-                .filter(|tool| tool.plugin_name == report.name)
+                .filter(|tool| {
+                    tool.plugin_root.file_name().and_then(|name| name.to_str())
+                        == Some(report.id.as_str())
+                })
                 .map(|tool| tool.name.clone())
                 .collect::<Vec<_>>();
             json!({
@@ -63,7 +67,7 @@ pub async fn list_plugins_handler(State(_state): State<AppState>) -> Response {
                 "scope": report.scope,
                 "status": report.status,
                 "diagnostic": report.diagnostic,
-                "tools_count": report.tools_count,
+                "tools_count": exported_tools.len(),
                 "skills_count": report.skills_count,
                 "mcp_servers_count": report.mcp_servers_count,
                 "exported_tools": exported_tools,
@@ -80,17 +84,31 @@ pub async fn install_plugin_handler(
     Json(payload): Json<InstallPluginPayload>,
 ) -> Response {
     let plugin_id = payload.plugin_id.unwrap_or_else(|| {
-        StdPath::new(&payload.url)
-            .file_stem()
+        let filename = payload
+            .url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(&payload.url)
+            .rsplit('/')
+            .next()
+            .unwrap_or("plugin");
+        let basename = filename
+            .strip_suffix(".tar.gz")
+            .or_else(|| filename.strip_suffix(".tgz"))
+            .unwrap_or(filename);
+        StdPath::new(basename)
+            .file_name()
             .and_then(|stem| stem.to_str())
             .filter(|stem| !stem.is_empty())
             .unwrap_or("plugin")
             .to_string()
     });
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let engine = NativePluginEngine::from_default_dirs(&cwd);
+    let engine = default_engine();
 
-    match engine.install(&payload.url, &plugin_id).await {
+    match engine
+        .install_with_checksum(&payload.url, &plugin_id, payload.sha256.as_deref())
+        .await
+    {
         Ok(report) => {
             crate::server::api::agents::publish_global_event(
                 Some(&state.db),
@@ -105,10 +123,7 @@ pub async fn install_plugin_handler(
         }
         Err(error) => {
             tracing::warn!(%error, plugin_id, "PluginEngine installation failed");
-            err(
-                StatusCode::BAD_REQUEST,
-                "Plugin installation failed during validation or activation",
-            )
+            err(StatusCode::BAD_REQUEST, &error.to_string())
         }
     }
 }
@@ -118,8 +133,11 @@ pub async fn uninstall_plugin_handler(
     State(state): State<AppState>,
     Path(plugin_id): Path<String>,
 ) -> Response {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let engine = NativePluginEngine::from_default_dirs(&cwd);
+    let engine = default_engine();
+
+    if let Err(error) = cade_plugin::marketplace::validate_plugin_id(&plugin_id) {
+        return err(StatusCode::BAD_REQUEST, &error.to_string());
+    }
 
     match engine.uninstall(&plugin_id) {
         Ok(report) => {
@@ -148,28 +166,34 @@ pub async fn uninstall_plugin_handler(
 pub async fn stream_plugin_events_handler(
     State(_state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = stream::once(async {
+    let receiver = crate::server::api::agents::GLOBAL_EVENTS_TX.subscribe();
+    let live =
+        tokio_stream::wrappers::BroadcastStream::new(receiver).filter_map(|result| async move {
+            let event = result.ok()?;
+            let kind = event["event_type"].as_str()?;
+            if !matches!(kind, "plugin_installed" | "plugin_removed") {
+                return None;
+            }
+            Some(Ok(Event::default().event(kind).data(event.to_string())))
+        });
+    let connected = futures::stream::once(async {
         Ok(Event::default()
             .event("connected")
-            .data(json!({ "status": "listening" }).to_string()))
+            .data("{\"status\":\"listening\"}"))
     });
+    let stream = connected.chain(live);
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+fn default_engine() -> NativePluginEngine {
+    let cwd = crate::server::api::run::runtime::execution_workspace();
+    NativePluginEngine::from_default_dirs(&cwd)
 }
 
 #[cfg(test)]
 mod tests {
     use cade_plugin::{NativePluginEngine, PluginEngine};
-
-    #[tokio::test]
-    async fn test_plugins_dir_and_stub_installation() {
-        let temp = tempfile::tempdir().unwrap();
-        let plugin_path = temp.path().join("my-test-plugin.wasm");
-        std::fs::write(&plugin_path, b"\x00asm\x01\x00\x00\x00").unwrap();
-
-        assert!(plugin_path.is_file());
-        assert_eq!(plugin_path.file_stem().unwrap(), "my-test-plugin");
-    }
 
     #[tokio::test]
     async fn test_native_plugin_engine_inventory_and_tools() {
@@ -209,7 +233,8 @@ mod tests {
         )
         .unwrap();
 
-        let engine = NativePluginEngine::from_default_dirs(temp.path());
+        let install_dir = temp.path().join(".cade/plugins");
+        let engine = NativePluginEngine::new(vec![install_dir.clone()], install_dir);
         let reports = engine.load_all().expect("load_all should succeed");
 
         assert_eq!(reports.len(), 1);
@@ -217,11 +242,18 @@ mod tests {
         assert_eq!(reports[0].name, "Demo Plugin");
         assert_eq!(reports[0].version, "1.2.3");
         assert_eq!(reports[0].scope, "project");
-        assert_eq!(reports[0].tools_count, 1);
+        assert_eq!(reports[0].tools_count, 0);
 
         let tools = engine.list_tools();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name, "demo_tool");
-        assert_eq!(tools[0].plugin_name, "Demo Plugin");
+        assert!(
+            tools.is_empty(),
+            "declarations without handlers are not ready capabilities"
+        );
+        assert!(
+            engine
+                .dispatch("demo_tool", &serde_json::json!({}))
+                .await
+                .is_err()
+        );
     }
 }

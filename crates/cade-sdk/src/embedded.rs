@@ -13,8 +13,11 @@ use cade_agent::backends::storage::StorageBackend;
 use cade_agent::mcp::McpManager;
 use cade_agent::tools::ToolRuntime;
 use cade_ai::{AiConfig, LlmProvider, LlmRouter};
-use cade_core::permissions::{PermissionManager, PermissionMode};
+use cade_core::permissions::PermissionMode;
 use cade_core::skills::Skill;
+use cade_server_lib::server::api::run::runtime::{
+    RunExecutionOptions, RunRequest, ServerAgentRuntime,
+};
 use cade_store::Db;
 use cade_store::sqlite::AgentRow;
 
@@ -548,7 +551,7 @@ impl StorageBackend for EmbeddedStorageBackend {
 /// Builder for creating an [`EmbeddedSession`].
 pub struct EmbeddedSessionBuilder {
     db_path: Option<PathBuf>,
-    model: String,
+    model: Option<String>,
     agent_id: Option<String>,
     agent_name: Option<String>,
     system_prompt: Option<String>,
@@ -558,13 +561,16 @@ pub struct EmbeddedSessionBuilder {
     llm_provider: Option<Arc<dyn LlmProvider>>,
     ai_config: Option<AiConfig>,
     max_turns: usize,
+    permissions: Option<cade_core::settings::PermissionSettings>,
+    execution: Option<cade_core::settings::ExecutionProfile>,
+    reasoning_effort: Option<String>,
 }
 
 impl Default for EmbeddedSessionBuilder {
     fn default() -> Self {
         Self {
             db_path: None,
-            model: "anthropic/claude-sonnet-4-5".to_string(),
+            model: None,
             agent_id: None,
             agent_name: None,
             system_prompt: None,
@@ -574,6 +580,9 @@ impl Default for EmbeddedSessionBuilder {
             llm_provider: None,
             ai_config: None,
             max_turns: 20,
+            permissions: None,
+            execution: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -594,7 +603,7 @@ impl EmbeddedSessionBuilder {
     }
 
     pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
+        self.model = Some(model.into());
         self
     }
 
@@ -643,6 +652,21 @@ impl EmbeddedSessionBuilder {
         self
     }
 
+    pub fn permissions(mut self, permissions: cade_core::settings::PermissionSettings) -> Self {
+        self.permissions = Some(permissions);
+        self
+    }
+
+    pub fn execution(mut self, execution: cade_core::settings::ExecutionProfile) -> Self {
+        self.execution = Some(execution);
+        self
+    }
+
+    pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self
+    }
+
     pub async fn build(self) -> Result<EmbeddedSession> {
         let db_target = match &self.db_path {
             Some(p) => p.to_string_lossy().to_string(),
@@ -663,10 +687,40 @@ impl EmbeddedSessionBuilder {
             .agent_name
             .unwrap_or_else(|| format!("EmbeddedAgent-{}", &agent_id[..6.min(agent_id.len())]));
 
+        let existing_agent = cade_store::sqlite::get_agent(&db, &agent_id)
+            .map_err(|error| Error::custom(error.to_string()))?;
+        let provider: Arc<dyn LlmProvider> = if let Some(provider) = &self.llm_provider {
+            Arc::clone(provider)
+        } else if let Some(config) = &self.ai_config {
+            Arc::new(LlmRouter::build(config))
+        } else {
+            Arc::new(LlmRouter::build(&AiConfig::from_env()))
+        };
+        let model = match self
+            .model
+            .clone()
+            .or_else(|| existing_agent.as_ref().map(|agent| agent.model.clone()))
+            .or_else(|| {
+                self.llm_provider
+                    .as_ref()
+                    .and_then(|provider| provider.default_model())
+            }) {
+            Some(model) => model,
+            None => cade_ai::provider_registry::ProviderRegistry::configured()
+                .configured_default_model(
+                    self.ai_config
+                        .as_ref()
+                        .map(|config| config.llm_provider.as_str()),
+                )
+                .map_err(|error| Error::custom(error.to_string()))?,
+        };
+        provider
+            .validate_model(&model)
+            .map_err(|error| Error::custom(error.to_string()))?;
         let agent_row = AgentRow {
             id: agent_id.clone(),
             name: agent_name,
-            model: self.model.clone(),
+            model: model.clone(),
             description: Some("Embedded agent".to_string()),
             system_prompt: self.system_prompt.clone(),
             created_at: None,
@@ -675,53 +729,32 @@ impl EmbeddedSessionBuilder {
             active_plan_json: None,
             parent_id: None,
         };
-        let _ = cade_store::sqlite::create_agent(&db, &agent_row);
+        if existing_agent.is_none() {
+            cade_store::sqlite::create_agent(&db, &agent_row)
+                .map_err(|e| Error::custom(e.to_string()))?;
+        } else if self.model.is_some()
+            && existing_agent
+                .as_ref()
+                .is_some_and(|agent| agent.model != model)
+        {
+            cade_store::sqlite::update_agent_model(&db, &agent_id, &model)
+                .map_err(|error| Error::custom(error.to_string()))?;
+        }
+        let conversation_id = cade_store::sqlite::create_conversation(&db, &agent_id, "")
+            .map_err(|e| Error::custom(e.to_string()))?
+            .id;
 
-        let provider: Arc<dyn LlmProvider> = if let Some(p) = self.llm_provider {
-            p
-        } else if let Some(ref cfg) = self.ai_config {
-            Arc::new(LlmRouter::build(cfg))
-        } else {
-            let env_config = AiConfig {
-                anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
-                openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-                google_api_key: std::env::var("GEMINI_API_KEY")
-                    .ok()
-                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok()),
-                deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
-                ollama_base_url: std::env::var("OLLAMA_BASE_URL")
-                    .unwrap_or_else(|_| "http://localhost:11434".to_string()),
-                llm_provider: "anthropic".to_string(),
-            };
-            Arc::new(LlmRouter::build(&env_config))
-        };
-
-        let storage = Arc::new(EmbeddedStorageBackend { db: db.clone() });
-        let mcp = Arc::new(McpManager::empty());
-
-        let mut runtime = ToolRuntime::new(storage, mcp, agent_id.clone(), self.cwd);
-        runtime.allowed_paths = self.allowed_paths;
-
-        let _permissions = PermissionManager::new(self.permission_mode);
-
-        let env_config = AiConfig {
-            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
-            openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-            google_api_key: std::env::var("GEMINI_API_KEY")
-                .ok()
-                .or_else(|| std::env::var("GOOGLE_API_KEY").ok()),
-            deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
-            ollama_base_url: std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
-            llm_provider: "anthropic".to_string(),
-        };
+        let env_config = AiConfig::from_env();
         let router_instance = if let Some(cfg) = &self.ai_config {
             LlmRouter::build(cfg)
         } else {
             LlmRouter::build(&env_config)
         };
         let router = Arc::new(tokio::sync::RwLock::new(router_instance));
-        let config = Arc::new(cade_server_lib::server::config::ServerConfig::default());
+        let config = Arc::new(cade_server_lib::server::config::ServerConfig {
+            default_model: model.clone(),
+            ..Default::default()
+        });
         let app_state = cade_server_lib::server::state::AppState::new_in_process(
             db.clone(),
             provider.clone(),
@@ -729,17 +762,40 @@ impl EmbeddedSessionBuilder {
             config,
             Arc::new(McpManager::empty()),
         );
-        let agent_runtime =
-            cade_server_lib::server::api::run::runtime::ServerAgentRuntime::new(app_state);
+        let agent_runtime = ServerAgentRuntime::new(app_state);
+        let request = RunRequest {
+            agent_id: agent_id.clone(),
+            conversation_id: Some(conversation_id.clone()),
+            input: String::new(),
+            permission_mode: None,
+        };
+        let options = RunExecutionOptions {
+            cwd: Some(self.cwd),
+            allowed_paths: self.allowed_paths,
+            permission_mode: Some(self.permission_mode.to_string()),
+            permissions: self.permissions,
+            execution: self.execution,
+            reasoning_effort: self.reasoning_effort,
+            max_turns: Some(self.max_turns),
+            ..Default::default()
+        };
+        let runtime = agent_runtime
+            .prepare_tool_runtime(&request, options.clone())
+            .map_err(|e| Error::custom(e.to_string()))?;
+        let agent_runtime = agent_runtime.with_execution_options(RunExecutionOptions {
+            cwd: Some(runtime.cwd.clone()),
+            allowed_paths: None,
+            execution: None,
+            tool_runtime: Some(runtime.clone()),
+            ..options
+        });
 
         Ok(EmbeddedSession {
             agent_id,
-            model: self.model,
-            _system_prompt: self.system_prompt,
+            model,
+            conversation_id,
             db,
-            _provider: provider,
-            runtime: Arc::new(runtime),
-            _max_turns: self.max_turns,
+            runtime,
             agent_runtime,
         })
     }
@@ -753,11 +809,9 @@ impl EmbeddedSessionBuilder {
 pub struct EmbeddedSession {
     agent_id: String,
     model: String,
-    _system_prompt: Option<String>,
+    conversation_id: String,
     db: Db,
-    _provider: Arc<dyn LlmProvider>,
     runtime: Arc<ToolRuntime>,
-    _max_turns: usize,
     agent_runtime: cade_server_lib::server::api::run::runtime::ServerAgentRuntime,
 }
 
@@ -783,6 +837,39 @@ impl EmbeddedSession {
         &self.runtime
     }
 
+    pub fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    /// Accept a durable in-process run and expose its id and ordered events.
+    pub async fn start_run(
+        &self,
+        text: &str,
+    ) -> Result<cade_server_lib::server::api::run::runtime::RunHandle> {
+        self.agent_runtime
+            .try_start(RunRequest {
+                agent_id: self.agent_id.clone(),
+                conversation_id: Some(self.conversation_id.clone()),
+                input: text.into(),
+                permission_mode: None,
+            })
+            .await
+            .map_err(|error| Error::custom(error.to_string()))
+    }
+
+    pub fn cancel_run(&self, run_id: &str) -> Result<bool> {
+        let run = cade_store::sqlite::get_run(&self.db, run_id)
+            .map_err(|error| Error::custom(error.to_string()))?
+            .ok_or_else(|| Error::custom("Run not found"))?;
+        if run.agent_id != self.agent_id
+            || run.conversation_id.as_deref() != Some(self.conversation_id.as_str())
+        {
+            return Err(Error::custom("Run does not belong to this session"));
+        }
+        cade_store::sqlite::request_run_cancellation(&self.db, run_id)
+            .map_err(|error| Error::custom(error.to_string()))
+    }
+
     /// Send a prompt and execute the agentic loop to convergence in-process.
     pub async fn prompt(&self, text: &str) -> Result<String> {
         use futures::StreamExt;
@@ -796,6 +883,11 @@ impl EmbeddedSession {
                 CadeStreamEvent::Error(err) => {
                     return Err(Error::custom(err));
                 }
+                CadeStreamEvent::Finished { outcome }
+                    if outcome == "error" || outcome == "cancelled" =>
+                {
+                    return Err(Error::custom(format!("Run {outcome}")));
+                }
                 _ => {}
             }
         }
@@ -808,20 +900,13 @@ impl EmbeddedSession {
         text: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = CadeStreamEvent> + Send>>> {
         let (tx, rx) = mpsc::channel(64);
-        let conversation_id = format!("conv-{}", self.agent_id);
-
-        let handle = self
-            .agent_runtime
-            .start(cade_server_lib::server::api::run::runtime::RunRequest {
-                agent_id: self.agent_id.clone(),
-                conversation_id: Some(conversation_id),
-                input: text.to_string(),
-                permission_mode: None,
-            })
-            .await;
+        let handle = self.start_run(text).await?;
+        let db = self.db.clone();
 
         tokio::spawn(async move {
+            let run_id = handle.run_id;
             let mut stream = handle.events;
+            let mut cursor = -1;
             while let Some(res) = stream.recv().await {
                 let Ok(env) = res;
                 let data = env.data;
@@ -832,13 +917,27 @@ impl EmbeddedSession {
                 if trimmed == "[DONE]" {
                     break;
                 }
-                if let Ok(stream_event) =
-                    serde_json::from_str::<cade_api_types::StreamEvent>(trimmed)
-                    && let Some(cade_event) = CadeStreamEvent::from_stream_event(&stream_event)
-                {
-                    let _ = tx.send(cade_event).await;
+                let sequence = serde_json::from_str::<Value>(trimmed)
+                    .ok()
+                    .and_then(|value| value["seq_id"].as_i64());
+                if let Some(sequence) = sequence {
+                    if sequence <= cursor {
+                        continue;
+                    }
+                    if sequence > cursor + 1 {
+                        if !replay_embedded_events(&db, &run_id, &mut cursor, &tx).await {
+                            return;
+                        }
+                        continue;
+                    }
+                    cursor = sequence;
+                }
+                if !forward_embedded_event(&tx, trimmed).await {
+                    return;
                 }
             }
+            // Tail replay covers a terminal frame skipped under backpressure.
+            let _ = replay_embedded_events(&db, &run_id, &mut cursor, &tx).await;
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))
@@ -901,6 +1000,46 @@ impl EmbeddedSession {
 }
 
 // endregion: --- EmbeddedSession
+
+async fn forward_embedded_event(tx: &mpsc::Sender<CadeStreamEvent>, data: &str) -> bool {
+    if let Ok(event) = serde_json::from_str::<cade_api_types::StreamEvent>(data)
+        && let Some(event) = CadeStreamEvent::from_stream_event(&event)
+    {
+        return tx.send(event).await.is_ok();
+    }
+    true
+}
+
+async fn replay_embedded_events(
+    db: &Db,
+    run_id: &str,
+    cursor: &mut i64,
+    tx: &mpsc::Sender<CadeStreamEvent>,
+) -> bool {
+    let rows = match cade_store::sqlite::run_events_after(db, run_id, *cursor) {
+        Ok(rows) => rows,
+        Err(error) => {
+            let _ = tx
+                .send(CadeStreamEvent::Error(format!(
+                    "Run event replay failed: {error}"
+                )))
+                .await;
+            return false;
+        }
+    };
+    for (sequence, data) in rows {
+        let Ok(mut payload) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
+        payload["run_id"] = run_id.into();
+        payload["seq_id"] = sequence.into();
+        if !forward_embedded_event(tx, &payload.to_string()).await {
+            return false;
+        }
+        *cursor = sequence;
+    }
+    true
+}
 
 #[cfg(test)]
 mod tests {
@@ -999,6 +1138,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_custom_provider_default_is_selected_by_embedded_factory() {
+        let definitions = cade_ai::provider_registry::ProviderRegistry::from_json(
+            &json!([{
+                "name":"office", "aliases":["office-alt"], "kind":"openai-compatible",
+                "chat_url":"http://127.0.0.1:1/v1", "default_model":"tenant/sdk-deployment"
+            }])
+            .to_string(),
+        )
+        .unwrap();
+        let mut router = LlmRouter::empty("office".into(), Arc::new(Default::default()))
+            .with_provider_registry(definitions);
+        router.add_provider(
+            "office-alt".into(),
+            Arc::new(MockLlmProvider {
+                call_count: Arc::new(AtomicUsize::new(0)),
+            }),
+        );
+        let workspace = Workspace::new();
+        let session = EmbeddedSession::builder()
+            .in_memory()
+            .cwd(&workspace.0)
+            .provider(Arc::new(router))
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(session.model(), "office/tenant/sdk-deployment");
+        assert_eq!(
+            cade_store::sqlite::get_agent(session.db(), session.agent_id())
+                .unwrap()
+                .unwrap()
+                .model,
+            "office/tenant/sdk-deployment"
+        );
+    }
+
+    #[tokio::test]
     async fn test_embedded_session_streaming_events() {
         let mock_provider = Arc::new(MockLlmProvider {
             call_count: Arc::new(AtomicUsize::new(0)),
@@ -1040,5 +1215,175 @@ mod tests {
         assert!(has_tool_exec, "Should emit ToolExecuting");
         assert!(has_tool_done, "Should emit ToolCompleted");
         assert!(has_finish, "Should emit Finished");
+    }
+
+    struct Workspace(std::path::PathBuf);
+    impl Workspace {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("cade-embedded-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path.canonicalize().unwrap())
+        }
+    }
+    impl Drop for Workspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct FileProvider {
+        calls: AtomicUsize,
+        write: bool,
+        reasoning: std::sync::Mutex<Vec<Option<String>>>,
+    }
+    #[async_trait]
+    impl LlmProvider for FileProvider {
+        async fn complete(&self, _: &CompletionRequest) -> cade_ai::Result<CompletionResponse> {
+            unreachable!()
+        }
+        async fn stream(
+            &self,
+            request: &CompletionRequest,
+        ) -> cade_ai::Result<Pin<Box<dyn Stream<Item = cade_ai::Result<StreamChunk>> + Send>>>
+        {
+            self.reasoning
+                .lock()
+                .unwrap()
+                .push(request.reasoning_effort.clone());
+            let chunks = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                vec![
+                    Ok(StreamChunk::ToolCall(LlmToolCall {
+                        id: "file-call".into(),
+                        name: if self.write {
+                            "write_file"
+                        } else {
+                            "read_file"
+                        }
+                        .into(),
+                        arguments: json!({"path":"file.txt", "content":"changed"}),
+                        thought_signature: None,
+                    })),
+                    Ok(StreamChunk::Done),
+                ]
+            } else {
+                let result = request
+                    .messages
+                    .iter()
+                    .filter(|message| message.role == "tool")
+                    .map(|message| message.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                vec![Ok(StreamChunk::Text(result)), Ok(StreamChunk::Done)]
+            };
+            Ok(Box::pin(futures::stream::iter(chunks)))
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate1_embedded_workspace_accessor_permissions_and_allowed_paths_are_effective() {
+        for (mode, paths, write, should_error) in [
+            (PermissionMode::Default, None, false, false),
+            (PermissionMode::Plan, None, true, true),
+            (
+                PermissionMode::AcceptEdits,
+                Some(vec!["elsewhere".into()]),
+                true,
+                true,
+            ),
+            (PermissionMode::AcceptEdits, None, true, false),
+        ] {
+            let workspace = Workspace::new();
+            std::fs::write(workspace.0.join("file.txt"), "unique workspace contents").unwrap();
+            let provider = Arc::new(FileProvider {
+                calls: AtomicUsize::new(0),
+                write,
+                reasoning: Default::default(),
+            });
+            let mut builder = EmbeddedSession::builder()
+                .in_memory()
+                .model("test")
+                .provider(provider.clone())
+                .cwd(&workspace.0)
+                .permission_mode(mode)
+                .permissions(Default::default())
+                .execution(Default::default())
+                .reasoning_effort("high");
+            if let Some(paths) = paths {
+                builder = builder.allowed_paths(paths);
+            }
+            let session = builder.build().await.unwrap();
+            assert_eq!(session.runtime().cwd, workspace.0);
+            assert_eq!(
+                session.runtime().conversation_id.as_deref(),
+                Some(session.conversation_id())
+            );
+            let response = session.prompt("operate on file").await.unwrap();
+            let rows = cade_store::sqlite::list_messages(
+                session.db(),
+                session.agent_id(),
+                Some(session.conversation_id()),
+                100,
+            )
+            .unwrap();
+            let tool = rows.iter().find(|row| row.role == "tool").unwrap();
+            assert_eq!(tool.content["is_error"], should_error, "{response}");
+            assert_eq!(
+                std::fs::read_to_string(workspace.0.join("file.txt")).unwrap(),
+                if write && !should_error {
+                    "changed"
+                } else {
+                    "unique workspace contents"
+                }
+            );
+            if !write {
+                assert!(response.contains("unique workspace contents"), "{response}");
+            }
+            assert!(
+                provider
+                    .reasoning
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value.as_deref() == Some("high"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate1_embedded_max_turns_is_honored_by_the_canonical_loop() {
+        let workspace = Workspace::new();
+        std::fs::write(workspace.0.join("file.txt"), "contents").unwrap();
+        let provider = Arc::new(FileProvider {
+            calls: AtomicUsize::new(0),
+            write: false,
+            reasoning: Default::default(),
+        });
+        let session = EmbeddedSession::builder()
+            .in_memory()
+            .model("test")
+            .provider(provider.clone())
+            .cwd(&workspace.0)
+            .permissions(Default::default())
+            .execution(Default::default())
+            .max_turns(1)
+            .build()
+            .await
+            .unwrap();
+        assert!(
+            session
+                .prompt("read file")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("exceeded 1 turns")
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            EmbeddedSession::builder()
+                .max_turns(0)
+                .build()
+                .await
+                .is_err()
+        );
     }
 }

@@ -80,9 +80,8 @@ impl DefaultContextCompactor {
         }
     }
 
-    /// Helper to group messages into turns (identical to the legacy group_into_turns).
-    fn group_into_turns(
-        &self,
+    /// Canonical grouping for inline context assembly and its legacy entry point.
+    pub(crate) fn group_into_turns(
         messages: &[LlmMessage],
         max_turn_chars: usize,
     ) -> Vec<Vec<LlmMessage>> {
@@ -129,7 +128,7 @@ impl ContextCompactionEngine for DefaultContextCompactor {
         message_budget_chars: usize,
         max_turn_chars: usize,
     ) -> InlineCompactionResult {
-        let mut turns = self.group_into_turns(history, max_turn_chars);
+        let mut turns = Self::group_into_turns(history, max_turn_chars);
 
         // Ensure we never split tool_call/tool_result pairs at the oldest boundary.
         if let Some(first_msg) = turns.first().and_then(|t| t.first())
@@ -205,7 +204,12 @@ impl ContextCompactionEngine for DefaultContextCompactor {
                     }
 
                     if cut_remaining == 0 {
-                        turn_chars -= to_cut;
+                        let tokens = budget_manager.turn_cost(model, &turn);
+                        turn_chars = if tokens == 0 {
+                            budget_manager.turn_cost_fallback_chars(&turn)
+                        } else {
+                            budget_manager.chars_for_tokens(tokens)
+                        };
                         if budget_used + turn_chars <= message_budget_chars {
                             selected.push(turn);
                             budget_used += turn_chars;

@@ -34,15 +34,7 @@ pub struct PricingRule {
 
 impl PricingRule {
     pub fn is_generic_fallback(&self) -> bool {
-        self.contains_any.is_empty()
-            && self.starts_with_any.iter().any(|s| {
-                s == "openai/"
-                    || s == "anthropic/"
-                    || s == "gemini/"
-                    || s == "gemini-"
-                    || s == "deepseek/"
-                    || s == "xai/"
-            })
+        self.contains_any.is_empty() && self.starts_with_any.iter().any(|s| s.ends_with('/'))
     }
 
     fn matches(&self, model_id: &str) -> bool {
@@ -134,15 +126,12 @@ impl ModelRegistry {
         }
 
         // 2. Try resolving against the new llm_providers database
-        let id_clean = model_id.strip_prefix("openrouter/").unwrap_or(model_id);
-        let parts: Vec<&str> = id_clean.split('/').collect();
-        if parts.len() == 2 {
-            let provider = if parts[0] == "gemini" {
-                "google"
-            } else {
-                parts[0]
-            };
-            let model_name = parts[1];
+        if let Some((provider, model_name)) = model_id.split_once('/') {
+            let definitions = crate::provider_registry::ProviderRegistry::configured();
+            let provider = definitions
+                .get(provider)
+                .and_then(|p| p.pricing_provider.as_deref())
+                .unwrap_or(provider);
             if let Some(m) = llm_providers::get_model(provider, model_name) {
                 // Find matching generic fallback rule to extract ratios
                 let mut cache_read_ratio = None;
@@ -159,36 +148,9 @@ impl ModelRegistry {
                     }
                 }
 
-                let cache_read = cache_read_ratio
-                    .map(|r| m.input_price * r)
-                    .unwrap_or_else(|| {
-                        if provider == "anthropic" {
-                            m.input_price * 0.1
-                        } else if provider == "openai" {
-                            m.input_price * 0.5
-                        } else if provider == "gemini" || provider == "google" {
-                            m.input_price * 0.25
-                        } else if provider == "deepseek" {
-                            if model_name.contains("reasoner") || model_name.contains("r1") {
-                                m.input_price * 0.25
-                            } else {
-                                m.input_price * 0.1
-                            }
-                        } else {
-                            0.0
-                        }
-                    });
+                let cache_read = cache_read_ratio.map(|r| m.input_price * r).unwrap_or(0.0);
 
-                let cache_write =
-                    cache_write_ratio
-                        .map(|r| m.input_price * r)
-                        .unwrap_or_else(|| {
-                            if provider == "anthropic" {
-                                m.input_price * 1.25
-                            } else {
-                                0.0
-                            }
-                        });
+                let cache_write = cache_write_ratio.map(|r| m.input_price * r).unwrap_or(0.0);
 
                 return ModelPricing {
                     input: m.input_price,

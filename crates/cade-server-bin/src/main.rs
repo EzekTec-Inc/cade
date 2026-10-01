@@ -15,7 +15,7 @@ use cade_server::server::{
 };
 use cade_store::sqlite::{self, open as open_db};
 
-use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
+use cade_ai::{ConcurrentRouter, LlmProvider, LlmRouter};
 use cade_core::settings::SettingsManager;
 
 // endregion: --- Modules
@@ -136,15 +136,13 @@ async fn async_main() -> Result<()> {
         if !row.enabled {
             continue;
         }
-        if let Some(p) = LlmRouter::provider_from_row(
+        if router_inner.add_configured_provider(
+            &row.name,
             &row.kind,
             row.api_key.clone(),
             row.base_url.clone(),
             &ai_config,
         ) {
-            // Store the API key so list_dynamic_models() can fetch live model lists.
-            let key = row.api_key.clone().unwrap_or_default();
-            router_inner.add_provider_with_key(row.name.clone(), p, key);
             tracing::info!("Loaded provider from DB: {} ({})", row.name, row.kind);
         }
     }
@@ -160,7 +158,7 @@ async fn async_main() -> Result<()> {
         // We need a stable Arc<dyn LlmProvider> for the existing llm field.
         // Since LlmRouter implements LlmProvider via the RwLock wrapper,
         // we wrap the RwLock<LlmRouter> in a thin adapter.
-        Arc::new(RouterAdapter(Arc::clone(&llm_router)))
+        Arc::new(ConcurrentRouter(Arc::clone(&llm_router)))
     };
 
     // ── MCP servers ───────────────────────────────────────────────────────────
@@ -505,49 +503,4 @@ async fn add_version_header(mut response: axum::response::Response) -> axum::res
         axum::http::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
     response
-}
-
-// -- RouterAdapter: thin wrapper so Arc<RwLock<LlmRouter>> implements LlmProvider
-//
-// IMPORTANT: the lock is held ONLY for the brief resolve_provider() call.
-// It is dropped BEFORE any HTTP calls to Anthropic / OpenAI / Gemini.
-
-struct RouterAdapter(Arc<RwLock<LlmRouter>>);
-
-#[async_trait::async_trait]
-impl LlmProvider for RouterAdapter {
-    async fn complete(
-        &self,
-        req: &CompletionRequest,
-    ) -> cade_ai::Result<cade_ai::CompletionResponse> {
-        let (provider, bare_model) = {
-            let router = self.0.read().await;
-            router.resolve_provider(&req.model)?
-        };
-        let routed = CompletionRequest {
-            model: bare_model,
-            ..req.clone()
-        };
-        provider.complete(&routed).await
-    }
-
-    async fn stream(
-        &self,
-        req: &CompletionRequest,
-    ) -> cade_ai::Result<
-        std::pin::Pin<
-            Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
-        >,
-    > {
-        let (provider, bare_model) = {
-            let router = self.0.read().await;
-            router.resolve_provider(&req.model)?
-        };
-        let routed = CompletionRequest {
-            model: bare_model,
-            ..req.clone()
-        };
-
-        provider.stream(&routed).await
-    }
 }

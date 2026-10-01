@@ -6,7 +6,7 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::server::state::AppState;
-use cade_ai::{LlmRouter, provider_registry::ProviderRegistry};
+use cade_ai::provider_registry::ProviderRegistry;
 use cade_store::sqlite::{self, ProviderRow};
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
@@ -28,6 +28,7 @@ pub async fn list_providers(
     let db_rows = sqlite::list_providers(&state.db).map_err(|e| server_err(e.to_string()))?;
 
     let live_names = state.llm_router.read().await.provider_names();
+    let registry = ProviderRegistry::configured();
 
     let providers: Vec<Value> = db_rows
         .iter()
@@ -49,7 +50,7 @@ pub async fn list_providers(
         if !db_rows.iter().any(|r| &r.name == name) {
             all.push(json!({
                 "name":    name,
-                "kind":    name,  // env-var providers have kind == name
+                "kind":    registry.get(name).map(|p| p.kind.as_str()).unwrap_or("registered"),
                 "enabled": true,
                 "live":    true,
                 "source":  "env"
@@ -90,23 +91,21 @@ pub async fn add_provider(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    if name.is_empty() {
-        return Err(bad_req("'name' cannot be empty"));
+    if name.is_empty() || name.contains('/') || name.chars().any(char::is_whitespace) {
+        return Err(bad_req(
+            "'name' must be a nonempty provider prefix without slashes or whitespace",
+        ));
     }
 
-    let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
-    let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
+    let provider_registry = ProviderRegistry::configured();
 
     // Preset shortcut: if kind == "preset" or kind == name and it matches a PresetDef, auto-fill base_url
     let base_url = if kind == "openai-compatible" || kind == "preset" || kind == name {
-        if let Some(preset_url) = provider_registry
-            .get_all_providers()
-            .iter()
-            .find(|p| p.name == name.as_str())
-            .map(|p| p.chat_url.to_string())
-        {
-            kind = "openai-compatible".to_string();
-            base_url.or(Some(preset_url))
+        if let Some(preset) = provider_registry.get(&name) {
+            if kind == "preset" || kind == name {
+                kind = preset.kind.clone();
+            }
+            base_url.or_else(|| Some(preset.endpoint()))
         } else {
             base_url
         }
@@ -140,19 +139,13 @@ pub async fn add_provider(
 
     // Build the live provider and add to router — store API key so live model listing works.
     let ai_config = state.config.to_ai_config();
-    if let Some(provider) = LlmRouter::provider_from_row(
+    if !state.llm_router.write().await.add_configured_provider(
+        &name,
         &row.kind,
         row.api_key.clone(),
         row.base_url.clone(),
         &ai_config,
     ) {
-        let key = row.api_key.clone().unwrap_or_default();
-        state
-            .llm_router
-            .write()
-            .await
-            .add_provider_with_key(name.clone(), provider, key);
-    } else {
         return Err(bad_req(
             "Could not construct provider — check api_key/base_url",
         ));
@@ -189,8 +182,7 @@ pub async fn remove_provider(
 
 /// GET /v1/providers/presets — list available OpenAI-compatible presets
 pub async fn list_presets() -> Json<Value> {
-    let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
-    let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
+    let provider_registry = ProviderRegistry::configured();
 
     let presets: Vec<Value> = provider_registry
         .get_all_providers()
@@ -198,10 +190,14 @@ pub async fn list_presets() -> Json<Value> {
         .map(|p| {
             json!({
                 "name":     p.name,
-                "kind":     "openai-compatible",
-                "base_url": p.chat_url,
+                "kind":     p.kind,
+                "base_url": p.endpoint(),
                 "models_url": &p.models_url,
+                "discovery": p.discovery,
                 "env_vars": &p.env_vars,
+                "default_model": &p.default_model,
+                "fast_model": &p.fast_model,
+                "background_model": &p.background_model,
             })
         })
         .collect();

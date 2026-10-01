@@ -56,7 +56,7 @@ impl TodoWriteTool {
 
     pub async fn run(args: &Value) -> Result<String> {
         let content = args["content"].as_str().unwrap_or("");
-        let path = std::env::current_dir()?.join(".cade-todo.md");
+        let path = super::fs::working_dir().join(".cade-todo.md");
         std::fs::write(&path, content)?;
         Ok(format!("Successfully updated {}", path.display()))
     }

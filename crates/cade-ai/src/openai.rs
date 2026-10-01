@@ -9,8 +9,7 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, clean_openai_schema, provider_error, retry_with_backoff,
-    seal_top_level_additional_properties,
+    clean_openai_schema, provider_error, retry_with_backoff, seal_top_level_additional_properties,
 };
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -18,20 +17,23 @@ const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
 // region:    --- Model Capabilities
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApiProtocol {
     ChatCompletions,
     Responses,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TokenParameter {
     MaxTokens,
     MaxCompletionTokens,
     MaxOutputTokens,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningStrategy {
     None,
     TopLevelReasoningEffort,
@@ -48,40 +50,17 @@ pub struct OpenAiModelCapabilities {
 
 impl OpenAiModelCapabilities {
     pub fn for_model(model: &str) -> Self {
-        let bare = bare_model(model).to_lowercase();
-
-        // GPT-5 and GPT-6 families: Frontier reasoning models requiring /v1/responses for function tools
-        if bare.starts_with("gpt-6") || bare.starts_with("gpt-5") {
-            Self {
-                default_protocol: ApiProtocol::Responses,
-                token_parameter: TokenParameter::MaxCompletionTokens,
-                reasoning_strategy: ReasoningStrategy::NestedReasoningObject,
-                is_frontier: true,
-            }
-        // O-series reasoning models (o1, o3, o4)
-        } else if bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4") {
-            Self {
-                default_protocol: ApiProtocol::ChatCompletions,
-                token_parameter: TokenParameter::MaxCompletionTokens,
-                reasoning_strategy: ReasoningStrategy::TopLevelReasoningEffort,
-                is_frontier: false,
-            }
-        // GPT-4.5
-        } else if bare.starts_with("gpt-4.5") {
-            Self {
-                default_protocol: ApiProtocol::ChatCompletions,
-                token_parameter: TokenParameter::MaxCompletionTokens,
-                reasoning_strategy: ReasoningStrategy::None,
-                is_frontier: false,
-            }
-        // Standard legacy models (gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo, etc.)
-        } else {
-            Self {
-                default_protocol: ApiProtocol::ChatCompletions,
-                token_parameter: TokenParameter::MaxTokens,
-                reasoning_strategy: ReasoningStrategy::None,
-                is_frontier: false,
-            }
+        let (provider, bare) = model.split_once('/').unwrap_or(("openai", model));
+        let metadata = crate::runtime::shared_registry()
+            .read()
+            .metadata(provider, bare);
+        Self {
+            default_protocol: metadata.protocol.unwrap_or(ApiProtocol::ChatCompletions),
+            token_parameter: metadata
+                .token_parameter
+                .unwrap_or(TokenParameter::MaxTokens),
+            reasoning_strategy: metadata.reasoning.unwrap_or(ReasoningStrategy::None),
+            is_frontier: metadata.preview_gateway.unwrap_or(false),
         }
     }
 }
@@ -93,21 +72,21 @@ pub(crate) fn is_frontier_preview_model(model: &str) -> bool {
     OpenAiModelCapabilities::for_model(model).is_frontier
 }
 
+#[cfg(test)]
 fn needs_max_completion_tokens(model: &str) -> bool {
     OpenAiModelCapabilities::for_model(model).token_parameter == TokenParameter::MaxCompletionTokens
 }
 
+#[cfg(test)]
 fn is_o_series(model: &str) -> bool {
-    let bare = bare_model(model).to_lowercase();
-    bare.starts_with("o1")
-        || bare.starts_with("o3")
-        || bare.starts_with("o4")
-        || bare.starts_with("gpt-5.5-pro")
-        || bare.starts_with("gpt-5.6")
-        || bare.starts_with("gpt-5")
-        || bare.starts_with("gpt-6")
+    let (provider, bare) = model.split_once('/').unwrap_or(("openai", model));
+    crate::runtime::RuntimeRegistry::configured()
+        .metadata(provider, bare)
+        .developer_role
+        == Some(true)
 }
 
+#[cfg(test)]
 fn requires_responses_api_for_tools_with_reasoning(req: &CompletionRequest) -> bool {
     OpenAiModelCapabilities::for_model(&req.model).is_frontier && !req.tools.is_empty()
 }
@@ -123,21 +102,23 @@ fn map_reasoning_effort(effort: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn is_deepseek_request(base_url: &str, model: &str) -> bool {
-    base_url.contains("deepseek.com")
-        || model.starts_with("deepseek/")
-        || model.starts_with("deepseek-")
+fn configured_reasoning_effort(
+    metadata: &crate::runtime::ModelMetadata,
+    effort: &str,
+) -> Option<String> {
+    match metadata.reasoning_values.as_ref() {
+        Some(values) => values.get(effort).cloned(),
+        None => map_reasoning_effort(effort).map(String::from),
+    }
 }
 
-pub(crate) fn map_deepseek_reasoning_effort(effort: &str) -> (&'static str, &'static str) {
-    match effort.to_lowercase().as_str() {
-        "none" | "off" | "disabled" => ("disabled", "none"),
-        "low" => ("enabled", "low"),
-        "medium" => ("enabled", "medium"),
-        "high" | "xhigh" => ("enabled", "high"),
-        "max" => ("enabled", "max"),
-        _ => ("enabled", "high"),
-    }
+fn parse_tool_arguments(arguments: &str) -> Result<Value> {
+    serde_json::from_str(if arguments.trim().is_empty() {
+        "{}"
+    } else {
+        arguments
+    })
+    .map_err(Into::into)
 }
 
 pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage> {
@@ -208,10 +189,26 @@ pub(crate) fn parse_responses_api_chunk(
                 let item = &v["item"];
                 if item["type"].as_str() == Some("function_call") {
                     let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                    let entry = tool_map.entry(idx).or_default();
+                    if let Some(id) = item["call_id"].as_str().or_else(|| item["id"].as_str()) {
+                        entry.0 = id.into();
+                    }
+                    if let Some(name) = item["name"].as_str() {
+                        entry.1 = name.into();
+                    }
+                    // The final item is authoritative, not another argument delta.
+                    if let Some(args) = item["arguments"].as_str() {
+                        entry.2 = args.into();
+                    }
                     if let Some((id, name, args_str)) = tool_map.remove(&idx)
                         && !name.is_empty()
                     {
-                        let args = serde_json::from_str(&args_str).unwrap_or_default();
+                        let args = serde_json::from_str(if args_str.trim().is_empty() {
+                            "{}"
+                        } else {
+                            &args_str
+                        })
+                        .unwrap_or_default();
                         chunks.push(StreamChunk::ToolCall(LlmToolCall {
                             id,
                             name,
@@ -230,23 +227,38 @@ pub(crate) fn parse_responses_api_chunk(
                     entry.2.push_str(delta_args);
                 }
             }
-            "response.text.delta" | "response.output_text.delta" => {
+            "response.function_call_arguments.done" => {
+                let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                if let Some(args) = v["arguments"].as_str() {
+                    tool_map.entry(idx).or_default().2 = args.into();
+                }
+            }
+            "response.text.delta" | "response.output_text.delta" | "response.refusal.delta" => {
                 if let Some(txt) = v["delta"].as_str()
                     && !txt.is_empty()
                 {
                     chunks.push(StreamChunk::Text(txt.to_string()));
                 }
             }
-            "response.reasoning.delta" => {
+            "response.reasoning.delta"
+            | "response.reasoning_text.delta"
+            | "response.reasoning_summary_text.delta" => {
                 if let Some(res) = v["delta"].as_str()
                     && !res.is_empty()
                 {
                     chunks.push(StreamChunk::Reasoning(res.to_string()));
                 }
             }
-            "response.done" => {
-                if let Some(status) = v["response"]["status"].as_str() {
-                    chunks.push(StreamChunk::FinishReason(status.to_string()));
+            "response.done" | "response.completed" | "response.incomplete" => {
+                if let Some(status) = v["response"]["incomplete_details"]["reason"]
+                    .as_str()
+                    .or_else(|| v["response"]["status"].as_str())
+                {
+                    chunks.push(StreamChunk::FinishReason(status.into()));
+                } else {
+                    chunks.push(StreamChunk::FinishReason(
+                        event_type.trim_start_matches("response.").into(),
+                    ));
                 }
             }
             _ => {}
@@ -273,121 +285,38 @@ pub(crate) fn parse_responses_api_chunk(
 ///   `[ { "id": "..." }, … ]`             — some providers return a bare array
 ///
 /// Returns a sorted `Vec<String>` of model IDs; empty on any error.
-/// Fetch only chat-completion-capable models from the OpenAI API.
-/// Filters out embeddings, TTS, Whisper, DALL-E, and legacy completions models.
-/// Returns model IDs sorted newest-first (by `created` timestamp).
+/// Compatibility listing API. A model ID alone does not prove chat capability;
+/// unclassified IDs remain discoverable instead of applying a name allowlist.
 pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
-    let client = Client::new();
-    let req = client
-        .get("https://api.openai.com/v1/models")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .send();
-    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
-            tracing::warn!("fetch_openai_chat_models: request failed: {e}");
-            return vec![];
-        }
-        Err(_) => {
-            tracing::warn!("fetch_openai_chat_models: request timed out");
-            return vec![];
-        }
-    };
-    if !resp.status().is_success() {
-        tracing::warn!(
-            "fetch_openai_chat_models: API returned error status: {}",
-            resp.status()
-        );
-        return vec![];
-    }
-    let Ok(body) = resp.json::<Value>().await else {
-        tracing::warn!("fetch_openai_chat_models: failed to parse JSON response body");
-        return vec![];
-    };
-
-    let arr = match body["data"].as_array() {
-        Some(a) => a.clone(),
-        None => return vec![],
-    };
-
-    // Keep only models that support chat completions — filter by well-known prefixes
-    let is_chat_model = |id: &str| -> bool {
-        let id = id.to_lowercase();
-        id.starts_with("gpt-")
-            || id.starts_with("o1")
-            || id.starts_with("o3")
-            || id.starts_with("o4")
-            || id.starts_with("chatgpt")
-    };
-
-    // Sort newest first using the `created` Unix timestamp
-    let mut entries: Vec<(u64, String)> = arr
-        .iter()
-        .filter_map(|m| {
-            let id = m["id"].as_str()?;
-            if !is_chat_model(id) {
-                return None;
-            }
-            let created = m["created"].as_u64().unwrap_or(0);
-            Some((created, id.to_string()))
-        })
-        .collect();
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    entries.into_iter().map(|(_, id)| id).collect()
+    crate::discovery::default_models("openai", api_key)
+        .await
+        .into_iter()
+        .filter_map(|entry| entry.id.split_once('/').map(|(_, id)| id.to_owned()))
+        .collect()
 }
 
 pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
-    let client = Client::new();
-    let mut req_builder = client
-        .get(models_url)
-        .header("Authorization", format!("Bearer {api_key}"));
-
-    if models_url.contains("openrouter.ai") {
-        req_builder = req_builder
-            .header("HTTP-Referer", "https://github.com/GovAlta-Lab/cade")
-            .header("X-Title", "CADE");
-    }
-    let req = req_builder.send();
-    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
-            tracing::warn!("fetch_model_ids: request failed for {models_url}: {e}");
-            return vec![];
+    let registry = std::sync::Arc::new(parking_lot::RwLock::new(
+        crate::runtime::RuntimeRegistry::default(),
+    ));
+    match crate::discovery::discover(
+        "openai-compatible",
+        models_url,
+        api_key,
+        "gateway",
+        &registry,
+    )
+    .await
+    {
+        Ok(entries) => entries
+            .into_iter()
+            .filter_map(|e| e.id.split_once('/').map(|(_, id)| id.to_owned()))
+            .collect(),
+        Err(e) => {
+            tracing::warn!("Model discovery failed: {e}");
+            Vec::new()
         }
-        Err(_) => {
-            tracing::warn!("fetch_model_ids: request timed out for {models_url}");
-            return vec![];
-        }
-    };
-    if !resp.status().is_success() {
-        tracing::warn!(
-            "fetch_model_ids: API returned error status for {models_url}: {}",
-            resp.status()
-        );
-        return vec![];
     }
-    let Ok(body) = resp.json::<Value>().await else {
-        tracing::warn!("fetch_model_ids: failed to parse JSON response body for {models_url}");
-        return vec![];
-    };
-
-    // Try { "data": [...] } (OpenAI format)
-    let items = if let Some(arr) = body["data"].as_array() {
-        arr.clone()
-    } else if body.is_array() {
-        // Bare array
-        body.as_array().cloned().unwrap_or_default()
-    } else {
-        return vec![];
-    };
-
-    let mut ids: Vec<String> = items
-        .iter()
-        .filter_map(|m| m["id"].as_str().map(String::from))
-        .filter(|id| !id.is_empty())
-        .collect();
-    ids.sort();
-    ids
 }
 
 // endregion: --- Tests
@@ -397,8 +326,12 @@ pub struct OpenAiProvider {
     api_key: String,
     /// Override base URL for OpenAI-compatible endpoints (e.g. Together, Groq)
     base_url: String,
+    provider_name: String,
+    label: String,
+    models: crate::SharedModelRegistry,
 }
 
+#[cfg(test)]
 const OPENAI_MAX_TOOLS: usize = 128;
 const PRIORITY_TOOL_NAMES: &[&str] = &[
     "load_skill",
@@ -469,15 +402,15 @@ fn tool_server_key(schema: &Value) -> &str {
         .unwrap_or("")
 }
 
-fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
-    let mut selected: Vec<&Value> = Vec::with_capacity(OPENAI_MAX_TOOLS.min(schemas.len()));
+fn capped_tools_with_limit(schemas: &[Value], limit: usize) -> Vec<&Value> {
+    let mut selected: Vec<&Value> = Vec::with_capacity(limit.min(schemas.len()));
 
     // 1. Tier 0: Meta Tools (Memory, Skills, Planning, Task Lifecycle)
     let mut meta_tools: Vec<&Value> = schemas.iter().filter(|s| is_meta_tool(s)).collect();
     meta_tools.sort_by_key(|s| (tool_server_key(s), tool_name(s).unwrap_or("")));
-    selected.extend(meta_tools.into_iter().take(OPENAI_MAX_TOOLS));
+    selected.extend(meta_tools.into_iter().take(limit));
 
-    if selected.len() >= OPENAI_MAX_TOOLS {
+    if selected.len() >= limit {
         return selected;
     }
 
@@ -500,7 +433,7 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
     loop {
         let mut added_in_round = 0;
         for tools in core_by_server.values() {
-            if selected.len() >= OPENAI_MAX_TOOLS {
+            if selected.len() >= limit {
                 break;
             }
             if let Some(&tool) = tools.get(round) {
@@ -508,13 +441,13 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
                 added_in_round += 1;
             }
         }
-        if added_in_round == 0 || selected.len() >= OPENAI_MAX_TOOLS {
+        if added_in_round == 0 || selected.len() >= limit {
             break;
         }
         round += 1;
     }
 
-    if selected.len() >= OPENAI_MAX_TOOLS {
+    if selected.len() >= limit {
         return selected;
     }
 
@@ -525,7 +458,7 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
         .collect();
     remaining.sort_by_key(|s| (tool_server_key(s), tool_name(s).unwrap_or("")));
 
-    let slots_left = OPENAI_MAX_TOOLS.saturating_sub(selected.len());
+    let slots_left = limit.saturating_sub(selected.len());
     selected.extend(remaining.into_iter().take(slots_left));
 
     selected
@@ -534,25 +467,24 @@ fn capped_tools(schemas: &[Value]) -> Vec<&Value> {
 impl OpenAiProvider {
     /// Return a human-readable label for this provider instance.
     /// Used in error messages so users see "OpenRouter" instead of "OpenAI".
-    pub(crate) fn provider_label(&self) -> &'static str {
-        if self.base_url.contains("openrouter.ai") {
-            "OpenRouter"
-        } else if self.base_url.contains("api.groq.com") {
-            "Groq"
-        } else if self.base_url.contains("deepseek.com") {
-            "DeepSeek"
-        } else if self.base_url != OPENAI_URL {
-            "OpenAI-compatible"
-        } else {
-            "OpenAI"
-        }
+    pub(crate) fn provider_label(&self) -> &str {
+        &self.label
     }
 
     /// Resolve the target endpoint for a model request.
-    /// If `OPENAI_PREVIEW_BASE_URL` is set and the model is a frontier preview (`gpt-5*`),
-    /// route to the custom gateway rather than the default public chat completions endpoint.
+    /// Preview gateway eligibility comes from registered/compatibility metadata.
+    /// Appending a protocol path preserves any configured gateway query parameters.
     fn append_endpoint_path(base_url: &str, path: &str) -> String {
         let trimmed = base_url.trim().trim_end_matches('/');
+        if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+            let root = url.path().trim_end_matches('/');
+            if root.ends_with("/chat/completions") || root.ends_with("/responses") {
+                return url.into();
+            }
+            let endpoint = format!("{root}{path}");
+            url.set_path(&endpoint);
+            return url.into();
+        }
         if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/responses") {
             trimmed.to_string()
         } else {
@@ -572,7 +504,7 @@ impl OpenAiProvider {
             "/chat/completions"
         };
 
-        if self.base_url == OPENAI_URL && is_frontier_preview_model(model) {
+        if self.base_url == OPENAI_URL && self.metadata(model).preview_gateway == Some(true) {
             let env_opt = std::env::var("OPENAI_PREVIEW_BASE_URL").ok();
             let opt = preview_override.or(env_opt.as_deref());
             if let Some(preview_url) = opt {
@@ -590,12 +522,106 @@ impl OpenAiProvider {
         Self::append_endpoint_path(&self.base_url, endpoint_path)
     }
 
-    fn resolve_endpoint_for_request(&self, req: &CompletionRequest) -> String {
-        self.resolve_endpoint_with_preview(
-            &req.model,
-            requires_responses_api_for_tools_with_reasoning(req),
-            None,
+    fn protocol_endpoint(&self, req: &CompletionRequest) -> (ApiProtocol, String) {
+        let desired = self.protocol(req);
+        let endpoint =
+            self.resolve_endpoint_with_preview(&req.model, desired == ApiProtocol::Responses, None);
+        // Freeze the paired contract before any await. The URL is authoritative
+        // even if shared metadata is edited while this request is being prepared.
+        (
+            Self::endpoint_protocol(&endpoint).unwrap_or(desired),
+            endpoint,
         )
+    }
+
+    #[cfg(test)]
+    fn resolve_endpoint_for_request(&self, req: &CompletionRequest) -> String {
+        self.protocol_endpoint(req).1
+    }
+
+    pub fn with_registry(
+        mut self,
+        provider_name: String,
+        models: crate::SharedModelRegistry,
+    ) -> Self {
+        self.provider_name = provider_name;
+        self.models = models;
+        let definitions = crate::provider_registry::ProviderRegistry::configured();
+        if let Some(definition) = definitions.get(&self.provider_name) {
+            self.apply_definition(Some(definition));
+        } else {
+            self.label = self.provider_name.clone();
+        }
+        self
+    }
+
+    pub(crate) fn with_provider_definition(
+        mut self,
+        definition: &crate::provider_registry::ProviderDef,
+    ) -> Self {
+        self.apply_definition(Some(definition));
+        self
+    }
+
+    fn apply_definition(&mut self, definition: Option<&crate::provider_registry::ProviderDef>) {
+        self.label = definition
+            .and_then(|d| d.display_name.clone())
+            .unwrap_or_else(|| self.provider_name.clone());
+        self.client = crate::utils::build_provider_http_client(definition);
+    }
+
+    fn metadata(&self, model: &str) -> crate::runtime::ModelMetadata {
+        let registry = self.models.read();
+        registry.metadata(
+            &self.provider_name,
+            registry.upstream_model(&self.provider_name, model),
+        )
+    }
+
+    fn protocol(&self, req: &CompletionRequest) -> ApiProtocol {
+        if self.base_url == OPENAI_URL
+            && self.metadata(&req.model).preview_gateway == Some(true)
+            && let Ok(preview) = std::env::var("OPENAI_PREVIEW_BASE_URL")
+            && let Some(protocol) = Self::endpoint_protocol(&preview)
+        {
+            return protocol;
+        }
+        // An explicitly configured complete Chat URL is a protocol choice. A root
+        // gateway URL permits model metadata to choose the paired endpoint.
+        if self.base_url != OPENAI_URL
+            && let Some(protocol) = Self::endpoint_protocol(&self.base_url)
+        {
+            return protocol;
+        }
+        self.metadata(&req.model)
+            .protocol
+            .unwrap_or(ApiProtocol::ChatCompletions)
+    }
+
+    fn endpoint_protocol(endpoint: &str) -> Option<ApiProtocol> {
+        let url = reqwest::Url::parse(endpoint).ok()?;
+        let path = url.path().trim_end_matches('/');
+        if path.ends_with("/responses") {
+            Some(ApiProtocol::Responses)
+        } else if path.ends_with("/chat/completions") {
+            Some(ApiProtocol::ChatCompletions)
+        } else {
+            None
+        }
+    }
+
+    fn validate_request(&self, req: &CompletionRequest) -> Result<()> {
+        self.validate_model(&req.model)?;
+        if !req.tools.is_empty() && self.metadata(&req.model).tools == Some(false) {
+            return Err(crate::Error::custom(format!(
+                "Model '{}' is registered without tool support",
+                req.model
+            )));
+        }
+        if req.max_tokens == 0 {
+            return Err(crate::Error::custom("max_tokens must be greater than zero"));
+        }
+        Ok(())
     }
 
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
@@ -608,35 +634,37 @@ impl OpenAiProvider {
             })
             .unwrap_or_else(|| OPENAI_URL.to_string());
 
-        let client = if base.contains("openrouter.ai") {
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(
-                "HTTP-Referer",
-                reqwest::header::HeaderValue::from_static("https://github.com/GovAlta-Lab/cade"),
-            );
-            headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
-
-            Client::builder()
-                .tcp_keepalive(std::time::Duration::from_secs(30))
-                .connect_timeout(std::time::Duration::from_secs(15))
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .default_headers(headers)
-                .build()
-                .unwrap_or_else(|_| Client::new())
-        } else {
-            crate::utils::build_standard_http_client()
-        };
-
+        let definitions = crate::provider_registry::ProviderRegistry::configured();
+        let definition = definitions
+            .get_all_providers()
+            .iter()
+            .find(|p| p.chat_url == base || p.endpoint() == base);
+        let provider_name = definition.map(|p| p.name.clone()).unwrap_or_else(|| {
+            if base == OPENAI_URL {
+                "openai".into()
+            } else {
+                "openai-compatible".into()
+            }
+        });
+        let label = definition
+            .and_then(|d| d.display_name.clone())
+            .unwrap_or_else(|| provider_name.clone());
         Self {
-            client,
+            client: crate::utils::build_provider_http_client(definition),
             api_key,
             base_url: base,
+            provider_name,
+            label,
+            models: crate::runtime::shared_registry(),
         }
     }
 
+    #[cfg(test)]
     fn to_openai_messages(req: &CompletionRequest) -> Value {
-        let is_o_series = is_o_series(&req.model);
+        Self::to_openai_messages_with_role(req, is_o_series(&req.model))
+    }
 
+    fn to_openai_messages_with_role(req: &CompletionRequest, developer: bool) -> Value {
         let mut combined_system = String::new();
         let mut processed_messages = Vec::new();
 
@@ -654,7 +682,7 @@ impl OpenAiProvider {
         let mut json_messages = Vec::new();
 
         if !combined_system.is_empty() {
-            let role = if is_o_series { "developer" } else { "system" };
+            let role = if developer { "developer" } else { "system" };
             json_messages.push(json!({"role": role, "content": combined_system}));
         }
 
@@ -691,9 +719,7 @@ impl OpenAiProvider {
                     {
                         let mut parts: Vec<Value> = images.iter().map(|img| json!({
                             "type": "image_url",
-                            "image_url": {
-                                "url": format!("data:{};base64,{}", img.media_type, img.data)
-                            }
+                            "image_url": {"url": format!("data:{};base64,{}", img.media_type, img.data)}
                         })).collect();
                         if !m.content.is_empty() {
                             parts.push(json!({"type": "text", "text": m.content}));
@@ -710,9 +736,12 @@ impl OpenAiProvider {
         json!(json_messages)
     }
 
+    #[cfg(test)]
     pub(crate) fn to_responses_input(req: &CompletionRequest) -> Value {
-        let is_o_series = is_o_series(&req.model);
+        Self::to_responses_input_with_role(req, is_o_series(&req.model))
+    }
 
+    fn to_responses_input_with_role(req: &CompletionRequest, developer: bool) -> Value {
         let mut combined_system = String::new();
         let mut processed_messages = Vec::new();
 
@@ -730,7 +759,7 @@ impl OpenAiProvider {
         let mut json_items = Vec::new();
 
         if !combined_system.is_empty() {
-            let role = if is_o_series { "developer" } else { "system" };
+            let role = if developer { "developer" } else { "system" };
             json_items.push(json!({"role": role, "content": combined_system}));
         }
 
@@ -770,13 +799,11 @@ impl OpenAiProvider {
                         && !images.is_empty()
                     {
                         let mut parts: Vec<Value> = images.iter().map(|img| json!({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": format!("data:{};base64,{}", img.media_type, img.data)
-                            }
+                            "type": "input_image",
+                            "image_url": format!("data:{};base64,{}", img.media_type, img.data)
                         })).collect();
                         if !m.content.is_empty() {
-                            parts.push(json!({"type": "text", "text": m.content}));
+                            parts.push(json!({"type": "input_text", "text": m.content}));
                         }
                         json_items.push(json!({"role": m.role, "content": parts}));
                     } else {
@@ -797,9 +824,12 @@ impl OpenAiProvider {
         model: &str,
     ) -> crate::Error {
         if status == reqwest::StatusCode::NOT_FOUND && is_frontier_preview_model(model) {
-            crate::Error::custom(format!(
-                "{label} returned 404 Not Found for model '{model}'. If you are using a partner/enterprise preview or internal gateway, configure OPENAI_PREVIEW_BASE_URL (e.g. export OPENAI_PREVIEW_BASE_URL=\"https://your-gateway.example.com/v1\"). Upstream details: {text}"
-            ))
+            crate::Error::Provider {
+                status: status.as_u16(),
+                msg: format!(
+                    "{label} returned 404 Not Found for model '{model}'. If you are using a partner/enterprise preview or internal gateway, configure OPENAI_PREVIEW_BASE_URL (e.g. export OPENAI_PREVIEW_BASE_URL=\"https://your-gateway.example.com/v1\"). Upstream details: {text}"
+                ),
+            }
         } else {
             provider_error(label, status, text)
         }
@@ -849,16 +879,127 @@ impl OpenAiProvider {
         }
     }
 
-    fn build_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = capped_tools(&req.tools)
+    fn decode_response(body: &Value, protocol: ApiProtocol) -> Result<CompletionResponse> {
+        if let Some(error) = body.get("error").filter(|v| !v.is_null()) {
+            return Err(crate::Error::custom(format!(
+                "Upstream completion error: {error}"
+            )));
+        }
+        if protocol == ApiProtocol::ChatCompletions {
+            if !body["choices"][0]["message"].is_object() {
+                return Err(crate::Error::custom(
+                    "Expected Chat Completions choices[0].message",
+                ));
+            }
+            return Ok(Self::parse_response(body));
+        }
+        if body["status"] == "failed" || body["status"] == "cancelled" {
+            return Err(crate::Error::custom(format!(
+                "Responses request {}: {}",
+                body["status"], body["error"]
+            )));
+        }
+        let output = body["output"]
+            .as_array()
+            .ok_or_else(|| crate::Error::custom("Expected Responses output array"))?;
+        let mut text = String::new();
+        let mut tools = Vec::new();
+        for item in output {
+            match item["type"].as_str() {
+                Some("message") => {
+                    if let Some(parts) = item["content"].as_array() {
+                        for part in parts {
+                            if let Some(content) =
+                                part["text"].as_str().or_else(|| part["refusal"].as_str())
+                            {
+                                text.push_str(content);
+                            }
+                        }
+                    }
+                }
+                Some("function_call") => {
+                    let arguments = item["arguments"].as_str().unwrap_or("{}");
+                    tools.push(LlmToolCall {
+                        id: item["call_id"]
+                            .as_str()
+                            .or_else(|| item["id"].as_str())
+                            .unwrap_or_default()
+                            .into(),
+                        name: item["name"].as_str().unwrap_or_default().into(),
+                        arguments: parse_tool_arguments(arguments)?,
+                        thought_signature: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+        let finish_reason = if body["status"] == "incomplete" {
+            body["incomplete_details"]["reason"]
+                .as_str()
+                .unwrap_or("incomplete")
+        } else if !tools.is_empty() {
+            "tool_calls"
+        } else {
+            "stop"
+        };
+        Ok(CompletionResponse {
+            content: (!text.is_empty()).then_some(text),
+            tool_calls: tools,
+            finish_reason: finish_reason.into(),
+        })
+    }
+
+    async fn send_completion(
+        &self,
+        req: &CompletionRequest,
+        body: Value,
+        protocol: ApiProtocol,
+        endpoint: String,
+    ) -> Result<CompletionResponse> {
+        retry_with_backoff(
+            "OpenAI::complete",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let endpoint = endpoint.clone();
+                let body = body.clone();
+                async move {
+                    let mut request = self.client.post(endpoint).json(&body);
+                    if !self.api_key.is_empty() {
+                        request = request.bearer_auth(&self.api_key);
+                    }
+                    let response = request.send().await?;
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        return Err(Self::format_upstream_error(
+                            self.provider_label(),
+                            status,
+                            &response.text().await.unwrap_or_default(),
+                            &req.model,
+                        ));
+                    }
+                    Self::decode_response(&response.json::<Value>().await?, protocol)
+                }
+            },
+        )
+        .await
+    }
+
+    fn build_tools_with_limit(req: &CompletionRequest, limit: usize) -> Value {
+        let tools: Vec<Value> = capped_tools_with_limit(&req.tools, limit)
             .into_iter()
             .map(Self::openai_tool_from_schema)
             .collect();
         json!(tools)
     }
 
-    fn build_responses_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = capped_tools(&req.tools)
+    #[cfg(test)]
+    fn build_tools(req: &CompletionRequest) -> Value {
+        Self::build_tools_with_limit(req, OPENAI_MAX_TOOLS)
+    }
+
+    fn build_responses_tools(req: &CompletionRequest, limit: usize) -> Value {
+        let tools: Vec<Value> = capped_tools_with_limit(&req.tools, limit)
             .iter()
             .map(|schema| {
                 let tool = Self::openai_tool_from_schema(schema);
@@ -932,8 +1073,18 @@ impl OpenAiProvider {
         })
     }
 
+    #[cfg(test)]
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> Value {
-        if requires_responses_api_for_tools_with_reasoning(req) {
+        self.build_body_for_protocol(req, stream, self.protocol_endpoint(req).0)
+    }
+
+    fn build_body_for_protocol(
+        &self,
+        req: &CompletionRequest,
+        stream: bool,
+        protocol: ApiProtocol,
+    ) -> Value {
+        if protocol == ApiProtocol::Responses {
             self.build_responses_body(req, stream)
         } else {
             self.build_chat_body(req, stream)
@@ -941,67 +1092,81 @@ impl OpenAiProvider {
     }
 
     pub(crate) fn build_chat_body(&self, req: &CompletionRequest, stream: bool) -> Value {
-        let bare_model_id = if self.base_url == OPENAI_URL {
-            bare_model(&req.model)
-        } else {
-            &req.model
+        let registry = self.models.read();
+        let bare_model_id = registry.upstream_model(&self.provider_name, &req.model);
+        drop(registry);
+        let metadata = self.metadata(&req.model);
+        let token_field = match metadata.token_parameter {
+            Some(TokenParameter::MaxCompletionTokens) => "max_completion_tokens",
+            _ => "max_tokens",
         };
-        let token_field = if needs_max_completion_tokens(bare_model_id) {
-            "max_completion_tokens"
-        } else {
-            "max_tokens"
-        };
+        let messages =
+            Self::to_openai_messages_with_role(req, metadata.developer_role == Some(true));
         let mut body = json!({
             "model": bare_model_id,
-            "messages": Self::to_openai_messages(req),
+            "messages": messages,
             token_field: req.max_tokens,
         });
         if stream {
             body["stream"] = true.into();
             body["stream_options"] = json!({ "include_usage": true });
         }
-        if !req.tools.is_empty() && crate::catalogue::supports_tools_for_model(&req.model) {
-            body["tools"] = Self::build_tools(req);
+        if !req.tools.is_empty() && metadata.tools != Some(false) {
+            body["tools"] =
+                Self::build_tools_with_limit(req, metadata.max_tools.unwrap_or(usize::MAX));
         }
-        if is_deepseek_request(&self.base_url, &req.model) {
-            if let Some(effort_str) = req.reasoning_effort.as_deref() {
-                let (thinking_type, effort) = map_deepseek_reasoning_effort(effort_str);
-                body["thinking"] = json!({ "type": thinking_type });
-                body["reasoning_effort"] = effort.into();
+        if metadata.thinking.as_deref() == Some("deepseek") {
+            if let Some(effort_str) = req.reasoning_effort.as_deref()
+                && let Some(effort) = metadata
+                    .reasoning_values
+                    .as_ref()
+                    .and_then(|values| values.get(effort_str))
+            {
+                body["thinking"] =
+                    json!({ "type": if effort == "none" { "disabled" } else { "enabled" } });
+                body["reasoning_effort"] = json!(effort);
             }
-        } else if is_o_series(&req.model)
+        } else if metadata
+            .reasoning
+            .is_some_and(|r| r != ReasoningStrategy::None)
             && let Some(effort) = req
                 .reasoning_effort
                 .as_deref()
-                .and_then(map_reasoning_effort)
+                .and_then(|effort| configured_reasoning_effort(&metadata, effort))
         {
             body["reasoning_effort"] = effort.into();
         }
-        if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
+        if metadata.include_reasoning == Some(true) && req.reasoning_effort.is_some() {
             body["include_reasoning"] = true.into();
         }
         body
     }
 
     fn build_responses_body(&self, req: &CompletionRequest, stream: bool) -> Value {
-        let bare_model_id = if self.base_url == OPENAI_URL {
-            bare_model(&req.model)
-        } else {
-            &req.model
-        };
+        let registry = self.models.read();
+        let bare_model_id = registry.upstream_model(&self.provider_name, &req.model);
+        drop(registry);
+        let metadata = self.metadata(&req.model);
+        let input = Self::to_responses_input_with_role(req, metadata.developer_role == Some(true));
         let mut body = json!({
             "model": bare_model_id,
-            "input": Self::to_responses_input(req),
+            "input": input,
             "max_output_tokens": req.max_tokens,
-            "tools": Self::build_responses_tools(req),
         });
+        if !req.tools.is_empty() && metadata.tools != Some(false) {
+            body["tools"] =
+                Self::build_responses_tools(req, metadata.max_tools.unwrap_or(usize::MAX));
+        }
         if stream {
             body["stream"] = true.into();
         }
-        if let Some(effort) = req
-            .reasoning_effort
-            .as_deref()
-            .and_then(map_reasoning_effort)
+        if metadata
+            .reasoning
+            .is_some_and(|r| r != ReasoningStrategy::None)
+            && let Some(effort) = req
+                .reasoning_effort
+                .as_deref()
+                .and_then(|effort| configured_reasoning_effort(&metadata, effort))
         {
             body["reasoning"] = json!({ "effort": effort });
         }
@@ -1012,61 +1177,31 @@ impl OpenAiProvider {
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
+        self.validate_request(req)?;
         use tracing::Instrument;
         let span = crate::gen_ai_span!("openai", req);
 
-        let fut = async move {
-            let body = self.build_body(req, false);
-
-            let provider_label = self.provider_label();
-            let target_url = self.resolve_endpoint_for_request(req);
-
-            retry_with_backoff(
-                "OpenAI::complete",
-                3,
-                std::time::Duration::from_secs(1),
-                |_| {
-                    let client = self.client.clone();
-                    let endpoint = target_url.clone();
-                    let api_key = self.api_key.clone();
-                    let body = body.clone();
-                    let label = provider_label;
-                    let model_name = req.model.clone();
-                    async move {
-                        let mut req = client.post(&endpoint).json(&body);
-                        if !api_key.is_empty() {
-                            req = req.bearer_auth(&api_key);
-                        }
-                        let resp = req.send().await?;
-                        if !resp.status().is_success() {
-                            let status = resp.status();
-                            let text = resp.text().await.unwrap_or_default();
-                            return Err(Self::format_upstream_error(
-                                label,
-                                status,
-                                &text,
-                                &model_name,
-                            ));
-                        }
-                        Ok(Self::parse_response(&resp.json::<Value>().await?))
-                    }
-                },
-            )
-            .await
-        };
-
-        fut.instrument(span).await
+        let (protocol, endpoint) = self.protocol_endpoint(req);
+        self.send_completion(
+            req,
+            self.build_body_for_protocol(req, false, protocol),
+            protocol,
+            endpoint,
+        )
+        .instrument(span)
+        .await
     }
 
     async fn stream(
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        self.validate_request(req)?;
+        let (protocol, target_url) = self.protocol_endpoint(req);
         let req_model = req.model.clone();
-        let body = self.build_body(req, true);
+        let body = self.build_body_for_protocol(req, true, protocol);
 
         let provider_label = self.provider_label();
-        let target_url = self.resolve_endpoint_for_request(req);
         let model_name = req.model.clone();
 
         //NOTE: Stephen Z. Ezekwem -- this is where the api call and response is implemented.
@@ -1107,9 +1242,11 @@ impl LlmProvider for OpenAiProvider {
             let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
                 std::collections::BTreeMap::new();
             let mut finish_emitted = false;
+            let mut text_emitted = false;
+            let mut finished_tools = std::collections::HashSet::new();
 
             while let Some(chunk) = byte_stream.next().await {
-                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
+                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); return; } };
                 buf.extend_from_slice(&chunk);
 
                 let mut start = 0;
@@ -1118,24 +1255,35 @@ impl LlmProvider for OpenAiProvider {
                     let end = start + pos;
                     if let Ok(line_str) = std::str::from_utf8(&buf[start..end]) {
                         let line = line_str.trim();
-                        if let Some(data) = line.strip_prefix("data: ") {
+                        if let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
+                            if data.is_empty() { start = end + 1; continue; }
                             if data == "[DONE]" {
                         let remaining: Vec<(String, String, String)> =
                             std::mem::take(&mut tool_map).into_values().collect();
                         for (id, name, args_str) in remaining {
                             if !name.is_empty() {
-                                let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
-                                    tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
-                                    serde_json::Value::Object(Default::default())
-                                });
+                                 let args = match parse_tool_arguments(&args_str) { Ok(args) => args, Err(e) => { yield Err(e); return; } };
                                 yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
                             }
                         }
                         yield Ok(StreamChunk::Done);
                         return;
                     }
-                    let v_res = serde_json::from_str::<Value>(data);
-                    if let Ok(v) = v_res {
+                    let v = match serde_json::from_str::<Value>(data) {
+                        Ok(value) => value,
+                        Err(e) => { yield Err(crate::Error::custom(format!("Invalid completion SSE JSON: {e}"))); return; }
+                    };
+                    {
+                        let event = v["type"].as_str().unwrap_or_default();
+                        if matches!(event, "error" | "response.failed" | "response.cancelled")
+                            || matches!(v["response"]["status"].as_str(), Some("failed" | "cancelled"))
+                            || v.get("error").is_some_and(|e| !e.is_null()) {
+                            yield Err(crate::Error::custom(format!("Upstream stream error: {v}"))); return;
+                        }
+                        if (protocol == ApiProtocol::Responses && v.get("choices").is_some())
+                            || (protocol == ApiProtocol::ChatCompletions && event.starts_with("response.")) {
+                            yield Err(crate::Error::custom("Completion stream protocol does not match configured endpoint")); return;
+                        }
                         // 1. Standard Chat Completions SSE schema
                         if let Some(choices) = v.get("choices").and_then(Value::as_array)
                             && let Some(choice0) = choices.first()
@@ -1166,10 +1314,7 @@ impl LlmProvider for OpenAiProvider {
                                         std::mem::take(&mut tool_map).into_values().collect();
                                     for (id, name, args_str) in calls {
                                         if !name.is_empty() {
-                                            let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
-                                                tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
-                                                serde_json::Value::Object(Default::default())
-                                            });
+                                             let args = match parse_tool_arguments(&args_str) { Ok(args) => args, Err(e) => { yield Err(e); return; } };
                                             yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
                                         }
                                     }
@@ -1183,7 +1328,16 @@ impl LlmProvider for OpenAiProvider {
                             }
                         }
                         // 2. Modern Responses API / Realtime wire events
-                        else if v.get("type").is_some() {
+                        else if protocol == ApiProtocol::Responses && v.get("type").is_some() {
+                            if event == "response.output_item.done" && v["item"]["type"] == "function_call" {
+                                let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                                let args = v["item"]["arguments"].as_str()
+                                    .or_else(|| tool_map.get(&idx).map(|e| e.2.as_str())).unwrap_or("{}");
+                                if !args.trim().is_empty() && serde_json::from_str::<Value>(args).is_err() {
+                                    yield Err(crate::Error::custom("Invalid Responses function arguments")); return;
+                                }
+                                if !finished_tools.insert(idx) { start = end + 1; continue; }
+                            }
                             let resp_chunks =
                                 parse_responses_api_chunk(&v, &mut tool_map, &req_model);
                             for c in resp_chunks {
@@ -1193,8 +1347,38 @@ impl LlmProvider for OpenAiProvider {
                                         yield Ok(c);
                                     }
                                 } else {
+                                    if matches!(&c, StreamChunk::Text(_)) { text_emitted = true; }
                                     yield Ok(c);
                                 }
+                            }
+                            if matches!(event, "response.completed" | "response.incomplete" | "response.done") {
+                                // A terminal response contains final items even when a
+                                // gateway omitted intermediate output_item events.
+                                if let Some(output) = v["response"]["output"].as_array() {
+                                    if !text_emitted {
+                                        match Self::decode_response(&v["response"], ApiProtocol::Responses) {
+                                            Ok(response) => if let Some(content) = response.content { yield Ok(StreamChunk::Text(content)); },
+                                            Err(e) => { yield Err(e); return; }
+                                        }
+                                    }
+                                    for (index, item) in output.iter().enumerate() {
+                                        if item["type"] == "function_call" && !finished_tools.contains(&index) {
+                                            let synthetic = json!({"output": [item], "status": "completed"});
+                                            match Self::decode_response(&synthetic, ApiProtocol::Responses) {
+                                                Ok(response) => for call in response.tool_calls { yield Ok(StreamChunk::ToolCall(call)); },
+                                                Err(e) => { yield Err(e); return; }
+                                            }
+                                            tool_map.remove(&index);
+                                        }
+                                    }
+                                }
+                                for (_, (id, name, args)) in std::mem::take(&mut tool_map) {
+                                    if !name.is_empty() {
+                                        let arguments = match parse_tool_arguments(&args) { Ok(v) => v, Err(e) => { yield Err(e); return; } };
+                                        yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments, thought_signature: None }));
+                                    }
+                                }
+                                yield Ok(StreamChunk::Done); return;
                             }
                         } else {
                             // Standard Chat Completions usage chunk (empty choices, top-level usage)
@@ -1208,13 +1392,18 @@ impl LlmProvider for OpenAiProvider {
                     }
                         }
                         start = end + 1;
+                    } else {
+                        yield Err(crate::Error::custom("Invalid UTF-8 in completion SSE")); return;
                     }
                 }
                 if start > 0 {
                     buf.drain(..start);
                 }
             }
-            // Byte stream exhausted without explicit [DONE] — always send Done
+            if protocol == ApiProtocol::Responses {
+                yield Err(crate::Error::custom("Responses stream ended before a terminal event")); return;
+            }
+            // Chat-compatible byte streams may omit [DONE] — preserve that fallback.
             // so the SSE client doesn't fall back to the blocking endpoint.
             // Also flush any tool calls that arrived without an explicit finish_reason
             // (some OpenAI-compatible providers omit it).
@@ -1222,7 +1411,7 @@ impl LlmProvider for OpenAiProvider {
                 std::mem::take(&mut tool_map).into_values().collect();
             for (id, name, args_str) in remaining {
                 if !name.is_empty() {
-                    let args = serde_json::from_str(&args_str).unwrap_or_default();
+                    let args = match parse_tool_arguments(&args_str) { Ok(args) => args, Err(e) => { yield Err(e); return; } };
                     yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
                 }
             }
@@ -1239,98 +1428,31 @@ impl LlmProvider for OpenAiProvider {
         use tracing::Instrument;
         let span = crate::gen_ai_span!("openai", req);
 
-        crate::utils::enforce_strict_json_schema(&mut schema);
-
+        self.validate_request(req)?;
         let fut = async move {
-            let bare_model_id = if self.base_url == OPENAI_URL {
-                bare_model(&req.model)
+            let (protocol, endpoint) = self.protocol_endpoint(req);
+            let native = self.metadata(&req.model).native_structured == Some(true);
+            let fallback;
+            let body_req = if native {
+                req
             } else {
-                &req.model
+                fallback = crate::types::structured_fallback_request(req, &schema);
+                &fallback
             };
-
-            let mut body = if needs_max_completion_tokens(bare_model_id) {
-                json!({
-                    "model": bare_model_id,
-                    "messages": Self::to_openai_messages(req),
-                    "max_completion_tokens": req.max_tokens,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "structured_output",
-                            "strict": true,
-                            "schema": schema
-                        }
-                    }
-                })
-            } else {
-                json!({
-                    "model": bare_model_id,
-                    "messages": Self::to_openai_messages(req),
-                    "max_tokens": req.max_tokens,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "structured_output",
-                            "strict": true,
-                            "schema": schema
-                        }
-                    }
-                })
-            };
-
-            if !req.tools.is_empty() {
-                body["tools"] = Self::build_tools(req);
-            }
-            if is_o_series(&req.model)
-                && let Some(effort) = &req.reasoning_effort
-            {
-                let mapped = match effort.as_str() {
-                    "xhigh" => "high",
-                    e @ ("low" | "medium" | "high") => e,
-                    _ => "",
-                };
-                if !mapped.is_empty() {
-                    body["reasoning_effort"] = mapped.into();
+            let mut body = self.build_body_for_protocol(body_req, false, protocol);
+            // Unknown gateways use JSON parsing fallback; native schema constraints
+            // are opt-in metadata rather than inferred from an arbitrary model ID.
+            if native {
+                crate::utils::enforce_strict_json_schema(&mut schema);
+                if protocol == ApiProtocol::Responses {
+                    body["text"] = json!({"format": {"type": "json_schema", "name": "structured_output", "strict": true, "schema": schema}});
+                } else {
+                    body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "structured_output", "strict": true, "schema": schema}});
                 }
             }
+            let res = self.send_completion(req, body, protocol, endpoint).await?;
 
-            let provider_label = self.provider_label();
-
-            let res = retry_with_backoff(
-                "OpenAI::complete_structured",
-                3,
-                std::time::Duration::from_secs(1),
-                |_| {
-                    let client = self.client.clone();
-                    let target_url = self.resolve_endpoint_with_preview(&req.model, false, None);
-                    let api_key = self.api_key.clone();
-                    let body = body.clone();
-                    let label = provider_label;
-                    async move {
-                        let mut req = client.post(&target_url).json(&body);
-                        if !api_key.is_empty() {
-                            req = req.bearer_auth(&api_key);
-                        }
-                        let resp = req.send().await?;
-                        if !resp.status().is_success() {
-                            let status = resp.status();
-                            let text = resp.text().await.unwrap_or_default();
-                            return Err(provider_error(label, status, &text));
-                        }
-                        let parsed = Self::parse_response(&resp.json::<Value>().await?);
-                        Ok(parsed)
-                    }
-                },
-            )
-            .await?;
-
-            let text = res.content.unwrap_or_default();
-            let json_str = crate::utils::clean_json_markers(&text);
-            serde_json::from_str(&json_str).map_err(|e| {
-                crate::Error::custom(format!(
-                    "OpenAI structured output parsing failed: {e}. Raw response: {text}"
-                ))
-            })
+            crate::types::parse_structured_text(res.content.as_deref().unwrap_or_default())
         };
 
         fut.instrument(span).await

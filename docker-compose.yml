@@ -10,7 +10,7 @@ services:
       - "8284:8284"
     volumes:
       # Persist SQLite memory, agent settings, and skills
-      - cade_data:/root/.cade
+      - cade_data:/home/cade/.cade
       # Optional: Mount a workspace for the agent to modify
       - ./workspace:/workspace
     environment:

@@ -35,6 +35,13 @@ pub struct RuntimeToolResult {
     pub ui_resource_uri: Option<String>,
 }
 
+/// Executable capabilities supplied by a host without coupling native tools to packages.
+#[async_trait::async_trait]
+pub trait ToolExtension: Send + Sync {
+    fn has_tool(&self, name: &str) -> bool;
+    async fn execute(&self, call_id: &str, name: &str, args: &Value) -> RuntimeToolResult;
+}
+
 // endregion: --- Types
 
 // region:    --- ToolRuntime
@@ -61,6 +68,7 @@ pub struct ToolRuntime {
     pub backend: Arc<dyn ExecutionBackend>,
     /// Restrict file I/O tools to these paths. Only paths starting with one of these prefixes are allowed.
     pub allowed_paths: Option<Vec<String>>,
+    pub extension: Option<Arc<dyn ToolExtension>>,
 }
 
 impl ToolRuntime {
@@ -81,6 +89,7 @@ impl ToolRuntime {
             log_executions: false,
             backend: Arc::new(LocalBackend),
             allowed_paths: None,
+            extension: None,
         }
     }
 
@@ -100,6 +109,7 @@ impl ToolRuntime {
             log_executions: false,
             backend: Arc::new(LocalBackend),
             allowed_paths: None,
+            extension: None,
         }
     }
 
@@ -119,6 +129,27 @@ impl ToolRuntime {
     pub fn with_backend(mut self, backend: Arc<dyn ExecutionBackend>) -> Self {
         self.backend = backend;
         self
+    }
+
+    pub fn with_extension(mut self, extension: Arc<dyn ToolExtension>) -> Self {
+        self.extension = Some(extension);
+        self
+    }
+
+    /// The arguments authorized, observed and executed must name the same workspace paths.
+    pub fn prepare_arguments(&self, name: &str, args: &Value) -> Value {
+        let canonical = crate::tools::manager::canonical_name(name);
+        let mut args = args.clone();
+        if matches!(canonical, "glob" | "grep") && args.get("path").is_none() {
+            args["path"] = Value::String(self.cwd.to_string_lossy().into_owned());
+        }
+        crate::tools::normalize_mcp_arguments(canonical, &args, &self.cwd)
+    }
+
+    pub fn extension_is_write(&self, name: &str) -> bool {
+        self.extension
+            .as_ref()
+            .is_some_and(|extension| extension.has_tool(name))
     }
 
     /// Access the working directory.
@@ -148,6 +179,20 @@ impl ToolRuntime {
         tool_name: &str,
         args: &Value,
     ) -> Option<RuntimeToolResult> {
+        let args = self.prepare_arguments(tool_name, args);
+        crate::tools::fs::in_workspace(
+            &self.cwd,
+            self.execute_in_workspace(tool_call_id, tool_name, &args),
+        )
+        .await
+    }
+
+    async fn execute_in_workspace(
+        &self,
+        tool_call_id: String,
+        tool_name: &str,
+        args: &Value,
+    ) -> Option<RuntimeToolResult> {
         // Normalise Gemini / Codex aliases back to canonical IDs.
         let canonical_owned: String = {
             use cade_core::toolsets::Toolset;
@@ -156,6 +201,21 @@ impl ToolRuntime {
             ga.to_canonical(tool_name).to_string()
         };
         let canonical = canonical_owned.as_str();
+
+        if let Err(error) = crate::tools::fs::check_path_grants(
+            canonical,
+            args,
+            self.allowed_paths.as_deref(),
+            &self.cwd,
+        ) {
+            return Some(RuntimeToolResult {
+                tool_call_id,
+                tool_name: tool_name.into(),
+                output: error.to_string(),
+                is_error: true,
+                ui_resource_uri: None,
+            });
+        }
 
         let mut ui_resource_uri = None;
 
@@ -236,6 +296,14 @@ impl ToolRuntime {
             BASH if !self.is_local_backend() => self.handle_bash_via_backend(args).await,
             READ_FILE if !self.is_local_backend() => self.handle_read_via_backend(args).await,
             WRITE_FILE if !self.is_local_backend() => self.handle_write_via_backend(args).await,
+            EDIT_FILE if !self.is_local_backend() => self.handle_edit_via_backend(args).await,
+            APPLY_PATCH | GREP | GLOB if !self.is_local_backend() => (
+                format!(
+                    "Tool '{canonical}' is not supported by execution backend '{}'; host execution refused",
+                    self.backend.name()
+                ),
+                true,
+            ),
 
             // -- Everything else: native Rust tools + MCP (local or remote server)
             _ => {
@@ -250,6 +318,25 @@ impl ToolRuntime {
                 )
                 .await;
                 if r.is_error && r.output.starts_with("Unknown tool:") {
+                    if let Some(extension) = &self.extension
+                        && extension.has_tool(canonical)
+                    {
+                        if !self.is_local_backend() || !self.backend.is_writable() {
+                            return Some(RuntimeToolResult {
+                                tool_call_id,
+                                tool_name: tool_name.to_owned(),
+                                output: "Native plugin execution requires a writable local backend"
+                                    .into(),
+                                is_error: true,
+                                ui_resource_uri: None,
+                            });
+                        }
+                        return Some(
+                            extension
+                                .execute(&tool_call_id, canonical, &normalized_args)
+                                .await,
+                        );
+                    }
                     // Try remote server-hosted MCP
                     match self
                         .storage
@@ -284,7 +371,7 @@ impl ToolRuntime {
                     tool_name.to_string(),
                     args.clone(),
                     if output.len() > 1024 {
-                        format!("{}…", &output[..1024])
+                        format!("{}…", output.chars().take(1024).collect::<String>())
                     } else {
                         output.clone()
                     },
@@ -360,6 +447,9 @@ impl ToolRuntime {
             return ("Error: 'path' is required".to_string(), true);
         }
         let path = std::path::Path::new(&path_str);
+        let _lock = crate::tools::file_lock::FileLockManager::global()
+            .acquire_lock(path)
+            .await;
         match self.backend.write_file(path, &content).await {
             Ok(()) => (
                 format!("Written {} bytes to {path_str}", content.len()),
@@ -503,7 +593,10 @@ fn parse_hunk_start(hdr: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     /// Build a ToolRuntime with a fake client (no actual HTTP).
     fn build_test_runtime() -> ToolRuntime {
@@ -516,6 +609,171 @@ mod tests {
         );
         let mcp = Arc::new(crate::mcp::McpManager::empty());
         ToolRuntime::new(client, mcp, "test-agent".to_string(), PathBuf::from("/tmp"))
+    }
+
+    struct DelayedFileBackend {
+        files: Mutex<BTreeMap<PathBuf, String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionBackend for DelayedFileBackend {
+        async fn exec_bash(
+            &self,
+            _command: &str,
+            _cwd: &Path,
+            _timeout_secs: u64,
+        ) -> crate::Result<crate::backends::BashOutput> {
+            Err(crate::Error::custom("shell execution is not supported"))
+        }
+
+        async fn read_file(&self, path: &Path) -> crate::Result<String> {
+            let snapshot = self
+                .files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| crate::Error::custom("file not found"))?;
+            // Yield after taking the snapshot: without runtime serialization,
+            // concurrent edits both read the original content before either writes.
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            Ok(snapshot)
+        }
+
+        async fn write_file(&self, path: &Path, content: &str) -> crate::Result<()> {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), content.to_string());
+            Ok(())
+        }
+
+        async fn path_exists(&self, path: &Path) -> bool {
+            self.files.lock().unwrap().contains_key(path)
+        }
+
+        async fn list_dir(&self, _path: &Path) -> crate::Result<Vec<crate::backends::DirEntry>> {
+            Err(crate::Error::custom("directory listing is not supported"))
+        }
+
+        fn is_writable(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &'static str {
+            "delayed-test-backend"
+        }
+    }
+
+    fn build_backend_test_runtime(cwd: PathBuf, backend: Arc<DelayedFileBackend>) -> ToolRuntime {
+        ToolRuntime::new(
+            Arc::new(MockRemoteMcpStorage {
+                expected_name: String::new(),
+                return_output: String::new(),
+            }),
+            Arc::new(crate::mcp::McpManager::empty()),
+            "test-agent".to_string(),
+            cwd,
+        )
+        .with_backend(backend)
+    }
+
+    #[tokio::test]
+    async fn backend_edits_preserve_concurrent_disjoint_changes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("shared.txt");
+        let backend = Arc::new(DelayedFileBackend {
+            files: Mutex::new(BTreeMap::from([(
+                path.clone(),
+                "alpha=old\nbeta=old\n".to_string(),
+            )])),
+        });
+        let mut rt = build_backend_test_runtime(workspace.path().to_path_buf(), backend.clone());
+        rt.allowed_paths = Some(vec![workspace.path().to_string_lossy().into_owned()]);
+        let alpha = serde_json::json!({
+            "path": "shared.txt", "old_string": "alpha=old", "new_string": "alpha=new"
+        });
+        let beta = serde_json::json!({
+            "path": "shared.txt", "old_string": "beta=old", "new_string": "beta=new"
+        });
+
+        let (alpha_result, beta_result) = tokio::join!(
+            rt.execute("edit-alpha".into(), "edit_file", &alpha),
+            rt.execute("edit-beta".into(), "edit_file", &beta),
+        );
+
+        for result in [alpha_result, beta_result] {
+            let result = result.expect("edit_file must be handled by ToolRuntime");
+            assert!(!result.is_error, "{}", result.output);
+        }
+        assert_eq!(
+            backend.files.lock().unwrap().get(&path).unwrap(),
+            "alpha=new\nbeta=new\n",
+            "both successful edits must survive in the backend file"
+        );
+    }
+
+    #[tokio::test]
+    async fn backend_edits_respect_allowed_roots() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().join("allowed");
+        let allowed_path = root.join("file.txt");
+        let escaped_path = workspace.path().join("allowed-other/file.txt");
+        let backend = Arc::new(DelayedFileBackend {
+            files: Mutex::new(BTreeMap::from([
+                (allowed_path.clone(), "original".to_string()),
+                (escaped_path.clone(), "original".to_string()),
+            ])),
+        });
+        let mut rt = build_backend_test_runtime(workspace.path().to_path_buf(), backend.clone());
+        rt.allowed_paths = Some(vec![root.to_string_lossy().into_owned()]);
+
+        for path in [escaped_path.clone(), root.join("../allowed-other/file.txt")] {
+            for tool in ["edit_file", "write_file"] {
+                let result = rt
+                    .execute(
+                        format!("denied-{tool}"),
+                        tool,
+                        &serde_json::json!({
+                            "path": path,
+                            "old_string": "original",
+                            "new_string": "changed",
+                            "content": "changed"
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                assert!(result.is_error, "{tool} must reject {}", path.display());
+                assert!(
+                    result.output.contains("[Blocked by RBAC]"),
+                    "{}",
+                    result.output
+                );
+            }
+        }
+
+        let result = rt
+            .execute(
+                "allowed-edit".into(),
+                "edit_file",
+                &serde_json::json!({
+                    "path": "allowed/file.txt",
+                    "old_string": "original",
+                    "new_string": "changed"
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(!result.is_error, "{}", result.output);
+        assert_eq!(
+            *backend.files.lock().unwrap(),
+            BTreeMap::from([
+                (allowed_path, "changed".to_string()),
+                (escaped_path, "original".to_string()),
+            ])
+        );
     }
 
     // -- Bug 7: ToolRuntime returns None for interactive-only tools

@@ -9,58 +9,26 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff,
+    provider_error, retry_with_backoff,
 };
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
-const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Fetch all models available to this API key from Anthropic's models endpoint.
-/// Returns `(id, display_name)` pairs, newest first (as returned by the API).
+/// Returns `(id, display_name)` pairs using the shared gateway-aware discovery.
 /// Returns empty Vec on any error or timeout.
 pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
-    let client = Client::new();
-    let req = client
-        .get(MODELS_URL)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .send();
-    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
-            tracing::warn!("fetch_anthropic_models: request failed: {e}");
-            return vec![];
-        }
-        Err(_) => {
-            tracing::warn!("fetch_anthropic_models: request timed out");
-            return vec![];
-        }
-    };
-    if !resp.status().is_success() {
-        tracing::warn!(
-            "fetch_anthropic_models: API returned error status: {}",
-            resp.status()
-        );
-        return vec![];
-    }
-    let Ok(body) = resp.json::<Value>().await else {
-        tracing::warn!("fetch_anthropic_models: failed to parse JSON response body");
-        return vec![];
-    };
-
-    body["data"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| {
-                    let id = m["id"].as_str()?;
-                    let name = m["display_name"].as_str().unwrap_or(id);
-                    Some((id.to_string(), name.to_string()))
-                })
-                .collect()
+    crate::discovery::default_models("anthropic", api_key)
+        .await
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .id
+                .split_once('/')
+                .map(|(_, id)| (id.to_owned(), entry.display_name.clone()))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 // endregion: --- Tests
@@ -68,33 +36,24 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
 /// Returns true if the given Anthropic model expects the newer
 /// `thinking.type=adaptive` + `output_config.effort` request shape.
 ///
-/// As of 2025 Anthropic returns HTTP 400 `"thinking.type.enabled" is not
-/// supported for this model` when sending the legacy `enabled` shape to
-/// Claude 4+ family models. The canonical TypedDicts live in the official
-/// Python SDK (`ThinkingConfigAdaptiveParam`, `OutputConfigParam`).
-///
-/// Heuristic: match `claude-(opus|sonnet|haiku)-<N>-…` where N ≥ 4. This
-/// naturally covers current releases (`claude-sonnet-4-5-…`,
-/// `claude-opus-4-…`) and future majors (claude-5-*, claude-10-*) without a
-/// hardcoded model list.
+/// Compatibility classification comes from editable metadata; future major
+/// versions are not automatically assigned an unverified thinking protocol.
+#[cfg(test)]
 pub(crate) fn supports_adaptive_thinking(model: &str) -> bool {
-    let bare = bare_model(model);
-    for family in ["sonnet", "opus", "haiku"] {
-        let prefix = format!("claude-{family}-");
-        if let Some(rest) = bare.strip_prefix(&prefix)
-            && let Some(first) = rest.split('-').next()
-            && let Ok(n) = first.parse::<u32>()
-        {
-            return n >= 4;
-        }
-    }
-    false
+    let (provider, bare) = model.split_once('/').unwrap_or(("anthropic", model));
+    crate::runtime::RuntimeRegistry::configured()
+        .metadata(provider, bare)
+        .thinking
+        .as_deref()
+        == Some("adaptive")
 }
 
 pub struct AnthropicProvider {
     client: Client,
     api_key: String,
     base_url: Option<String>,
+    provider_name: String,
+    models: crate::SharedModelRegistry,
 }
 
 impl AnthropicProvider {
@@ -109,7 +68,49 @@ impl AnthropicProvider {
             client: crate::utils::build_standard_http_client(),
             api_key,
             base_url: base,
+            provider_name: "anthropic".into(),
+            models: crate::runtime::shared_registry(),
         }
+    }
+
+    pub fn with_registry(
+        mut self,
+        provider_name: String,
+        models: crate::SharedModelRegistry,
+    ) -> Self {
+        self.provider_name = provider_name;
+        self.models = models;
+        self
+    }
+
+    pub(crate) fn with_provider_definition(
+        mut self,
+        definition: &crate::provider_registry::ProviderDef,
+    ) -> Self {
+        self.client = crate::utils::build_provider_http_client(Some(definition));
+        self
+    }
+
+    fn metadata(&self, model: &str) -> crate::runtime::ModelMetadata {
+        let registry = self.models.read();
+        registry.metadata(
+            &self.provider_name,
+            registry.upstream_model(&self.provider_name, model),
+        )
+    }
+
+    fn validate_request(&self, req: &CompletionRequest) -> Result<()> {
+        self.validate_model(&req.model)?;
+        if req.max_tokens == 0 {
+            return Err(crate::Error::custom("max_tokens must be greater than zero"));
+        }
+        if !req.tools.is_empty() && self.metadata(&req.model).tools == Some(false) {
+            return Err(crate::Error::custom(format!(
+                "Model '{}' is registered without tool support",
+                req.model
+            )));
+        }
+        Ok(())
     }
 
     pub fn endpoint_url(&self) -> String {
@@ -275,14 +276,15 @@ impl AnthropicProvider {
             .collect();
 
         let mut body = json!({
-            "model": bare_model(&req.model),
-            "max_tokens": req.max_tokens.max(4096), // At least 4096, but allows higher if specified
+            "model": self.models.read().upstream_model(&self.provider_name, &req.model),
+            "max_tokens": req.max_tokens,
             "messages": anthropic_messages,
             "stream": stream
         });
 
+        let metadata = self.metadata(&req.model);
         if let Some(effort) = &req.reasoning_effort {
-            if supports_adaptive_thinking(&req.model) {
+            if metadata.thinking.as_deref() == Some("adaptive") && effort != "none" {
                 // Claude 4+ models require `thinking.type=adaptive` and the
                 // effort level is passed via the top-level `output_config`.
                 // Budget is managed dynamically by the server, so we do NOT
@@ -293,30 +295,18 @@ impl AnthropicProvider {
                 };
                 body["thinking"] = json!({ "type": "adaptive" });
                 body["output_config"] = json!({ "effort": mapped_effort });
-            } else if bare_model(&req.model).contains("claude-3-7-sonnet") {
-                // Legacy Claude 3.7 extended-thinking models:
-                // `thinking.type=enabled` with an explicit `budget_tokens`.
-                // Anthropic requires budget_tokens ≤ max_tokens. The max_tokens
-                // field is shared between reasoning and output, so we scale the
-                // reasoning budget relative to max_tokens.
-                let effective_max = req.max_tokens.max(4096);
-                let budget = match effort.as_str() {
-                    "low" => (effective_max / 4).max(1024), // 25% of max_tokens
-                    "medium" => (effective_max / 2).max(2048), // 50%
-                    "high" => (effective_max * 3 / 4).max(4096), // 75%
-                    "xhigh" => effective_max.saturating_sub(1024), // nearly all
-                    _ => 0,
-                };
-                if budget > 0 {
-                    // Ensure max_tokens is at least budget + 1024 so the model
-                    // still has room for visible output after reasoning.
-                    let adjusted_max = effective_max.max(budget + 1024);
-                    body["max_tokens"] = json!(adjusted_max);
-                    body["thinking"] = json!({
-                        "type": "enabled",
-                        "budget_tokens": budget
-                    });
-                }
+            } else if metadata.thinking.as_deref() == Some("budget")
+                && let Some(budget) = metadata
+                    .thinking_budgets
+                    .as_ref()
+                    .and_then(|map| map.get(effort))
+                && *budget > 0
+                && (*budget as u64) < u64::from(req.max_tokens)
+            {
+                body["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
             }
         }
 
@@ -368,6 +358,7 @@ impl AnthropicProvider {
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
+        self.validate_request(req)?;
         let body = self.build_body(req, false);
         retry_with_backoff(
             "Anthropic::complete",
@@ -405,6 +396,7 @@ impl LlmProvider for AnthropicProvider {
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        self.validate_request(req)?;
         let body = self.build_body(req, true);
         let req_model = req.model.clone(); // extracted before async_stream to avoid lifetime capture
         // Retry the HTTP handshake only; the byte stream itself is not retried
@@ -443,10 +435,11 @@ impl LlmProvider for AnthropicProvider {
 
         let s = stream! {
             let mut buf = Vec::new();
-            // Accumulate partial tool call state
-            let mut tool_id = String::new();
-            let mut tool_name = String::new();
-            let mut tool_args = String::new();
+            // Calls are withheld until message_stop: a later in-band error or
+            // premature EOF must never expose tools from an unsuccessful turn.
+            let mut pending_tools: std::collections::BTreeMap<usize, (String, String, String, Value)> =
+                std::collections::BTreeMap::new();
+            let mut completed_tools = Vec::new();
             let mut thinking_text = String::new();
             let mut in_thinking = false;
             // Accumulate token usage across message_start + message_delta
@@ -454,11 +447,12 @@ impl LlmProvider for AnthropicProvider {
             let mut output_tokens: u32 = 0;
             let mut cache_read_tokens: u32 = 0;
             let mut cache_write_tokens: u32 = 0;
+            let mut finish_reason = None;
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk {
                     Ok(c) => c,
-                    Err(e) => { yield Err(crate::Error::custom(format!("stream error: {e}"))); break; }
+                    Err(e) => { yield Err(crate::Error::custom(format!("Anthropic stream transport error: {e}"))); return; }
                 };
                 buf.extend_from_slice(&chunk);
 
@@ -469,13 +463,27 @@ impl LlmProvider for AnthropicProvider {
                     if let Ok(line_str) = std::str::from_utf8(&buf[start..end]) {
                         let line = line_str.trim();
                         if !line.is_empty() && !line.starts_with(':')
-                            && let Some(data) = line.strip_prefix("data: ") {
+                            && let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
+                                if data.is_empty() { start = end + 1; continue; }
                                 let event: Value = match serde_json::from_str(data) {
                                     Ok(v) => v,
-                                    Err(_) => { start = end + 1; continue; }
+                                    Err(e) => { yield Err(crate::Error::custom(format!("Invalid Anthropic SSE JSON: {e}"))); return; }
                                 };
 
                     match event["type"].as_str().unwrap_or("") {
+                        "error" => {
+                            let kind = event["error"]["type"].as_str().unwrap_or("unknown_error");
+                            let message = event["error"]["message"].as_str().unwrap_or("Provider reported a streaming failure");
+                            let status = event["error"]["status_code"].as_u64().or_else(|| event["status"].as_u64())
+                                .and_then(|n| u16::try_from(n).ok()).filter(|n| (400..=599).contains(n))
+                                .unwrap_or(match kind {
+                                    "invalid_request_error" => 400, "authentication_error" => 401,
+                                    "permission_error" => 403, "not_found_error" => 404,
+                                    "rate_limit_error" => 429, "overloaded_error" => 529, _ => 500,
+                                });
+                            yield Err(crate::Error::Provider { status, msg: format!("Anthropic stream error ({kind}): {message}") });
+                            return;
+                        }
                         "content_block_delta" => {
                             match event["delta"]["type"].as_str().unwrap_or("") {
                                 "text_delta" => {
@@ -485,7 +493,11 @@ impl LlmProvider for AnthropicProvider {
                                 }
                                 "input_json_delta" => {
                                     if let Some(partial) = event["delta"]["partial_json"].as_str() {
-                                        tool_args.push_str(partial);
+                                        let index = event["index"].as_u64().unwrap_or(0) as usize;
+                                        let Some(tool) = pending_tools.get_mut(&index) else {
+                                            yield Err(crate::Error::custom("Anthropic tool arguments arrived without a content_block_start")); return;
+                                        };
+                                        tool.2.push_str(partial);
                                     }
                                 }
                                 "thinking_delta" => {
@@ -499,9 +511,13 @@ impl LlmProvider for AnthropicProvider {
                         "content_block_start" => {
                             match event["content_block"]["type"].as_str().unwrap_or("") {
                                 "tool_use" => {
-                                    tool_id   = event["content_block"]["id"].as_str().unwrap_or("").to_string();
-                                    tool_name = event["content_block"]["name"].as_str().unwrap_or("").to_string();
-                                    tool_args.clear();
+                                    let index = event["index"].as_u64().unwrap_or(0) as usize;
+                                    let block = &event["content_block"];
+                                    let initial = block.get("input").filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!({}));
+                                    pending_tools.insert(index, (
+                                        block["id"].as_str().unwrap_or_default().into(),
+                                        block["name"].as_str().unwrap_or_default().into(), String::new(), initial,
+                                    ));
                                 }
                                 "thinking" => {
                                     in_thinking = true;
@@ -517,40 +533,50 @@ impl LlmProvider for AnthropicProvider {
                                 }
                                 in_thinking = false;
                             }
-                            if !tool_name.is_empty() {
-                                let args: Value = serde_json::from_str(&tool_args)
-                                    .unwrap_or_else(|e| {
-                                        tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {:?}", tool_name, tool_args);
-                                        Value::Object(serde_json::Map::new())
-                                    });
-                                yield Ok(StreamChunk::ToolCall(LlmToolCall {
-                                    id:                std::mem::take(&mut tool_id),
-                                    name:              std::mem::take(&mut tool_name),
-                                    arguments:         args,
+                            let index = event["index"].as_u64().unwrap_or(0) as usize;
+                            if let Some((id, name, arguments, initial)) = pending_tools.remove(&index) {
+                                let args = if arguments.trim().is_empty() { initial } else {
+                                    match serde_json::from_str::<Value>(&arguments) {
+                                        Ok(args) => args,
+                                        Err(e) => { yield Err(crate::Error::custom(format!("Invalid Anthropic tool arguments for '{name}': {e}"))); return; }
+                                    }
+                                };
+                                if id.is_empty() || name.is_empty() || !args.is_object() {
+                                    yield Err(crate::Error::custom("Malformed Anthropic tool call")); return;
+                                }
+                                completed_tools.push(LlmToolCall {
+                                    id,
+                                    name,
+                                    arguments: args,
                                     thought_signature: None,
-                                }));
-                                tool_args.clear();
+                                });
                             }
                         }
                         "message_start" => {
                             // e.g. {"type":"message_start","message":{"usage":{"input_tokens":N,"cache_read_input_tokens":N,"cache_creation_input_tokens":N}}}
                             if let Some(n) = event["message"]["usage"]["input_tokens"].as_u64() {
-                                input_tokens += n as u32;
+                                input_tokens = n.try_into().unwrap_or(u32::MAX);
                             }
                             if let Some(n) = event["message"]["usage"]["cache_read_input_tokens"].as_u64() {
-                                cache_read_tokens += n as u32;
+                                cache_read_tokens = n.try_into().unwrap_or(u32::MAX);
                             }
                             if let Some(n) = event["message"]["usage"]["cache_creation_input_tokens"].as_u64() {
-                                cache_write_tokens += n as u32;
+                                cache_write_tokens = n.try_into().unwrap_or(u32::MAX);
                             }
                         }
                         "message_delta" => {
                             // e.g. {"type":"message_delta","usage":{"output_tokens":N}}
                             if let Some(n) = event["usage"]["output_tokens"].as_u64() {
-                                output_tokens += n as u32;
+                                // Anthropic reports the cumulative output count.
+                                output_tokens = n.try_into().unwrap_or(u32::MAX);
                             }
+                            if let Some(reason) = event["delta"]["stop_reason"].as_str() { finish_reason = Some(reason.to_string()); }
                         }
                         "message_stop" => {
+                            if !pending_tools.is_empty() {
+                                yield Err(crate::Error::custom("Incomplete Anthropic stream: message_stop before tool blocks completed")); return;
+                            }
+                            for call in completed_tools { yield Ok(StreamChunk::ToolCall(call)); }
                             if input_tokens > 0 || output_tokens > 0 || cache_read_tokens > 0 || cache_write_tokens > 0 {
                                 yield Ok(StreamChunk::Usage(TokenUsage {
                                     input_tokens,
@@ -560,22 +586,24 @@ impl LlmProvider for AnthropicProvider {
                                     model: req_model.clone(),
                                 }));
                             }
-                            if let Some(reason) = event["stop_reason"].as_str() {
-                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
+                            if let Some(reason) = event["stop_reason"].as_str().map(String::from).or(finish_reason) {
+                                yield Ok(StreamChunk::FinishReason(reason));
                             }
                             yield Ok(StreamChunk::Done);
-                            break;
+                            return;
                         }
                         _ => {}
-                    }
-                            }
-                    }
+                     }
+                             }
+                     } else { yield Err(crate::Error::custom("Invalid UTF-8 in Anthropic SSE")); return; }
                     start = end + 1;
                 }
                 if start > 0 {
                     buf.drain(..start);
                 }
             }
+            yield Err(crate::Error::Provider { status: 502,
+                msg: "Incomplete Anthropic stream: EOF before message_stop".into() });
         };
 
         Ok(Box::pin(s))
@@ -586,6 +614,11 @@ impl LlmProvider for AnthropicProvider {
         req: &CompletionRequest,
         schema: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        self.validate_request(req)?;
+        let metadata = self.metadata(&req.model);
+        if metadata.native_structured != Some(true) || metadata.tools == Some(false) {
+            return crate::types::structured_fallback(self, req, &schema).await;
+        }
         use tracing::Instrument;
         let span = crate::gen_ai_span!("anthropic", req);
 
@@ -838,8 +871,10 @@ mod tests {
         let body = provider.build_body(&req, false);
         assert!(body["thinking"].is_object());
         assert_eq!(body["thinking"]["type"], "enabled");
-        // "high" = 75% of max_tokens (8192) = 6144, clamped to .max(4096)
-        assert_eq!(body["thinking"]["budget_tokens"], 6144);
+        // The editable compatibility seed selects the budget without inflating
+        // the caller's explicit output limit.
+        assert_eq!(body["thinking"]["budget_tokens"], 4096);
+        assert_eq!(body["max_tokens"], 8192);
         // No output_config in the legacy shape.
         assert!(body.get("output_config").is_none());
     }
@@ -879,9 +914,9 @@ mod tests {
         assert!(supports_adaptive_thinking("claude-opus-4-20250514"));
         assert!(supports_adaptive_thinking("claude-haiku-4-20250815"));
         assert!(supports_adaptive_thinking("anthropic/claude-sonnet-4-6"));
-        // Future majors must keep working.
-        assert!(supports_adaptive_thinking("claude-sonnet-5-20260101"));
-        assert!(supports_adaptive_thinking("claude-opus-10-20270101"));
+        // Unknown future families need discovery/config, not optimistic guesses.
+        assert!(!supports_adaptive_thinking("claude-sonnet-5-20260101"));
+        assert!(!supports_adaptive_thinking("claude-opus-10-20270101"));
         // Legacy Claude 3.x -> NOT adaptive
         assert!(!supports_adaptive_thinking("claude-3-7-sonnet-20250219"));
         assert!(!supports_adaptive_thinking("claude-3-5-haiku-20241022"));

@@ -91,12 +91,17 @@ impl SubagentRunner for TeamSubagentRunner {
             cache_control: None,
         });
 
-        let tools = all_schemas(false);
+        let tools = if cade_ai::catalogue::supports_tools_for_model(&model) {
+            all_schemas(false)
+        } else {
+            Vec::new()
+        };
+        let max_tokens = cade_ai::catalogue::max_tokens_for_model(&model);
         let req = CompletionRequest {
             model,
             messages,
             tools,
-            max_tokens: 4096,
+            max_tokens,
             reasoning_effort: None,
         };
 
@@ -196,7 +201,7 @@ impl LlmCompleter for TeamLlmCompleter {
             model: model.to_string(),
             messages,
             tools: vec![],
-            max_tokens: 4096,
+            max_tokens: cade_ai::catalogue::max_tokens_for_model(model),
             reasoning_effort: None,
         };
 
@@ -356,29 +361,32 @@ impl TeamSessionBuilder {
         let db = cade_store::sqlite::open(&db_target)
             .map_err(|e| Error::custom(format!("failed to open database at {db_target}: {e}")))?;
 
-        let leader_model = self
-            .leader_model
-            .clone()
-            .unwrap_or_else(|| "anthropic/claude-sonnet-4-5".to_string());
+        let leader_model = match self.leader_model.clone().or_else(|| {
+            self.provider
+                .as_ref()
+                .and_then(|provider| provider.default_model())
+        }) {
+            Some(model) => model,
+            None => cade_ai::provider_registry::ProviderRegistry::configured()
+                .configured_default_model(
+                    self.ai_config
+                        .as_ref()
+                        .map(|config| config.llm_provider.as_str()),
+                )
+                .map_err(|error| Error::custom(error.to_string()))?,
+        };
 
         let provider: Arc<dyn LlmProvider> = if let Some(p) = self.provider {
             p
         } else if let Some(cfg) = self.ai_config {
             Arc::new(LlmRouter::build(&cfg))
         } else {
-            let env_config = AiConfig {
-                anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
-                openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-                google_api_key: std::env::var("GEMINI_API_KEY")
-                    .ok()
-                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok()),
-                deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
-                ollama_base_url: std::env::var("OLLAMA_BASE_URL")
-                    .unwrap_or_else(|_| "http://localhost:11434".to_string()),
-                llm_provider: "anthropic".to_string(),
-            };
+            let env_config = AiConfig::from_env();
             Arc::new(LlmRouter::build(&env_config))
         };
+        provider
+            .validate_model(&leader_model)
+            .map_err(|error| Error::custom(error.to_string()))?;
 
         let team_def = TeamDef {
             id: self.team_id.clone(),
@@ -671,6 +679,37 @@ mod tests {
             .expect("team execution should succeed");
 
         assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn configured_custom_provider_default_is_selected_by_team_factory() {
+        let definitions = cade_ai::provider_registry::ProviderRegistry::from_json(
+            &serde_json::json!([{
+                "name":"office", "kind":"openai-compatible", "chat_url":"http://127.0.0.1:1/v1",
+                "default_model":"tenant/team-deployment"
+            }])
+            .to_string(),
+        )
+        .unwrap();
+        let mut router = LlmRouter::empty("office".into(), Arc::new(Default::default()))
+            .with_provider_registry(definitions);
+        router.add_provider(
+            "office".into(),
+            Arc::new(TeamMockLlmProvider {
+                count: Arc::new(AtomicUsize::new(0)),
+            }),
+        );
+        let team = TeamSession::builder()
+            .in_memory()
+            .provider(Arc::new(router))
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(team.leader_model, "office/tenant/team-deployment");
+        assert_eq!(
+            team.team_def.leader_model.as_deref(),
+            Some("office/tenant/team-deployment")
+        );
     }
 
     #[tokio::test]

@@ -15,6 +15,19 @@ pub struct ArenaLaneState {
     pub status: String,
 }
 
+impl ArenaLaneState {
+    fn select_agent(&mut self, agent: &cade_api_types::AgentInfo) {
+        self.agent_id = agent.id.clone();
+        self.agent_name = agent.name.clone();
+        self.model = agent
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())
+            .unwrap_or("Unknown")
+            .to_owned();
+    }
+}
+
 #[component]
 pub fn ArenaView() -> Element {
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
@@ -42,7 +55,7 @@ pub fn ArenaView() -> Element {
                 id: 1,
                 agent_id: String::new(),
                 agent_name: "Model Lane A".to_string(),
-                model: "claude-3-5-sonnet".to_string(),
+                model: "Unknown".to_string(),
                 content: String::new(),
                 is_streaming: false,
                 latency_ms: 0,
@@ -53,7 +66,7 @@ pub fn ArenaView() -> Element {
                 id: 2,
                 agent_id: String::new(),
                 agent_name: "Model Lane B".to_string(),
-                model: "gpt-4o".to_string(),
+                model: "Unknown".to_string(),
                 content: String::new(),
                 is_streaming: false,
                 latency_ms: 0,
@@ -77,11 +90,7 @@ pub fn ArenaView() -> Element {
                 let mut current = lns();
                 for (idx, lane) in current.iter_mut().enumerate() {
                     if let Some(agent) = list.get(idx).or_else(|| list.first()) {
-                        lane.agent_id = agent.id.clone();
-                        lane.agent_name = agent.name.clone();
-                        if let Some(ref m) = agent.model {
-                            lane.model = m.clone();
-                        }
+                        lane.select_agent(agent);
                     }
                 }
                 lns.set(current);
@@ -101,12 +110,14 @@ pub fn ArenaView() -> Element {
                 Some(a) => (
                     a.id,
                     a.name,
-                    a.model.unwrap_or_else(|| "default".to_string()),
+                    a.model
+                        .filter(|model| !model.trim().is_empty())
+                        .unwrap_or_else(|| "Unknown".to_string()),
                 ),
                 None => (
                     String::new(),
                     format!("Model Lane {next_id}"),
-                    "default".to_string(),
+                    "Unknown".to_string(),
                 ),
             };
             cur.push(ArenaLaneState {
@@ -298,10 +309,7 @@ pub fn ArenaView() -> Element {
                                                                 if let Some(target_lane) = cur.iter_mut().find(|l| l.id == l_id) {
                                                                     target_lane.agent_id = val.clone();
                                                                     if let Some(ag) = ags_snap.iter().find(|a| a.id == val) {
-                                                                        target_lane.agent_name = ag.name.clone();
-                                                                        if let Some(ref m) = ag.model {
-                                                                            target_lane.model = m.clone();
-                                                                        }
+                                                                        target_lane.select_agent(ag);
                                                                     }
                                                                 }
                                                                 lns_mut.set(cur);
@@ -400,8 +408,8 @@ pub fn ArenaView() -> Element {
                 div { class: "mt-4 bg-[#090d16] border border-[#1e293b] rounded-xl p-4 shadow-xl select-none",
                     div { class: "flex items-center justify-between mb-3 border-b border-[#1e293b] pb-2",
                         div { class: "flex items-center space-x-2",
-                            span { class: "text-xs font-bold text-slate-100 font-mono", "🏆 Model Elo Rating Leaderboard" }
-                            span { class: "text-[10px] font-mono text-purple-400 bg-purple-950/60 border border-purple-800/80 px-2 py-0.5 rounded", "K-Factor: 32" }
+                            span { class: "text-xs font-bold text-slate-100 font-mono", "🏆 Example Model Elo Leaderboard" }
+                            span { class: "text-[10px] font-mono text-purple-400 bg-purple-950/60 border border-purple-800/80 px-2 py-0.5 rounded", "Illustrative data" }
                         }
                         span { class: "text-[10px] font-mono text-slate-500", "Category: General Coding & System Architecture" }
                     }
@@ -422,5 +430,41 @@ pub fn ArenaView() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_model_label_updates_and_never_inherits_previous_lane_model() {
+        let mut lane = ArenaLaneState {
+            id: 1,
+            agent_id: String::new(),
+            agent_name: "Lane".into(),
+            model: "Unknown".into(),
+            content: String::new(),
+            is_streaming: false,
+            latency_ms: 0,
+            token_count: 0,
+            status: "Idle".into(),
+        };
+        let mut agent = cade_api_types::AgentInfo {
+            id: "chosen-agent".into(),
+            name: "Chosen agent".into(),
+            model: Some("private-provider/custom-model".into()),
+            provider: Some("private-provider".into()),
+            theme: None,
+        };
+        lane.select_agent(&agent);
+        assert_eq!(lane.model, "private-provider/custom-model");
+        assert_eq!(lane.agent_id, "chosen-agent");
+        agent.model = None;
+        lane.select_agent(&agent);
+        assert_eq!(lane.model, "Unknown");
+        agent.model = Some(" ".into());
+        lane.select_agent(&agent);
+        assert_eq!(lane.model, "Unknown");
     }
 }

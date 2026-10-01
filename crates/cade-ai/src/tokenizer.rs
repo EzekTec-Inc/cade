@@ -1,29 +1,29 @@
-//! Provider-aware token counting.
-//!
-//! Replaces the legacy `chars / 3` estimate used by the context builder.
-//! For OpenAI models we pick the matching BPE encoder (`cl100k_base` for
-//! GPT-3.5/4, `o200k_base` for GPT-4o / o-series).  For Anthropic, Gemini,
-//! and unknown providers — which lack a public Rust tokenizer — we fall
-//! back to `cl100k_base`, which over-counts Claude by ~5–10 %.  That is the
-//! safe direction (the budget reserves *more* room, not less).
+//! Metadata-selected token counting. Encoder kinds are supported Rust adapters;
+//! model/provider assignments and fallback ratios live in editable runtime JSON.
+//! Approximation is not a claim that a provider uses the selected vocabulary.
 //!
 //! All encoders are cached behind `once_cell::Lazy` so callers can call
 //! `count_tokens` thousands of times per request without re-loading BPE
 //! tables.
 
+use crate::runtime::{ModelMetadata, RuntimeRegistry, TokenizerKind};
 use crate::types::LlmMessage;
 use once_cell::sync::Lazy;
 use tiktoken_rs::CoreBPE;
 
-/// Default fallback ratio when *all* tokenizer paths fail (encoder load
-/// error, panic, unknown family).  Conservative: 3 chars/token leaves
-/// ~25 % headroom against typical English text (~3.5–4 c/t).
-pub const FALLBACK_CHARS_PER_TOKEN: usize = 3;
+/// First-use compatibility snapshot of the configured fallback character ratio.
+/// Conversion/counting functions obtain current policy through central metadata.
+pub static FALLBACK_CHARS_PER_TOKEN: Lazy<usize> = Lazy::new(|| {
+    crate::runtime::shared_registry()
+        .read()
+        .fallback
+        .character_ratio()
+});
 
-/// Lazily-initialised cl100k_base encoder (GPT-3.5/4, default fallback).
+/// Lazily initialized supported BPE vocabulary.
 static CL100K: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::cl100k_base().ok());
 
-/// Lazily-initialised o200k_base encoder (GPT-4o, o-series).
+/// Lazily initialized supported BPE vocabulary.
 static O200K: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::o200k_base().ok());
 
 pub trait TokenCounter: Send + Sync {
@@ -40,27 +40,9 @@ impl TokenCounter for TiktokenAdapter {
     }
 }
 
-pub struct AnthropicAdapter {
-    pub encoder: &'static CoreBPE,
-}
-
-impl TokenCounter for AnthropicAdapter {
-    fn count(&self, text: &str) -> usize {
-        // cl100k_base over-counts Claude slightly, which is our safe headroom boundary (WI-SEMANTIC)
-        self.encoder.encode_with_special_tokens(text).len()
-    }
-}
-
-pub struct GeminiAdapter {
-    pub encoder: &'static CoreBPE,
-}
-
-impl TokenCounter for GeminiAdapter {
-    fn count(&self, text: &str) -> usize {
-        // Gemini uses a different vocab but fits cl100k_base approximation safely
-        self.encoder.encode_with_special_tokens(text).len()
-    }
-}
+/// Source-compatible names for the same metadata-selected BPE adapter.
+pub type AnthropicAdapter = TiktokenAdapter;
+pub type GeminiAdapter = TiktokenAdapter;
 
 pub struct FallbackCharAdapter {
     pub chars_per_token: usize,
@@ -68,69 +50,48 @@ pub struct FallbackCharAdapter {
 
 impl TokenCounter for FallbackCharAdapter {
     fn count(&self, text: &str) -> usize {
-        text.chars().count() / self.chars_per_token.max(1)
+        text.chars().count().div_ceil(self.chars_per_token.max(1))
     }
 }
 
-/// Pick the most accurate available tokenizer for a given model id.
-///
-/// Returns `None` only when the encoder failed to load (corrupt BPE table,
-/// out-of-memory, etc.) — callers must fall back to a char-based estimate.
-#[allow(dead_code)]
+/// Compatibility test access to the metadata-selected encoder. Character-only
+/// policy and unavailable BPE tables both return None.
+#[cfg(test)]
 fn encoder_for(model_id: &str) -> Option<&'static CoreBPE> {
-    let lower = model_id.to_ascii_lowercase();
-
-    // OpenAI o-series + GPT-4o → o200k_base
-    let is_o200k = lower.contains("gpt-4o")
-        || lower.contains("gpt-4.5")
-        || lower.contains("gpt-5")
-        || lower.contains("/o1")
-        || lower.contains("/o3")
-        || lower.contains("/o4");
-    if is_o200k && let Some(enc) = O200K.as_ref() {
-        return Some(enc);
-    }
-
-    // Everything else (OpenAI cl100k era, Anthropic, Gemini, Ollama,
-    // unknown providers) → cl100k_base.  This over-counts Claude by
-    // ~5–10 % which is the conservative direction.
-    CL100K.as_ref()
+    encoder_for_metadata(&crate::catalogue::metadata_for_model(model_id))
 }
 
-pub fn resolve_token_counter(model_id: &str) -> Box<dyn TokenCounter> {
-    let lower = model_id.to_ascii_lowercase();
-
-    let is_o200k = lower.contains("gpt-4o")
-        || lower.contains("gpt-4.5")
-        || lower.contains("gpt-5")
-        || lower.contains("/o1")
-        || lower.contains("/o3")
-        || lower.contains("/o4");
-
-    if is_o200k && let Some(enc) = O200K.as_ref() {
-        return Box::new(TiktokenAdapter { encoder: enc });
+fn encoder_for_metadata(metadata: &ModelMetadata) -> Option<&'static CoreBPE> {
+    match metadata.tokenizer {
+        Some(TokenizerKind::O200kBase) => O200K.as_ref().or_else(|| CL100K.as_ref()),
+        Some(TokenizerKind::Cl100kBase) => CL100K.as_ref(),
+        Some(TokenizerKind::Characters) | None => None,
     }
+}
 
-    if let Some(enc) = CL100K.as_ref() {
-        if lower.contains("anthropic") || lower.contains("claude") {
-            return Box::new(AnthropicAdapter { encoder: enc });
-        }
-        if lower.contains("gemini") || lower.contains("google") {
-            return Box::new(GeminiAdapter { encoder: enc });
-        }
-        return Box::new(TiktokenAdapter { encoder: enc });
+pub(crate) fn bpe_counter_with_metadata(metadata: &ModelMetadata) -> Option<TiktokenAdapter> {
+    encoder_for_metadata(metadata).map(|encoder| TiktokenAdapter { encoder })
+}
+
+pub fn resolve_token_counter_with_metadata(metadata: &ModelMetadata) -> Box<dyn TokenCounter> {
+    if let Some(counter) = bpe_counter_with_metadata(metadata) {
+        return Box::new(counter);
     }
-
     Box::new(FallbackCharAdapter {
-        chars_per_token: FALLBACK_CHARS_PER_TOKEN,
+        chars_per_token: metadata.character_ratio(),
     })
 }
 
-/// Count tokens in `text` using the best available encoder for `model_id`.
-///
-/// On any error path (encoder unavailable) falls back to
-/// `chars / FALLBACK_CHARS_PER_TOKEN` so callers always get a usable
-/// number.
+pub fn resolve_token_counter(model_id: &str) -> Box<dyn TokenCounter> {
+    let metadata = crate::catalogue::metadata_for_model(model_id);
+    resolve_token_counter_with_metadata(&metadata)
+}
+
+pub fn count_tokens_with_registry(registry: &RuntimeRegistry, model_id: &str, text: &str) -> usize {
+    resolve_token_counter_with_metadata(&registry.metadata_for_id(model_id)).count(text)
+}
+
+/// Count using the configured vocabulary or an upward-rounded character estimate.
 pub fn count_tokens(model_id: &str, text: &str) -> usize {
     if text.is_empty() {
         return 0;
@@ -146,7 +107,16 @@ pub fn count_tokens(model_id: &str, text: &str) -> usize {
 /// budget).  Used by `cade-server` when it needs to keep the legacy
 /// char-based budget API but anchor it to a real token window.
 pub fn chars_for_tokens(tokens: usize) -> usize {
-    tokens.saturating_mul(FALLBACK_CHARS_PER_TOKEN)
+    let ratio = crate::runtime::shared_registry()
+        .read()
+        .fallback
+        .character_ratio();
+    tokens.saturating_mul(ratio)
+}
+
+pub fn chars_for_tokens_for_model(model_id: &str, tokens: usize) -> usize {
+    let metadata = crate::catalogue::metadata_for_model(model_id);
+    tokens.saturating_mul(metadata.character_ratio())
 }
 
 /// A deep, concrete manager that unifies token counting, conversion math,
@@ -166,16 +136,21 @@ impl PromptBudgetManager {
 
     /// Compute the total token cost of a turn (all content + tool calls)
     pub fn turn_cost(&self, model_id: &str, turn: &[LlmMessage]) -> usize {
+        let counter = resolve_token_counter(model_id);
+        Self::turn_cost_with_counter(counter.as_ref(), turn)
+    }
+
+    fn turn_cost_with_counter(counter: &dyn TokenCounter, turn: &[LlmMessage]) -> usize {
         let mut total_tokens = 0usize;
         for m in turn {
             if !m.content.is_empty() {
-                total_tokens += self.count_tokens(model_id, &m.content);
+                total_tokens = total_tokens.saturating_add(counter.count(&m.content));
             }
             if let Some(tcs) = m.tool_calls.as_deref() {
                 for tc in tcs {
                     let json = tc.arguments.to_string();
                     if !json.is_empty() {
-                        total_tokens += self.count_tokens(model_id, &json);
+                        total_tokens = total_tokens.saturating_add(counter.count(&json));
                     }
                 }
             }
@@ -185,17 +160,19 @@ impl PromptBudgetManager {
 
     /// Compute the fallback character-based cost of a turn for backward compatibility
     pub fn turn_cost_fallback_chars(&self, turn: &[LlmMessage]) -> usize {
-        turn.iter()
-            .map(|m| {
-                m.content.chars().count()
-                    + m.tool_calls
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|tc| tc.arguments.to_string().len())
-                        .sum::<usize>()
-            })
-            .sum()
+        turn.iter().fold(0usize, |total, m| {
+            let tools = m
+                .tool_calls
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .fold(0usize, |total, tc| {
+                    total.saturating_add(tc.arguments.to_string().chars().count())
+                });
+            total
+                .saturating_add(m.content.chars().count())
+                .saturating_add(tools)
+        })
     }
 
     /// Convert a token count to its equivalent upper-bound character count.
@@ -212,7 +189,41 @@ impl PromptBudgetManager {
         system_overhead_tokens: usize,
         max_context_chars: usize,
     ) -> ContextBudgetResult {
-        let system_overhead_chars = self.chars_for_tokens(system_overhead_tokens);
+        let metadata = crate::catalogue::metadata_for_model(model_id);
+        self.calculate_budget_with_metadata(
+            &metadata,
+            turns,
+            system_overhead_tokens,
+            max_context_chars,
+        )
+    }
+
+    pub fn calculate_budget_with_registry(
+        &self,
+        registry: &RuntimeRegistry,
+        model_id: &str,
+        turns: &[Vec<LlmMessage>],
+        system_overhead_tokens: usize,
+        max_context_chars: usize,
+    ) -> ContextBudgetResult {
+        self.calculate_budget_with_metadata(
+            &registry.metadata_for_id(model_id),
+            turns,
+            system_overhead_tokens,
+            max_context_chars,
+        )
+    }
+
+    fn calculate_budget_with_metadata(
+        &self,
+        metadata: &ModelMetadata,
+        turns: &[Vec<LlmMessage>],
+        system_overhead_tokens: usize,
+        max_context_chars: usize,
+    ) -> ContextBudgetResult {
+        let counter = resolve_token_counter_with_metadata(metadata);
+        let ratio = metadata.character_ratio();
+        let system_overhead_chars = system_overhead_tokens.saturating_mul(ratio);
         let message_budget = max_context_chars.saturating_sub(system_overhead_chars);
 
         let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
@@ -220,24 +231,24 @@ impl PromptBudgetManager {
         let mut total_tokens_used: usize = system_overhead_tokens;
 
         for turn in turns.iter().cloned().rev() {
-            let tokens = self.turn_cost(model_id, &turn);
+            let tokens = Self::turn_cost_with_counter(counter.as_ref(), &turn);
             let fallback_chars = self.turn_cost_fallback_chars(&turn);
 
             let turn_chars = if tokens == 0 && fallback_chars > 0 {
                 fallback_chars
             } else {
-                self.chars_for_tokens(tokens)
+                tokens.saturating_mul(ratio)
             };
 
             if selected.is_empty() {
                 // Always include the most recent turn regardless of size
                 selected.push(turn);
-                budget_used_chars += turn_chars;
-                total_tokens_used += tokens;
-            } else if budget_used_chars + turn_chars <= message_budget {
+                budget_used_chars = budget_used_chars.saturating_add(turn_chars);
+                total_tokens_used = total_tokens_used.saturating_add(tokens);
+            } else if budget_used_chars.saturating_add(turn_chars) <= message_budget {
                 selected.push(turn);
-                budget_used_chars += turn_chars;
-                total_tokens_used += tokens;
+                budget_used_chars = budget_used_chars.saturating_add(turn_chars);
+                total_tokens_used = total_tokens_used.saturating_add(tokens);
             } else {
                 break;
             }
@@ -250,7 +261,7 @@ impl PromptBudgetManager {
         ContextBudgetResult {
             selected_turns: selected,
             total_tokens_used,
-            total_chars_used: budget_used_chars + system_overhead_chars,
+            total_chars_used: budget_used_chars.saturating_add(system_overhead_chars),
             omitted_turns_count: omitted_count,
         }
     }

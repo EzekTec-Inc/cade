@@ -11,6 +11,18 @@ pub async fn register_and_attach_with_caps(
     toolset: Toolset,
     caps: &CapabilitySet,
 ) {
+    register_and_attach_with_caps_filtered(client, agent_id, toolset, caps, None).await;
+}
+
+/// Capability-aware + filter-aware registration. Meta tools remain available;
+/// an explicit name list narrows native schemas before registration/attachment.
+pub async fn register_and_attach_with_caps_filtered(
+    client: &HttpTransport,
+    agent_id: &str,
+    toolset: Toolset,
+    caps: &CapabilitySet,
+    tool_filter: Option<&[String]>,
+) {
     use agent::client::CreateToolRequest;
     use cade_agent::agent::tools::build_python_stub_from_schema as bps;
     use cade_agent::tools::catalog::{
@@ -18,7 +30,16 @@ pub async fn register_and_attach_with_caps(
     };
 
     let meta_schemas = meta_schemas_for_capabilities(caps);
-    let native_schemas = native_schemas_for_capabilities(toolset, caps);
+    let native_schemas: Vec<_> = native_schemas_for_capabilities(toolset, caps)
+        .into_iter()
+        .filter(|schema| {
+            tool_filter.is_none_or(|names| {
+                schema["name"]
+                    .as_str()
+                    .is_some_and(|name| names.iter().any(|n| n == name))
+            })
+        })
+        .collect();
 
     let mut ids = Vec::new();
 
@@ -64,56 +85,6 @@ pub async fn register_and_attach_with_caps(
     if !ids.is_empty() {
         if let Err(e) = client.attach_agent_tools(agent_id, &ids).await {
             tracing::warn!("attach_agent_tools: {e}");
-        }
-    }
-}
-
-/// Capability-aware + filter-aware registration.
-/// When `tool_filter` is `None`, registers all tools allowed by `caps`.
-/// When `tool_filter` is `Some(names)`, intersects the filter with caps.
-pub async fn register_and_attach_with_caps_filtered(
-    client: &HttpTransport,
-    agent_id: &str,
-    toolset: Toolset,
-    caps: &CapabilitySet,
-    tool_filter: Option<&[String]>,
-) {
-    #[allow(clippy::redundant_guards)]
-    match tool_filter {
-        None => {
-            // No explicit filter — use full capability-aware registration
-            register_and_attach_with_caps(client, agent_id, toolset, caps).await;
-        }
-        Some(names) if names.is_empty() => {
-            // Empty filter → meta tools only, filtered by caps
-            use agent::client::CreateToolRequest;
-            use cade_agent::tools::catalog::meta_schemas_for_capabilities;
-            let meta_schemas = meta_schemas_for_capabilities(caps);
-            let mut ids = Vec::new();
-            for schema in &meta_schemas {
-                let req = CreateToolRequest {
-                    source_code: String::new(),
-                    source_type: "json".to_string(),
-                    json_schema: Some(schema.clone()),
-                    tags: vec!["cade".to_string(), "meta".to_string()],
-                };
-                match client.create_tool(req).await {
-                    Ok(tool) => ids.push(tool.id),
-                    Err(e) => tracing::debug!("meta tool registration: {e}"),
-                }
-            }
-            if !ids.is_empty() {
-                let _ = client.attach_agent_tools(agent_id, &ids).await;
-            }
-        }
-        Some(names) => {
-            // Explicit tool names — register those + meta tools (both filtered by caps)
-            register_and_attach_with_caps(client, agent_id, toolset, caps).await;
-            // The caps filter already removes tools not in the capability set.
-            // The explicit name filter is an additional narrowing handled at the
-            // schema level. For now, the caps-aware path is sufficient since
-            // the user explicitly requested these tools.
-            let _ = names;
         }
     }
 }

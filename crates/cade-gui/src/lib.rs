@@ -3,6 +3,7 @@ pub mod api_engine;
 pub mod chat_session;
 pub mod components;
 pub mod startup;
+pub mod theme;
 pub mod types;
 
 pub use api_engine::{ApiClientEngine, ResourceMutation, ResourceState};
@@ -79,9 +80,9 @@ fn App() -> Element {
     let global_error = use_signal(|| Option::<String>::None);
     let active_stream_id = use_signal(|| Option::<String>::None);
     let active_stream = use_signal(types::SafeAbortHandle::default);
-    let parsed_messages =
-        use_signal(std::collections::HashMap::<String, (String, Option<String>)>::new);
-    let mut pending_approvals = use_signal(Vec::<serde_json::Value>::new);
+    let parsed_messages = use_signal(chat_session::ParsedMessageCache::default);
+    let chat_timeline = use_signal(chat_session::ChatTimeline::default);
+    let pending_approvals = use_signal(Vec::<serde_json::Value>::new);
     let runs = use_signal(Vec::<serde_json::Value>::new);
     let mut show_palette = use_signal(|| false);
     let mut palette_query = use_signal(String::new);
@@ -117,6 +118,7 @@ fn App() -> Element {
         active_stream_id,
         active_stream,
         parsed_messages,
+        chat_timeline,
         pending_approvals,
         runs,
     };
@@ -131,26 +133,33 @@ fn App() -> Element {
     let api_engine = crate::api_engine::ApiClientEngine::new(client);
     use_context_provider(|| api_engine);
 
-    // ── Startup: fetch first agent + start real-time SSE event loop ─────────
+    // Root-owned selection lifetime survives page navigation. Stream callbacks
+    // also synchronize selection before applying, closing the effect/await race.
     use_effect(move || {
+        let _ = selected_agent();
+        let _ = active_conversation();
+        let _ = api_key();
+        chat_session::ChatSessionCoordinator::refresh_selection(app_state, client());
+    });
+
+    // ── Startup: fetch first agent + start real-time SSE event loop ─────────
+    let _events = use_resource(move || {
+        let credential = api_key();
         let key = api_key;
         let _state = app_state;
         let mut selected = selected_agent;
         let mut convs = conversations;
-        let mut messages = messages;
         let mut active_conversation = active_conversation;
         let mut global_error = global_error;
         let mut runs = runs;
-        let mut active_stream_id = active_stream_id;
 
-        spawn(async move {
-            // Wait until an API key is configured
-            while key().is_empty() {
-                gloo_timers::future::TimeoutFuture::new(200).await;
+        async move {
+            if credential.is_empty() {
+                return;
             }
 
             // Fetch initial agent + conversations (silent poll; show toast only on failure)
-            match api::list_agents(&key()).await {
+            match api::list_agents(&credential).await {
                 Ok(list) => {
                     let matched = if let Some(ref initial_agent) = *selected.peek() {
                         list.iter().find(|a| a.id == initial_agent.id).cloned()
@@ -159,14 +168,7 @@ fn App() -> Element {
                     };
 
                     if let Some(agent) = matched.or_else(|| list.into_iter().next()) {
-                        let agent_id = agent.id.clone();
                         selected.set(Some(agent));
-                        let _ = api::list_conversations(&agent_id, &key())
-                            .await
-                            .map(|list| convs.set(list));
-                        let _ = api::list_agent_runs(&agent_id, &key())
-                            .await
-                            .map(|r| runs.set(r));
                     }
                 }
                 Err(e) => {
@@ -176,292 +178,242 @@ fn App() -> Element {
 
             // Seed the shared dashboard/chat queue for approvals created before
             // this browser connected (the global SSE feed only sends new events).
-            if let Ok(data) = crate::api::CadeApiClient::new(key()).list_approvals().await
+            if let Ok(data) = crate::api::CadeApiClient::new(credential.clone())
+                .list_approvals()
+                .await
                 && let Some(rows) = data["approvals"].as_array()
             {
-                pending_approvals.set(rows.clone());
+                chat_session::ChatSessionCoordinator::pending_snapshot(app_state, rows.clone());
             }
 
             // Real-time SSE event loop
             loop {
-                let client_inst = crate::api::CadeApiClient::new(key());
+                let client_inst = crate::api::CadeApiClient::new(credential.clone());
 
-                let sse_res = client_inst
-                    .listen_global_events(|event| {
-                        let event_type = event["event_type"].as_str().unwrap_or("");
-                        match event_type {
-                            "conversation_created" => {
-                                let agent_id = event["agent_id"].as_str().unwrap_or("");
-                                if let Some(curr) = selected()
-                                    && curr.id == agent_id
-                                    && let Ok(conv) =
-                                        serde_json::from_value::<cade_api_types::ConversationInfo>(
-                                            event["conversation"].clone(),
+                let sse_res =
+                    client_inst
+                        .listen_global_events(|event| {
+                            if *key.peek() != credential {
+                                return;
+                            }
+                            let Ok(decoded) =
+                                serde_json::from_value::<cade_api_types::StreamEvent>(event)
+                            else {
+                                return;
+                            };
+                            let event = &decoded.data;
+                            chat_session::ChatSessionCoordinator::pending_event(
+                                app_state, &decoded,
+                            );
+                            let event_type = decoded.msg_type();
+                            match event_type {
+                                "conversation_created" => {
+                                    let agent_id = event["agent_id"].as_str().unwrap_or("");
+                                    if let Some(curr) = selected.peek().clone()
+                                        && curr.id == agent_id
+                                        && let Ok(conv) = serde_json::from_value::<
+                                            cade_api_types::ConversationInfo,
+                                        >(
+                                            event["conversation"].clone()
                                         )
-                                {
-                                    let mut list = convs();
-                                    if !list.contains(&conv) {
-                                        list.push(conv);
+                                    {
+                                        let mut list = convs.peek().clone();
+                                        if !list.iter().any(|row| row.id == conv.id) {
+                                            list.push(conv);
+                                            convs.set(list);
+                                        }
+                                    }
+                                }
+                                "conversation_deleted" => {
+                                    let agent_id = event["agent_id"].as_str().unwrap_or("");
+                                    let conv_id = event["conversation_id"].as_str().unwrap_or("");
+                                    if let Some(curr) = selected.peek().clone()
+                                        && curr.id == agent_id
+                                    {
+                                        let mut list = convs.peek().clone();
+                                        list.retain(|c| c.id != conv_id);
                                         convs.set(list);
+                                        if *active_conversation.peek() == Some(conv_id.to_string())
+                                        {
+                                            active_conversation.set(None);
+                                        }
                                     }
                                 }
-                            }
-                            "conversation_deleted" => {
-                                let agent_id = event["agent_id"].as_str().unwrap_or("");
-                                let conv_id = event["conversation_id"].as_str().unwrap_or("");
-                                if let Some(curr) = selected()
-                                    && curr.id == agent_id
-                                {
-                                    let mut list = convs();
-                                    list.retain(|c| c.id != conv_id);
-                                    convs.set(list);
-                                    if active_conversation() == Some(conv_id.to_string()) {
-                                        active_conversation.set(None);
-                                    }
-                                }
-                            }
-                            "message_created" => {
-                                let m_agent_id = event["agent_id"].as_str().unwrap_or("");
-                                let m_conv_id = event["conversation_id"].as_str();
-                                if let Some(curr_agent) = selected()
-                                    && curr_agent.id == m_agent_id
-                                    && active_conversation() == m_conv_id.map(String::from)
-                                    && let Ok(msg) =
+                                "message_created" => {
+                                    let m_agent_id = event["agent_id"].as_str().unwrap_or("");
+                                    if let Ok(msg) =
                                         serde_json::from_value::<cade_api_types::ChatMessage>(
                                             event["message"].clone(),
                                         )
-                                {
-                                    let mut list = messages();
-                                    if !list.iter().any(|m| m.id == msg.id) {
-                                        list.push(msg);
-                                        messages.set(list);
-                                    }
-                                }
-                            }
-                            "compaction_completed" => {
-                                let m_agent_id = event["agent_id"].as_str().unwrap_or("");
-                                let m_conv_id = event["conversation_id"].as_str();
-                                let dropped = event["dropped_turns"].as_u64().unwrap_or(0);
-                                if let Some(curr_agent) = selected()
-                                    && curr_agent.id == m_agent_id
-                                    && active_conversation() == m_conv_id.map(String::from)
-                                {
-                                    // 1. Refresh active messages
-                                    let key_clone = key().clone();
-                                    let agent_id_clone = m_agent_id.to_string();
-                                    let conv_id_clone = m_conv_id.map(String::from);
-                                    let mut messages_sig = messages;
-                                    spawn(async move {
-                                        let c = api::CadeApiClient::new(key_clone);
-                                        if let Ok(list) = c
-                                            .get_messages(&agent_id_clone, conv_id_clone.as_deref())
-                                            .await
-                                        {
-                                            messages_sig.set(list);
-                                        }
-                                    });
-
-                                    // 2. Add a success toast notification
-                                    let mut list = toasts();
-                                    let detail = if dropped == 1 {
-                                        "1 older turn archived to session_summary.".to_string()
-                                    } else {
-                                        format!(
-                                            "{} older turns archived to session_summary.",
-                                            dropped
-                                        )
-                                    };
-                                    list.push(types::ToastMessage {
-                                        id: js_sys::Date::now() as u64,
-                                        level: types::ToastLevel::Success,
-                                        title: "✓ Context Compacted".to_string(),
-                                        detail,
-                                    });
-                                    toasts.set(list);
-                                }
-                            }
-                            "approval_required" => {
-                                let approval_id = event["id"].as_str().unwrap_or("");
-                                if !approval_id.is_empty() {
-                                    let mut list = pending_approvals();
-                                    if !list.iter().any(|a| a["id"].as_str() == Some(approval_id)) {
-                                        list.push(event.clone());
-                                        pending_approvals.set(list);
-                                    }
-                                }
-                            }
-                            "approval_resolved" => {
-                                let approval_id = event["id"].as_str().unwrap_or("");
-                                if !approval_id.is_empty() {
-                                    let mut list = pending_approvals();
-                                    list.retain(|a| a["id"].as_str() != Some(approval_id));
-                                    pending_approvals.set(list);
-                                }
-                            }
-                            "run_started" => {
-                                let run_id = event["run_id"].as_str().unwrap_or("").to_string();
-                                let r_agent_id =
-                                    event["agent_id"].as_str().unwrap_or("").to_string();
-                                let r_conv_id = event["conversation_id"].as_str().map(String::from);
-
-                                if !run_id.is_empty() {
-                                    // 1. Update runs list in AppState
-                                    let mut r_list = runs();
-                                    if !r_list.iter().any(|r| r["id"].as_str() == Some(&run_id)) {
-                                        let now = js_sys::Date::now() as i64 / 1000;
-                                        r_list.insert(
-                                            0,
-                                            serde_json::json!({
-                                                "id": run_id.clone(),
-                                                "agent_id": r_agent_id.clone(),
-                                                "status": "running",
-                                                "conversation_id": r_conv_id.clone(),
-                                                "created_at": now,
-                                            }),
+                                    {
+                                        chat_session::ChatSessionCoordinator::persisted(
+                                            app_state, m_agent_id, msg,
                                         );
-                                        runs.set(r_list);
                                     }
+                                }
+                                "compaction_completed" => {
+                                    let m_agent_id = event["agent_id"].as_str().unwrap_or("");
+                                    let m_conv_id = event["conversation_id"].as_str();
+                                    let dropped = event["dropped_turns"].as_u64().unwrap_or(0);
+                                    if let Some(curr_agent) = selected.peek().clone()
+                                        && curr_agent.id == m_agent_id
+                                        && *active_conversation.peek()
+                                            == m_conv_id.map(String::from)
+                                    {
+                                        // 1. Refresh active messages
+                                        let key_clone = credential.clone();
+                                        chat_session::ChatSessionCoordinator::refresh_history(
+                                            app_state,
+                                            api::CadeApiClient::new(key_clone),
+                                        );
 
-                                    // 2. If this run is for the currently selected agent, sync conversation and stream
-                                    if let Some(curr) = selected()
+                                        // 2. Add a success toast notification
+                                        let mut list = toasts.peek().clone();
+                                        let detail = if dropped == 1 {
+                                            "1 older turn archived to session_summary.".to_string()
+                                        } else {
+                                            format!(
+                                                "{} older turns archived to session_summary.",
+                                                dropped
+                                            )
+                                        };
+                                        list.push(types::ToastMessage {
+                                            id: js_sys::Date::now() as u64,
+                                            level: types::ToastLevel::Success,
+                                            title: "✓ Context Compacted".to_string(),
+                                            detail,
+                                        });
+                                        toasts.set(list);
+                                    }
+                                }
+                                "run_started" => {
+                                    let run_id = event["run_id"].as_str().unwrap_or("").to_string();
+                                    let r_agent_id =
+                                        event["agent_id"].as_str().unwrap_or("").to_string();
+                                    let r_conv_id =
+                                        event["conversation_id"].as_str().map(String::from);
+
+                                    if !run_id.is_empty() {
+                                        // 1. Update runs list in AppState
+                                        let mut r_list = runs.peek().clone();
+                                        if !r_list.iter().any(|r| r["id"].as_str() == Some(&run_id))
+                                        {
+                                            let now = js_sys::Date::now() as i64 / 1000;
+                                            r_list.insert(
+                                                0,
+                                                serde_json::json!({
+                                                    "id": run_id.clone(),
+                                                    "agent_id": r_agent_id.clone(),
+                                                    "status": "running",
+                                                    "conversation_id": r_conv_id.clone(),
+                                                    "created_at": now,
+                                                }),
+                                            );
+                                            runs.set(r_list);
+                                        }
+
+                                        chat_session::ChatSessionCoordinator::follow_run(
+                                            app_state,
+                                            api::CadeApiClient::new(credential.clone()),
+                                            &r_agent_id,
+                                            r_conv_id.as_deref(),
+                                            &run_id,
+                                        );
+                                    }
+                                }
+                                "run_finished" => {
+                                    let run_id = event["run_id"].as_str().unwrap_or("");
+                                    let r_status = event["status"].as_str().unwrap_or("done");
+                                    let r_agent_id = event["agent_id"].as_str().unwrap_or("");
+
+                                    // 1. Update status in runs list
+                                    let mut r_list = runs.peek().clone();
+                                    for r in r_list.iter_mut() {
+                                        if r["id"].as_str() == Some(run_id)
+                                            && let Some(obj) = r.as_object_mut()
+                                        {
+                                            obj.insert(
+                                                "status".to_string(),
+                                                serde_json::json!(r_status),
+                                            );
+                                        }
+                                    }
+                                    runs.set(r_list);
+
+                                    // 2. Refresh messages and conversations for current agent from server DB to sync final state
+                                    if let Some(curr) = selected.peek().clone()
                                         && curr.id == r_agent_id
                                     {
-                                        if let Some(ref cid) = r_conv_id
-                                            && active_conversation().as_ref() != Some(cid)
-                                        {
-                                            active_conversation.set(Some(cid.clone()));
-                                        }
-
-                                        if active_stream_id() != Some(run_id.clone()) {
-                                            active_stream_id.set(Some(run_id.clone()));
-                                            let key_c = key();
-                                            let rid_c = run_id.clone();
-                                            let mut msgs_sig = messages;
-                                            let mut active_sid = active_stream_id;
-
-                                            spawn(async move {
-                                                let mut reasoning_acc = String::new();
-                                                let stream_msg_id = format!("live-{}", rid_c);
-
-                                                // Insert initial placeholder message for assistant stream if not present
-                                                {
-                                                    let mut list = msgs_sig();
-                                                    if !list.iter().any(|m| m.id == stream_msg_id) {
-                                                        list.push(cade_api_types::ChatMessage {
-                                                            id: stream_msg_id.clone(),
-                                                            role: "assistant".to_string(),
-                                                            content: serde_json::Value::String(
-                                                                String::new(),
-                                                            ),
-                                                            conversation_id: r_conv_id.clone(),
-                                                        });
-                                                        msgs_sig.set(list);
-                                                    }
-                                                }
-
-                                                let _ = api::stream_run(
-                                                    &key_c,
-                                                    &rid_c,
-                                                    None,
-                                                    move |stream_evt| {
-                                                        let mut pending = pending_approvals();
-                                                        crate::chat_session::track_approval_event(&mut pending, &stream_evt);
-                                                        pending_approvals.set(pending);
-                                                        let mut list = msgs_sig();
-                                                        crate::chat_session::ChatSessionCoordinator::apply_stream_event(
-                                                            &mut list,
-                                                            &stream_msg_id,
-                                                            stream_evt,
-                                                            &mut reasoning_acc,
-                                                        );
-                                                        msgs_sig.set(list);
-                                                    },
-                                                )
-                                                .await;
-
-                                                if active_sid() == Some(rid_c) {
-                                                    active_sid.set(None);
-                                                }
-                                            });
-                                        }
+                                        let key_c = credential.clone();
+                                        let aid_c = r_agent_id.to_string();
+                                        let mut convs_sig = convs;
+                                        spawn(async move {
+                                            let conversations =
+                                                api::list_conversations(&aid_c, &key_c).await;
+                                            let agent_is_selected = {
+                                                let selection = selected.peek();
+                                                selection.as_ref().is_some_and(|a| a.id == aid_c)
+                                            };
+                                            if let Ok(c_list) = conversations
+                                                && agent_is_selected
+                                            {
+                                                convs_sig.set(c_list);
+                                            }
+                                        });
                                     }
                                 }
+                                _ => {}
                             }
-                            "run_finished" => {
-                                let run_id = event["run_id"].as_str().unwrap_or("");
-                                let r_status = event["status"].as_str().unwrap_or("done");
-                                let r_agent_id = event["agent_id"].as_str().unwrap_or("");
+                        })
+                        .await;
 
-                                // 1. Update status in runs list
-                                let mut r_list = runs();
-                                for r in r_list.iter_mut() {
-                                    if r["id"].as_str() == Some(run_id)
-                                        && let Some(obj) = r.as_object_mut()
-                                    {
-                                        obj.insert(
-                                            "status".to_string(),
-                                            serde_json::json!(r_status),
-                                        );
-                                    }
-                                }
-                                runs.set(r_list);
-
-                                // 2. Refresh messages and conversations for current agent from server DB to sync final state
-                                if let Some(curr) = selected()
-                                    && curr.id == r_agent_id
-                                {
-                                    let key_c = key();
-                                    let aid_c = r_agent_id.to_string();
-                                    let cid_c = active_conversation();
-                                    let mut msgs_sig = messages;
-                                    let mut convs_sig = convs;
-                                    spawn(async move {
-                                        let c = api::CadeApiClient::new(key_c.clone());
-                                        if let Ok(list) =
-                                            c.get_messages(&aid_c, cid_c.as_deref()).await
-                                        {
-                                            msgs_sig.set(list);
-                                        }
-                                        if let Ok(c_list) = api::list_conversations(&aid_c, &key_c).await {
-                                            convs_sig.set(c_list);
-                                        }
-                                    });
-                                }
-                            }
-                            _ => {}
-                        }
-                    })
-                    .await;
-
-                if let Err(e) = sse_res {
-                    global_error.set(Some(format!("Server connection lost: {e}")));
+                {
+                    let error = sse_res
+                        .err()
+                        .unwrap_or_else(|| "Event stream closed.".into());
+                    global_error.set(Some(format!("Server connection lost: {error}")));
                     gloo_timers::future::TimeoutFuture::new(3000).await;
 
                     // Re-sync on reconnect
-                    if let Ok(list) = api::list_agents(&key()).await {
+                    if let Ok(list) = api::list_agents(&credential).await {
                         global_error.set(None);
-                        if let Some(first) = list.into_iter().next() {
-                            let agent_id = first.id.clone();
-                            selected.set(Some(first));
-                            if let Ok(c_list) = api::list_conversations(&agent_id, &key()).await {
+                        let current = {
+                            let selection = selected.peek();
+                            selection
+                                .as_ref()
+                                .and_then(|agent| list.iter().find(|item| item.id == agent.id))
+                                .cloned()
+                        };
+                        if let Some(current) = current {
+                            let agent_id = current.id.clone();
+                            selected.set(Some(current));
+                            if let Ok(c_list) =
+                                api::list_conversations(&agent_id, &credential).await
+                            {
                                 convs.set(c_list);
                             }
                         }
                     }
-                    if let Ok(data) = crate::api::CadeApiClient::new(key()).list_approvals().await
+                    if let Ok(data) = crate::api::CadeApiClient::new(credential.clone())
+                        .list_approvals()
+                        .await
                         && let Some(rows) = data["approvals"].as_array()
                     {
-                        pending_approvals.set(rows.clone());
+                        chat_session::ChatSessionCoordinator::pending_snapshot(
+                            app_state,
+                            rows.clone(),
+                        );
                     }
                 }
             }
-        });
+        }
     });
 
     // ── Render ──────────────────────────────────────────────────────────────
     rsx! {
         div {
             class: "w-screen h-screen flex bg-[#0f1115] text-gray-200 overflow-hidden",
+            style: theme::style(selected_agent().and_then(|a| a.theme).as_deref()),
             // Global Keyboard shortcuts:
             //   Ctrl+K   → Command Palette
             //   Ctrl+N   → Chat
@@ -498,6 +450,7 @@ fn App() -> Element {
                     }
                 }
             },
+            style { "{theme::INTERACTION_CSS}" }
             if (api_key)().is_empty() {
                 components::login::LoginScreen {}
             } else {
@@ -551,6 +504,7 @@ fn App() -> Element {
                     } else {
                         components::dashboard::DashboardView {}
                     }
+                    components::interactions::ChatInteractions { state: app_state }
                 }
                 if show_palette() {
                     div {

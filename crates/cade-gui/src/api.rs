@@ -15,9 +15,24 @@ extern "C" {
 }
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{
-    ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response, TextDecoder,
-};
+use web_sys::{ReadableStreamDefaultReader, Request, RequestInit, RequestMode, Response};
+
+/// Dropping a root resource (for example on credential change) must detach its
+/// browser reader too, rather than leave a live HTTP feed behind the UI task.
+struct StreamReader(ReadableStreamDefaultReader);
+
+impl std::ops::Deref for StreamReader {
+    type Target = ReadableStreamDefaultReader;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for StreamReader {
+    fn drop(&mut self) {
+        let _ = self.0.cancel();
+    }
+}
 
 /// Low-level HTTP request to the CADE server.
 pub async fn api_request(
@@ -88,11 +103,14 @@ pub async fn get_messages(
     conversation_id: Option<&str>,
 ) -> Result<Vec<cade_api_types::ChatMessage>, String> {
     let path = match conversation_id {
-        Some(cid) => format!("/v1/agents/{agent_id}/messages?conversation_id={cid}"),
+        Some(cid) => format!(
+            "/v1/agents/{agent_id}/messages?conversation_id={}",
+            urlencoding::encode(cid)
+        ),
         None => format!("/v1/agents/{agent_id}/messages"),
     };
     let body = api_request("GET", &path, None, api_key).await?;
-    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+    cade_api_types::decode_list(&body, "messages").map_err(|e| format!("JSON parse: {e}"))
 }
 
 /// Send a message via the streaming SSE endpoint and call `on_event` for every
@@ -146,14 +164,14 @@ where
         .get_reader()
         .dyn_into()
         .map_err(|e| format!("{:?}", e))?;
-    let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
-
-    let mut buffer = String::new();
+    let reader = StreamReader(reader);
+    let mut decoder = cade_api_types::SseDecoder::default();
 
     loop {
         if let Some(token) = &cancel_token
             && token.load(std::sync::atomic::Ordering::Acquire)
         {
+            let _ = JsFuture::from(reader.cancel()).await;
             return Err("aborted".to_string());
         }
         let result = JsFuture::from(reader.read())
@@ -176,22 +194,19 @@ where
         }
 
         let uint8array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{:?}", e))?;
-        let chunk = decoder
-            .decode_with_buffer_source(&uint8array.into())
-            .map_err(|e| format!("{:?}", e))?;
-
-        buffer.push_str(&chunk);
-
-        // Drain complete SSE events (separated by \n\n)
-        while let Some(pos) = buffer.find("\n\n") {
-            let event_str = buffer[..pos].to_string();
-            buffer = buffer[pos + 2..].to_string();
-            dispatch_sse_lines(&event_str, &mut on_event)?;
+        for data in decoder.push(&uint8array.to_vec()) {
+            if data.trim() == "[DONE]" {
+                let _ = JsFuture::from(reader.cancel()).await;
+                return Ok(());
+            }
+            dispatch_sse_data(&data, &mut on_event)?;
         }
     }
 
     // Process any remaining data after the stream closes
-    dispatch_sse_lines(&buffer, &mut on_event)?;
+    for data in decoder.finish() {
+        dispatch_sse_data(&data, &mut on_event)?;
+    }
 
     Ok(())
 }
@@ -239,8 +254,8 @@ where
         .get_reader()
         .dyn_into()
         .map_err(|e| format!("{:?}", e))?;
-    let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
-    let mut buffer = String::new();
+    let reader = StreamReader(reader);
+    let mut decoder = cade_api_types::SseDecoder::default();
     loop {
         let result = JsFuture::from(reader.read())
             .await
@@ -257,17 +272,17 @@ where
             continue;
         }
         let uint8array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{:?}", e))?;
-        let chunk = decoder
-            .decode_with_buffer_source(&uint8array.into())
-            .map_err(|e| format!("{:?}", e))?;
-        buffer.push_str(&chunk);
-        while let Some(pos) = buffer.find("\n\n") {
-            let event_str = buffer[..pos].to_string();
-            buffer = buffer[pos + 2..].to_string();
-            dispatch_sse_lines(&event_str, &mut on_event)?;
+        for data in decoder.push(&uint8array.to_vec()) {
+            if data.trim() == "[DONE]" {
+                let _ = JsFuture::from(reader.cancel()).await;
+                return Ok(());
+            }
+            dispatch_sse_data(&data, &mut on_event)?;
         }
     }
-    dispatch_sse_lines(&buffer, &mut on_event)?;
+    for data in decoder.finish() {
+        dispatch_sse_data(&data, &mut on_event)?;
+    }
     Ok(())
 }
 
@@ -293,14 +308,7 @@ pub async fn list_conversations(
 ) -> Result<Vec<cade_api_types::ConversationInfo>, String> {
     let path = format!("/v1/agents/{agent_id}/conversations");
     let body = api_request("GET", &path, None, api_key).await?;
-    // Server returns { "conversations": [...] }
-    let map: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))?;
-    let arr = map["conversations"]
-        .as_array()
-        .ok_or_else(|| "missing conversations array".to_string())?
-        .clone();
-    serde_json::from_value(serde_json::Value::Array(arr)).map_err(|e| format!("JSON parse: {e}"))
+    cade_api_types::decode_list(&body, "conversations").map_err(|e| format!("JSON parse: {e}"))
 }
 
 /// Create a new conversation for an agent.
@@ -546,22 +554,15 @@ pub async fn list_events(agent_id: &str, api_key: &str) -> Result<Vec<serde_json
     Ok(arr)
 }
 
-/// Parse `data: ...` lines from a single SSE event block and dispatch to `on_event`.
-fn dispatch_sse_lines<F>(block: &str, on_event: &mut F) -> Result<(), String>
+/// All browser run transports use the same wire normalization.
+fn dispatch_sse_data<F>(data: &str, on_event: &mut F) -> Result<(), String>
 where
     F: FnMut(cade_api_types::StreamEvent),
 {
-    for line in block.lines() {
-        if let Some(data) = line.strip_prefix("data: ") {
-            let trimmed = data.trim();
-            if trimmed == "[DONE]" {
-                return Ok(()); // signal end — let caller decide what to do
-            }
-            if let Ok(event) = serde_json::from_str::<cade_api_types::StreamEvent>(trimmed) {
-                on_event(event);
-            }
-        }
+    if data.trim() == "[DONE]" {
+        return Ok(());
     }
+    on_event(serde_json::from_str(data).map_err(|e| format!("SSE decode: {e}"))?);
     Ok(())
 }
 
@@ -586,9 +587,7 @@ impl CadeApiClient {
         &self,
         agent_id: &str,
     ) -> Result<Vec<cade_api_types::ConversationInfo>, String> {
-        let path = format!("/v1/agents/{}/conversations", agent_id);
-        let res = api_request("GET", &path, None, &self.api_key).await?;
-        serde_json::from_str(&res).map_err(|e| e.to_string())
+        list_conversations(agent_id, &self.api_key).await
     }
 
     pub async fn create_conversation(
@@ -748,8 +747,17 @@ impl CadeApiClient {
         id: &str,
         action: &str,
     ) -> Result<serde_json::Value, String> {
+        self.respond_to_interaction(id, action, None).await
+    }
+
+    pub async fn respond_to_interaction(
+        &self,
+        id: &str,
+        action: &str,
+        feedback: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
         let path = format!("/v1/approvals/{}/action", id);
-        let body = serde_json::json!({ "action": action });
+        let body = serde_json::json!({ "action": action, "feedback": feedback });
         let res = api_request("POST", &path, Some(&body.to_string()), &self.api_key).await?;
         serde_json::from_str(&res).map_err(|e| e.to_string())
     }
@@ -833,9 +841,8 @@ where
         .get_reader()
         .dyn_into()
         .map_err(|e| format!("{:?}", e))?;
-    let decoder = TextDecoder::new().map_err(|e| format!("{:?}", e))?;
-
-    let mut buffer = String::new();
+    let reader = StreamReader(reader);
+    let mut decoder = cade_api_types::SseDecoder::default();
 
     loop {
         let result = JsFuture::from(reader.read())
@@ -858,25 +865,17 @@ where
         }
 
         let uint8array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{:?}", e))?;
-        let chunk = decoder
-            .decode_with_buffer_source(&uint8array.into())
-            .map_err(|e| format!("{:?}", e))?;
-
-        buffer.push_str(&chunk);
-
-        while let Some(pos) = buffer.find("\n\n") {
-            let event_str = buffer[..pos].to_string();
-            buffer = buffer[pos + 2..].to_string();
-
-            for line in event_str.lines() {
-                if let Some(data_str) = line.strip_prefix("data:")
-                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str.trim())
-                {
-                    on_event(val);
-                }
+        for data in decoder.push(&uint8array.to_vec()) {
+            if data.trim() == "[DONE]" {
+                return Ok(());
             }
+            on_event(serde_json::from_str(&data).map_err(|e| format!("Global SSE decode: {e}"))?);
         }
     }
-
+    for data in decoder.finish() {
+        if data.trim() != "[DONE]" {
+            on_event(serde_json::from_str(&data).map_err(|e| format!("Global SSE decode: {e}"))?);
+        }
+    }
     Ok(())
 }

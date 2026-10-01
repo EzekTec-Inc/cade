@@ -6,49 +6,24 @@ use crate::types::{AppState, ToastLevel, add_toast};
 #[component]
 pub fn ChatView() -> Element {
     let state = use_context::<AppState>();
-    let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let agent_name = (state.selected_agent)()
         .map(|a| a.name.clone())
         .unwrap_or_else(|| "Default Agent".to_string());
     let mut show_conversations = use_signal(|| true);
-
-    // Load messages when the active conversation or selected agent changes.
-    // This replaces the old background-polling approach which would overwrite
-    // streaming content mid-stream.
-    use_effect(move || {
-        let conv_id = (state.active_conversation)();
-        let agent_id = (state.selected_agent)()
-            .map(|a| a.id.clone())
-            .unwrap_or_default();
-        let api_client = client();
-        let mut msgs = state.messages;
-        let mut active_stream = state.active_stream;
-
-        // Abort the previous stream on conversation/agent switch
-        active_stream
-            .peek()
-            .0
-            .store(true, std::sync::atomic::Ordering::Release);
-        active_stream.set(crate::types::SafeAbortHandle::default());
-
-        spawn(async move {
-            if !agent_id.is_empty()
-                && let Ok(mut list) = api_client.get_messages(&agent_id, conv_id.as_deref()).await
-            {
-                // Preserve in-flight live stream placeholder if present in current messages
-                if let Some(live_msg) = msgs
-                    .peek()
-                    .iter()
-                    .find(|m| m.id.starts_with("live-"))
-                    .cloned()
-                    && !list.iter().any(|m| m.id == live_msg.id)
-                {
-                    list.push(live_msg);
-                }
-                msgs.set(list);
-            }
-        });
-    });
+    let agent_id = (state.selected_agent)().map(|a| a.id).unwrap_or_default();
+    let conversation = (state.active_conversation)();
+    let running_runs: Vec<_> = (state.runs)()
+        .into_iter()
+        .filter(|run| {
+            run["status"].as_str() == Some("running")
+                && run["agent_id"].as_str() == Some(agent_id.as_str())
+                && run["conversation_id"].as_str() == conversation.as_deref()
+        })
+        .collect();
+    let pending_count = (state.pending_approvals)()
+        .iter()
+        .filter(|row| row["agent_id"].as_str() == Some(agent_id.as_str()))
+        .count();
 
     rsx! {
         div { class: "flex flex-1 h-full overflow-hidden w-full min-w-0",
@@ -78,7 +53,6 @@ pub fn ChatView() -> Element {
 
                 // Active Subagents Banner
                 {
-                    let running_runs: Vec<_> = (state.runs)().into_iter().filter(|r| r["status"].as_str() == Some("running")).collect();
                     if !running_runs.is_empty() {
                         let count = running_runs.len();
                         let first_id = running_runs[0]["id"].as_str().unwrap_or("").to_string();
@@ -86,7 +60,7 @@ pub fn ChatView() -> Element {
                             div { class: "px-6 py-2 bg-gradient-to-r from-cyan-950/70 via-[#0a1124] to-[#040711] border-b border-cyan-800/40 flex items-center justify-between font-mono text-xs text-cyan-200 shrink-0 select-none",
                                 div { class: "flex items-center space-x-2 truncate",
                                     span { class: "w-2 h-2 rounded-full bg-emerald-400 animate-ping" }
-                                    span { class: "font-bold text-slate-100", "Autonomous Subagent Active:" }
+                                    span { class: "font-bold text-slate-100", "Run active:" }
                                     span { class: "text-cyan-300 font-semibold truncate", "{first_id}" }
                                     if count > 1 {
                                         span { class: "text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/60 text-cyan-300 border border-cyan-700/60 font-bold", "+{count - 1} more" }
@@ -109,16 +83,7 @@ pub fn ChatView() -> Element {
 
                 messages_panel { messages: state.messages, agent_name: agent_name.clone() }
 
-                chat_approvals { state }
-
-                input_area {
-                    input_text: state.input_text,
-                    is_loading: state.is_loading,
-                    messages: state.messages,
-                    selected_agent: state.selected_agent,
-                    api_key: state.api_key,
-                    active_conversation: state.active_conversation,
-                }
+                input_area {}
             }
 
             // Right-hand Side-Tray Context Panel (Phase 4)
@@ -132,15 +97,15 @@ pub fn ChatView() -> Element {
                 }
                 div { class: "space-y-2 border-t border-slate-800/80 pt-4",
                     div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between",
-                        span { "Pending Approvals" }
-                        span { class: "px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-mono font-bold", "{(state.pending_approvals)().len()}" }
+                        span { "Pending requests" }
+                        span { class: "px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-mono font-bold", "{pending_count}" }
                     }
                 }
                 div { class: "space-y-2 border-t border-slate-800/80 pt-4",
                     div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between",
-                        span { "Active Subagents" }
+                        span { "Active runs" }
                         {
-                            let running_cnt = (state.runs)().iter().filter(|r| r["status"].as_str() == Some("running")).count();
+                            let running_cnt = running_runs.len();
                             if running_cnt > 0 {
                                 rsx! {
                                     span { class: "px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-mono font-bold animate-pulse", "{running_cnt} active" }
@@ -153,7 +118,7 @@ pub fn ChatView() -> Element {
                         }
                     }
 
-                    for r in (state.runs)().iter().filter(|r| r["status"].as_str() == Some("running")).take(3) {
+                    for r in running_runs.iter().take(3) {
                         {
                             let rid = r["id"].as_str().unwrap_or("").to_string();
                             let aid = r["agent_id"].as_str().unwrap_or("").to_string();
@@ -180,79 +145,6 @@ pub fn ChatView() -> Element {
                     }
                 }
 
-                div { class: "space-y-2 border-t border-slate-800/80 pt-4 flex-1",
-                    div { class: "text-[10px] font-bold text-slate-500 uppercase tracking-wider", "Modified Files" }
-                    div { class: "text-xs font-mono text-slate-500 italic p-3 rounded bg-[#0c101d] border border-slate-800/60", "No modified files in session" }
-                }
-            }
-        }
-    }
-}
-
-/// Actionable approvals for the selected agent, including those arriving from
-/// the active run stream. The global feed and dashboard use the same queue ID.
-fn submit_chat_approval(
-    state: AppState,
-    api: crate::api::CadeApiClient,
-    id: String,
-    action: &'static str,
-) {
-    spawn(async move {
-        match api.action_approval(&id, action).await {
-            Ok(_) => {
-                let mut list = state.pending_approvals;
-                list.write().retain(|a| a["id"] != id);
-            }
-            Err(e) => add_toast(&state, ToastLevel::Error, "Approval failed", e),
-        }
-    });
-}
-
-#[component]
-fn chat_approvals(state: AppState) -> Element {
-    let client = use_context::<Memo<crate::api::CadeApiClient>>();
-    let agent_id = (state.selected_agent)().map(|a| a.id).unwrap_or_default();
-    let approvals: Vec<_> = (state.pending_approvals)()
-        .into_iter()
-        .filter(|a| {
-            a["agent_id"].as_str() == Some(&agent_id) && crate::chat_session::is_tool_approval(a)
-        })
-        .collect();
-
-    rsx! {
-        for approval in approvals {
-            {
-                let id = approval["id"].as_str().unwrap_or("").to_string();
-                let tool = approval["tool_name"].as_str().unwrap_or("tool").to_string();
-                let reason = approval["reason"].as_str().unwrap_or("Requires human review before execution.").to_string();
-                let arguments = approval["arguments"].as_str().map(String::from)
-                    .unwrap_or_else(|| approval["arguments"].to_string());
-                let id_approve = id.clone();
-                let id_deny = id.clone();
-                rsx! {
-                    div { key: "{id}", class: "mx-4 md:mx-8 p-4 rounded-xl border border-amber-500/40 bg-amber-950/20 text-sm space-y-2 shrink-0",
-                        div { class: "font-bold text-amber-300", "Approval Required: {tool}" }
-                        div { class: "text-xs font-mono text-slate-400", "ID: {id}" }
-                        div { class: "text-slate-200", "{reason}" }
-                        pre { class: "text-xs font-mono text-slate-300 whitespace-pre-wrap break-all max-h-32 overflow-y-auto", "{arguments}" }
-                        div { class: "flex gap-2",
-                            button {
-                                class: "px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer",
-                                onclick: move |_| {
-                                    submit_chat_approval(state, client(), id_approve.clone(), "approve");
-                                },
-                                "Approve"
-                            }
-                            button {
-                                class: "px-3 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white cursor-pointer",
-                                onclick: move |_| {
-                                    submit_chat_approval(state, client(), id_deny.clone(), "deny");
-                                },
-                                "Deny"
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -268,7 +160,7 @@ fn chat_sidebar(
     selected_agent: Signal<Option<cade_api_types::AgentInfo>>,
     api_key: Signal<String>,
 ) -> Element {
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
     let mut show_new = use_signal(|| false);
     let mut new_title = use_signal(String::new);
@@ -291,22 +183,6 @@ fn chat_sidebar(
         });
     });
 
-    let agent_id_for_convs = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
-    let conv_api_client = client;
-    use_effect(move || {
-        let a_id = agent_id_for_convs.clone();
-        let api = conv_api_client;
-        let mut conv_sig = conversations;
-        spawn(async move {
-            if !a_id.is_empty()
-                && let Ok(mut data) = api().list_conversations(&a_id).await
-            {
-                data.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
-                conv_sig.set(data);
-            }
-        });
-    });
-
     let mut create_conv = move || {
         let title = new_title().trim().to_string();
         if title.is_empty() {
@@ -322,8 +198,18 @@ fn chat_sidebar(
                 .await
             {
                 Ok(conv) => {
+                    if selected_agent
+                        .peek()
+                        .as_ref()
+                        .is_none_or(|agent| agent.id != agent_id)
+                        || *api_key.peek() != api_client.api_key
+                    {
+                        return;
+                    }
                     let mut list = convs();
-                    list.push(conv.clone());
+                    if !list.iter().any(|row| row.id == conv.id) {
+                        list.push(conv.clone());
+                    }
                     convs.set(list);
                     active.set(Some(conv.id));
                     add_toast(&state, ToastLevel::Success, "Conversation created", &title);
@@ -348,6 +234,14 @@ fn chat_sidebar(
         spawn(async move {
             match api_client.delete_conversation(&agent_id, &conv_id).await {
                 Ok(_) => {
+                    if selected_agent
+                        .peek()
+                        .as_ref()
+                        .is_none_or(|agent| agent.id != agent_id)
+                        || *api_key.peek() != api_client.api_key
+                    {
+                        return;
+                    }
                     let mut list = convs();
                     list.retain(|c| c.id != conv_id);
                     convs.set(list);
@@ -410,7 +304,7 @@ fn chat_sidebar(
                         div { class: "w-7 h-7 rounded-lg bg-gradient-to-tr from-[#ec4899] to-[#8b5cf6] filter drop-shadow-[0_0_6px_rgba(236,72,153,0.3)] shrink-0 flex items-center justify-center text-white text-xs font-bold", "AI" }
                         div { class: "flex flex-col min-w-0",
                             span { class: "text-white text-xs font-bold truncate", "{agent_name}" }
-                            span { class: "text-[10px] font-mono text-emerald-400", "● Session Connected" }
+                            span { class: "text-[10px] font-mono text-slate-400", "Selected agent" }
                         }
                     }
                 }
@@ -421,7 +315,7 @@ fn chat_sidebar(
                         class: "flex items-center justify-center space-x-2 px-3 py-2 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-medium text-xs cursor-pointer shadow-md shadow-sky-950/30 transition duration-150 select-none",
                         onclick: move |_| {
                             active_conversation.set(None);
-                            state.messages.set(Vec::new());
+                            crate::chat_session::ChatSessionCoordinator::sync_selection(state);
                         },
                         span { "＋" }
                         span { "New Dialogue" }
@@ -626,20 +520,6 @@ fn messages_panel(
 
 // ── Message bubble with rich rendering ───────────────────────────────────
 
-/// Split text into (reasoning, content) if `<reasoning>...</reasoning>` tags
-/// are present. Otherwise returns `None`.
-fn split_reasoning(text: &str) -> Option<(String, String)> {
-    let start_tag = "<reasoning>";
-    let end_tag = "</reasoning>";
-    let start = text.find(start_tag)?;
-    let end = text.find(end_tag)?;
-    let reasoning = text[start + start_tag.len()..end].trim().to_string();
-    let content = format!("{}{}", &text[..start], &text[end + end_tag.len()..])
-        .trim()
-        .to_string();
-    Some((reasoning, content))
-}
-
 #[component]
 fn message_bubble(id: String) -> Element {
     let mut state = use_context::<AppState>();
@@ -651,7 +531,7 @@ fn message_bubble(id: String) -> Element {
 
     let is_user = message.role == "user";
     let is_tool = message.role == "tool";
-    let is_streaming = message.id.starts_with("streaming-");
+    let is_streaming = state.chat_timeline.read().is_live_message(&message.id);
 
     let bubble_class = if is_user {
         "flex items-start space-x-3 max-w-[80%] ml-auto flex-row-reverse space-x-reverse"
@@ -734,13 +614,8 @@ fn message_bubble(id: String) -> Element {
             }
         }
     } else if is_user {
-        let content_str;
-        let content_val = if let Some(s) = message.content.as_str() {
-            s
-        } else {
-            content_str = message.content.to_string();
-            &content_str
-        };
+        let content_str = message.text();
+        let content_val = &content_str;
 
         rsx! {
             div { class: "{bubble_class}",
@@ -767,30 +642,12 @@ fn message_bubble(id: String) -> Element {
             }
         }
     } else {
-        let content_str;
-        let content_val = if let Some(s) = message.content.as_str() {
-            s
-        } else {
-            content_str = message.content.to_string();
-            &content_str
-        };
+        let content_str = message.text();
+        let content_val = &content_str;
 
         let (display_text, reasoning_val) = {
             let mut cache = state.parsed_messages.write();
-            if let Some(cached) = cache.get(&message.id) {
-                cached.clone()
-            } else {
-                let reasoning_parts = split_reasoning(content_val);
-                let (reason, disp) = if let Some((ref r, ref d)) = reasoning_parts {
-                    (Some(r.clone()), d.clone())
-                } else {
-                    (None, content_val.to_string())
-                };
-                if !is_streaming {
-                    cache.insert(message.id.clone(), (disp.clone(), reason.clone()));
-                }
-                (disp, reason)
-            }
+            cache.parse(&message.id, content_val, is_streaming)
         };
 
         rsx! {
@@ -842,15 +699,12 @@ fn message_bubble(id: String) -> Element {
 // ── Input area ───────────────────────────────────────────────────────────
 
 #[component]
-fn input_area(
-    input_text: Signal<String>,
-    is_loading: Signal<bool>,
-    messages: Signal<Vec<cade_api_types::ChatMessage>>,
-    selected_agent: Signal<Option<cade_api_types::AgentInfo>>,
-    api_key: Signal<String>,
-    active_conversation: Signal<Option<String>>,
-) -> Element {
-    let mut state = use_context::<AppState>();
+fn input_area() -> Element {
+    let state = use_context::<AppState>();
+    let mut input_text = state.input_text;
+    let is_loading = state.is_loading;
+    let selected_agent = state.selected_agent;
+    let active_conversation = state.active_conversation;
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
 
     let mut show_suggestions = use_signal(|| false);
@@ -859,7 +713,7 @@ fn input_area(
 
     let mut do_send = move || {
         let text = input_text().trim().to_string();
-        if text.is_empty() || is_loading() {
+        if text.is_empty() || is_loading() || selected_agent().is_none() {
             return;
         }
         input_text.set(String::new());
@@ -867,68 +721,46 @@ fn input_area(
 
         // Abort controller setup for the active stream (safe atomic bool cancel token)
         let cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        state
-            .active_stream
-            .set(crate::types::SafeAbortHandle(cancel_token.clone()));
-
         let agent_id = selected_agent().map(|a| a.id.clone()).unwrap_or_default();
         let api_client = client();
         let conv_id = active_conversation();
 
         let state_toast = state;
         let mut convs = state.conversations;
-        let mut active_conv = active_conversation;
         let agent_id_clone = agent_id.clone();
         let api_client_clone = api_client.clone();
 
-        spawn(async move {
-            let actual_agent_id = if agent_id_clone.is_empty() {
-                if let Ok(agents) = api_client_clone.list_agents().await
-                    && let Some(first) = agents.first()
-                {
-                    first.id.clone()
-                } else {
-                    "default".to_string()
-                }
-            } else {
-                agent_id_clone.clone()
-            };
-
+        spawn_forever(async move {
             let coordinator = crate::chat_session::ChatSessionCoordinator::new(
                 api_client_clone.clone(),
-                actual_agent_id.clone(),
+                agent_id_clone.clone(),
                 conv_id,
             );
 
-            let result = coordinator
-                .dispatch_turn(
-                    &text,
-                    messages,
-                    is_loading,
-                    state.pending_approvals,
-                    cancel_token,
-                )
-                .await;
+            let result = coordinator.dispatch_turn(&text, state, cancel_token).await;
 
             match result {
-                Ok(crate::chat_session::ChatTurnOutcome::Completed {
-                    assigned_conversation_id,
-                    ..
-                }) => {
-                    if active_conv().is_none()
-                        && let Some(cid) = assigned_conversation_id
-                    {
-                        active_conv.set(Some(cid));
-                        if let Ok(mut list) =
+                Ok(crate::chat_session::ChatTurnOutcome::Completed { .. }) => {
+                    // Each predicate returns an owned bool, releasing its
+                    // signal guard before the request or any signal mutation.
+                    let agent_is_selected = || {
+                        let selected = state.selected_agent.peek();
+                        selected.as_ref().is_some_and(|a| a.id == agent_id_clone)
+                    };
+                    if agent_is_selected()
+                        && let Ok(mut list) =
                             api_client_clone.list_conversations(&agent_id_clone).await
-                        {
-                            list.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
-                            convs.set(list);
-                        }
+                        && agent_is_selected()
+                    {
+                        list.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+                        convs.set(list);
                     }
                 }
                 Err(e) => {
                     add_toast(&state_toast, ToastLevel::Error, "Stream failed", e);
+                }
+                Ok(crate::chat_session::ChatTurnOutcome::Failed(e)) => {
+                    add_toast(&state_toast, ToastLevel::Error, "Run failed", e);
                 }
                 _ => {}
             }
@@ -1059,17 +891,10 @@ fn input_area(
                     }
                 }
                 div { class: "flex items-center justify-between pt-2 border-t border-[#1e293b]/40 select-none",
-                    div { class: "flex items-center space-x-3 text-xs text-gray-500 font-medium",
-                        span { class: "flex items-center space-x-1",
-                            span { class: "text-emerald-500", "\u{1f7e2}" }
-                            span { "Cloud" }
-                        }
-                        span { class: "flex items-center space-x-1",
-                            span { "\u{1f4c1}" }
-                            span { "root" }
-                        }
-                    }
+                    div { class: "text-xs text-gray-500", "Enter to send · Shift+Enter for a new line" }
                     button {
+                        disabled: is_loading() || selected_agent().is_none() || input_text().trim().is_empty(),
+                        "aria-label": "Send message",
                         class: if is_loading() { "w-7 h-7 bg-sky-500 text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150 opacity-50 cursor-not-allowed" } else { "w-7 h-7 bg-sky-500 text-white rounded-lg flex items-center justify-center hover:bg-[#e26a4f] transition duration-150" },
                         onclick: move |_| do_send(),
                         svg { class: "w-4 h-4 transform rotate-90", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.5",

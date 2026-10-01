@@ -3,7 +3,6 @@ use axum::extract::State;
 use serde_json::{Value, json};
 
 use crate::server::state::AppState;
-use cade_ai::provider_registry::ProviderRegistry;
 
 /// GET /v1/models
 ///
@@ -25,43 +24,41 @@ pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
         router.hot_sync_env_providers();
     }
 
-    let router = state.llm_router.read().await;
+    let router = state.llm_router.read().await.clone();
     let live_names = router.provider_names();
 
     // All models — fetched live concurrently, with per-provider catalogue fallback
     let dynamic = router.list_dynamic_models().await;
-    drop(router);
-
-    // Providers with no known model listing (not in catalogue, preset, or ollama)
-    let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
-    let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
-
-    const KNOWN: &[&str] = &[
-        "anthropic",
-        "openai",
-        "gemini",
-        "google",
-        "deepseek",
-        "ollama",
-    ];
-    let all_known: std::collections::HashSet<String> = KNOWN
-        .iter()
-        .map(|s| s.to_string())
-        .chain(
-            provider_registry
-                .get_all_providers()
-                .iter()
-                .map(|p| p.name.clone()),
-        )
-        .collect();
+    let listed: std::collections::HashSet<_> =
+        dynamic.iter().map(|model| model.provider.clone()).collect();
     let custom_providers: Vec<String> = live_names
         .into_iter()
-        .filter(|n| !all_known.contains(n))
+        .filter(|name| !listed.contains(name))
+        .collect();
+    let metadata: std::collections::BTreeMap<_, _> = dynamic
+        .iter()
+        .map(|entry| {
+            let bare = entry
+                .id
+                .split_once('/')
+                .map(|(_, id)| id)
+                .unwrap_or(&entry.id);
+            let registry = router.models.read();
+            (
+                entry.id.clone(),
+                json!({
+                    "capabilities": registry.metadata(&entry.provider, bare),
+                    "source": registry.metadata_source(&entry.provider, bare),
+                    "limits_are_fallback": !registry.has_known_limits(&entry.provider, bare),
+                }),
+            )
+        })
         .collect();
 
     Json(json!({
         "supported":        [],
         "dynamic":          dynamic,
         "custom_providers": custom_providers,
+        "metadata": metadata,
     }))
 }

@@ -1139,6 +1139,9 @@ fn to_openai_messages_never_emits_null_content() -> Result<()> {
     let body = provider.build_body(&req, false);
     if let Some(input) = body.get("input").and_then(|v| v.as_array()) {
         for (idx, item) in input.iter().enumerate() {
+            if item["type"] == "function_call" || item["type"] == "function_call_output" {
+                continue;
+            }
             let content = &item["content"];
             assert!(
                 !content.is_null(),

@@ -2,6 +2,45 @@ use super::*;
 use serde_json::Value;
 
 impl ToolRuntime {
+    pub(crate) async fn handle_edit_via_backend(&self, args: &Value) -> (String, bool) {
+        if !self.backend.is_writable() {
+            return ("Error: backend is read-only".into(), true);
+        }
+        let Some(path) = args["path"].as_str().filter(|path| !path.trim().is_empty()) else {
+            return ("edit_file: missing 'path'".into(), true);
+        };
+        let Some(old) = args["old_string"].as_str().filter(|old| !old.is_empty()) else {
+            return ("edit_file: nonempty 'old_string' is required".into(), true);
+        };
+        let Some(new) = args["new_string"].as_str() else {
+            return ("edit_file: missing 'new_string'".into(), true);
+        };
+        let path = std::path::Path::new(path);
+        let _lock = crate::tools::file_lock::FileLockManager::global()
+            .acquire_lock(path)
+            .await;
+        let content = match self.backend.read_file(path).await {
+            Ok(content) => content,
+            Err(error) => return (error.to_string(), true),
+        };
+        let matches = content.matches(old).count();
+        let all = args["replace_all"].as_bool().unwrap_or(false);
+        if matches == 0 || (matches > 1 && !all) {
+            return (
+                format!("edit_file: expected a unique match, found {matches}"),
+                true,
+            );
+        }
+        let changed = if all {
+            content.replace(old, new)
+        } else {
+            content.replacen(old, new, 1)
+        };
+        match self.backend.write_file(path, &changed).await {
+            Ok(()) => (format!("Edited {}", path.display()), false),
+            Err(error) => (error.to_string(), true),
+        }
+    }
     pub(crate) async fn handle_bash_via_backend(&self, args: &Value) -> (String, bool) {
         let command = args["command"].as_str().unwrap_or("").to_string();
         let timeout_secs = args["timeout"].as_u64().unwrap_or(120);
@@ -11,7 +50,7 @@ impl ToolRuntime {
             return (
                 format!(
                     "Blocked: read-only backend refuses write command: {}",
-                    &command[..80.min(command.len())]
+                    command.chars().take(80).collect::<String>()
                 ),
                 true,
             );

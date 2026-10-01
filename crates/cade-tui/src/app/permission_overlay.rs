@@ -1,74 +1,91 @@
-//! Permission request overlay — an interactive modal that prompts the
-//! user to approve or deny a mid-execution tool permission request.
-//!
-//! When a running tool calls `ask_permission`, the execution future is
-//! halted and this overlay is pushed onto the TUI stack.  The user sees
-//! a floating modal with the permission description and can approve (Y),
-//! deny (N), or always-allow-for-session (A).
-
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
-};
-
+//! Permission decisions adapt the shared question presentation/input model.
+use super::{ActiveQuestionDrawState, ActiveQuestionState};
 use crate::colors::ThemeColors;
-use crate::colors::ThemeColorsExt;
 use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+use crate::question::{Question, QuestionAnswer, QuestionOption};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{Frame, layout::Rect};
 
-/// Result produced by the permission overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionVerdict {
-    /// User explicitly approved this specific operation.
     Allow,
-    /// User denied this specific operation.
     Deny,
-    /// User approved and requested to remember the choice for this session.
     AllowSession,
 }
 
-/// State for the floating permission request modal.
 #[derive(Debug)]
 pub struct PermissionOverlay {
-    /// The permission being requested (e.g. "bash.exec", "file.write").
     pub permission: String,
-    /// The specific target pattern (e.g. a file path or command).
     pub pattern: String,
-    /// One-shot channel to send the verdict back to the waiting tool.
     pub tx: Option<tokio::sync::oneshot::Sender<PermissionVerdict>>,
-    /// Stored verdict after user input.
     verdict: Option<PermissionVerdict>,
+    dialog: ActiveQuestionState,
 }
 
 impl PermissionOverlay {
-    /// Create a new permission overlay for the given operation.
     pub fn new(
         permission: impl Into<String>,
         pattern: impl Into<String>,
         tx: tokio::sync::oneshot::Sender<PermissionVerdict>,
     ) -> Self {
+        let permission = permission.into();
+        let pattern = pattern.into();
+        let detail = if permission == "bash.exec" {
+            format!("```bash\n{pattern}\n```")
+        } else {
+            format!("```text\n{pattern}\n```")
+        };
+        let question = Question {
+            header: format!("Permission · {permission}"),
+            text: format!("Allow this operation?\n\n{detail}"),
+            options: vec![
+                QuestionOption {
+                    label: "Allow once".into(),
+                    description: "Y · This operation only".into(),
+                },
+                QuestionOption {
+                    label: "Deny".into(),
+                    description: "N · Refuse this operation".into(),
+                },
+                QuestionOption {
+                    label: "Allow for this session".into(),
+                    description: "A · Remember for this session".into(),
+                },
+            ],
+            multi_select: false,
+            allow_other: false,
+            progress: None,
+        };
         Self {
-            permission: permission.into(),
-            pattern: pattern.into(),
+            permission,
+            pattern,
             tx: Some(tx),
             verdict: None,
+            dialog: ActiveQuestionState {
+                draw_state: ActiveQuestionDrawState::new(question),
+                tx: None,
+                result: None,
+            },
         }
     }
 
-    fn permission_label(&self) -> String {
-        match self.permission.as_str() {
-            "bash.exec" => "Shell Execution".to_string(),
-            "file.write" => "Write File".to_string(),
-            "file.edit" => "Edit File".to_string(),
-            "file.delete" => "Delete File".to_string(),
-            "network.connect" => "Network Access".to_string(),
-            "desktop.screenshot" => "Desktop Screenshot".to_string(),
-            "clipboard.read" => "Clipboard Read".to_string(),
-            other => other.to_string(),
+    fn finish(&mut self, result: OverlayInputResult) -> OverlayInputResult {
+        if result == OverlayInputResult::Dismiss {
+            // Authorization is an indexed, typed choice, never arbitrary text.
+            let verdict = match self.dialog.result.take().flatten() {
+                Some(QuestionAnswer::Single(_)) => match self.dialog.draw_state.cursor_pos {
+                    0 => PermissionVerdict::Allow,
+                    2 => PermissionVerdict::AllowSession,
+                    _ => PermissionVerdict::Deny,
+                },
+                _ => PermissionVerdict::Deny,
+            };
+            if let Some(tx) = self.tx.take() {
+                let _ = tx.send(verdict.clone());
+            }
+            self.verdict = Some(verdict);
         }
+        result
     }
 }
 
@@ -76,185 +93,80 @@ impl OverlayComponent for PermissionOverlay {
     fn id(&self) -> &'static str {
         "permission"
     }
-
     fn render_overlay(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
-        // Dim background
-        frame.render_widget(Clear, area);
-
-        // Calculate centered modal area (60% width, auto height)
-        let modal_w = (area.width as f64 * 0.6) as u16;
-        let modal_h = 9u16;
-        let x = area.x + (area.width.saturating_sub(modal_w)) / 2;
-        let y = area.y + area.height.saturating_sub(modal_h) / 2;
-        let modal_area = Rect::new(x, y, modal_w, modal_h);
-
-        // Draw the modal shell
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(colors.c_border_style())
-            .style(Style::default().bg(colors.c_bg_surface2()))
-            .border_style(colors.border_accent())
-            .title(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    "🔒 Permission Request",
-                    Style::default()
-                        .fg(colors.c_warning())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-            ]));
-
-        let inner = block.inner(modal_area);
-        frame.render_widget(Clear, modal_area);
-        frame.render_widget(block, modal_area);
-
-        // Layout inner content
-        let [body_area, hint_area] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
-
-        // Body text
-        let body_text = vec![
-            Line::from(vec![
-                Span::styled(
-                    "Permission: ",
-                    Style::default()
-                        .fg(colors.c_primary())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    self.permission_label(),
-                    Style::default().fg(colors.c_text_primary()),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "Target:     ",
-                    Style::default()
-                        .fg(colors.c_primary())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    &self.pattern,
-                    Style::default()
-                        .fg(colors.c_warning())
-                        .add_modifier(Modifier::DIM),
-                ),
-            ]),
-            Line::from(Span::raw("")),
-            Line::from(vec![Span::styled(
-                "Allow this operation?",
-                Style::default().fg(colors.c_text_primary()),
-            )]),
-        ];
-
-        let body = Paragraph::new(body_text)
-            .block(Block::default().style(Style::default()))
-            .wrap(Wrap { trim: false });
-        frame.render_widget(body, body_area);
-
-        // Hint row
-        let hint_text = Line::from(vec![
-            Span::styled(" [Y]es  ", Style::default().fg(colors.c_success())),
-            Span::styled("[N]o  ", Style::default().fg(colors.c_error())),
-            Span::styled(
-                "[A]lways for session  ",
-                Style::default()
-                    .fg(colors.c_primary())
-                    .add_modifier(Modifier::DIM),
-            ),
-            Span::styled("[Esc] Cancel", colors.text_muted()),
-        ]);
-        frame.render_widget(Paragraph::new(hint_text).style(Style::default()), hint_area);
+        self.dialog.render_overlay(frame, area, colors);
     }
-
+    fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
+        self.dialog.render_inline(frame, area, colors);
+    }
+    fn inline_height(&self, max: u16) -> u16 {
+        self.dialog.inline_height(max)
+    }
+    fn inline_height_for(&self, area: Rect) -> u16 {
+        self.dialog.inline_height_for(area)
+    }
+    fn inline_area(&self) -> Option<Rect> {
+        self.dialog.inline_area()
+    }
     fn handle_input(&mut self, key: KeyEvent) -> OverlayInputResult {
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('y') | KeyCode::Char('Y'), _) => {
-                self.verdict = Some(PermissionVerdict::Allow);
-                if let Some(tx) = self.tx.take() {
-                    let _ = tx.send(PermissionVerdict::Allow);
-                }
-                OverlayInputResult::Dismiss
+        let index = if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT {
+            match key.code {
+                KeyCode::Char('y' | 'Y') => Some(0),
+                KeyCode::Char('n' | 'N') => Some(1),
+                KeyCode::Char('a' | 'A') => Some(2),
+                _ => None,
             }
-            (KeyCode::Char('n') | KeyCode::Char('N'), _) | (KeyCode::Esc, _) => {
-                self.verdict = Some(PermissionVerdict::Deny);
-                if let Some(tx) = self.tx.take() {
-                    let _ = tx.send(PermissionVerdict::Deny);
-                }
-                OverlayInputResult::Dismiss
+        } else {
+            None
+        };
+        let result = if let Some(index) = index {
+            if key.kind != crossterm::event::KeyEventKind::Press {
+                return OverlayInputResult::Consumed;
             }
-            (KeyCode::Char('a') | KeyCode::Char('A'), _) => {
-                self.verdict = Some(PermissionVerdict::AllowSession);
-                if let Some(tx) = self.tx.take() {
-                    let _ = tx.send(PermissionVerdict::AllowSession);
-                }
-                OverlayInputResult::Dismiss
-            }
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.verdict = Some(PermissionVerdict::Deny);
-                if let Some(tx) = self.tx.take() {
-                    let _ = tx.send(PermissionVerdict::Deny);
-                }
-                OverlayInputResult::Dismiss
-            }
-            _ => OverlayInputResult::Consumed,
-        }
+            self.dialog.draw_state.cursor_pos = index;
+            self.dialog
+                .handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        } else {
+            self.dialog.handle_input(key)
+        };
+        self.finish(result)
     }
-
+    fn handle_event(&mut self, event: &Event) -> OverlayInputResult {
+        if let Event::Key(key) = event {
+            return self.handle_input(*key);
+        }
+        let result = self.dialog.handle_event(event);
+        self.finish(result)
+    }
     fn take_result(&mut self) -> Option<Box<dyn std::any::Any>> {
         self.verdict
             .take()
             .map(|v| Box::new(v) as Box<dyn std::any::Any>)
+    }
+    fn is_dismissed(&self) -> bool {
+        self.tx.as_ref().is_some_and(|tx| tx.is_closed())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyModifiers};
-
-    fn make_key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
     #[test]
-    fn permission_overlay_approve() {
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let mut overlay = PermissionOverlay::new("file.write", "/tmp/test.txt", tx);
-
-        let result = overlay.handle_input(make_key(KeyCode::Char('y')));
-        assert_eq!(result, OverlayInputResult::Dismiss);
-        assert_eq!(overlay.verdict, Some(PermissionVerdict::Allow));
-    }
-
-    #[test]
-    fn permission_overlay_deny() {
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let mut overlay = PermissionOverlay::new("bash.exec", "rm -rf /", tx);
-
-        let result = overlay.handle_input(make_key(KeyCode::Char('n')));
-        assert_eq!(result, OverlayInputResult::Dismiss);
-        assert_eq!(overlay.verdict, Some(PermissionVerdict::Deny));
-    }
-
-    #[test]
-    fn permission_overlay_allow_session() {
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let mut overlay = PermissionOverlay::new("network.connect", "example.com:443", tx);
-
-        let result = overlay.handle_input(make_key(KeyCode::Char('A')));
-        assert_eq!(result, OverlayInputResult::Dismiss);
-        assert_eq!(overlay.verdict, Some(PermissionVerdict::AllowSession));
-    }
-
-    #[test]
-    fn permission_overlay_esc_denies() {
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let mut overlay = PermissionOverlay::new("file.delete", "/data/db", tx);
-
-        let result = overlay.handle_input(make_key(KeyCode::Esc));
-        assert_eq!(result, OverlayInputResult::Dismiss);
-        assert_eq!(overlay.verdict, Some(PermissionVerdict::Deny));
+    fn candidate6_permission_keyboard_verdicts_are_typed() {
+        for (key, expected) in [
+            (KeyCode::Char('y'), PermissionVerdict::Allow),
+            (KeyCode::Char('n'), PermissionVerdict::Deny),
+            (KeyCode::Char('A'), PermissionVerdict::AllowSession),
+            (KeyCode::Esc, PermissionVerdict::Deny),
+            (KeyCode::Char('3'), PermissionVerdict::AllowSession),
+        ] {
+            let (tx, mut rx) = tokio::sync::oneshot::channel();
+            let mut overlay = PermissionOverlay::new("bash.exec", "git status", tx);
+            assert_eq!(
+                overlay.handle_input(KeyEvent::new(key, KeyModifiers::NONE)),
+                OverlayInputResult::Dismiss
+            );
+            assert_eq!(rx.try_recv().unwrap(), expected);
+        }
     }
 }

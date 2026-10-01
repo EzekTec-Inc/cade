@@ -1,12 +1,44 @@
 [
   {
+    "name": "anthropic", "kind": "anthropic", "config_key": "anthropic", "aliases": ["claude"],
+    "env_vars": ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+    "chat_url": "https://api.anthropic.com/v1/messages",
+    "models_url": "https://api.anthropic.com/v1/models",
+    "base_url_env": ["ANTHROPIC_BASE_URL"],
+    "default_model": "claude-opus-4-5", "fast_model": "claude-haiku-4-5", "priority": 10, "fast_priority": 30
+  },
+  {
+    "name": "openai", "display_name": "OpenAI", "kind": "openai", "config_key": "openai", "env_vars": ["OPENAI_API_KEY"],
+    "chat_url": "https://api.openai.com/v1/chat/completions",
+    "models_url": "https://api.openai.com/v1/models", "base_url_env": ["OPENAI_BASE_URL"],
+    "default_model": "gpt-4o", "fast_model": "o4-mini", "background_model": "gpt-4o-mini", "priority": 20, "fast_priority": 20
+  },
+  {
+    "name": "gemini", "kind": "gemini", "config_key": "google", "aliases": ["google"], "pricing_provider": "google",
+    "env_vars": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+    "chat_url": "https://generativelanguage.googleapis.com/v1beta/models",
+    "models_url": "https://generativelanguage.googleapis.com/v1beta/models",
+    "base_url_env": ["GEMINI_BASE_URL", "GOOGLE_AI_BASE_URL"],
+    "default_model": "gemini-2.5-pro", "fast_model": "gemini-2.0-flash", "priority": 30, "fast_priority": 10
+  },
+  {
+    "name": "ollama", "kind": "ollama", "config_key": "ollama", "aliases": ["local"], "env_vars": [], "local": true,
+    "chat_url": "http://localhost:11434", "models_url": "http://localhost:11434/api/tags",
+    "base_url_env": ["OLLAMA_BASE_URL"],
+    "default_model": "llama3.2", "priority": 1000
+  },
+  {
     "name": "openrouter",
+    "display_name": "OpenRouter",
+    "background_model": "z-ai/glm-4.5-air:free",
+    "headers": {"HTTP-Referer": "https://github.com/GovAlta-Lab/cade", "X-Title": "CADE"},
     "env_vars": ["OPENROUTER_API_KEY"],
     "chat_url": "https://openrouter.ai/api/v1/chat/completions",
     "models_url": "https://openrouter.ai/api/v1/models"
   },
   {
     "name": "groq",
+    "display_name": "Groq",
     "env_vars": ["GROQ_API_KEY"],
     "chat_url": "https://api.groq.com/openai/v1/chat/completions",
     "models_url": "https://api.groq.com/openai/v1/models"
@@ -31,6 +63,9 @@
   },
   {
     "name": "deepseek",
+    "display_name": "DeepSeek",
+    "config_key": "deepseek",
+    "default_model": "deepseek-chat", "fast_model": "deepseek-chat", "priority": 40,
     "env_vars": ["DEEPSEEK_API_KEY"],
     "chat_url": "https://api.deepseek.com/chat/completions",
     "models_url": "https://api.deepseek.com/models"

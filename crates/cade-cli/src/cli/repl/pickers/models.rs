@@ -333,10 +333,7 @@ impl Repl {
                                 allow_other: true,
                                 progress: None,
                             };
-                            let ans = {
-                                let mut app = app_arc.lock();
-                                app.ask_question(&q)?
-                            };
+                            let ans = self.ask_repl_question(q).await?;
                             if let Some(a) = &ans {
                                 let typed = a.as_str();
                                 if !typed.is_empty() && typed != "Cancel" {

@@ -1,14 +1,12 @@
 /// High-level agent session for SDK consumers.
 ///
-/// `AgentSession` wraps `CadeClient` and `ToolRuntime` to provide a clean
+/// `AgentSession` wraps the server-owned runtime transport to provide a clean
 /// API for embedding CADE in other applications.
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use cade_agent::agent::client::{HttpTransport, MemoryBlock};
-use cade_agent::mcp::McpManager;
-use cade_agent::tools::ToolRuntime;
-use cade_core::permissions::{PermissionManager, PermissionMode};
+use cade_core::permissions::PermissionMode;
 use cade_core::skills::Skill;
 
 use crate::Result;
@@ -26,7 +24,7 @@ pub struct SessionOptions {
     pub model: Option<String>,
     /// Working directory for skill/tool path resolution.
     pub cwd: PathBuf,
-    /// Permission mode (default: BypassPermissions for SDK use).
+    /// Permission mode (default: Default).
     pub permission_mode: PermissionMode,
     /// Allowed paths for granular RBAC file sandboxing.
     pub allowed_paths: Option<Vec<String>>,
@@ -53,10 +51,9 @@ impl Default for SessionOptions {
 /// A stateful agent session.
 pub struct AgentSession {
     client: Arc<HttpTransport>,
-    runtime: ToolRuntime,
+    cwd: PathBuf,
+    execution_options: serde_json::Value,
     agent_id: String,
-    #[allow(dead_code)]
-    permissions: PermissionManager,
 }
 
 impl AgentSession {
@@ -79,13 +76,18 @@ impl AgentSession {
         let agent_id = match opts.agent_id {
             Some(id) => id,
             None => {
-                let model = opts
-                    .model
-                    .as_deref()
-                    .unwrap_or("anthropic/claude-sonnet-4-5");
+                let model = match opts.model.as_ref() {
+                    Some(model) => model.clone(),
+                    None => client
+                        .server_default_model_checked()
+                        .await
+                        .map_err(|error| {
+                            crate::Error::custom(format!("server model config: {error}"))
+                        })?,
+                };
                 let req = cade_agent::agent::client::CreateAgentRequest {
                     name: Some(format!("sdk-{}", uuid::Uuid::new_v4())),
-                    model: model.to_string(),
+                    model,
                     description: Some("SDK agent".to_string()),
                     system_prompt: None,
                     memory_blocks: Vec::new(),
@@ -99,22 +101,16 @@ impl AgentSession {
             }
         };
 
-        let mcp = Arc::new(McpManager::empty());
-        let mut runtime = ToolRuntime::new(
-            Arc::clone(&client) as Arc<dyn cade_agent::backends::storage::StorageBackend>,
-            Arc::clone(&mcp),
-            agent_id.clone(),
-            opts.cwd,
-        );
-        runtime.allowed_paths = opts.allowed_paths;
-
-        let permissions = PermissionManager::new(opts.permission_mode);
+        let execution_options = serde_json::json!({
+            "cwd": opts.cwd, "allowed_paths": opts.allowed_paths,
+            "permission_mode": opts.permission_mode.to_string(),
+        });
 
         Ok(Self {
             client,
-            runtime,
+            cwd: opts.cwd,
+            execution_options,
             agent_id,
-            permissions,
         })
     }
 
@@ -122,6 +118,29 @@ impl AgentSession {
 
     pub fn agent_id(&self) -> &str {
         &self.agent_id
+    }
+
+    pub fn with_max_turns(mut self, turns: usize) -> Self {
+        self.execution_options["max_turns"] = turns.into();
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.execution_options["reasoning_effort"] = effort.into().into();
+        self
+    }
+
+    pub fn with_execution(mut self, execution: cade_core::settings::ExecutionProfile) -> Self {
+        self.execution_options["execution"] = serde_json::json!(execution);
+        self
+    }
+
+    pub fn with_permissions(
+        mut self,
+        permissions: cade_core::settings::PermissionSettings,
+    ) -> Self {
+        self.execution_options["permissions"] = serde_json::json!(permissions);
+        self
     }
 
     // -- Prompting
@@ -136,9 +155,17 @@ impl AgentSession {
     pub async fn prompt(&self, text: &str) -> Result<String> {
         let messages = self
             .client
-            .stream_message(&self.agent_id, text, |_msg| {})
+            .start_run_cancellable_with_options(
+                &self.agent_id,
+                text,
+                None,
+                &self.execution_options,
+                |_msg| {},
+                None,
+            )
             .await
             .map_err(|e| crate::Error::custom(format!("stream: {e}")))?;
+        check_run_errors(&messages)?;
 
         let text: String = messages
             .iter()
@@ -157,13 +184,21 @@ impl AgentSession {
     ) -> Result<String> {
         let messages = self
             .client
-            .stream_message(&self.agent_id, text, |msg| {
-                if let Some(t) = msg.assistant_text() {
-                    on_delta(t);
-                }
-            })
+            .start_run_cancellable_with_options(
+                &self.agent_id,
+                text,
+                None,
+                &self.execution_options,
+                |msg| {
+                    if let Some(t) = msg.assistant_text() {
+                        on_delta(t);
+                    }
+                },
+                None,
+            )
             .await
             .map_err(|e| crate::Error::custom(format!("stream: {e}")))?;
+        check_run_errors(&messages)?;
 
         let full: String = messages
             .iter()
@@ -214,8 +249,26 @@ impl AgentSession {
 
     /// List all available skills for the current working directory.
     pub fn list_skills(&self) -> Vec<Skill> {
-        cade_core::skills::discover_all_skills(&self.runtime.cwd, Some(&self.agent_id), None)
+        cade_core::skills::discover_all_skills(&self.cwd, Some(&self.agent_id), None)
     }
 }
 
 // endregion: --- AgentSession
+
+fn check_run_errors(messages: &[cade_agent::agent::client::CadeMessage]) -> Result<()> {
+    for message in messages {
+        if message.msg_type() == "error" {
+            return Err(crate::Error::custom(
+                message.data["error"].as_str().unwrap_or("Run failed"),
+            ));
+        }
+        if message.msg_type() == "run_done" {
+            match message.data["status"].as_str() {
+                Some("cancelled") => return Err(crate::Error::custom("Run cancelled")),
+                Some("error") => return Err(crate::Error::custom("Run failed")),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}

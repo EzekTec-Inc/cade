@@ -13,6 +13,49 @@ use crate::ThemeColors;
 use crate::colors::ThemeColorsExt;
 use crate::slots::SlotComponent;
 
+#[cfg(test)]
+mod candidate6_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn candidate6_lua_selection_coalesces_without_crossing_action_barriers() {
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let mut slot = LuaUiSlot::new(false, queue.clone());
+        slot.update(Some(vec![LuaWidget::List {
+            id: Some("targets".into()),
+            items: vec!["one".into(), "two".into(), "three".into()],
+            selected: Some(0),
+        }]));
+        slot.set_focused(true);
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        slot.handle_input(right);
+        slot.handle_input(right);
+        assert_eq!(queue.lock().unwrap().len(), 1);
+        assert_eq!(queue.lock().unwrap()[0].1["selected"], 2);
+        slot.handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        slot.handle_input(right);
+        assert_eq!(
+            queue.lock().unwrap().len(),
+            3,
+            "button/action order is not coalesced"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                slot.render(frame, area, &ThemeColors::default());
+            })
+            .unwrap();
+        assert!(
+            !slot.hitboxes.is_empty(),
+            "rendered widgets must be pointer-accessible"
+        );
+        assert_eq!(slot.focused_idx, 0);
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LuaWidget {
@@ -80,6 +123,7 @@ pub struct LuaUiSlot {
     pub has_clock: bool,
     pub hitboxes: Vec<(String, ratatui::layout::Rect)>,
     pub is_focused: bool,
+    pub work_ready: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl LuaUiSlot {
@@ -95,6 +139,7 @@ impl LuaUiSlot {
             has_clock: false,
             hitboxes: Vec::new(),
             is_focused: false,
+            work_ready: None,
         }
     }
 
@@ -107,6 +152,29 @@ impl LuaUiSlot {
             self.focused_idx = 0;
         } else if self.focused_idx >= interactives.len() {
             self.focused_idx = interactives.len() - 1;
+        }
+    }
+
+    pub fn with_wakeup(mut self, wake: Arc<tokio::sync::Notify>) -> Self {
+        self.work_ready = Some(wake);
+        self
+    }
+
+    fn enqueue_event(&self, id: String, value: serde_json::Value) {
+        let mut queue = self.event_queue.lock().unwrap_or_else(|e| e.into_inner());
+        // List selection is replaceable state. Button activations and tool
+        // completions are actions and must retain their order and identity.
+        if value.get("selected").is_some()
+            && let Some((old_id, old)) = queue.back_mut()
+            && old_id == &id
+            && old.get("selected").is_some()
+        {
+            *old = value;
+        } else {
+            queue.push_back((id, value));
+        }
+        if let Some(wake) = &self.work_ready {
+            wake.notify_one();
         }
     }
 
@@ -164,6 +232,9 @@ impl LuaUiSlot {
 }
 
 impl SlotComponent for LuaUiSlot {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
     fn set_focused(&mut self, focused: bool) {
         self.is_focused = focused;
     }
@@ -192,7 +263,7 @@ impl SlotComponent for LuaUiSlot {
 
             let constraints: Vec<Constraint> = if self.is_header {
                 std::iter::repeat_n(
-                    Constraint::Percentage(100 / children.len() as u16),
+                    Constraint::Percentage(100 / children.len().max(1) as u16),
                     children.len(),
                 )
                 .collect()
@@ -264,10 +335,7 @@ impl SlotComponent for LuaUiSlot {
                     if let Some(new_state) = self.root.as_mut().and_then(|r| toggle_widget(r, id)) {
                         let mut args = serde_json::Map::new();
                         args.insert("state".to_string(), serde_json::Value::Bool(new_state));
-                        self.event_queue
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                        self.enqueue_event(id.clone(), serde_json::Value::Object(args));
                     } else {
                         // Treat as general button click / generic action trigger
                         let mut args = serde_json::Map::new();
@@ -279,10 +347,7 @@ impl SlotComponent for LuaUiSlot {
                             "col_offset".to_string(),
                             serde_json::Value::Number(0.into()),
                         );
-                        self.event_queue
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                        self.enqueue_event(id.clone(), serde_json::Value::Object(args));
                     }
                     true
                 } else {
@@ -302,10 +367,7 @@ impl SlotComponent for LuaUiSlot {
                             "selected".to_string(),
                             serde_json::Value::Number(new_idx.into()),
                         );
-                        self.event_queue
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                        self.enqueue_event(id.clone(), serde_json::Value::Object(args));
                         true
                     } else {
                         false
@@ -327,10 +389,7 @@ impl SlotComponent for LuaUiSlot {
                             "selected".to_string(),
                             serde_json::Value::Number(new_idx.into()),
                         );
-                        self.event_queue
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .push_back((id.clone(), serde_json::Value::Object(args)));
+                        self.enqueue_event(id.clone(), serde_json::Value::Object(args));
                         true
                     } else {
                         false
@@ -367,10 +426,7 @@ impl SlotComponent for LuaUiSlot {
                         "col_offset".to_string(),
                         serde_json::Value::Number((mouse.column - rect.x).into()),
                     );
-                    self.event_queue
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push_back((id.clone(), serde_json::Value::Object(args)));
+                    self.enqueue_event(id.clone(), serde_json::Value::Object(args));
                     return true;
                 }
             }

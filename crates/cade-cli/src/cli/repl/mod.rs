@@ -28,6 +28,8 @@ pub mod commands_skills;
 pub mod commands_theme;
 pub mod commands_tree;
 pub mod format;
+mod input_driver;
+mod lua_work;
 pub mod pickers;
 pub mod tool_intercepts;
 pub mod turn_loop;
@@ -213,6 +215,9 @@ pub struct Repl {
     pub(crate) session_stats: std::sync::Arc<parking_lot::Mutex<SessionStats>>,
     /// Fullscreen ratatui TUI — single render path for all output + input.
     pub(crate) app: Arc<Mutex<TuiApp>>,
+    pub(crate) lua_tool_slots: Arc<tokio::sync::Semaphore>,
+    pub(crate) terminal_driver_active: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) pending_terminal_event: Arc<Mutex<Option<crossterm::event::Event>>>,
     /// I-01: steering message typed during a turn (Enter key) — cancel current
     /// turn and run this message as the very next turn.
     pub(crate) queued_steering: Arc<Mutex<Option<String>>>,
@@ -348,6 +353,9 @@ impl Repl {
             session_stats: std::sync::Arc::new(parking_lot::Mutex::new(SessionStats::new())),
             app,
             queued_steering: Arc::new(Mutex::new(None)),
+            lua_tool_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            terminal_driver_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending_terminal_event: Arc::new(Mutex::new(None)),
             queued_followup: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             last_reasoning: Arc::new(Mutex::new(String::new())),
             last_assistant_text: Arc::new(Mutex::new(String::new())),
@@ -896,76 +904,9 @@ impl Repl {
                 }
             }
 
-            // Process Lua tool queue (ADR 17)
-            {
-                let app = self.app.lock();
-                if let Some(lua) = &app.lua_engine {
-                    let mut t_q = lua.tool_queue.lock().unwrap_or_else(|e| e.into_inner());
-                    while let Some((tool_name, args)) = t_q.pop_front() {
-                        let mcp = self.mcp.clone();
-                        let hooks = self.hooks.clone();
-                        let app_ref = self.app.clone();
-                        let stats = self.session_stats.clone();
-                        let t_name = tool_name.clone();
-                        let ui_event_q = lua.ui_event_queue.clone();
-
-                        let runtime = std::sync::Arc::new(
-                            cade_agent::tools::ToolRuntime::new(
-                                std::sync::Arc::new(self.client.clone()),
-                                std::sync::Arc::clone(&self.mcp),
-                                self.agent_id(),
-                                self.cwd.clone(),
-                            )
-                            .with_conversation(self.conversation_id())
-                            .with_backend(std::sync::Arc::clone(&self.exec_backend)),
-                        );
-
-                        tokio::spawn(async move {
-                            let call_id = uuid::Uuid::new_v4().to_string();
-                            let result = Self::run_tool_inner(
-                                &call_id, &t_name, &args, &mcp, &hooks, &app_ref, &runtime, None,
-                                None, &stats,
-                            )
-                            .await;
-
-                            let payload = serde_json::json!({
-                                "tool_name": t_name,
-                                "is_error": result.is_error,
-                                "content": result.output,
-                            });
-                            ui_event_q
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .push_back(("tool_complete".to_string(), payload));
-                        });
-                    }
-                }
-            }
-
-            // Process Lua UI events
-            {
-                let mut app = self.app.lock();
-                let mut ui_events = Vec::new();
-                if let Some(lua) = &app.lua_engine {
-                    let mut eq = lua.ui_event_queue.lock().unwrap_or_else(|e| e.into_inner());
-                    ui_events.extend(eq.drain(..));
-                }
-
-                if !ui_events.is_empty() {
-                    let mut handled_any = false;
-                    if let Some(lua) = &app.lua_engine {
-                        for (id, args) in ui_events {
-                            if lua.handle_ui_event(&id, args) {
-                                handled_any = true;
-                            }
-                        }
-                    }
-                    if handled_any {
-                        app.refresh_lua_ui();
-                        app.draw_dirty = true;
-                    }
-                }
-            }
+            // A bounded host pump is shared with the active-turn driver.
+            self.lua_work_pump()();
+            self.app.lock().pump_lua_ui_events();
 
             // Update app footer to reflect current mode/model before reading input.
             {
@@ -987,9 +928,10 @@ impl Repl {
             let input = if let Some(cmd) = pending_input.take() {
                 cmd
             } else {
-                match self.app.lock().read_input(&mut history, &mut hist_idx)? {
-                    Some(s) => s,
-                    None => break,
+                match self.read_idle_input(&mut history, &mut hist_idx).await? {
+                    cade_tui::app::input::InputOutcome::Submitted(s) => s,
+                    cade_tui::app::input::InputOutcome::Exit => break,
+                    cade_tui::app::input::InputOutcome::WorkReady => continue,
                 }
             };
             let input = input.trim().to_string();

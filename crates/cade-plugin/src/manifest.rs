@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 /// (`name`, `description`, `parameters`).
 ///
 /// When `handler` is set, CADE executes that script and passes tool
-/// arguments as JSON on stdin.  When absent, the tool falls through to MCP.
+/// arguments as JSON on stdin. These are native processes, not WASM sandboxes.
+/// Without a handler the declaration is not advertised as executable. MCP
+/// capabilities are advertised by the live MCP catalogue instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginToolDef {
     /// Path to the JSON schema file, relative to the manifest directory.
@@ -114,10 +116,10 @@ impl PluginManifest {
             let p = root.join(dir);
             if p.is_dir() {
                 match *field {
-                    "skills" => m.skills = vec![p],
-                    "prompts" => m.prompts = vec![p],
-                    "themes" => m.themes = vec![p],
-                    "subagents" => m.subagents = vec![p],
+                    "skills" => m.skills = vec![PathBuf::from(*dir)],
+                    "prompts" => m.prompts = vec![PathBuf::from(*dir)],
+                    "themes" => m.themes = vec![PathBuf::from(*dir)],
+                    "subagents" => m.subagents = vec![PathBuf::from(*dir)],
                     _ => {} // tools handled separately via JSON schemas
                 }
             }

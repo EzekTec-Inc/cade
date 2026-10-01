@@ -127,8 +127,18 @@ pub async fn reflect_agent(
     );
 
     // -- 5. Call LLM
+    let model = match get_agent_model(state, agent_id).await {
+        Ok(model) => model,
+        Err(error) => {
+            tracing::warn!(agent_id = %agent_id, "reflect_agent: model selection failed: {error}");
+            result.summary = format!("Reflection model error: {error}");
+            result.duration_ms = t0.elapsed().as_millis();
+            return result;
+        }
+    };
+    let max_tokens = REFLECTION_MAX_TOKENS.min(cade_ai::catalogue::max_tokens_for_model(&model));
     let req = CompletionRequest {
-        model: get_agent_model(state, agent_id).await,
+        model,
         messages: vec![LlmMessage {
             role: "user".to_string(),
             content: prompt,
@@ -138,7 +148,7 @@ pub async fn reflect_agent(
             cache_control: None,
         }],
         tools: vec![],
-        max_tokens: REFLECTION_MAX_TOKENS,
+        max_tokens,
         reasoning_effort: None,
     };
 
@@ -257,15 +267,101 @@ pub async fn reflect_agent(
 
 // region:    --- Support
 
-async fn get_agent_model(state: &AppState, agent_id: &str) -> String {
+async fn get_agent_model(state: &AppState, agent_id: &str) -> Result<String, String> {
     let db = state.db.clone();
     let aid = agent_id.to_string();
-    let res = tokio::task::spawn_blocking(move || sqlite::get_agent(&db, &aid)).await;
-    res.unwrap_or_else(|_| Ok(None))
-        .ok()
-        .flatten()
-        .map(|a| a.model)
-        .unwrap_or_else(|| "anthropic/claude-sonnet-4-5-20250929".to_string())
+    let agent = tokio::task::spawn_blocking(move || sqlite::get_agent(&db, &aid))
+        .await
+        .map_err(|error| format!("Agent model lookup task failed: {error}"))?
+        .map_err(|error| format!("Agent model lookup failed: {error}"))?;
+    let model = agent
+        .map(|agent| agent.model)
+        .unwrap_or_else(|| state.config.default_model.clone());
+    if model.trim().is_empty() {
+        return Err("No agent or server default model configured".into());
+    }
+    state
+        .llm
+        .validate_model(&model)
+        .map_err(|error| error.to_string())?;
+    Ok(model)
 }
 
 // endregion: --- Support
+
+#[cfg(test)]
+mod reflection_model_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct LookupOnlyProvider;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for LookupOnlyProvider {
+        async fn complete(
+            &self,
+            _: &CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            panic!("model lookup must not invoke a provider")
+        }
+        async fn stream(
+            &self,
+            _: &CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn futures::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("model lookup must not invoke a provider")
+        }
+    }
+
+    #[tokio::test]
+    async fn reflection_model_uses_agent_then_server_configuration_or_fails_closed() {
+        let mut state = AppState::new_in_process(
+            sqlite::open(":memory:").unwrap(),
+            Arc::new(LookupOnlyProvider),
+            Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::empty(
+                "office".into(),
+                Arc::new(Default::default()),
+            ))),
+            Arc::new(crate::server::config::ServerConfig::default()),
+            Arc::new(cade_agent::mcp::McpManager::empty()),
+        );
+        let mut config = (*state.config).clone();
+        config.default_model = "office/tenant/server-default".into();
+        state.config = Arc::new(config);
+        assert_eq!(
+            get_agent_model(&state, "missing").await.unwrap(),
+            "office/tenant/server-default"
+        );
+        sqlite::create_agent(
+            &state.db,
+            &sqlite::AgentRow {
+                id: "selected".into(),
+                name: "Selected".into(),
+                model: "office/tenant/explicit-agent".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+                active_plan_json: None,
+                parent_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            get_agent_model(&state, "selected").await.unwrap(),
+            "office/tenant/explicit-agent"
+        );
+        let mut config = (*state.config).clone();
+        config.default_model.clear();
+        state.config = Arc::new(config);
+        assert!(
+            get_agent_model(&state, "missing")
+                .await
+                .unwrap_err()
+                .contains("No agent or server default")
+        );
+    }
+}

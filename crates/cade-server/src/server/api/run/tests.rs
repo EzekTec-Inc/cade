@@ -338,7 +338,7 @@ async fn parent_background_model_control_acknowledges_and_uses_next_turn() {
     assert!(finished.is_err());
 }
 
-fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
+fn seed_test_agent(db: &cade_store::sqlite::Db, agent_id: &str) {
     cade_store::sqlite::create_agent(
         db,
         &cade_store::sqlite::AgentRow {
@@ -355,6 +355,41 @@ fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
         },
     )
     .expect("test agent");
+}
+
+pub(super) fn seed_test_tools(db: &cade_store::sqlite::Db, agent_id: &str, names: &[&str]) {
+    let mut schemas = cade_agent::tools::manager::schemas_for_toolset(
+        cade_core::toolsets::Toolset::Default,
+        true,
+    );
+    schemas.extend(cade_agent::tools::all_meta_schemas());
+    let mut ids = Vec::new();
+    for name in names {
+        let schema = schemas
+            .iter()
+            .find(|schema| schema["name"].as_str() == Some(*name))
+            .unwrap_or_else(|| panic!("production schema must exist for {name}"));
+        let id = format!("test-{name}");
+        cade_store::sqlite::upsert_tool(
+            db,
+            &cade_store::sqlite::ToolRow {
+                id: id.clone(),
+                name: (*name).into(),
+                description: None,
+                source_code: None,
+                json_schema: Some(schema.clone()),
+                tags: vec![],
+            },
+        )
+        .expect("register test capability");
+        ids.push(id);
+    }
+    cade_store::sqlite::attach_tools_to_agent(db, agent_id, &ids)
+        .expect("attach inherited capabilities to the real parent");
+}
+
+fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
+    seed_test_agent(db, agent_id);
     cade_store::sqlite::create_run(db, agent_id, None)
         .expect("test run")
         .id
@@ -1065,6 +1100,7 @@ async fn cancelled_run_persists_a_terminal_cancelled_event() -> Result<(), Strin
             theme_command: None,
             input: "ignored".to_owned(),
             permission_mode: None,
+            options: test_execution_options(&state, "agent-cancel-terminal"),
         },
         sender,
         std::sync::Arc::new(NeverContextBuilder),
@@ -1098,6 +1134,23 @@ async fn cancelled_run_persists_a_terminal_cancelled_event() -> Result<(), Strin
 /// A mock LlmProvider that panics if called.  Used to assert that an early
 /// return path (e.g. depth-limit guard) never reaches the LLM at all.
 pub(super) struct PanicOnCallLlm;
+
+fn test_execution_options(
+    state: &AppState,
+    agent_id: &str,
+) -> Arc<runtime::ResolvedRunExecutionOptions> {
+    runtime::RunExecutionOptions::default()
+        .resolve(
+            state,
+            &runtime::RunRequest {
+                agent_id: agent_id.into(),
+                conversation_id: None,
+                input: String::new(),
+                permission_mode: None,
+            },
+        )
+        .unwrap()
+}
 #[async_trait::async_trait]
 impl cade_ai::LlmProvider for PanicOnCallLlm {
     async fn complete(
@@ -1722,6 +1775,7 @@ async fn failed_background_outcome_write_stays_pending_and_reports_run_error() {
             theme_command: None,
             input: "next turn".into(),
             permission_mode: None,
+            options: test_execution_options(&state, "storage-parent"),
         },
         tx,
         Arc::new(StopBuild),
@@ -1766,6 +1820,7 @@ async fn failed_background_outcome_write_stays_pending_and_reports_run_error() {
             theme_command: None,
             input: "next turn".into(),
             permission_mode: None,
+            options: test_execution_options(&state, "storage-parent"),
         },
         tx,
         Arc::new(StopBuild),
@@ -2699,6 +2754,7 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
                 theme_command: None,
                 input: "next turn".into(),
                 permission_mode: None,
+                options: test_execution_options(&state, "shared-parent"),
             },
             tx,
             Arc::new(StopBeforeLlm {
@@ -2780,6 +2836,7 @@ async fn concurrent_conversations_keep_subagent_context_and_outcomes_separate() 
 /// the test fast while still exercising depth recursion.
 struct OneRecurseLlm {
     call_count: std::sync::atomic::AtomicUsize,
+    tool_results: std::sync::Mutex<Vec<String>>,
 }
 #[async_trait::async_trait]
 impl cade_ai::LlmProvider for OneRecurseLlm {
@@ -2804,6 +2861,12 @@ impl cade_ai::LlmProvider for OneRecurseLlm {
                 finish_reason: "tool_use".into(),
             })
         } else {
+            self.tool_results.lock().unwrap().extend(
+                r.messages
+                    .iter()
+                    .filter(|message| message.role == "tool")
+                    .map(|message| message.content.clone()),
+            );
             Ok(cade_ai::CompletionResponse {
                 content: Some("done".into()),
                 tool_calls: vec![],
@@ -2823,24 +2886,43 @@ impl cade_ai::LlmProvider for OneRecurseLlm {
     }
 }
 
-/// Recursion bound: a subagent that recurses once per level must hit
-/// the depth cap (default 3) and return without deadlock.  At depth 3
-/// the call is refused before acquiring a permit, so the chain
-/// terminates.  Asserts (a) outer call succeeds, (b) LLM call count
-/// is small (linear in depth, not exponential).
+/// Enforce the hard depth cap before admission and reject nested delegation
+/// from a child whose definition does not grant it. The model receives that
+/// rejection and can finish, without launching another child or leaking slots.
 #[tokio::test]
 async fn recursive_subagent_calls_are_bounded_by_depth() {
     let llm = std::sync::Arc::new(OneRecurseLlm {
         call_count: std::sync::atomic::AtomicUsize::new(0),
+        tool_results: std::sync::Mutex::new(Vec::new()),
     });
     let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_state_with_llm(llm_dyn);
+    seed_test_agent(&state.db, "parent_x");
+    seed_test_tools(&state.db, "parent_x", &["run_subagent"]);
+    let max_depth = std::env::var("CADE_SUBAGENT_MAX_DEPTH")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(3);
+    let (limit_tx, _limit_rx) = tokio::sync::mpsc::channel(8);
+    let refused = handle_run_subagent_tool(
+        &state,
+        "parent_x",
+        None,
+        "tc_depth_limit",
+        &json!({"prompt":"too deep", "_subagent_depth":max_depth}),
+        limit_tx,
+    )
+    .await;
+    assert!(
+        refused.is_error && refused.output.contains("recursion depth"),
+        "{}",
+        refused.output
+    );
+    assert_eq!(llm.call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(state.subagent_semaphore.available_permits(), 4);
+    assert!(state.subagent_cancellations.read().await.is_empty());
     let (tx, _rx) = tokio::sync::mpsc::channel(64);
 
-    // depth 0 → 1 → 2 → 3 (refused).  Each level: 2 LLM calls
-    // (initial recurse + final).  Depth-2's recurse to depth 3 is
-    // refused (tool result = error), then depth-2's next iter sees
-    // post-tool-result state and returns final text.
     let args = serde_json::json!({ "prompt": "start", "_subagent_depth": 0 });
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -2855,17 +2937,24 @@ async fn recursive_subagent_calls_are_bounded_by_depth() {
         result.output
     );
     let calls = llm.call_count.load(std::sync::atomic::Ordering::SeqCst);
-    assert!(
-        calls > 0 && calls < 20,
-        "LLM call count must be small (linear in depth), got: {calls}"
+    assert_eq!(
+        calls, 2,
+        "initial delegation attempt, then completion after policy rejection"
     );
+    assert!(
+        llm.tool_results
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|output| output.contains("Nested subagent delegation is not permitted"))
+    );
+    assert_eq!(state.subagent_semaphore.available_permits(), 4);
+    assert!(state.subagent_cancellations.read().await.is_empty());
+    assert_eq!(cade_store::sqlite::list_agents(&state.db).unwrap().len(), 1);
 }
 
-/// Approach C deliberately runs the subagent loop in-memory without
-/// creating ephemeral `agent`/`message` rows.  That keeps the parent
-/// agent's conversation history clean and avoids cross-contamination.
-/// This test is a watchdog: if a future change accidentally persists
-/// subagent traffic it will fail loudly.
+/// Child messages stay in-memory and its ephemeral identity is cleaned up.
+/// Successful execution must leave the real parent's durable history intact.
 #[tokio::test]
 async fn subagent_run_does_not_pollute_parent_db() {
     let llm = std::sync::Arc::new(ScriptedLlm {
@@ -2874,6 +2963,8 @@ async fn subagent_run_does_not_pollute_parent_db() {
     });
     let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_state_with_llm(llm_dyn);
+    seed_test_agent(&state.db, "parent_x");
+    seed_test_tools(&state.db, "parent_x", &["read_file"]);
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let events = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -2891,7 +2982,9 @@ async fn subagent_run_does_not_pollute_parent_db() {
         .unwrap();
 
     let args = serde_json::json!({ "prompt": "do thing" });
-    let _ = handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx).await;
+    let result = handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx).await;
+    assert!(!result.is_error, "{}", result.output);
+    assert_eq!(llm.call_count.load(std::sync::atomic::Ordering::SeqCst), 2);
     events.await.unwrap();
 
     let agents_after: i64 = state
@@ -2909,7 +3002,7 @@ async fn subagent_run_does_not_pollute_parent_db() {
 
     assert_eq!(
         agents_before, agents_after,
-        "subagent must not create agent rows"
+        "subagent must not leave its ephemeral identity behind"
     );
     assert_eq!(
         messages_before, messages_after,
@@ -3006,8 +3099,8 @@ impl cade_ai::LlmProvider for ScriptedLlm {
                 content: None,
                 tool_calls: vec![cade_ai::LlmToolCall {
                     id: "tc_inner_1".into(),
-                    name: "fake_tool".into(),
-                    arguments: serde_json::json!({}),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path":"Cargo.toml"}),
                     thought_signature: None,
                 }],
                 finish_reason: "tool_use".into(),
@@ -3034,9 +3127,7 @@ impl cade_ai::LlmProvider for ScriptedLlm {
     }
 }
 
-/// RED: subagent currently does a single `complete()` and returns the
-/// text.  When the LLM returns a tool_call instead, the subagent loop
-/// must dispatch it and feed the result back in a second LLM call.
+/// Dispatch an inherited native read and feed its real output back to the LLM.
 /// Asserts (a) the LLM was called exactly twice, (b) the second call
 /// saw a "tool" role message containing the dispatch result.
 #[tokio::test]
@@ -3047,10 +3138,14 @@ async fn subagent_dispatches_tool_calls_and_loops() {
     });
     let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_state_with_llm(llm_dyn);
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    seed_test_agent(&state.db, "parent_x");
+    seed_test_tools(&state.db, "parent_x", &["read_file"]);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let events = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     let args = serde_json::json!({ "prompt": "do thing" });
     let result = handle_run_subagent_tool(&state, "parent_x", None, "tc_outer", &args, tx).await;
+    events.await.unwrap();
 
     assert!(
         !result.is_error,
@@ -3063,9 +3158,12 @@ async fn subagent_dispatches_tool_calls_and_loops() {
         "LLM must be called twice (first tool_call, then completion)"
     );
     let iter2 = llm.captured_iter2_messages.lock().unwrap().clone();
-    let has_tool_msg = iter2
-        .iter()
-        .any(|m| m.role == "tool" && m.content.contains("fake_tool"));
+    let has_tool_msg = iter2.iter().any(|m| {
+        m.role == "tool"
+            && m.tool_call_id.as_deref() == Some("tc_inner_1")
+            && m.content.contains("[package]")
+            && !m.content.contains("Tool error:")
+    });
     assert!(
         has_tool_msg,
         "iteration-2 messages must include a tool-role message echoing dispatch result, got roles: {:?}",
@@ -3200,6 +3298,7 @@ impl cade_ai::LlmProvider for SlowLlm {
 async fn subagent_loop_respects_wall_clock_timeout() {
     let llm = std::sync::Arc::new(SlowLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
     let state = build_state_with_llm(llm);
+    seed_test_agent(&state.db, "parent_slow");
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
     let agents_before: i64 = state
@@ -4366,18 +4465,6 @@ mod run_agent_helpers_tests {
             Some("reload".to_string())
         );
     }
-
-    // ── make_run_id ────────────────────────────────────────────────────────
-
-    #[test]
-    fn make_run_id_fallback_starts_with_run_local() {
-        // We can't construct a real AppState easily, but we can verify the
-        // fallback format by calling the inner logic directly.
-        let ts = chrono::Utc::now().timestamp();
-        let id = format!("run-local-{ts}");
-        assert!(id.starts_with("run-local-"));
-        assert!(id.len() > "run-local-".len());
-    }
 }
 
 #[cfg(test)]
@@ -4620,6 +4707,7 @@ mod advanced_execution_tests {
     async fn test_ask_user_question_yields_event_and_resumes_with_answers() {
         // -- Setup & Fixtures
         let state = build_state_with_llm(std::sync::Arc::new(PanicOnCallLlm));
+        let run_id = approval_test_run(&state.db, "agent-question-test");
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
 
         let tool_calls = vec![LlmToolCall {
@@ -4642,6 +4730,7 @@ mod advanced_execution_tests {
         }];
 
         let state_c = state.clone();
+        let run_for_turn = run_id.clone();
         // -- Exec: Execute turn tool in background
         let handle = tokio::spawn(async move {
             execute_turn_tools(
@@ -4649,7 +4738,7 @@ mod advanced_execution_tests {
                 runtime::TurnExecutionInput {
                     agent_id: "agent-question-test".to_string(),
                     conversation_id: None,
-                    run_id: "run-question".to_string(),
+                    run_id: run_for_turn,
                     input: "ask user".to_string(),
                     permission_mode: None,
                 },
@@ -4660,13 +4749,25 @@ mod advanced_execution_tests {
         });
 
         // -- Check: Active turn receives question_required SSE event
-        let event = rx
-            .recv()
-            .await
-            .expect("must receive question_required SSE event");
-        let env = event.expect("infallible event envelope");
-        let payload: Value = serde_json::from_str(&env.data).expect("valid json");
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let env = rx
+                    .recv()
+                    .await
+                    .expect("turn must emit question")
+                    .expect("infallible event envelope");
+                let payload: Value = serde_json::from_str(&env.data).expect("valid json");
+                // A real durable run publishes tool progress before its prompt.
+                if payload["message_type"] == "question_required" {
+                    break payload;
+                }
+            }
+        })
+        .await
+        .expect("question must be delivered promptly");
         assert_eq!(payload["type"], "question_required");
+        assert_eq!(payload["run_id"], run_id);
+        assert!(payload["seq_id"].is_number());
         let question_id = payload["id"].as_str().expect("id must be string");
 
         // -- Exec: User answers the question via status update with feedback
@@ -4675,7 +4776,10 @@ mod advanced_execution_tests {
             .expect("must set approval status with answers");
 
         // -- Check: Tool execution unblocks and returns formatted answer
-        let results = handle.await.expect("task must join");
+        let results = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("answer must unblock the direct execution call")
+            .expect("task must join");
         assert_eq!(results.len(), 1);
         let (result, _) = &results[0];
         assert!(!result.is_error, "ask_user_question should succeed");
@@ -4683,6 +4787,11 @@ mod advanced_execution_tests {
             result.output.contains("PostgreSQL"),
             "tool output must contain the user's selected answer: {}",
             result.output
+        );
+        assert!(
+            cade_store::sqlite::list_pending_approvals(&state.db)
+                .unwrap()
+                .is_empty()
         );
     }
 

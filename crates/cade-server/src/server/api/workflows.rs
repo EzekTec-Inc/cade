@@ -1,321 +1,131 @@
-//! Automated Webhook Workflow Router & Dispatcher (PRD #99 / Issue #101).
+//! HTTP and webhook adapters for the same canonical workflow engine.
 
-use crate::server::api::run::runtime::{RunRequest, ServerAgentRuntime};
 use crate::server::state::AppState;
-use crate::server::workflows::{WorkflowDef, WorkflowEngine};
+pub use crate::server::workflows::WorkflowConfig;
+use crate::server::workflows::{WorkflowEngine, run_summary};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     response::{
-        IntoResponse,
-        sse::{Event, Sse},
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
     },
 };
-use cade_api_types::WorkflowStatus;
+use cade_store::sqlite::get_workflow_run;
 use serde_json::{Value, json};
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
-use cade_store::sqlite::{self, AgentRow, get_workflow_run};
-
-/// Workflow configuration structure loaded from `.cade/workflows/{name}.json`.
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub struct WorkflowConfig {
-    pub name: String,
-    pub agent: String,
-    pub model: String,
-    pub prompt: String,
+fn error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
-/// GET /v1/workflows — List all registered workflow summaries.
-pub async fn list_workflows_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let engine = WorkflowEngine::new(state.db.clone());
-    let workflows = engine.list_workflows().await;
-    (StatusCode::OK, Json(json!({ "workflows": workflows }))).into_response()
+pub async fn list_workflows_handler(State(state): State<AppState>) -> Response {
+    match WorkflowEngine::new(state).list_workflows().await {
+        Ok(workflows) => Json(json!({ "workflows": workflows })).into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
 }
 
-/// GET /v1/workflows/:workflow_name — Get a workflow definition including its DAG steps.
 pub async fn get_workflow_handler(
-    Path(workflow_name): Path<String>,
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
-    let builtins = WorkflowEngine::builtin_workflows();
-    if let Some(def) = builtins.into_iter().find(|w| w.name == workflow_name) {
-        return (StatusCode::OK, Json(json!(def))).into_response();
+    Path(name): Path<String>,
+    State(state): State<AppState>,
+) -> Response {
+    match WorkflowEngine::new(state).definition(&name) {
+        Ok(Some(definition)) => Json(json!(definition)).into_response(),
+        Ok(None) => error(
+            StatusCode::NOT_FOUND,
+            format!("Workflow '{name}' not found"),
+        ),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
-
-    let path = std::path::Path::new(".cade/workflows").join(format!("{}.json", workflow_name));
-    if path.exists()
-        && let Ok(content) = std::fs::read_to_string(&path)
-        && let Ok(config) = serde_json::from_str::<WorkflowConfig>(&content)
-    {
-        let def = WorkflowDef {
-            name: config.name.clone(),
-            description: format!("Custom workflow: {}", config.name),
-            steps: vec![cade_api_types::WorkflowStepDef {
-                name: "run-agent".to_string(),
-                agent: Some(config.agent),
-                prompt: config.prompt,
-                depends_on: vec![],
-            }],
-        };
-        return (StatusCode::OK, Json(json!(def))).into_response();
-    }
-
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": format!("Workflow '{workflow_name}' not found") })),
-    )
-        .into_response()
 }
 
-/// POST /v1/workflows/:workflow_name/run — Dispatch a workflow run.
 pub async fn run_workflow_handler(
-    Path(workflow_name): Path<String>,
+    Path(name): Path<String>,
     State(state): State<AppState>,
     Json(params): Json<Value>,
-) -> impl IntoResponse {
-    let engine = WorkflowEngine::new(state.db.clone());
-    let builtins = WorkflowEngine::builtin_workflows();
-
-    let def = if let Some(found) = builtins.into_iter().find(|w| w.name == workflow_name) {
-        found
-    } else {
-        WorkflowDef {
-            name: workflow_name.clone(),
-            description: format!("Custom workflow pipeline: {workflow_name}"),
-            steps: vec![cade_api_types::WorkflowStepDef {
-                name: "default-step".to_string(),
-                agent: Some("worker".to_string()),
-                prompt: format!("Execute workflow {workflow_name}"),
-                depends_on: vec![],
-            }],
-        }
-    };
-
-    let (run_id, _rx) = engine.dispatch(def, params).await;
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({
-            "run_id": run_id,
-            "status": "running"
-        })),
-    )
-        .into_response()
+) -> Response {
+    dispatch_named(state, name, params, false).await
 }
 
-/// GET /v1/workflows/runs/:run_id — Query workflow run summary.
+/// Webhooks use the same dependency ordering, run records, outcomes and cancellation.
+pub async fn dispatch_workflow(
+    Path(name): Path<String>,
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Response {
+    dispatch_named(state, name, payload, true).await
+}
+
+async fn dispatch_named(state: AppState, name: String, params: Value, webhook: bool) -> Response {
+    let engine = WorkflowEngine::new(state);
+    let definition = match engine.definition(&name) {
+        Ok(Some(definition)) => definition,
+        Ok(None) => {
+            return error(
+                StatusCode::NOT_FOUND,
+                format!("Workflow '{name}' not found"),
+            );
+        }
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
+    };
+    if let Err(message) = engine.prepare_legacy_agent(&name) {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    match engine.dispatch_with_execution(definition, params).await {
+        Ok((accepted, _events)) => {
+            let mut body = json!({
+                "run_id": accepted.run_id, "execution_id": accepted.execution_id,
+                "agent_id": accepted.agent_id, "workflow": name,
+                "status": if webhook { "triggered" } else { "running" },
+            });
+            if webhook {
+                body["message"] =
+                    json!("Workflow spawned and running asynchronously in background.");
+            }
+            (StatusCode::ACCEPTED, Json(body)).into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+
 pub async fn get_workflow_run_handler(
     Path(run_id): Path<String>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
+) -> Response {
     match get_workflow_run(&state.db, &run_id) {
-        Ok(Some(record)) => {
-            let summary = cade_api_types::WorkflowRunSummary {
-                run_id: record.run_id,
-                workflow_name: record.workflow_name,
-                status: match record.status.as_str() {
-                    "running" => WorkflowStatus::Running,
-                    "succeeded" => WorkflowStatus::Succeeded,
-                    "failed" => WorkflowStatus::Failed,
-                    "cancelled" => WorkflowStatus::Cancelled,
-                    "skipped" => WorkflowStatus::Skipped,
-                    _ => WorkflowStatus::Pending,
-                },
-                created_at: record.created_at,
-                completed_at: record.completed_at,
-                current_step: record.current_step,
-                total_steps: record.total_steps,
-                error: record.error,
-            };
-            (StatusCode::OK, Json(json!(summary))).into_response()
-        }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Workflow run not found" })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Ok(Some(record)) => Json(json!(run_summary(record))).into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "Workflow run not found"),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string()),
     }
 }
 
-/// GET /v1/workflows/runs/:run_id/stream — Stream live workflow step events over SSE.
 pub async fn stream_workflow_run_handler(
     Path(run_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>, StatusCode> {
-    let engine = WorkflowEngine::new(state.db.clone());
-    let rx = engine
+    let receiver = WorkflowEngine::new(state)
         .subscribe_events(&run_id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
-
-    let stream = BroadcastStream::new(rx).filter_map(|res| match res {
-        Ok(ev) => {
-            let json_data = serde_json::to_string(&ev).unwrap_or_default();
-            Some(Ok(Event::default().data(json_data)))
-        }
+    let stream = BroadcastStream::new(receiver).filter_map(|result| match result {
+        Ok(event) => Some(Ok(Event::default().data(json!(event).to_string()))),
         Err(_) => None,
     });
-
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-/// POST /v1/workflows/runs/:run_id/cancel — Cancel an in-flight workflow run.
 pub async fn cancel_workflow_run_handler(
     Path(run_id): Path<String>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    let engine = WorkflowEngine::new(state.db.clone());
-    let cancelled = engine.cancel(&run_id).await;
-
-    if cancelled {
-        (
-            StatusCode::OK,
-            Json(json!({ "status": "cancelled", "run_id": run_id })),
-        )
-            .into_response()
-    } else {
-        (
+) -> Response {
+    match WorkflowEngine::new(state).cancel(&run_id).await {
+        Ok(true) => Json(json!({ "status": "cancelling", "run_id": run_id })).into_response(),
+        Ok(false) => error(
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Active workflow run not found or already completed" })),
-        )
-            .into_response()
+            "Active workflow run not found or already completed",
+        ),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
-}
-
-/// Webhook entrypoint to dispatch automated, headless CADE workflow sessions.
-pub async fn dispatch_workflow(
-    Path(workflow_name): Path<String>,
-    State(state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> impl IntoResponse {
-    if workflow_name.is_empty()
-        || workflow_name.contains('/')
-        || workflow_name.contains('\\')
-        || workflow_name.contains("..")
-        || !workflow_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "Invalid workflow name. Only alphanumeric characters, hyphens, and underscores are allowed."
-            })),
-        )
-            .into_response();
-    }
-
-    tracing::info!(
-        "Workflow Dispatch Webhook Received: '{}' with payload: {}",
-        workflow_name,
-        serde_json::to_string(&payload).unwrap_or_default()
-    );
-
-    let path = std::path::Path::new(".cade/workflows").join(format!("{}.json", workflow_name));
-    if !path.exists() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": format!("Workflow '{}' not found on disk.", workflow_name)
-            })),
-        )
-            .into_response();
-    }
-
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to read workflow file: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    let config: WorkflowConfig = match serde_json::from_str(&content) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!("Malformed workflow JSON config: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    let agent_id = format!("agent-workflow-{}", workflow_name);
-    let agent_exists = matches!(sqlite::get_agent(&state.db, &agent_id), Ok(Some(_)));
-
-    if !agent_exists {
-        let row = AgentRow {
-            id: agent_id.clone(),
-            name: config.agent.clone(),
-            model: config.model.clone(),
-            description: Some(format!("Automated workflow agent for '{}'", workflow_name)),
-            system_prompt: Some(config.prompt.clone()),
-            created_at: None,
-            compaction_model: None,
-            theme: None,
-            active_plan_json: None,
-            parent_id: None,
-        };
-        if let Err(e) = sqlite::create_agent(&state.db, &row) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to create agent for workflow: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    }
-
-    let prompt_input = serde_json::to_string_pretty(&payload).unwrap_or_default();
-    let prompt = format!(
-        "Automated Webhook Payload Received for Workflow '{}':\n\n```json\n{}\n```\nExecute your designated prompt instructions.",
-        workflow_name, prompt_input
-    );
-
-    let runtime = ServerAgentRuntime::new(state);
-    let handle = runtime
-        .start(RunRequest {
-            agent_id: agent_id.clone(),
-            conversation_id: None,
-            input: prompt,
-            permission_mode: None,
-        })
-        .await;
-    let execution_id = handle.run_id.clone();
-
-    // Workflows run without an HTTP presentation adapter. Retain the event
-    // receiver until the runtime reaches a terminal outcome so the loop does
-    // not interpret a dropped receiver as client cancellation.
-    tokio::spawn(async move {
-        let mut events = handle.events;
-        while events.recv().await.is_some() {}
-    });
-
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({
-            "status": "triggered",
-            "execution_id": execution_id,
-            "workflow": workflow_name,
-            "agent_id": agent_id,
-            "message": "Workflow spawned and running asynchronously in background."
-        })),
-    )
-        .into_response()
 }

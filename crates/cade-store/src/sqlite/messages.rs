@@ -1,11 +1,14 @@
 use super::*;
 
+/// Monotonic insertion revision for context-cache invalidation. The historical
+/// API name is retained; history_seq starts at the old rowids and cannot be
+/// reused by deleting rows or renumbered by VACUUM.
 pub fn get_max_rowid(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<u64> {
     let conn = db.get()?;
     let sql = if conversation_id.is_some() {
-        "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE agent_id = ?1 AND conversation_id = ?2"
+        "SELECT COALESCE(MAX(history_seq), 0) FROM messages WHERE agent_id = ?1 AND conversation_id = ?2"
     } else {
-        "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE agent_id = ?1 AND conversation_id IS NULL"
+        "SELECT COALESCE(MAX(history_seq), 0) FROM messages WHERE agent_id = ?1 AND conversation_id IS NULL"
     };
     let mut stmt = conn.prepare(sql)?;
     let val: i64 = if let Some(cid) = conversation_id {
@@ -26,11 +29,11 @@ pub fn last_assistant_message(
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'assistant'
-         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+         ORDER BY created_at DESC, history_seq DESC LIMIT 1"
     } else {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'assistant'
-         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+         ORDER BY created_at DESC, history_seq DESC LIMIT 1"
     };
 
     let mut stmt = conn.prepare(sql)?;
@@ -67,11 +70,11 @@ pub fn get_latest_user_message(
     let sql = if conversation_id.is_some() {
         "SELECT content FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'user'
-         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+         ORDER BY created_at DESC, history_seq DESC LIMIT 1"
     } else {
         "SELECT content FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'user'
-         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+         ORDER BY created_at DESC, history_seq DESC LIMIT 1"
     };
 
     let mut stmt = conn.prepare(sql)?;
@@ -84,7 +87,10 @@ pub fn get_latest_user_message(
     if let Some(r) = rows.next()? {
         let content_str: String = r.get(0)?;
         let content: Value = serde_json::from_str(&content_str).unwrap_or(Value::Null);
-        Ok(content.as_str().map(String::from))
+        Ok(content
+            .as_str()
+            .or_else(|| content.get("content").and_then(Value::as_str))
+            .map(String::from))
     } else {
         Ok(None)
     }
@@ -161,11 +167,11 @@ pub fn list_messages_page(
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2 AND role != 'compaction'
-         ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
+         ORDER BY created_at DESC, history_seq DESC LIMIT ?3 OFFSET ?4"
     } else {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL AND role != 'compaction'
-         ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
+         ORDER BY created_at DESC, history_seq DESC LIMIT ?3 OFFSET ?4"
     };
 
     let mut stmt = conn.prepare(sql)?;
@@ -216,83 +222,19 @@ pub fn get_context_window(
 ) -> Result<Vec<MessageRow>> {
     let conn = db.get()?;
 
-    // The CTE `boundary` finds the created_at of the most recent compaction marker.
-    // If none exists, COALESCE falls back to 0 (scan all messages).
-    // The `ranked` CTE then only considers messages with created_at > boundary
-    // and role != 'compaction', applying the usual char_budget windowing.
-    let sql = if conversation_id.is_some() {
-        "WITH boundary AS (
-             SELECT COALESCE(
-                 (SELECT created_at FROM messages
-                  WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
-                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 -1
-             ) AS marker_ts
-         ),
-         ranked AS (
-             SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,
-                    SUM(char_count) OVER (ORDER BY created_at DESC, rowid DESC) as running_total
-             FROM messages
-             WHERE agent_id = ?1 AND conversation_id = ?2
-               AND role != 'compaction'
-               AND created_at > (SELECT marker_ts FROM boundary)
-         )
-         SELECT id, agent_id, conversation_id, role, content, char_count
-         FROM ranked
-         WHERE running_total - char_count <= ?3
-         ORDER BY created_at DESC, rowid DESC"
-    } else {
-        "WITH boundary AS (
-             SELECT COALESCE(
-                 (SELECT created_at FROM messages
-                  WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
-                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
-                 -1
-             ) AS marker_ts
-         ),
-         ranked AS (
-             SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,
-                    SUM(char_count) OVER (ORDER BY created_at DESC, rowid DESC) as running_total
-             FROM messages
-             WHERE agent_id = ?1 AND conversation_id IS NULL
-               AND role != 'compaction'
-               AND created_at > (SELECT marker_ts FROM boundary)
-         )
-         SELECT id, agent_id, conversation_id, role, content, char_count
-         FROM ranked
-         WHERE running_total - char_count <= ?3
-         ORDER BY created_at DESC, rowid DESC"
-    };
-
-    let mut stmt = conn.prepare(sql)?;
-    let conv_placeholder = conversation_id.unwrap_or("");
+    let sql = format!("{}, ranked AS (
+         SELECT *, SUM(char_count) OVER (ORDER BY created_at DESC, source_sequence DESC) AS running_total
+         FROM visible
+     )
+     SELECT id, agent_id, conversation_id, role, content, char_count FROM ranked
+     WHERE running_total - char_count <= ?3
+     ORDER BY created_at DESC, source_sequence DESC", horizon::VISIBLE_HISTORY_CTE);
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        params![agent_id, conv_placeholder, char_budget as i64],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-            ))
-        },
+        params![agent_id, conversation_id, char_budget as i64],
+        horizon::message_from_row,
     )?;
-
-    let mut result: Vec<MessageRow> = rows
-        .filter_map(|r| r.ok())
-        .map(
-            |(id, agent_id, conversation_id, role, content, char_count)| MessageRow {
-                id,
-                agent_id,
-                conversation_id,
-                role,
-                content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
-                char_count: char_count.max(0) as usize,
-            },
-        )
-        .collect();
+    let mut result = rows.collect::<rusqlite::Result<Vec<_>>>()?;
 
     // The query returns newest-first because of ORDER BY ... DESC.
     // The calling code expects oldest-first.
@@ -315,17 +257,31 @@ pub fn compact_old_tool_outputs(
     protect_chars: usize,
     min_chars: usize,
 ) -> Result<usize> {
-    let conn = db.get()?;
+    let mut pooled = db.get()?;
+    let tx = pooled.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let conn = &tx;
+    // Footprint pruning must not mutate a consolidator's captured source while
+    // its LLM is running. The claim check and pruning share the write lock, so
+    // a new snapshot cannot slip between that check and the updates either.
+    let claimed: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM consolidation_claims
+         WHERE agent_id = ?1 AND conversation_key = ?2 AND expires_at > ?3)",
+        params![agent_id, serde_json::to_string(&conversation_id)?, now_ts()],
+        |r| r.get(0),
+    )?;
+    if claimed {
+        return Ok(0);
+    }
 
     // Find all tool messages ordered newest-first.
     let sql = if conversation_id.is_some() {
         "SELECT rowid, char_count FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'tool'
-         ORDER BY created_at DESC, rowid DESC"
+         ORDER BY created_at DESC, history_seq DESC"
     } else {
         "SELECT rowid, char_count FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'tool'
-         ORDER BY created_at DESC, rowid DESC"
+         ORDER BY created_at DESC, history_seq DESC"
     };
 
     let mut stmt = conn.prepare(sql)?;
@@ -334,13 +290,14 @@ pub fn compact_old_tool_outputs(
         let mapped = stmt.query_map(params![agent_id, conv], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
         })?;
-        mapped.filter_map(|r| r.ok()).collect()
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
     } else {
         let mapped = stmt.query_map(params![agent_id], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
         })?;
-        mapped.filter_map(|r| r.ok()).collect()
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    drop(stmt);
 
     // Walk newest-first, accumulating total chars. Once we exceed protect_chars,
     // everything older with char_count > min_chars is eligible for compaction.
@@ -373,6 +330,7 @@ pub fn compact_old_tool_outputs(
         compacted += 1;
     }
 
+    tx.commit()?;
     Ok(compacted)
 }
 

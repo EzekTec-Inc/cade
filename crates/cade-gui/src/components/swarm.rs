@@ -3,6 +3,12 @@
 use cade_api_types::SwarmTopologyResponse;
 use dioxus::prelude::*;
 
+fn model_label(model: Option<&str>) -> &str {
+    model
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or("Unknown")
+}
+
 #[component]
 pub fn SwarmView() -> Element {
     let client = use_context::<Memo<crate::api::CadeApiClient>>();
@@ -153,7 +159,7 @@ pub fn SwarmView() -> Element {
                                                 "Primary coordinator delegating tasks, enforcing verification gates, and orchestrating member execution."
                                             }
                                             div { class: "pt-2 border-t border-[#1e293b] flex items-center justify-between text-[10px] font-mono text-slate-400",
-                                                span { class: "text-purple-300", "{team.leader_model.as_deref().unwrap_or(\"anthropic/claude-sonnet-4-5\")}" }
+                                                span { class: "text-purple-300", "{model_label(team.leader_model.as_deref())}" }
                                                 span { "Role: Coordinator" }
                                             }
                                         }
@@ -185,7 +191,7 @@ pub fn SwarmView() -> Element {
                                                         p { class: "text-slate-400 text-[11px] leading-relaxed line-clamp-3", "{member.description}" }
                                                     }
                                                     div { class: "pt-3 border-t border-[#1e293b] flex items-center justify-between text-[10px] font-mono text-slate-500",
-                                                        span { class: "text-slate-400", "{member.model.as_deref().unwrap_or(\"Inherited\")}" }
+                                                        span { class: "text-slate-400", "{model_label(member.model.as_deref())}" }
                                                         span { class: "text-slate-500", "Tools: {member.tools}" }
                                                     }
                                                 }
@@ -215,7 +221,7 @@ pub fn SwarmView() -> Element {
                                                     p { class: "text-[11px] text-slate-400 line-clamp-2 leading-relaxed", "{sub.description}" }
                                                 }
                                                 div { class: "pt-2 border-t border-[#1e293b]/60 flex items-center justify-between text-[10px] font-mono text-slate-500",
-                                                    span { "{sub.model.as_deref().unwrap_or(\"auto\")}" }
+                                                    span { "{model_label(sub.model.as_deref())}" }
                                                     span { "{sub.status}" }
                                                 }
                                             }
@@ -252,5 +258,21 @@ pub fn SwarmView() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_model_badges_display_reported_identity_or_unknown() {
+        assert_eq!(
+            model_label(Some("private/custom-model")),
+            "private/custom-model"
+        );
+        assert_eq!(model_label(None), "Unknown");
+        assert_eq!(model_label(Some("")), "Unknown");
+        assert_eq!(model_label(Some(" ")), "Unknown");
     }
 }

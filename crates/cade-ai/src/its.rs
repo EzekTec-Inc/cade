@@ -298,10 +298,15 @@ fn is_essential_tool(name: &str) -> bool {
 pub fn resolve_tool_selector(model_id: &str) -> Box<dyn IntelligentToolSelector> {
     if std::env::var("CADE_DISABLE_TOOL_PRUNING").is_ok() {
         Box::new(PassThroughToolSelector)
-    } else if model_id.contains("needle") || std::env::var("CADE_USE_NEEDLE_ITS").is_ok() {
+    } else if std::env::var("CADE_USE_NEEDLE_ITS").is_ok() {
         Box::new(NeedleToolSelector::default())
     } else {
-        Box::new(IntentToolSelector::default())
+        use crate::runtime::ToolSelectorKind;
+        match crate::catalogue::metadata_for_model(model_id).tool_selector {
+            Some(ToolSelectorKind::Needle) => Box::new(NeedleToolSelector::default()),
+            Some(ToolSelectorKind::PassThrough) => Box::new(PassThroughToolSelector),
+            Some(ToolSelectorKind::Intent) | None => Box::new(IntentToolSelector::default()),
+        }
     }
 }
 

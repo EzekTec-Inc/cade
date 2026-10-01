@@ -1,4 +1,6 @@
-use crate::{CompletionRequest, count_tokens};
+use crate::CompletionRequest;
+use crate::runtime::{ModelMetadata, PromptCacheKind};
+use crate::tokenizer::{TokenCounter, bpe_counter_with_metadata};
 
 /// Polymorphic interface for managing and optimizing prompt caching
 /// across different LLM providers.
@@ -64,27 +66,37 @@ pub struct OpenAiCacheAdapter;
 
 impl PromptCacheManager for OpenAiCacheAdapter {
     fn optimize(&self, req: &mut CompletionRequest) {
-        // OpenAI automatically caches segments of prompts longer than 1024 tokens
-        // and matches on 128-token boundaries.
-        // We pad the system_static block (the first system message) to the nearest
-        // 128-token boundary using the Model's active tokenizer to maximize hits.
+        let policy = crate::catalogue::metadata_for_model(&req.model);
+        self.optimize_with_metadata(req, &policy);
+    }
+}
+
+impl OpenAiCacheAdapter {
+    /// Apply a stable, explicit policy, including the character fallback when
+    /// BPE is unconfigured or unavailable. Unknown cache capability is a no-op.
+    pub fn optimize_with_metadata(&self, req: &mut CompletionRequest, policy: &ModelMetadata) {
+        if policy.prompt_cache != Some(PromptCacheKind::Openai) {
+            return;
+        }
+        let padding_limit = policy.cache_padding_limit.unwrap_or(0);
         if let Some(sys_msg) = req.messages.first_mut()
             && sys_msg.role == "system"
             && !sys_msg.content.is_empty()
         {
-            let model = &req.model;
-            let tokens = count_tokens(model, &sys_msg.content);
-
-            if tokens > 0 {
-                let remainder = tokens % 128;
+            if let Some(counter) = bpe_counter_with_metadata(policy)
+                && let Some(boundary) = policy.cache_token_boundary.filter(|value| *value > 0)
+                && let tokens = counter.count(&sys_msg.content)
+                && tokens > 0
+            {
+                let remainder = tokens % boundary;
                 if remainder > 0 {
-                    let pad_tokens = 128 - remainder;
-                    let target_tokens = tokens + pad_tokens;
+                    let pad_tokens = boundary - remainder;
+                    let target_tokens = tokens.saturating_add(pad_tokens);
                     let mut padded_content = sys_msg.content.clone();
 
                     // Iteratively pad with spaces until count_tokens matches target_tokens
-                    for _ in 0..1000 {
-                        let current_toks = count_tokens(model, &padded_content);
+                    for _ in 0..padding_limit {
+                        let current_toks = counter.count(&padded_content);
                         if current_toks >= target_tokens {
                             break;
                         }
@@ -93,11 +105,16 @@ impl PromptCacheManager for OpenAiCacheAdapter {
                     sys_msg.content = padded_content;
                 }
             } else {
-                // Character fallback: pad to 512-character boundary
-                let len = sys_msg.content.len();
-                let remainder = len % 512;
+                // Estimates are not precise BPE boundaries. Use the configured
+                // character boundary even when the estimator reports nonzero tokens.
+                let Some(boundary) = policy.cache_character_boundary.filter(|value| *value > 0)
+                else {
+                    return;
+                };
+                let len = sys_msg.content.chars().count();
+                let remainder = len % boundary;
                 if remainder > 0 {
-                    let padding_len = 512 - remainder;
+                    let padding_len = (boundary - remainder).min(padding_limit);
                     sys_msg.content.push_str(&" ".repeat(padding_len));
                 }
             }
@@ -132,19 +149,12 @@ impl PromptCacheManager for FallbackCacheAdapter {
 
 /// Resolves the optimal `PromptCacheManager` based on the active model ID.
 pub fn resolve_prompt_cache_manager(model_id: &str) -> Box<dyn PromptCacheManager> {
-    let lower = model_id.to_lowercase();
-    if lower.starts_with("anthropic/") || lower.contains("claude") {
-        Box::new(AnthropicCacheAdapter)
-    } else if lower.starts_with("openai/")
-        || lower.contains("gpt")
-        || lower.contains("o1")
-        || lower.contains("o3")
-    {
-        Box::new(OpenAiCacheAdapter)
-    } else if lower.starts_with("google/") || lower.contains("gemini") {
-        Box::new(GeminiCacheAdapter)
-    } else {
-        Box::new(FallbackCacheAdapter)
+    use crate::runtime::PromptCacheKind;
+    match crate::catalogue::metadata_for_model(model_id).prompt_cache {
+        Some(PromptCacheKind::Anthropic) => Box::new(AnthropicCacheAdapter),
+        Some(PromptCacheKind::Openai) => Box::new(OpenAiCacheAdapter),
+        Some(PromptCacheKind::Gemini) => Box::new(GeminiCacheAdapter),
+        Some(PromptCacheKind::None) | None => Box::new(FallbackCacheAdapter),
     }
 }
 
@@ -261,7 +271,7 @@ mod tests {
     fn test_openai_cache_optimization_fallback() {
         let adapter = OpenAiCacheAdapter;
         let mut req = CompletionRequest {
-            model: "nonexistent-model-so-it-triggers-fallback".to_string(),
+            model: "private/nonexistent-model-so-it-triggers-fallback".to_string(),
             messages: vec![LlmMessage {
                 role: "system".to_string(),
                 content: "system prompt".to_string(),
@@ -275,11 +285,33 @@ mod tests {
             reasoning_effort: None,
         };
 
-        adapter.optimize(&mut req);
+        let registry = crate::runtime::RuntimeRegistry::from_json(&json!({
+            "models":[{"id":req.model, "prompt_cache":"openai", "tokenizer":"characters",
+                "cache_token_boundary":8, "cache_character_boundary":16, "cache_padding_limit":16}]
+        }).to_string()).unwrap();
+        let policy = registry.metadata_for_id(&req.model);
+        adapter.optimize_with_metadata(&mut req, &policy);
+        // Character mode must follow its own boundary, not treat an estimate as BPE.
+        assert_eq!(req.messages[0].content, "system prompt   ");
+        assert_eq!(req.messages[0].content.chars().count() % 16, 0);
+        adapter.optimize_with_metadata(&mut req, &policy);
+        assert_eq!(req.messages[0].content, "system prompt   ");
 
-        // Verify that the system prompt content was padded
-        assert!(req.messages[0].content.starts_with("system prompt"));
-        // Verify that the prompt was padded and length increased
-        assert!(req.messages[0].content.len() > "system prompt".len());
+        let mut limited = req.clone();
+        limited.messages[0].content = "system prompt".into();
+        let mut bounded = policy.clone();
+        bounded.cache_padding_limit = Some(2);
+        adapter.optimize_with_metadata(&mut limited, &bounded);
+        assert_eq!(limited.messages[0].content, "system prompt  ");
+
+        let mut disabled = policy;
+        disabled.prompt_cache = Some(PromptCacheKind::None);
+        limited.messages[0].content = "system prompt".into();
+        adapter.optimize_with_metadata(&mut limited, &disabled);
+        assert_eq!(limited.messages[0].content, "system prompt");
+
+        // An unknown name alone does not enable padding under the default policy.
+        adapter.optimize(&mut limited);
+        assert_eq!(limited.messages[0].content, "system prompt");
     }
 }

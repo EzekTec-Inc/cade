@@ -253,8 +253,21 @@ pub fn upsert_memory_block(
     description: Option<&str>,
     max_chars: Option<usize>,
 ) -> Result<WriteResult> {
-    let conn = db.get()?;
+    let mut conn = db.get()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let result = upsert_memory_block_on(&tx, agent_id, label, value, description, max_chars)?;
+    tx.commit()?;
+    Ok(result)
+}
 
+pub(super) fn upsert_memory_block_on(
+    conn: &Connection,
+    agent_id: &str,
+    label: &str,
+    value: &str,
+    description: Option<&str>,
+    max_chars: Option<usize>,
+) -> Result<WriteResult> {
     // Fetch existing block linked to this agent with this label
     let existing: Option<(String, String, Option<usize>)> = conn
         .query_row(
@@ -312,19 +325,19 @@ pub fn upsert_memory_block(
         // Snapshot old value into history (skip if unchanged)
         if old_value != final_value {
             let hist_id = uuid::Uuid::new_v4().to_string();
-            let _ = conn.execute(
+            conn.execute(
                 "INSERT INTO memory_history (id, block_id, value, updated_at) VALUES (?1, ?2, ?3, ?4)",
                 params![hist_id, block_id, old_value, ts],
-            );
+            )?;
             // Prune to last 5 revisions
-            let _ = conn.execute(
+            conn.execute(
                 "DELETE FROM memory_history WHERE block_id = ?1
                  AND id NOT IN (
                      SELECT id FROM memory_history WHERE block_id = ?1
-                     ORDER BY updated_at DESC LIMIT 5
+                      ORDER BY updated_at DESC, rowid DESC LIMIT 5
                  )",
                 params![block_id],
-            );
+            )?;
         }
 
         // Tier transition rule for UPDATE:
@@ -390,7 +403,7 @@ pub fn upsert_memory_block(
     // When no explicit memory_type is set, infer it from content heuristics.
     // This ensures durable knowledge (decisions, constraints, conventions) gets
     // the confidence boost that prevents the 80-turn archival cliff.
-    auto_type_block_if_untyped(&conn, label);
+    auto_type_block_if_untyped(conn, agent_id, label)?;
 
     // ── Semantic search: compute and store embedding for this block ──────────
     // Semantic search feature removed (F5).
@@ -932,23 +945,25 @@ const AUTO_TYPE_CONFIDENCE_BOOST: f64 = 1.35;
 ///   2. Contains "must"/"always"/"never"/"rule"/"mandatory" → `constraint`
 ///   3. Contains "convention"/"pattern"/"style"/"naming" + file path → `convention`
 ///   4. Contains "user prefers"/"user wants"/"user likes" → `user_pref`
-fn auto_type_block_if_untyped(conn: &rusqlite::Connection, label: &str) {
+fn auto_type_block_if_untyped(conn: &Connection, agent_id: &str, label: &str) -> Result<()> {
     // Read current memory_type + value
-    let row: Option<(Option<String>, String)> = conn
+    let row: Option<(String, Option<String>, String)> = conn
         .query_row(
-            "SELECT memory_type, value FROM shared_memory_blocks WHERE label = ?1",
-            params![label],
-            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+            "SELECT b.id, b.memory_type, b.value FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1 AND b.label = ?2",
+            params![agent_id, label],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .ok();
+        .optional()?;
 
-    let Some((existing_type, value)) = row else {
-        return;
+    let Some((block_id, existing_type, value)) = row else {
+        return Ok(());
     };
 
     // Skip if already typed
     if existing_type.is_some() {
-        return;
+        return Ok(());
     }
 
     let lower = value.to_lowercase();
@@ -979,13 +994,14 @@ fn auto_type_block_if_untyped(conn: &rusqlite::Connection, label: &str) {
     ) {
         "user_pref"
     } else {
-        return; // No match — leave untyped
+        return Ok(()); // No match — leave untyped
     };
 
-    let _ = conn.execute(
-        "UPDATE shared_memory_blocks SET memory_type = ?1, confidence = MAX(confidence, ?2) WHERE label = ?3",
-        params![inferred, AUTO_TYPE_CONFIDENCE_BOOST, label],
-    );
+    conn.execute(
+        "UPDATE shared_memory_blocks SET memory_type = ?1, confidence = MAX(confidence, ?2) WHERE id = ?3",
+        params![inferred, AUTO_TYPE_CONFIDENCE_BOOST, block_id],
+    )?;
+    Ok(())
 }
 
 /// Check if `haystack` contains any of the `needles`.
@@ -1457,7 +1473,7 @@ pub fn get_memory_history(
     };
     let mut stmt = conn.prepare(
         "SELECT id, value, updated_at FROM memory_history
-         WHERE block_id = ?1 ORDER BY updated_at DESC LIMIT ?2",
+          WHERE block_id = ?1 ORDER BY updated_at DESC, rowid DESC LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![block_id, limit as i64], |row| {
         Ok((

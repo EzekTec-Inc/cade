@@ -56,6 +56,56 @@ pub struct ChatMessage {
     pub conversation_id: Option<String>,
 }
 
+impl ChatMessage {
+    /// Persisted turns wrap text in `{content: ...}`; older servers use strings.
+    pub fn text(&self) -> String {
+        let mut text = text_value(&self.content);
+        if self.role == "assistant"
+            && let Some(calls) = self.content.get("tool_calls").and_then(|v| v.as_array())
+        {
+            for call in calls {
+                if let Some(name) = call.get("name").and_then(|v| v.as_str()) {
+                    let args = call.get("arguments").cloned().unwrap_or_default();
+                    let args = args
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| args.to_string());
+                    text.push_str(&format!("\n\n[Tool call: {name}]\nArguments: {args}"));
+                }
+            }
+        }
+        text
+    }
+}
+
+pub fn text_value(value: &serde_json::Value) -> String {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            value
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| value.to_string())
+}
+
+/// Accept the production list envelope and the legacy bare array. A malformed
+/// envelope is an error, never an empty history that can erase a live timeline.
+pub fn decode_list<T: serde::de::DeserializeOwned>(
+    body: &str,
+    field: &str,
+) -> Result<Vec<T>, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(body)?;
+    let rows = if value.is_array() {
+        value
+    } else {
+        value.get(field).cloned().unwrap_or(serde_json::Value::Null)
+    };
+    serde_json::from_value(rows)
+}
+
 /// A conversation associated with an agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationInfo {
@@ -83,16 +133,55 @@ pub struct ConversationInfo {
 /// | `finish_reason`       | `reason` (string)                             |
 /// | `error`               | `error` (string)                              |
 ///
-/// The wire format always carries `message_type` as a top-level key; extra
-/// fields are merged into `data` so the GUI can access them without needing
-/// a dedicated variant per type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Run events use `message_type`, questions also use `type`, and the global
+/// feed uses `event_type`. Decoding normalizes these and legacy `data` envelopes
+/// while serialization retains the canonical flattened `message_type` shape.
+#[derive(Debug, Clone, Serialize)]
 pub struct StreamEvent {
     #[serde(default)]
     pub message_type: String,
     /// Catch-all for every field other than `message_type`.
     #[serde(flatten)]
     pub data: serde_json::Value,
+}
+
+impl<'de> Deserialize<'de> for StreamEvent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut fields = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| serde::de::Error::custom("event must be an object"))?;
+        let mut kind = ["message_type", "type", "event_type"]
+            .iter()
+            .find_map(|key| {
+                fields
+                    .get(*key)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or("")
+            .to_owned();
+        // Older clients and replay envelopes may put fields inside `data`.
+        if let Some(serde_json::Value::Object(data)) = fields.get("data").cloned() {
+            fields.remove("data");
+            for (key, value) in data {
+                fields.entry(key).or_insert(value);
+            }
+        }
+        if kind.is_empty() {
+            kind = ["message_type", "type", "event_type"]
+                .iter()
+                .find_map(|key| fields.get(*key).and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .to_owned();
+        }
+        fields.remove("message_type");
+        Ok(Self {
+            message_type: kind,
+            data: serde_json::Value::Object(fields),
+        })
+    }
 }
 
 impl StreamEvent {
@@ -117,22 +206,74 @@ impl StreamEvent {
 
     /// Extract `tool_name` from a `tool_call_message` or `tool_result_message`.
     pub fn tool_name(&self) -> Option<&str> {
-        self.data.get("tool_name").and_then(|v| v.as_str())
+        self.tool_payload()
+            .get("tool_name")
+            .or_else(|| self.tool_payload().get("name"))
+            .and_then(|v| v.as_str())
     }
 
     /// Extract `tool_args` from a `tool_call_message`.
     pub fn tool_args(&self) -> Option<&str> {
-        self.data.get("tool_args").and_then(|v| v.as_str())
+        self.tool_payload()
+            .get("tool_args")
+            .or_else(|| self.tool_payload().get("arguments"))
+            .and_then(|v| v.as_str())
     }
 
     /// Extract `tool_call_id` from a `tool_call_message` / `tool_result_message`.
     pub fn tool_call_id(&self) -> Option<&str> {
-        self.data.get("tool_call_id").and_then(|v| v.as_str())
+        self.tool_payload()
+            .get("tool_call_id")
+            .or_else(|| self.tool_payload().get("id"))
+            .and_then(|v| v.as_str())
     }
 
     /// Extract `approval_id` from an `approval_required` event.
     pub fn approval_id(&self) -> Option<&str> {
-        self.data.get("id").and_then(|v| v.as_str())
+        self.data
+            .get("id")
+            .or_else(|| self.data.get("approval_id"))
+            .and_then(|v| v.as_str())
+    }
+
+    pub fn conversation_id(&self) -> Option<&str> {
+        self.data.get("conversation_id").and_then(|v| v.as_str())
+    }
+
+    pub fn tool_payload(&self) -> &serde_json::Value {
+        self.data
+            .get("tool_call")
+            .or_else(|| self.data.get("tool_result"))
+            .unwrap_or(&self.data)
+    }
+
+    pub fn tool_arguments(&self) -> serde_json::Value {
+        let value = self
+            .tool_payload()
+            .get("arguments")
+            .or_else(|| self.data.get("tool_args"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        decode_json_value(value)
+    }
+
+    pub fn tool_output(&self) -> Option<&str> {
+        self.tool_payload()
+            .get("output")
+            .or_else(|| self.tool_payload().get("content"))
+            .and_then(|v| v.as_str())
+    }
+
+    /// `finish_reason` ends a provider response, not necessarily the agent run.
+    pub fn is_terminal(&self) -> bool {
+        self.msg_type() == "run_done"
+    }
+
+    pub fn question_request(&self) -> Option<QuestionRequest> {
+        if self.msg_type() != "question_required" {
+            return None;
+        }
+        QuestionRequest::from_pending(&self.data)
     }
 
     /// The canonical approval request emitted by a server-owned run.
@@ -152,16 +293,12 @@ impl StreamEvent {
 
     /// Deserialize the `tool_call` object (id, name, arguments).
     pub fn tool_call(&self) -> Option<ToolCallData> {
-        self.data
-            .get("tool_call")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        serde_json::from_value(self.tool_payload().clone()).ok()
     }
 
     /// Deserialize the `tool_result` object (id, name, output, is_error).
     pub fn tool_result(&self) -> Option<ToolResultData> {
-        self.data
-            .get("tool_result")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        serde_json::from_value(self.tool_payload().clone()).ok()
     }
 }
 
@@ -185,26 +322,144 @@ impl<'a> ApprovalRequest<'a> {
             return None;
         }
         Some(Self {
-            id: id.or_else(|| data.get("id").and_then(|v| v.as_str()))?,
+            id: id.or_else(|| {
+                data.get("id")
+                    .or_else(|| data.get("approval_id"))
+                    .and_then(|v| v.as_str())
+            })?,
             tool_name: data.get("tool_name")?.as_str()?,
             arguments: data.get("arguments")?,
-            reason: data.get("reason")?.as_str()?,
+            reason: data.get("reason").and_then(|v| v.as_str()).unwrap_or(""),
         })
+    }
+}
+
+pub fn decode_json_value(value: serde_json::Value) -> serde_json::Value {
+    value
+        .as_str()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(value)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Question {
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default, rename = "multiSelect", alias = "multi_select")]
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuestionRequest {
+    pub id: String,
+    pub questions: Vec<Question>,
+}
+
+impl QuestionRequest {
+    /// Live questions and queue rows (JSON-string arguments) share this decoder.
+    pub fn from_pending(row: &serde_json::Value) -> Option<Self> {
+        let arguments = decode_json_value(row.get("arguments").cloned().unwrap_or_default());
+        let questions = row
+            .get("questions")
+            .or_else(|| arguments.get("questions"))?;
+        let questions: Vec<Question> = serde_json::from_value(questions.clone()).ok()?;
+        if questions.is_empty()
+            || questions
+                .iter()
+                .any(|q| q.header.is_empty() || q.question.is_empty())
+        {
+            return None;
+        }
+        Some(Self {
+            id: row.get("id")?.as_str()?.to_owned(),
+            questions,
+        })
+    }
+}
+
+/// Transport-neutral SSE framing. Buffers bytes until a complete line, so UTF-8
+/// split across network reads and CRLF split across reads are both preserved.
+#[derive(Default)]
+pub struct SseDecoder {
+    pending: Vec<u8>,
+    data: Vec<String>,
+}
+
+impl SseDecoder {
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.pending.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<_> = self.pending.drain(..=end).collect();
+            self.line(
+                String::from_utf8_lossy(&line[..end]).trim_end_matches('\r'),
+                &mut frames,
+            );
+        }
+        frames
+    }
+
+    pub fn finish(&mut self) -> Vec<String> {
+        let remaining = std::mem::take(&mut self.pending);
+        let mut frames = Vec::new();
+        if !remaining.is_empty() {
+            self.line(
+                String::from_utf8_lossy(&remaining).trim_end_matches('\r'),
+                &mut frames,
+            );
+        }
+        self.line("", &mut frames);
+        frames
+    }
+
+    fn line(&mut self, line: &str, frames: &mut Vec<String>) {
+        if line.is_empty() {
+            if !self.data.is_empty() {
+                frames.push(std::mem::take(&mut self.data).join("\n"));
+            }
+        } else if let Some(data) = line.strip_prefix("data:") {
+            self.data
+                .push(data.strip_prefix(' ').unwrap_or(data).to_owned());
+        }
     }
 }
 
 /// A tool call within a `tool_call_message` event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallData {
+    #[serde(alias = "tool_call_id")]
     pub id: String,
+    #[serde(alias = "tool_name")]
     pub name: String,
+    #[serde(alias = "tool_args", deserialize_with = "deserialize_json_text")]
     pub arguments: String,
+}
+
+fn deserialize_json_text<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string()))
 }
 
 /// A tool result within a `tool_result_message` event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultData {
+    #[serde(alias = "tool_call_id")]
     pub id: String,
+    #[serde(alias = "tool_name")]
     pub name: String,
     pub output: String,
     #[serde(default)]
@@ -335,6 +590,92 @@ pub struct SwarmTopologyResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_production_history_and_conversation_envelopes_are_legacy_compatible() {
+        let history = r#"{"messages":[{"id":"m","role":"assistant","content":{"content":"answer"},"conversation_id":"c"}],"has_more":false}"#;
+        let rows = decode_list::<ChatMessage>(history, "messages").unwrap();
+        assert_eq!(rows[0].text(), "answer");
+        assert_eq!(
+            decode_list::<ChatMessage>(&serde_json::to_string(&rows).unwrap(), "messages").unwrap(),
+            rows
+        );
+        assert!(decode_list::<ChatMessage>(r#"{"error":"unauthorized"}"#, "messages").is_err());
+        let conversations = r#"{"conversations":[{"id":"c","agent_id":"a","title":"real title","created_at":1,"updated_at":2,"message_count":3}]}"#;
+        assert_eq!(
+            decode_list::<ConversationInfo>(conversations, "conversations").unwrap()[0].title,
+            "real title"
+        );
+    }
+
+    #[test]
+    fn wire_question_and_approval_decoders_accept_production_discriminators() {
+        let question: StreamEvent = serde_json::from_value(serde_json::json!({"type":"question_required","id":"q-1","agent_id":"a","run_id":"r","seq_id":9,"questions":[{"header":"Scope","question":"Which scope?","multiSelect":false,"options":[{"label":"Local","description":"Current workspace"}]}]})).unwrap();
+        assert_eq!(question.msg_type(), "question_required");
+        assert_eq!(question.run_id(), Some("r"));
+        let request = question.question_request().unwrap();
+        assert_eq!(
+            request.questions[0].options[0].description,
+            "Current workspace"
+        );
+        let queue = serde_json::json!({"id":"q-1","tool_name":"ask_user_question","arguments":serde_json::json!({"questions":request.questions}).to_string()});
+        assert_eq!(QuestionRequest::from_pending(&queue), Some(request));
+        let approval: StreamEvent = serde_json::from_value(serde_json::json!({"event_type":"approval_required","seq":1,"data":{"id":"app-1","tool_name":"write_file","arguments":{"path":"real.txt"}}})).unwrap();
+        assert_eq!(approval.approval_request().unwrap().id, "app-1");
+        assert_eq!(approval.approval_request().unwrap().reason, "");
+        assert_eq!(
+            approval.seq_id(),
+            None,
+            "global feed cursors must never be run cursors"
+        );
+    }
+
+    #[test]
+    fn wire_tool_projections_accept_nested_and_flattened_payloads_without_losing_arguments() {
+        for payload in [
+            serde_json::json!({"message_type":"tool_call_message","tool_call":{"id":"tc","name":"inspect","arguments":{"path":"Cargo.toml"}}}),
+            serde_json::json!({"message_type":"tool_executing","tool_call_id":"tc","tool_name":"inspect","arguments":"{\"path\":\"Cargo.toml\"}"}),
+        ] {
+            let event: StreamEvent = serde_json::from_value(payload).unwrap();
+            assert_eq!(event.tool_name(), Some("inspect"));
+            assert_eq!(event.tool_call_id(), Some("tc"));
+            assert_eq!(
+                event.tool_arguments(),
+                serde_json::json!({"path":"Cargo.toml"})
+            );
+            assert_eq!(event.tool_call().unwrap().name, "inspect");
+        }
+        let result: StreamEvent = serde_json::from_value(serde_json::json!({"message_type":"tool_result_message","tool_result":{"tool_call_id":"tc","tool_name":"inspect","output":"actual output","is_error":false}})).unwrap();
+        assert_eq!(result.tool_output(), Some("actual output"));
+        assert_eq!(result.tool_result().unwrap().id, "tc");
+        let persisted: ChatMessage = serde_json::from_value(serde_json::json!({"id":"m","role":"assistant","content":{"content":"","tool_calls":[{"name":"write_file","arguments":{"path":"notes.txt","content":"actual content"}}]}})).unwrap();
+        assert!(
+            persisted.text().contains("notes.txt") && persisted.text().contains("actual content")
+        );
+    }
+
+    #[test]
+    fn wire_sse_framing_handles_chunked_unicode_crlf_multiline_and_eof() {
+        let wire = ": keepalive\r\nevent: message\r\ndata:{\"type\":\"question_required\",\r\ndata: \"id\":\"q-猫\",\"questions\":[]}\r\n\r\ndata: [DONE]\r\n\r\n";
+        let mut decoder = SseDecoder::default();
+        let mut frames = vec![];
+        for byte in wire.as_bytes() {
+            frames.extend(decoder.push(&[*byte]));
+        }
+        frames.extend(decoder.finish());
+        assert_eq!(frames.len(), 2);
+        let question: StreamEvent = serde_json::from_str(&frames[0]).unwrap();
+        assert_eq!(question.approval_id(), Some("q-猫"));
+        assert_eq!(frames[1], "[DONE]");
+        assert!(decoder.push(b": heartbeat\n\n").is_empty());
+        decoder.push(b"data: {\"message_type\":\"run_done\",\"status\":\"done\"}");
+        let final_frame = decoder.finish();
+        assert!(
+            serde_json::from_str::<StreamEvent>(&final_frame[0])
+                .unwrap()
+                .is_terminal()
+        );
+    }
 
     #[test]
     fn health_info_parses_server_shape() {

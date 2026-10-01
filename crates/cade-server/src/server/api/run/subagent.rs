@@ -2,7 +2,7 @@
 
 use crate::server::state::AppState;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub(super) fn pause_state(id: &str) -> Option<cade_agent::subagents::SubagentPauseState> {
@@ -43,6 +43,7 @@ pub(super) struct EphemeralEnvironment {
     parent_agent_id: String,
     /// Set to `true` once the guard has already run (e.g. manual call).
     defused: bool,
+    written_facts: usize,
 }
 
 impl EphemeralEnvironment {
@@ -56,28 +57,52 @@ impl EphemeralEnvironment {
             subagent_id,
             parent_agent_id,
             defused: false,
+            written_facts: 0,
         }
     }
 
     /// Async write-back that supports Smart Memory Merge.
-    pub(super) async fn write_back_and_delete_async(&mut self, state: &AppState) -> usize {
+    pub(super) async fn write_back_and_delete_async(
+        &mut self,
+        state: &AppState,
+    ) -> Result<usize, String> {
         if self.defused {
-            return 0;
+            return Ok(self.written_facts);
         }
-        self.defused = true;
 
         let lock_mutex = get_writeback_lock(&self.parent_agent_id);
         let _lock = lock_mutex.lock().await;
 
+        // The compatibility extractor returns an empty Vec on read failure.
+        // Validate its source first so corrupt/unreadable findings cannot be
+        // silently treated as successful zero-fact writeback.
+        if let Err(error) = cade_store::sqlite::memory::get_memory_blocks_with_provenance(
+            &self.db,
+            &self.subagent_id,
+        ) {
+            let cleanup = self.discard();
+            return Err(format!(
+                "reading child findings: {error}; deletion: {cleanup:?}"
+            ));
+        }
         let facts = cade_store::sqlite::memory::extract_subagent_memory_for_writeback(
             &self.db,
             &self.subagent_id,
         );
 
-        let parent_blocks = cade_store::sqlite::get_memory_blocks(&self.db, &self.parent_agent_id)
-            .unwrap_or_default();
+        let parent_blocks =
+            match cade_store::sqlite::get_memory_blocks(&self.db, &self.parent_agent_id) {
+                Ok(blocks) => blocks,
+                Err(error) => {
+                    let cleanup = self.discard();
+                    return Err(format!(
+                        "reading parent memory: {error}; deletion: {cleanup:?}"
+                    ));
+                }
+            };
 
         let mut written = 0;
+        let mut errors = Vec::new();
         for fact in &facts {
             let parent_label = format!("subagent:{}", fact.label);
             let desc = if fact.description.is_empty() {
@@ -110,16 +135,15 @@ impl EphemeralEnvironment {
                     ),
                 )
                 .await;
-                if merge_result.is_err() {
-                    tracing::warn!(
-                        label = %parent_label,
-                        subagent_id = %self.subagent_id,
-                        "smart_memory_merge timed out; retaining old value"
-                    );
+                match merge_result {
+                    Ok(Ok(())) => written += 1,
+                    Ok(Err(error)) => errors.push(format!("{parent_label}: {error}")),
+                    Err(_) => errors.push(format!(
+                        "{parent_label}: smart memory merge timed out; old value retained"
+                    )),
                 }
-                written += 1;
             } else {
-                if cade_store::sqlite::upsert_memory_block_typed(
+                match cade_store::sqlite::upsert_memory_block_typed(
                     &self.db,
                     &self.parent_agent_id,
                     &parent_label,
@@ -128,29 +152,137 @@ impl EphemeralEnvironment {
                     None,
                     Some(&fact.memory_type),
                     Some(fact.confidence),
-                )
-                .is_ok()
-                {
-                    written += 1;
+                ) {
+                    Ok(()) => written += 1,
+                    Err(error) => errors.push(format!("{parent_label}: {error}")),
                 }
             }
+            self.written_facts = written;
         }
 
-        let _ = cade_store::sqlite::delete_agent(&self.db, &self.subagent_id);
-        written
+        if let Err(error) = self.discard() {
+            errors.push(error);
+        }
+        if errors.is_empty() {
+            Ok(written)
+        } else {
+            Err(format!(
+                "After writing {written} facts: {}",
+                errors.join("; ")
+            ))
+        }
     }
 
-    fn discard(&mut self) {
+    fn discard(&mut self) -> Result<(), String> {
         if !self.defused {
             self.defused = true;
-            let _ = cade_store::sqlite::delete_agent(&self.db, &self.subagent_id);
+            cade_store::sqlite::delete_agent(&self.db, &self.subagent_id).map_err(|error| {
+                format!("deleting ephemeral agent {}: {error}", self.subagent_id)
+            })?;
         }
+        Ok(())
     }
 }
 
 impl Drop for EphemeralEnvironment {
     fn drop(&mut self) {
-        self.discard();
+        if let Err(error) = self.discard() {
+            tracing::warn!(%error, "ephemeral environment drop cleanup failed");
+        }
+    }
+}
+
+struct ServerSubagentCleanup {
+    state: AppState,
+    environment: EphemeralEnvironment,
+    /// Parent workspace captured before execution is rebound to the child clone.
+    primary_root: std::path::PathBuf,
+    written: Arc<std::sync::atomic::AtomicUsize>,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    recent_edits: Arc<Mutex<BTreeSet<String>>>,
+}
+
+struct SubagentAdmissionCleanup {
+    map: Arc<tokio::sync::RwLock<HashMap<String, cade_agent::subagents::SubagentCancellation>>>,
+    id: String,
+    cancellation: cade_agent::subagents::SubagentCancellation,
+    closed: bool,
+}
+
+#[async_trait::async_trait]
+impl cade_agent::subagents::SubagentCleanup for SubagentAdmissionCleanup {
+    async fn finalize(&mut self, _: bool) -> Result<(), String> {
+        if !self.closed {
+            self.cancellation.close();
+            self.map.write().await.remove(&self.id);
+            self.closed = true;
+        }
+        Ok(())
+    }
+
+    fn discard(&mut self) -> Result<(), String> {
+        if self.closed {
+            return Ok(());
+        }
+        self.cancellation.close();
+        if let Ok(mut map) = self.map.try_write() {
+            map.remove(&self.id);
+            self.closed = true;
+            return Ok(());
+        }
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|error| format!("Cancellation registry cleanup: {error}"))?;
+        let map = self.map.clone();
+        let id = self.id.clone();
+        handle.spawn(async move {
+            map.write().await.remove(&id);
+        });
+        self.closed = true;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl cade_agent::subagents::SubagentCleanup for ServerSubagentCleanup {
+    async fn finalize(&mut self, success: bool) -> Result<(), String> {
+        // Memory writeback must not occupy a reasoning slot. The session has
+        // already reconciled/discarded the workspace at this boundary.
+        self.permit = None;
+        if success {
+            let edits =
+                std::mem::take(&mut *self.recent_edits.lock().unwrap_or_else(|e| e.into_inner()));
+            for path in edits {
+                // Joining retains valid absolute paths and maps staged relative
+                // paths back to the primary workspace, never the child clone or
+                // whichever execution scope happens to run finalization.
+                let path = self.primary_root.join(path);
+                super::record_recent_edit_db(
+                    &self.state.db,
+                    &self.environment.parent_agent_id,
+                    &path.to_string_lossy(),
+                );
+            }
+            let result = self
+                .environment
+                .write_back_and_delete_async(&self.state)
+                .await;
+            self.written.store(
+                self.environment.written_facts,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            result.map(|_| ())
+        } else {
+            self.environment.discard()
+        }
+    }
+
+    fn discard(&mut self) -> Result<(), String> {
+        self.permit = None;
+        self.written.store(
+            self.environment.written_facts,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        self.environment.discard()
     }
 }
 
@@ -318,7 +450,9 @@ impl CadeSubagentExecutor {
             parent_conversation_id,
             tool_call_id,
             emitter,
-            permission_mode: cade_core::permissions::PermissionMode::Default,
+            permission_mode: super::runtime::current_execution_options()
+                .map(|options| options.permissions.mode())
+                .unwrap_or_default(),
         }
     }
 }
@@ -350,6 +484,13 @@ pub(super) struct ServerSubagentRunner {
     pub(super) permission_mode: cade_core::permissions::PermissionMode,
 }
 
+struct AbortCoordinatorOnDrop(tokio::task::AbortHandle);
+impl Drop for AbortCoordinatorOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 #[async_trait]
 impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
     async fn run_single(
@@ -376,9 +517,8 @@ impl cade_agent::subagents::SubagentSingleRunner for ServerSubagentRunner {
     }
 
     fn list_subagents(&self) -> Result<String, cade_agent::Error> {
-        let defs = cade_agent::subagents::discover_all_subagents(
-            &std::env::current_dir().unwrap_or_default(),
-        );
+        let defs =
+            cade_agent::subagents::discover_all_subagents(&super::runtime::execution_workspace());
         let mut out = String::from("Available subagents:\n");
         for d in cade_agent::subagents::visible_subagents(&defs) {
             out.push_str(&format!("- {}: {} ({})\n", d.name, d.description, d.tools));
@@ -560,7 +700,7 @@ pub(super) async fn handle_subagent_tool(
     };
     let tool_call_id_c = tool_call_id.clone();
     let args_c = args.clone();
-    let handle = tokio::spawn(async move {
+    let handle = super::runtime::spawn_in_execution_scope(async move {
         cade_agent::subagents::SubagentCoordinator::coordinate(
             &runner_owned,
             &tool_call_id_c,
@@ -568,7 +708,12 @@ pub(super) async fn handle_subagent_tool(
         )
         .await
     });
-    match handle.await {
+    // Dropping an awaited parent invocation must drop synchronous sessions.
+    // Background sessions were transferred to their own launch owner already.
+    let abort_on_drop = AbortCoordinatorOnDrop(handle.abort_handle());
+    let outcome = handle.await;
+    drop(abort_on_drop);
+    match outcome {
         Ok(Ok(res)) => res,
         Ok(Err(e)) => cade_agent::tools::manager::ToolResult {
             tool_call_id: tool_call_id.clone(),
@@ -628,6 +773,7 @@ pub(super) async fn handle_run_subagent_tool(
 
 struct ServerSubagentLlm<'a> {
     state: &'a AppState,
+    runtime: Arc<cade_agent::tools::runtime::ToolRuntime>,
 }
 
 #[async_trait::async_trait]
@@ -638,8 +784,12 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
         prompt: &str,
         tools: &[serde_json::Value],
     ) -> (String, Vec<serde_json::Value>) {
+        let prompt = format!(
+            "{prompt}\n\nExecution workspace: {}",
+            self.runtime.cwd.display()
+        );
         if cade_ai::catalogue::supports_tools_for_model(model) {
-            (prompt.to_string(), tools.to_vec())
+            (prompt, tools.to_vec())
         } else {
             (
                 format!(
@@ -691,8 +841,9 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
             model: model.to_string(),
             messages: ai_messages,
             tools: tools.to_vec(),
-            max_tokens: 8192,
-            reasoning_effort: None,
+            max_tokens: cade_ai::catalogue::max_tokens_for_model(model),
+            reasoning_effort: super::runtime::current_execution_options()
+                .and_then(|options| options.reasoning_effort.clone()),
         };
 
         let resp = self
@@ -705,10 +856,13 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
         let tool_calls = resp
             .tool_calls
             .into_iter()
-            .map(|tc| cade_agent::subagents::SubagentToolCall {
-                id: tc.id,
-                name: tc.name,
-                arguments: tc.arguments,
+            .map(|tc| {
+                let arguments = self.runtime.prepare_arguments(&tc.name, &tc.arguments);
+                cade_agent::subagents::SubagentToolCall {
+                    id: tc.id,
+                    name: tc.name,
+                    arguments,
+                }
             })
             .collect();
 
@@ -728,15 +882,44 @@ impl<'a> cade_agent::subagents::SubagentLlmExecutor for ServerSubagentLlm<'a> {
 
 struct ServerSubagentTools<'a> {
     state: &'a AppState,
-    subagent_id: String,
-    allowed_paths: Option<Vec<String>>,
     parent_agent_id: String,
+    runtime: Arc<cade_agent::tools::runtime::ToolRuntime>,
+    permissions: cade_core::permissions::PermissionManager,
+    hooks: Arc<cade_core::hooks::HookEngine>,
+    recent_edits: Arc<Mutex<BTreeSet<String>>>,
+}
+
+struct ChildPipelineApproval {
+    queue: HeadlessQueueAdapter,
+    authorized_name: String,
+    authorized_arguments: serde_json::Value,
+}
+
+#[async_trait::async_trait]
+impl cade_agent::tools::ApprovalDelegate for ChildPipelineApproval {
+    async fn request_approval(
+        &self,
+        _: &str,
+        name: &str,
+        arguments: &serde_json::Value,
+        _: &str,
+    ) -> cade_agent::Result<bool> {
+        // SubagentSession already authorized this exact normalized call. A hook
+        // changing its parameters must go back through the child's own queue.
+        if name == self.authorized_name && arguments == &self.authorized_arguments {
+            return Ok(true);
+        }
+        cade_core::permissions::PermissionService::request_permission(&self.queue, name, arguments)
+            .await
+            .map_err(cade_agent::Error::custom)
+    }
 }
 
 #[async_trait::async_trait]
 impl<'a> cade_agent::subagents::SubagentToolExecutor for ServerSubagentTools<'a> {
     async fn is_mcp_write(&self, tool_name: &str) -> bool {
         cade_agent::tools::is_mcp_write_tool(tool_name, &self.state.mcp).await
+            || self.runtime.extension_is_write(tool_name)
     }
 
     async fn execute_tool(
@@ -746,39 +929,49 @@ impl<'a> cade_agent::subagents::SubagentToolExecutor for ServerSubagentTools<'a>
         arguments: &serde_json::Value,
         execution_path: &std::path::Path,
     ) -> Result<String, String> {
-        let storage_backend = std::sync::Arc::new(super::storage_impl::ServerStorageBackend {
-            state: self.state.clone(),
-        });
-        let mut runtime = cade_agent::tools::runtime::ToolRuntime::new(
-            storage_backend,
-            std::sync::Arc::clone(&self.state.mcp),
-            self.subagent_id.clone(),
-            execution_path.to_path_buf(),
+        if self.runtime.cwd != execution_path {
+            return Err("Child tool runtime workspace does not match its execution path".into());
+        }
+
+        let pipeline = cade_agent::tools::ToolPipeline::new(
+            self.runtime.clone(),
+            self.permissions.clone(),
+            self.hooks.clone(),
+            Arc::new(ChildPipelineApproval {
+                queue: HeadlessQueueAdapter {
+                    db: self.state.db.clone(),
+                    parent_agent_id: self.parent_agent_id.clone(),
+                    subagent_id: self.runtime.agent_id.clone(),
+                },
+                authorized_name: cade_agent::tools::manager::canonical_name(tool_name).to_owned(),
+                authorized_arguments: self.runtime.prepare_arguments(tool_name, arguments),
+            }),
         );
-        runtime.allowed_paths = self.allowed_paths.clone();
+        match pipeline.execute(tool_call_id, tool_name, arguments).await {
+            Ok(executed) => {
+                if !executed.is_error
+                    && cade_agent::tools::manager::is_file_edit_tool(tool_name)
+                    && let Some(path) = arguments["path"]
+                        .as_str()
+                        .or_else(|| arguments["file_path"].as_str())
+                {
+                    // These paths belong to the child's workspace until successful
+                    // reconciliation. A conflict must not claim a parent edit.
+                    let path = std::path::Path::new(path);
+                    let path = path.strip_prefix(execution_path).unwrap_or(path);
+                    self.recent_edits
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(path.to_string_lossy().to_string());
+                }
 
-        if let Some(executed) = runtime
-            .execute(tool_call_id.to_string(), tool_name, arguments)
-            .await
-        {
-            if !executed.is_error
-                && cade_agent::tools::manager::is_file_edit_tool(tool_name)
-                && let Some(path) = arguments["path"]
-                    .as_str()
-                    .or_else(|| arguments["file_path"].as_str())
-            {
-                super::record_recent_edit_db(&self.state.db, &self.parent_agent_id, path);
+                if executed.is_error {
+                    Err(executed.output)
+                } else {
+                    Ok(executed.output)
+                }
             }
-
-            if executed.is_error {
-                Err(executed.output)
-            } else {
-                Ok(executed.output)
-            }
-        } else {
-            Err(format!(
-                "Tool '{tool_name}' requires interactive TUI context and is not supported in subagent background loop."
-            ))
+            Err(error) => Err(error.to_string()),
         }
     }
 }
@@ -821,7 +1014,7 @@ pub(super) async fn handle_run_subagent_tool_inner(
 
     // Validate the requested definition before waiting for a slot or creating
     // any child state. Keep hidden definitions available for exact lookup.
-    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let cwd_for_defs = super::runtime::execution_workspace();
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
     match cfg.resolve_definition(&all_defs) {
         Ok(_) => {}
@@ -849,14 +1042,22 @@ pub(super) async fn handle_run_subagent_tool_inner(
     let subagent_id = format!("sa_{}", uuid::Uuid::new_v4());
     let mut session = cade_agent::subagents::SubagentSession::new(cfg.clone(), parent_agent_id);
     session.session_id = subagent_id.clone();
-    let control = session.register_control(true);
+    session.register_control(true);
+    let completion = session.completion();
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel(1);
-    let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx);
+    let cancellation = cade_agent::subagents::SubagentCancellation::new(cancel_tx)
+        .with_completion(completion.clone());
     state
         .subagent_cancellations
         .write()
         .await
         .insert(subagent_id.clone(), cancellation.clone());
+    session = session.with_cleanup(Box::new(SubagentAdmissionCleanup {
+        map: state.subagent_cancellations.clone(),
+        id: subagent_id.clone(),
+        cancellation: cancellation.clone(),
+        closed: false,
+    }));
 
     if cfg.background {
         let state_owned = state.clone();
@@ -871,26 +1072,29 @@ pub(super) async fn handle_run_subagent_tool_inner(
         let completion_id = subagent_id.clone();
         let completion_sse = emitter.raw_sse_tx();
         let completion_cancel = cancellation.clone();
-        let running_control = control.clone();
-        let completion_control = control.clone();
+        // launch_background spawns internally: capture explicitly rather than
+        // relying on task-local inheritance, and retain no parent cancel token.
+        let launch_options = super::runtime::current_execution_options();
         let launch = session.launch_background(
             state.subagent_semaphore.clone(),
             std::time::Duration::from_secs(subagent_timeout_secs()),
             cancel_rx,
             move |session, permit| async move {
-                running_control.running();
                 let (_, unused_rx) = tokio::sync::mpsc::channel(1);
-                run_subagent_with_permit(
-                    &state_owned,
-                    &parent,
-                    conversation.as_deref(),
-                    &call,
-                    &args,
-                    emitter,
-                    parent_mode,
-                    session,
-                    permit,
-                    unused_rx,
+                super::runtime::in_execution_scope(
+                    launch_options,
+                    run_subagent_with_permit(
+                        &state_owned,
+                        &parent,
+                        conversation.as_deref(),
+                        &call,
+                        &args,
+                        emitter,
+                        parent_mode,
+                        session,
+                        permit,
+                        unused_rx,
+                    ),
                 )
                 .await
             },
@@ -912,12 +1116,13 @@ pub(super) async fn handle_run_subagent_tool_inner(
                                 TerminalStatus::Error
                             }
                         };
-                        (reason.to_string(), true, status)
+                        let output = completion
+                            .outcome()
+                            .map(|outcome| outcome.summary_text().to_string())
+                            .unwrap_or_else(|| reason.to_string());
+                        (output, true, status)
                     }
                 };
-                if !matches!(completion_control.status(), cade_agent::subagents::SubagentStatus::Finished { outcome } if outcome != "error") {
-                    completion_control.finished(status.as_str());
-                }
                 let event = serde_json::json!({
                     "message_type": "subagent_complete",
                     "subagent_id": completion_id,
@@ -955,29 +1160,17 @@ pub(super) async fn handle_run_subagent_tool_inner(
         };
     }
 
-    // REC-3/G2: Backpressure — block until a semaphore slot is free instead
-    // of returning an instant error that causes the parent LLM to retry-loop.
-    // Wrapped in the wall-clock timeout so a full semaphore never hangs forever.
-    let permit = match tokio::select! {
-        biased;
-        Some(()) = cancel_rx.recv() => {
-            cancellation.close();
-            state.subagent_cancellations.write().await.remove(&subagent_id);
-            return ToolResult {
-                tool_call_id: tool_call_id.to_string(),
-                tool_name: "run_subagent".to_string(),
-                output: "Subagent cancelled by parent".to_string(),
-                is_error: true,
-                ui_resource_uri: None,
-            };
-        }
-        acquired = tokio::time::timeout(
+    let permit = match session
+        .acquire_slot(
+            state.subagent_semaphore.clone(),
             std::time::Duration::from_secs(subagent_timeout_secs()),
-            state.subagent_semaphore.clone().acquire_owned(),
-        ) => acquired,
-    } {
-        Ok(Ok(p)) => p,
-        Ok(Err(_)) => {
+            &mut cancel_rx,
+        )
+        .await
+    {
+        Ok(permit) => permit,
+        Err(reason) => {
+            cancellation.close();
             state
                 .subagent_cancellations
                 .write()
@@ -986,37 +1179,17 @@ pub(super) async fn handle_run_subagent_tool_inner(
             return ToolResult {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: "run_subagent".to_string(),
-                output: "error: subagent semaphore closed.".to_string(),
-                is_error: true,
-                ui_resource_uri: None,
-            };
-        }
-        Err(_) => {
-            state
-                .subagent_cancellations
-                .write()
-                .await
-                .remove(&subagent_id);
-            return ToolResult {
-                tool_call_id: tool_call_id.to_string(),
-                tool_name: "run_subagent".to_string(),
-                output: format!(
-                    "error: timed out waiting for a subagent slot after {}s. \
-                     All {} slots are occupied. Retry later or raise CADE_MAX_SUBAGENTS.",
-                    subagent_timeout_secs(),
-                    std::env::var("CADE_MAX_SUBAGENTS")
-                        .ok()
-                        .and_then(|s| s.parse::<usize>().ok())
-                        .unwrap_or(4)
-                ),
+                output: completion
+                    .outcome()
+                    .map(|outcome| outcome.summary_text().to_string())
+                    .unwrap_or_else(|| reason.to_string()),
                 is_error: true,
                 ui_resource_uri: None,
             };
         }
     };
-    control.running();
 
-    let (result, status) = run_subagent_with_permit(
+    let (result, _status) = run_subagent_with_permit(
         state,
         parent_agent_id,
         parent_conversation_id,
@@ -1029,10 +1202,6 @@ pub(super) async fn handle_run_subagent_tool_inner(
         cancel_rx,
     )
     .await;
-    if !matches!(control.status(), cade_agent::subagents::SubagentStatus::Finished { outcome } if outcome != "error")
-    {
-        control.finished(status.as_str());
-    }
     cancellation.close();
     state
         .subagent_cancellations
@@ -1154,21 +1323,13 @@ async fn run_subagent_with_permit(
     use cade_agent::subagents::SubagentConfig;
     use cade_agent::tools::manager::ToolResult;
     let cfg = SubagentConfig::from_args(args);
-    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let cwd_for_defs = super::runtime::execution_workspace();
+    let accepted_options = super::runtime::current_execution_options();
     let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
     let def_opt = match cfg.resolve_definition(&all_defs) {
         Ok(def) => def,
         Err(reason) => {
-            return (
-                ToolResult {
-                    tool_call_id: tool_call_id.into(),
-                    tool_name: "run_subagent".into(),
-                    output: reason,
-                    is_error: true,
-                    ui_resource_uri: None,
-                },
-                TerminalStatus::Error,
-            );
+            return failed_session_result(&mut session, tool_call_id, reason).await;
         }
     };
     let max_depth: usize = std::env::var("CADE_SUBAGENT_MAX_DEPTH")
@@ -1192,37 +1353,28 @@ async fn run_subagent_with_permit(
     session_config.enforce_isolation = use_isolation;
     session.config = session_config;
     if use_isolation {
-        let root = match std::env::current_dir() {
-            Ok(root) => root,
-            Err(e) => {
-                return (
-                    ToolResult {
-                        tool_call_id: tool_call_id.to_string(),
-                        tool_name: "run_subagent".to_string(),
-                        output: format!(
-                            "error: required subagent isolation could not determine workspace: {e}"
-                        ),
-                        is_error: true,
-                        ui_resource_uri: None,
-                    },
-                    TerminalStatus::Error,
-                );
-            }
-        };
+        if accepted_options
+            .as_ref()
+            .is_some_and(|options| !matches!(options.runtime.backend.name(), "local" | "readonly"))
+        {
+            return failed_session_result(
+                &mut session,
+                tool_call_id,
+                "error: workspace isolation requires a local execution backend".into(),
+            )
+            .await;
+        }
+        let root = cwd_for_defs.clone();
         // Merge the isolated snapshot through the workspace guard. A newly
         // initialized git branch has unrelated history to the parent and
         // cannot be merged back into an existing repository.
         if let Err(e) = session.prepare_workspace(&root, None).await {
-            return (
-                ToolResult {
-                    tool_call_id: tool_call_id.to_string(),
-                    tool_name: "run_subagent".to_string(),
-                    output: format!("error: required subagent isolation setup failed: {e}"),
-                    is_error: true,
-                    ui_resource_uri: None,
-                },
-                TerminalStatus::Error,
-            );
+            return failed_session_result(
+                &mut session,
+                tool_call_id,
+                format!("error: required subagent isolation setup failed: {e}"),
+            )
+            .await;
         }
     }
 
@@ -1230,7 +1382,7 @@ async fn run_subagent_with_permit(
         .ok()
         .flatten()
         .map(|a| a.model)
-        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+        .unwrap_or_else(|| state.config.default_model.clone());
 
     let model = cfg
         .resolve_model(def_opt)
@@ -1310,6 +1462,10 @@ async fn run_subagent_with_permit(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
+    let max_iters = accepted_options
+        .as_ref()
+        .map(|options| max_iters.min(options.max_turns))
+        .unwrap_or(max_iters);
 
     // Snapshot the parent agent's tool schemas, stripped of `run_subagent`
     // for defence-in-depth alongside the depth counter.  If the parent is
@@ -1318,7 +1474,13 @@ async fn run_subagent_with_permit(
     let (parent_tool_schemas, inherited_tools): (Vec<serde_json::Value>, Vec<String>) = {
         let parent_tool_ids =
             cade_store::sqlite::get_agent_tool_ids(&state.db, parent_agent_id).unwrap_or_default();
-        let all = cade_store::sqlite::list_tools(&state.db).unwrap_or_default();
+        let all = cade_store::sqlite::list_tools(&state.db)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|tool| {
+                !tool.tags.iter().any(|tag| tag == "plugin") && !tool.id.starts_with("tool-plugin-")
+            })
+            .collect::<Vec<_>>();
         let mut raw: Vec<serde_json::Value> = if parent_tool_ids.is_empty() {
             all.into_iter().filter_map(|t| t.json_schema).collect()
         } else {
@@ -1337,6 +1499,13 @@ async fn run_subagent_with_permit(
                 continue;
             }
             raw.push(cap_s.schema);
+        }
+        for tool in super::plugin_execution::ready_catalog(&cwd_for_defs, &state.mcp)
+            .await
+            .tools
+        {
+            raw.retain(|schema| schema["name"].as_str() != Some(tool.name.as_str()));
+            raw.push(tool.schema);
         }
         let tools_filter = def_opt.map(|d| &d.tools).unwrap_or_else(|| {
             if cfg.mode == "plan" {
@@ -1360,13 +1529,21 @@ async fn run_subagent_with_permit(
         (filtered, inherited)
     };
 
-    let allowed_paths = cfg.resolve_allowed_paths(def_opt);
+    let execution_path = session.execution_path(&cwd_for_defs).to_path_buf();
+    let allowed_paths = inherited_child_paths(
+        accepted_options
+            .as_ref()
+            .and_then(|options| options.runtime.allowed_paths.clone()),
+        cfg.resolve_allowed_paths(def_opt),
+        &cwd_for_defs,
+        &execution_path,
+    );
 
     // Create a lightweight ephemeral DB row for the subagent so its
     // meta-tool calls (update_memory, load_skill, etc.) are scoped to
     // its own namespace rather than writing into the parent agent's
     // memory store (memory isolation fix).
-    let _ = cade_store::sqlite::create_agent(
+    if let Err(error) = cade_store::sqlite::create_agent(
         &state.db,
         &cade_store::sqlite::AgentRow {
             id: subagent_id.clone(),
@@ -1380,7 +1557,29 @@ async fn run_subagent_with_permit(
             active_plan_json: None,
             parent_id: Some(parent_agent_id.to_string()),
         },
-    );
+    ) {
+        return failed_session_result(
+            &mut session,
+            tool_call_id,
+            format!("Creating ephemeral child: {error}"),
+        )
+        .await;
+    }
+
+    let writeback_facts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recent_edits = Arc::new(Mutex::new(BTreeSet::new()));
+    session = session.with_cleanup(Box::new(ServerSubagentCleanup {
+        state: state.clone(),
+        environment: EphemeralEnvironment::new(
+            state.db.clone(),
+            subagent_id.clone(),
+            parent_agent_id.to_string(),
+        ),
+        primary_root: cwd_for_defs.clone(),
+        written: writeback_facts.clone(),
+        permit: Some(permit),
+        recent_edits: recent_edits.clone(),
+    }));
 
     // Hierarchical memory mounting: Copy parent agent's core memory blocks
     // (project, persona, active_goal) into subagent's sandboxed namespace for grounding.
@@ -1399,53 +1598,67 @@ async fn run_subagent_with_permit(
         }
     }
 
-    // REC-2: Drop guard ensures write-back + row deletion even on panic.
-    let mut ephemeral_guard = EphemeralEnvironment::new(
-        state.db.clone(),
+    let mut child_runtime = cade_agent::tools::runtime::ToolRuntime::new(
+        Arc::new(super::storage_impl::ServerStorageBackend {
+            state: state.clone(),
+        }),
+        state.mcp.clone(),
         subagent_id.clone(),
-        parent_agent_id.to_string(),
-    );
-
-    // The launch registered cancellation before waiting for a slot.
-    struct CancelGuard {
-        map: std::sync::Arc<
-            tokio::sync::RwLock<
-                std::collections::HashMap<String, cade_agent::subagents::SubagentCancellation>,
-            >,
-        >,
-        id: String,
+        execution_path.clone(),
+    )
+    .with_conversation(parent_conversation_id.map(str::to_owned));
+    child_runtime.allowed_paths = allowed_paths;
+    if let Some(options) = accepted_options.as_ref() {
+        child_runtime.backend = options.runtime.backend.clone();
+        child_runtime.extension = if execution_path == cwd_for_defs {
+            options.runtime.extension.clone()
+        } else {
+            // The main-owned adapter separates package discovery from script
+            // execution. Never reuse a parent's execution root in a clone.
+            options.runtime.extension.as_ref().map(|_| {
+                Arc::new(super::plugin_execution::ServerPluginTools::for_workspace(
+                    cwd_for_defs.clone(),
+                    execution_path.clone(),
+                    state.mcp.clone(),
+                )) as Arc<dyn cade_agent::tools::runtime::ToolExtension>
+            })
+        };
     }
-    impl Drop for CancelGuard {
-        fn drop(&mut self) {
-            let map = self.map.clone();
-            let id = self.id.clone();
-            // RC3-FIX: Guard against missing runtime context during panic
-            // unwind or after runtime shutdown — tokio::task::spawn panics
-            // if no runtime is available, causing a double-panic abort.
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let mut cancellations = map.write().await;
-                    cancellations.remove(&id);
-                });
+    if child_runtime.extension.is_none() {
+        child_runtime.extension = Some(Arc::new(
+            super::plugin_execution::ServerPluginTools::for_workspace(
+                cwd_for_defs.clone(),
+                execution_path.clone(),
+                state.mcp.clone(),
+            ),
+        ));
+    }
+    let child_runtime = Arc::new(child_runtime);
+    let llm_executor = ServerSubagentLlm {
+        state,
+        runtime: child_runtime.clone(),
+    };
+    let mut permission_settings = accepted_options
+        .as_ref()
+        .map(|options| options.permission_settings.clone())
+        .or_else(|| {
+            cade_core::settings::SettingsManager::new(&cwd_for_defs)
+                .ok()
+                .map(|settings| settings.permission_settings().clone())
+        });
+    if let Some(settings) = permission_settings.as_mut() {
+        for rule in settings.allow.iter_mut().chain(settings.deny.iter_mut()) {
+            if let Some(mut parsed) = cade_core::permissions::PermissionRule::parse(rule)
+                && let Some(pattern) = parsed.pattern.as_deref()
+                && std::path::Path::new(pattern).is_absolute()
+                && let Ok(relative) = std::path::Path::new(pattern).strip_prefix(&cwd_for_defs)
+            {
+                parsed.pattern = Some(execution_path.join(relative).to_string_lossy().into_owned());
+                *rule = parsed.to_string();
             }
         }
     }
-    let _cancel_guard = CancelGuard {
-        map: state.subagent_cancellations.clone(),
-        id: subagent_id.clone(),
-    };
-
-    let llm_executor = ServerSubagentLlm { state };
-    let tools_executor = ServerSubagentTools {
-        state,
-        subagent_id: subagent_id.clone(),
-        allowed_paths: allowed_paths.clone(),
-        parent_agent_id: parent_agent_id.to_string(),
-    };
-
-    let permission_settings = cade_core::settings::SettingsManager::new(&cwd_for_defs).ok();
     let permissions = if let Some(ref settings) = permission_settings {
-        let settings = settings.permission_settings();
         let permissions = cade_core::permissions::PermissionManager::new_with_strict_bash(
             parent_mode,
             settings.strict_bash,
@@ -1455,15 +1668,47 @@ async fn run_subagent_with_permit(
     } else {
         cade_core::permissions::PermissionManager::new(parent_mode)
     };
+    let hooks_config = accepted_options
+        .as_ref()
+        .map(|options| options.hooks_config.clone())
+        .unwrap_or_else(|| {
+            cade_core::settings::SettingsManager::new(&cwd_for_defs)
+                .map(|settings| settings.merged_hooks())
+                .unwrap_or_default()
+        });
+    let tools_executor = ServerSubagentTools {
+        state,
+        parent_agent_id: parent_agent_id.to_owned(),
+        runtime: child_runtime,
+        permissions: permissions.clone(),
+        hooks: Arc::new(cade_core::hooks::HookEngine::new(
+            hooks_config,
+            execution_path,
+            subagent_id.clone(),
+        )),
+        recent_edits,
+    };
+    let child_options = accepted_options.as_ref().map(|options| {
+        options.for_child(
+            tools_executor.runtime.clone(),
+            tools_executor.permissions.clone(),
+            tools_executor.hooks.clone(),
+            max_iters,
+            permission_settings.clone().unwrap_or_default(),
+        )
+    });
     let policy = cade_agent::subagents::SubagentToolPolicy {
         permissions,
-        tools: def_opt.map(|d| d.tools.clone()).unwrap_or_else(|| {
-            if cfg.mode == "plan" || cfg.mode == "recall" {
-                cade_agent::subagents::SubagentTools::Readonly
-            } else {
-                cade_agent::subagents::SubagentTools::All
-            }
-        }),
+        tools: inherited_child_tools(
+            def_opt.map(|d| d.tools.clone()).unwrap_or_else(|| {
+                if cfg.mode == "plan" || cfg.mode == "recall" {
+                    cade_agent::subagents::SubagentTools::Readonly
+                } else {
+                    cade_agent::subagents::SubagentTools::All
+                }
+            }),
+            tools_executor.runtime.allowed_paths.as_deref(),
+        ),
         inherited_tools,
         allow_nesting: def_opt.is_some_and(|d| d.allow_run_subagent),
         max_depth,
@@ -1488,7 +1733,7 @@ async fn run_subagent_with_permit(
     let raw_sse = emitter.raw_sse_tx();
     let s_id_c = subagent_id.clone();
     let max_it = max_iters;
-    let mut pause_states = session.pause.subscribe();
+    let mut pause_states = session.subscribe_pause();
     let pause_sse = raw_sse.clone();
     let pause_id = subagent_id.clone();
     tokio::spawn(async move {
@@ -1598,14 +1843,15 @@ async fn run_subagent_with_permit(
         session_evt_tx,
     )));
 
-    let root_path = std::env::current_dir().unwrap_or_default();
+    let root_path = cwd_for_defs;
 
     let available_providers = cade_ai::catalogue::available_env_providers();
     let failover_candidates = build_failover_chain(&model, &parent_model, &available_providers);
     let timeout_dur = std::time::Duration::from_secs(subagent_timeout_secs());
-    let mut cancelled = false;
-    let loop_res = tokio::select! {
-        res = tokio::time::timeout(timeout_dur, session.run_autonomous_loop(
+    let completion = session.completion();
+    let outcome = super::runtime::in_execution_scope(
+        child_options,
+        session.run_controlled(
             &llm_executor,
             &tools_executor,
             model,
@@ -1614,65 +1860,29 @@ async fn run_subagent_with_permit(
             parent_tool_schemas,
             failover_candidates,
             &root_path,
-        )) => res,
-        Some(()) = cancel_rx.recv() => {
-            cancelled = true;
-            Ok(cade_agent::subagents::SubagentOutcome::Failed {
-                error: "Subagent cancelled by parent".to_string(),
-            })
-        },
-    };
-    // Timeout/cancellation drops the loop future without calling finalize_outcome.
-    // Close the control gate before write-back so no late pause can be accepted.
-    session.pause.finish();
-    // Dropping the guard discards changes if the run timed out or was cancelled.
-    session.workspace_guard = None;
+            timeout_dur,
+            &mut cancel_rx,
+        ),
+    )
+    .await;
 
     let elapsed = start_time.elapsed().as_secs() as u32;
 
-    // Release semaphore permit explicitly before write-back
-    drop(permit);
+    let writeback_count = writeback_facts.load(std::sync::atomic::Ordering::SeqCst);
 
-    // Explicitly run write-back + delete via the guard
-    let writeback_count = if matches!(
-        loop_res,
-        Ok(cade_agent::subagents::SubagentOutcome::Done { .. })
-    ) {
-        ephemeral_guard.write_back_and_delete_async(state).await
-    } else {
-        ephemeral_guard.discard();
-        0
-    };
-
-    let (output, is_error, status) = match loop_res {
-        Err(_) => (
-            format!(
-                "Subagent wall-clock timeout after {}s. The task was terminated to free resources.",
-                subagent_timeout_secs()
-            ),
-            true,
-            TerminalStatus::Timeout,
-        ),
-        Ok(outcome) => match outcome {
-            cade_agent::subagents::SubagentOutcome::Done { summary, .. } => {
-                (summary, false, TerminalStatus::Done)
-            }
-            cade_agent::subagents::SubagentOutcome::Blocked { reason, .. } => {
-                (reason, true, TerminalStatus::Error)
-            }
-            cade_agent::subagents::SubagentOutcome::Failed { error } => (
-                error,
-                true,
-                if cancelled {
-                    TerminalStatus::Cancelled
-                } else {
-                    TerminalStatus::Error
-                },
-            ),
-            cade_agent::subagents::SubagentOutcome::Exhausted { reason, .. } => {
-                (reason, true, TerminalStatus::Error)
-            }
-        },
+    let (output, is_error, status) = match outcome {
+        cade_agent::subagents::SubagentOutcome::Done { summary, .. } => {
+            (summary, false, TerminalStatus::Done)
+        }
+        outcome => {
+            use cade_agent::subagents::session::SubagentLaunchFailure;
+            let status = match completion.failure() {
+                Some(SubagentLaunchFailure::Cancelled) => TerminalStatus::Cancelled,
+                Some(SubagentLaunchFailure::TimedOut) => TerminalStatus::Timeout,
+                _ => TerminalStatus::Error,
+            };
+            (outcome.summary_text().to_string(), true, status)
+        }
     };
 
     let result_preview: String = output.chars().take(200).collect();
@@ -1706,6 +1916,157 @@ async fn run_subagent_with_permit(
         },
         status,
     )
+}
+
+async fn failed_session_result(
+    session: &mut cade_agent::subagents::SubagentSession,
+    tool_call_id: &str,
+    error: String,
+) -> (cade_agent::tools::manager::ToolResult, TerminalStatus) {
+    let outcome = session
+        .finalize_outcome(cade_agent::subagents::SubagentOutcome::Failed { error })
+        .await;
+    (
+        cade_agent::tools::manager::ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_subagent".to_string(),
+            output: outcome.summary_text().to_string(),
+            is_error: true,
+            ui_resource_uri: None,
+        },
+        TerminalStatus::Error,
+    )
+}
+
+/// A child can narrow the parent's filesystem grants, never replace or widen
+/// them. Rebase grants into an isolated clone without changing process cwd.
+fn inherited_child_paths(
+    parent: Option<Vec<String>>,
+    requested: Option<Vec<String>>,
+    primary: &std::path::Path,
+    execution: &std::path::Path,
+) -> Option<Vec<String>> {
+    if parent.is_none() && requested.is_none() {
+        return None;
+    }
+    let (Ok(primary), Ok(execution)) =
+        (resolve_child_grant(primary), resolve_child_grant(execution))
+    else {
+        return Some(Vec::new());
+    };
+    // Keep the two authorities separate until both have been resolved in the
+    // source namespace. Rebasing raw syntax first would erase the constraints
+    // represented by `..`, symlinks, or a differently spelled primary root.
+    let resolve = |paths: Vec<String>| {
+        paths
+            .into_iter()
+            .filter(|path| !path.trim().is_empty())
+            .filter_map(|path| {
+                let path = std::path::PathBuf::from(path);
+                let path = if path.is_absolute() {
+                    path
+                } else {
+                    primary.join(path)
+                };
+                resolve_child_grant(&path).ok()
+            })
+            .collect::<Vec<_>>()
+    };
+    let parent = parent.map(resolve);
+    let requested = requested.map(resolve);
+    let paths = match (parent, requested) {
+        (None, None) => Vec::new(),
+        (Some(paths), None) | (None, Some(paths)) => paths,
+        (Some(parent), Some(requested)) => {
+            let mut intersection = Vec::new();
+            for parent in parent {
+                for child in &requested {
+                    if child.starts_with(&parent) {
+                        intersection.push(child.clone());
+                    } else if parent.starts_with(child) {
+                        intersection.push(parent.clone());
+                    }
+                }
+            }
+            intersection
+        }
+    };
+    let mut paths = paths
+        .into_iter()
+        .filter_map(|path| {
+            match path.strip_prefix(&primary) {
+                Ok(relative) => {
+                    let projected = execution.join(relative);
+                    let resolved = resolve_child_grant(&projected).ok()?;
+                    // A clone-side alias must not redirect a source grant to a
+                    // different subtree. Native validation receives frozen,
+                    // absolute grant names, never an unresolved clone symlink.
+                    (resolved == projected).then_some(resolved)
+                }
+                Err(_) => Some(path),
+            }
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Some(
+        paths
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+    )
+}
+
+/// Resolve each existing ancestor before interpreting subsequent `..` parts.
+/// Missing descendants are normalized lexically, so grants for future paths
+/// have the same comparison semantics as existing paths. Broken links and I/O
+/// failures reject the grant rather than falling back to unchecked syntax.
+fn resolve_child_grant(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+    if !path.is_absolute() {
+        return Err(std::io::Error::other(
+            "filesystem grants require an absolute workspace",
+        ));
+    }
+    let mut resolved = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::Prefix(_) | Component::RootDir => resolved.push(part.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                match std::fs::symlink_metadata(&resolved) {
+                    Ok(metadata) if !metadata.is_dir() => {
+                        return Err(std::io::Error::other("grant ancestor is not a directory"));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+                resolved.pop();
+            }
+            Component::Normal(_) => {
+                resolved.push(part.as_os_str());
+                match std::fs::symlink_metadata(&resolved) {
+                    Ok(_) => resolved = resolved.canonicalize()?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn inherited_child_tools(
+    mut tools: cade_agent::subagents::SubagentTools,
+    resolved: Option<&[String]>,
+) -> cade_agent::subagents::SubagentTools {
+    if let cade_agent::subagents::SubagentTools::Restricted { allowed_paths, .. } = &mut tools {
+        // The shared session gate must enforce the same intersection as native
+        // execution, not re-authorize the definition's original raw paths.
+        *allowed_paths = resolved.unwrap_or_default().to_vec();
+    }
+    tools
 }
 
 struct CadeSubagentRunner {
@@ -1771,7 +2132,8 @@ impl cade_agent::team::LlmCompleter for CadeLlmCompleter {
             messages,
             tools: vec![],
             max_tokens: 3000,
-            reasoning_effort: None,
+            reasoning_effort: super::runtime::current_execution_options()
+                .and_then(|options| options.reasoning_effort.clone()),
         };
 
         match self.state.llm.complete(&req).await {
@@ -1802,7 +2164,7 @@ pub(super) async fn handle_run_team_tool(
         .ok()
         .flatten()
         .map(|a| a.model)
-        .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
+        .unwrap_or_else(|| state.config.default_model.clone());
 
     let config = TeamConfig::from_args(&args);
     if let Err(e) = config.validate() {
@@ -1815,7 +2177,7 @@ pub(super) async fn handle_run_team_tool(
         };
     }
 
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = super::runtime::execution_workspace();
     let all_teams = cade_agent::team::discovery::discover_all_teams(&cwd);
     let team_def = match cade_agent::team::discovery::resolve_team_def(&config.team_id, &all_teams)
     {
@@ -1936,7 +2298,7 @@ pub(super) async fn smart_memory_merge(
     new_value: String,
     memory_type: String,
     confidence: f64,
-) {
+) -> Result<(), String> {
     let prompt = format!(
         "You are a memory merge sub-agent. The parent agent already has a memory block labeled `{label}`. \
          A subagent just returned new information for this exact label. Synthesize the old and new facts into a single coherent block.\n\
@@ -1947,13 +2309,19 @@ pub(super) async fn smart_memory_merge(
     );
 
     // Grab model (cheapest capable)
-    let model = cade_store::sqlite::get_agent(&state.db, &agent_id)
+    let compaction_model = cade_store::sqlite::get_agent(&state.db, &agent_id)
         .ok()
         .flatten()
-        .and_then(|a| a.compaction_model)
-        .unwrap_or_else(|| "claude-3-5-haiku-20241022".to_string());
+        .map(|agent| {
+            agent
+                .compaction_model
+                .unwrap_or_else(|| cade_ai::catalogue::fast_model_for_main_model(&agent.model))
+        })
+        .unwrap_or_else(|| {
+            cade_ai::catalogue::select_fast_subagent_model(&state.config.default_model, None)
+        });
 
-    let compaction_model = crate::server::consolidation::default_compaction_model(&model);
+    let max_tokens = cade_ai::catalogue::max_tokens_for_model(&compaction_model);
 
     let req = cade_ai::CompletionRequest {
         model: compaction_model,
@@ -1966,25 +2334,31 @@ pub(super) async fn smart_memory_merge(
             cache_control: None,
         }],
         tools: vec![],
-        max_tokens: 4000,
+        max_tokens,
         reasoning_effort: None,
     };
 
-    if let Ok(resp) = state.llm.complete(&req).await
-        && let Some(merged) = resp.content
-    {
-        let desc = "Smart merged after subagent run".to_string();
-        let _ = cade_store::sqlite::upsert_memory_block_typed(
-            &state.db,
-            &agent_id,
-            &label,
-            merged.trim(),
-            Some(&desc),
-            None,
-            Some(&memory_type),
-            Some(confidence),
-        );
-    }
+    let resp = state
+        .llm
+        .complete(&req)
+        .await
+        .map_err(|error| error.to_string())?;
+    let merged = resp
+        .content
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| "Smart memory merge returned no content".to_string())?;
+    let desc = "Smart merged after subagent run".to_string();
+    cade_store::sqlite::upsert_memory_block_typed(
+        &state.db,
+        &agent_id,
+        &label,
+        merged.trim(),
+        Some(&desc),
+        None,
+        Some(&memory_type),
+        Some(confidence),
+    )
+    .map_err(|error| format!("Saving smart memory merge: {error}"))
 }
 
 #[allow(dead_code)]
@@ -1994,6 +2368,137 @@ pub struct HeadlessQueueAdapter {
     pub subagent_id: String,
 }
 
+type ChildApprovalWithdrawal =
+    futures::future::Shared<futures::future::BoxFuture<'static, Result<(), String>>>;
+
+fn child_approval_withdrawals()
+-> &'static Mutex<HashMap<String, HashMap<String, ChildApprovalWithdrawal>>> {
+    static WITHDRAWALS: OnceLock<Mutex<HashMap<String, HashMap<String, ChildApprovalWithdrawal>>>> =
+        OnceLock::new();
+    WITHDRAWALS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn forget_child_approval_withdrawal(parent: &str, id: &str) {
+    let mut pending = child_approval_withdrawals()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(requests) = pending.get_mut(parent) {
+        requests.remove(id);
+        if requests.is_empty() {
+            pending.remove(parent);
+        }
+    }
+}
+
+async fn finish_prior_child_approval_withdrawals(parent: &str) -> Result<(), String> {
+    loop {
+        let pending = child_approval_withdrawals()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(parent)
+            .map(|requests| {
+                requests
+                    .iter()
+                    .map(|(id, work)| (id.clone(), work.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for (id, work) in pending {
+            work.await
+                .map_err(|error| format!("Previous child approval withdrawal failed: {error}"))?;
+            forget_child_approval_withdrawal(parent, &id);
+        }
+    }
+}
+
+struct ChildApprovalCleanupGuard {
+    db: cade_store::sqlite::Db,
+    id: String,
+    parent_agent_id: String,
+    subagent_id: String,
+    conversation_id: Option<String>,
+    armed: bool,
+}
+
+impl ChildApprovalCleanupGuard {
+    fn withdraw(&self) -> Result<(), String> {
+        const STATUS: &str = "denied:Subagent approval request cancelled";
+        let changed = cade_store::sqlite::resolve_pending_approval(&self.db, &self.id, STATUS)
+            .map_err(|error| format!("Withdrawing approval {}: {error}", self.id))?;
+        if changed {
+            let sequence = crate::server::api::agents::publish_global_event(
+                Some(&self.db),
+                "approval_resolved",
+                serde_json::json!({
+                    "message_type": "approval_resolved", "id": self.id,
+                    "status": STATUS, "approved": false,
+                    "agent_id": self.parent_agent_id, "subagent_id": self.subagent_id,
+                    "conversation_id": self.conversation_id,
+                }),
+            );
+            if sequence == 0 {
+                tracing::error!(approval_id = %self.id, "approval withdrawal was broadcast but global event persistence failed");
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ChildApprovalCleanupGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        use futures::FutureExt;
+        let cleanup = Self {
+            db: self.db.clone(),
+            id: self.id.clone(),
+            parent_agent_id: self.parent_agent_id.clone(),
+            subagent_id: self.subagent_id.clone(),
+            conversation_id: self.conversation_id.clone(),
+            armed: false,
+        };
+        let parent = cleanup.parent_agent_id.clone();
+        let id = cleanup.id.clone();
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        let work = async move {
+            completed
+                .await
+                .map_err(|error| format!("Approval withdrawal worker ended: {error}"))?
+        }
+        .boxed()
+        .shared();
+        child_approval_withdrawals()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(parent.clone())
+            .or_default()
+            .insert(id.clone(), work);
+        // Drop only schedules work. A dedicated worker also works during Tokio
+        // shutdown/outside a runtime; no database or publisher I/O occurs here.
+        // Catch and report worker panics instead of detaching an unobserved
+        // panic, and make completion awaitable by every later parent request.
+        let spawned = std::thread::Builder::new().name("cade-approval-withdrawal".into()).spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cleanup.withdraw()))
+                .unwrap_or_else(|_| Err("Child approval withdrawal worker panicked".into()));
+            if let Err(error) = &result {
+                tracing::error!(approval_id = %id, agent_id = %parent, %error, "child approval withdrawal failed");
+            }
+            let success = result.is_ok();
+            if completion.send(result).is_err() {
+                tracing::error!(approval_id = %id, "child approval withdrawal completion observer closed");
+            }
+            if success { forget_child_approval_withdrawal(&parent, &id); }
+        });
+        if let Err(error) = spawned {
+            tracing::error!(approval_id = %self.id, %error, "could not start child approval withdrawal worker");
+        }
+    }
+}
+
 #[async_trait]
 impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
     async fn request_permission(
@@ -2001,6 +2506,7 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<bool, String> {
+        finish_prior_child_approval_withdrawals(&self.parent_agent_id).await?;
         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
         let args_str = args.to_string();
         if let Err(e) = cade_store::sqlite::create_pending_approval(
@@ -2015,32 +2521,26 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
             return Ok(false);
         }
 
-        // Withdraw pending approval if the child is interrupted mid-request.
-        struct PendingApproval {
-            db: cade_store::sqlite::Db,
-            id: String,
-        }
-        impl Drop for PendingApproval {
-            fn drop(&mut self) {
-                let _ = cade_store::sqlite::resolve_pending_approval(
-                    &self.db,
-                    &self.id,
-                    "denied:Subagent approval request cancelled",
-                );
-            }
-        }
-        let _pending = PendingApproval {
+        let conversation_id = super::runtime::current_execution_options()
+            .and_then(|options| options.runtime.conversation_id.clone());
+        let _pending = ChildApprovalCleanupGuard {
             db: self.db.clone(),
             id: approval_id.clone(),
+            parent_agent_id: self.parent_agent_id.clone(),
+            subagent_id: self.subagent_id.clone(),
+            conversation_id: conversation_id.clone(),
+            armed: true,
         };
 
         crate::server::api::agents::publish_global_event(
             Some(&self.db),
             "approval_required",
             serde_json::json!({
+                "message_type": "approval_required",
                 "id": approval_id,
                 "agent_id": self.parent_agent_id,
                 "subagent_id": self.subagent_id,
+                "conversation_id": conversation_id,
                 "tool_name": tool_name,
                 "arguments": args,
             }),
@@ -2112,23 +2612,27 @@ pub(crate) fn build_failover_chain(
         seen.insert(parent_model.to_string());
     }
 
-    // 3. Known fast models across available providers
-    const FAST_PROVIDER_MODELS: &[(&str, &str)] = &[
-        ("gemini", "gemini/gemini-2.0-flash"),
-        ("openai", "openai/gpt-4o-mini"),
-        ("anthropic", "anthropic/claude-haiku-4-5"),
-        ("deepseek", "deepseek/deepseek-chat"),
-        ("ollama", "ollama/qwen2.5-coder:7b"),
-    ];
-
-    for &(prov, model_id) in FAST_PROVIDER_MODELS {
-        if available_providers
+    // 3. Configured fast/default choices for available providers. IDs remain
+    // upstream identifiers, so nested deployment names are qualified once.
+    let registry = cade_ai::provider_registry::ProviderRegistry::configured();
+    let mut providers: Vec<_> = available_providers
+        .iter()
+        .filter_map(|name| registry.get(name))
+        .collect();
+    providers.sort_by_key(|provider| (provider.fast_priority, provider.priority, &provider.name));
+    for provider in providers {
+        for model in provider
+            .fast_model
             .iter()
-            .any(|p| p.eq_ignore_ascii_case(prov))
-            && !seen.contains(model_id)
+            .chain(provider.default_model.iter())
         {
-            chain.push(model_id.to_string());
-            seen.insert(model_id.to_string());
+            if model.trim().is_empty() {
+                continue;
+            }
+            let model_id = format!("{}/{model}", provider.name);
+            if seen.insert(model_id.clone()) {
+                chain.push(model_id);
+            }
         }
     }
 
@@ -2153,9 +2657,373 @@ pub(crate) fn is_failover_worthy_error(err_str: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "subagent_review_tests.rs"]
+mod review_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    struct EmptyMergeLlm;
+
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for EmptyMergeLlm {
+        async fn complete(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Ok(cade_ai::CompletionResponse {
+                content: None,
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("cleanup uses complete, not streaming")
+        }
+    }
+
+    fn cleanup_test_state() -> AppState {
+        let state = super::super::tests::build_state_with_llm(Arc::new(EmptyMergeLlm));
+        for id in ["cleanup-parent", "cleanup-child"] {
+            cade_store::sqlite::create_agent(
+                &state.db,
+                &cade_store::sqlite::AgentRow {
+                    id: id.into(),
+                    name: id.into(),
+                    model: "test".into(),
+                    description: None,
+                    system_prompt: None,
+                    created_at: None,
+                    compaction_model: None,
+                    theme: None,
+                    active_plan_json: None,
+                    parent_id: None,
+                },
+            )
+            .unwrap();
+        }
+        cade_store::sqlite::upsert_memory_block(
+            &state.db,
+            "cleanup-child",
+            "finding",
+            "child fact",
+            None,
+            None,
+        )
+        .unwrap();
+        state
+    }
+
+    fn cleanup_test_session(
+        state: &AppState,
+    ) -> (
+        cade_agent::subagents::SubagentSession,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        cleanup_test_session_in_workspace(state, super::super::runtime::execution_workspace())
+    }
+
+    fn cleanup_test_session_in_workspace(
+        state: &AppState,
+        primary_root: std::path::PathBuf,
+    ) -> (
+        cade_agent::subagents::SubagentSession,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let session = cade_agent::subagents::SubagentSession::new(
+            cade_agent::subagents::SubagentConfig::from_args(&serde_json::json!({"prompt":"task"})),
+            "cleanup-parent",
+        )
+        .with_cleanup(Box::new(ServerSubagentCleanup {
+            state: state.clone(),
+            environment: EphemeralEnvironment::new(
+                state.db.clone(),
+                "cleanup-child".into(),
+                "cleanup-parent".into(),
+            ),
+            primary_root,
+            written: count.clone(),
+            permit: None,
+            recent_edits: Arc::new(Mutex::new(BTreeSet::from(["src/child.rs".to_string()]))),
+        }));
+        (session, count)
+    }
+
+    fn cleanup_done() -> cade_agent::subagents::SubagentOutcome {
+        cade_agent::subagents::SubagentOutcome::Done {
+            summary: "task completed".into(),
+            iterations: 0,
+            tool_calls_count: 0,
+            token_usage: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn server_session_owns_ephemeral_writeback_and_deletion_once() {
+        for success in [true, false] {
+            let state = cleanup_test_state();
+            let (mut session, written) = cleanup_test_session(&state);
+            let result = if success {
+                session.finalize_outcome(cleanup_done()).await
+            } else {
+                session
+                    .finalize_interruption(
+                        cade_agent::subagents::session::SubagentLaunchFailure::Cancelled,
+                    )
+                    .await
+            };
+            assert_eq!(result.is_success(), success, "{}", result.summary_text());
+            assert!(
+                cade_store::sqlite::get_agent(&state.db, "cleanup-child")
+                    .unwrap()
+                    .is_none()
+            );
+            let blocks =
+                cade_store::sqlite::get_memory_blocks(&state.db, "cleanup-parent").unwrap();
+            assert_eq!(
+                blocks
+                    .iter()
+                    .any(|(label, value, _)| label == "subagent:finding" && value == "child fact"),
+                success
+            );
+            assert_eq!(
+                blocks
+                    .iter()
+                    .any(|(label, value, _)| label == "recent_edits"
+                        && value.contains("src/child.rs")),
+                success
+            );
+            assert_eq!(
+                written.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(success)
+            );
+            assert_eq!(session.finalize_outcome(cleanup_done()).await, result);
+        }
+    }
+
+    #[tokio::test]
+    async fn server_session_recent_edits_name_each_primary_workspace_after_reconciliation() {
+        let first_root = tempfile::tempdir().unwrap();
+        let second_root = tempfile::tempdir().unwrap();
+        let first_state = cleanup_test_state();
+        let second_state = cleanup_test_state();
+        let (mut first, _) =
+            cleanup_test_session_in_workspace(&first_state, first_root.path().to_path_buf());
+        let (mut second, _) =
+            cleanup_test_session_in_workspace(&second_state, second_root.path().to_path_buf());
+        first
+            .prepare_workspace(first_root.path(), None)
+            .await
+            .unwrap();
+        second
+            .prepare_workspace(second_root.path(), None)
+            .await
+            .unwrap();
+        let first_clone = first.execution_path(first_root.path()).to_path_buf();
+        let second_clone = second.execution_path(second_root.path()).to_path_buf();
+        for (clone, content) in [
+            (&first_clone, "first workspace"),
+            (&second_clone, "second workspace"),
+        ] {
+            fs::create_dir(clone.join("src")).unwrap();
+            fs::write(clone.join("src/child.rs"), content).unwrap();
+        }
+        for state in [&first_state, &second_state] {
+            assert!(
+                !cade_store::sqlite::get_memory_blocks(&state.db, "cleanup-parent")
+                    .unwrap()
+                    .iter()
+                    .any(|(label, _, _)| label == "recent_edits"),
+                "metadata waits for reconciliation"
+            );
+        }
+        let (first_outcome, second_outcome) = tokio::join!(
+            first.finalize_outcome(cleanup_done()),
+            second.finalize_outcome(cleanup_done()),
+        );
+        assert!(
+            first_outcome.is_success(),
+            "{}",
+            first_outcome.summary_text()
+        );
+        assert!(
+            second_outcome.is_success(),
+            "{}",
+            second_outcome.summary_text()
+        );
+        for (state, primary, clone, other_primary, content) in [
+            (
+                &first_state,
+                first_root.path(),
+                &first_clone,
+                second_root.path(),
+                "first workspace",
+            ),
+            (
+                &second_state,
+                second_root.path(),
+                &second_clone,
+                first_root.path(),
+                "second workspace",
+            ),
+        ] {
+            assert_eq!(
+                fs::read_to_string(primary.join("src/child.rs")).unwrap(),
+                content
+            );
+            let blocks =
+                cade_store::sqlite::get_memory_blocks(&state.db, "cleanup-parent").unwrap();
+            let (_, value, _) = blocks
+                .iter()
+                .find(|(label, _, _)| label == "recent_edits")
+                .unwrap();
+            assert_eq!(
+                value,
+                &format!(
+                    "Recently edited: {}",
+                    primary.join("src/child.rs").display()
+                )
+            );
+            assert!(
+                !value.contains(&clone.to_string_lossy().to_string()),
+                "metadata must not name the discarded clone"
+            );
+            assert!(
+                !value.contains(&other_primary.to_string_lossy().to_string()),
+                "metadata must not name another workspace"
+            );
+            assert!(!clone.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn server_session_memory_merge_failure_is_reported_and_parent_fact_preserved() {
+        let state = cleanup_test_state();
+        cade_store::sqlite::upsert_memory_block(
+            &state.db,
+            "cleanup-parent",
+            "subagent:finding",
+            "parent fact",
+            None,
+            None,
+        )
+        .unwrap();
+        let (mut session, written) = cleanup_test_session(&state);
+        let receipt = session.completion();
+        let result = session.finalize_outcome(cleanup_done()).await;
+        assert!(!result.is_success());
+        assert!(
+            result
+                .summary_text()
+                .contains("Smart memory merge returned no content")
+        );
+        assert_eq!(receipt.outcome(), Some(result));
+        assert!(
+            cade_store::sqlite::get_agent(&state.db, "cleanup-child")
+                .unwrap()
+                .is_none()
+        );
+        let blocks = cade_store::sqlite::get_memory_blocks(&state.db, "cleanup-parent").unwrap();
+        assert!(
+            blocks
+                .iter()
+                .any(|(label, value, _)| label == "subagent:finding" && value == "parent fact")
+        );
+        assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn server_session_ephemeral_deletion_failure_is_not_reported_as_success() {
+        let state = cleanup_test_state();
+        state.db.get().unwrap().execute_batch(
+            "CREATE TRIGGER fail_child_cleanup BEFORE DELETE ON agents WHEN OLD.id = 'cleanup-child'
+             BEGIN SELECT RAISE(FAIL, 'injected child deletion failure'); END;",
+        ).unwrap();
+        let (mut session, _) = cleanup_test_session(&state);
+        let result = session.finalize_outcome(cleanup_done()).await;
+        assert!(!result.is_success());
+        assert!(
+            result
+                .summary_text()
+                .contains("injected child deletion failure")
+        );
+        assert!(
+            cade_store::sqlite::get_agent(&state.db, "cleanup-child")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(session.finalize_outcome(cleanup_done()).await, result);
+        state
+            .db
+            .get()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_child_cleanup;")
+            .unwrap();
+        cade_store::sqlite::delete_agent(&state.db, "cleanup-child").unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_session_unreadable_findings_are_an_error_instead_of_empty_writeback() {
+        let state = cleanup_test_state();
+        state
+            .db
+            .get()
+            .unwrap()
+            .execute_batch(
+                "UPDATE shared_memory_blocks SET value = X'FF' WHERE id IN
+             (SELECT block_id FROM agent_memory_blocks WHERE agent_id = 'cleanup-child');",
+            )
+            .unwrap();
+        let (mut session, written) = cleanup_test_session(&state);
+        let result = session.finalize_outcome(cleanup_done()).await;
+        assert!(!result.is_success());
+        assert!(result.summary_text().contains("reading child findings"));
+        assert!(
+            cade_store::sqlite::get_agent(&state.db, "cleanup-child")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn server_session_queued_drop_closes_its_cancellation_registration() {
+        let mut session = cade_agent::subagents::SubagentSession::new(
+            cade_agent::subagents::SubagentConfig::from_args(&serde_json::json!({"prompt":"task"})),
+            "parent",
+        );
+        session.register_control(true);
+        let receipt = session.completion();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let cancellation =
+            cade_agent::subagents::SubagentCancellation::new(tx).with_completion(receipt.clone());
+        let map = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        map.write()
+            .await
+            .insert(session.session_id.clone(), cancellation.clone());
+        let id = session.session_id.clone();
+        let session = session.with_cleanup(Box::new(SubagentAdmissionCleanup {
+            map: map.clone(),
+            id,
+            cancellation: cancellation.clone(),
+            closed: false,
+        }));
+        drop(session);
+        assert!(map.read().await.is_empty());
+        assert!(cancellation.cancel().is_err());
+        assert!(!receipt.outcome().unwrap().is_success());
+    }
 
     #[tokio::test]
     async fn server_subagent_approval_waits_for_real_queue_decision() {
@@ -2331,8 +3199,15 @@ mod tests {
         )?;
         fs::write(clone_dir.path().join("new_in_branch.txt"), "fresh file")?;
 
-        // Copy back (this should commit in sandbox and merge sandbox branch to host main!)
+        let (head_exit, head_before, _) = run_git_test(src.path(), &["rev-parse", "HEAD"]).await;
+        assert_eq!(head_exit, 0);
+        // Branch mode uses the same conflict-aware delta reconciliation. It
+        // must not merge unrelated history or mutate the host's Git index.
         clone_dir.merge_back().await?;
+        let (_, head_after, _) = run_git_test(src.path(), &["rev-parse", "HEAD"]).await;
+        assert_eq!(head_before, head_after);
+        let (_, staged, _) = run_git_test(src.path(), &["diff", "--cached", "--name-only"]).await;
+        assert!(staged.trim().is_empty());
 
         assert_eq!(
             fs::read_to_string(src.path().join("a.txt"))?,
@@ -2353,23 +3228,40 @@ mod tests {
     #[test]
     fn test_build_failover_chain_ordering_and_deduplication() {
         let providers = vec!["gemini".to_string(), "openai".to_string()];
-        let chain = super::build_failover_chain(
-            "gemini/gemini-2.0-flash",
-            "anthropic/claude-sonnet-4",
-            &providers,
+        let registry = cade_ai::provider_registry::ProviderRegistry::configured();
+        let primary_provider = registry.get("gemini").unwrap();
+        let primary = format!(
+            "{}/{}",
+            primary_provider.name,
+            primary_provider
+                .fast_model
+                .as_ref()
+                .or(primary_provider.default_model.as_ref())
+                .unwrap()
         );
+        let parent = "parent-provider/explicit-parent-model";
+        let chain = super::build_failover_chain(&primary, parent, &providers);
 
-        assert_eq!(chain[0], "gemini/gemini-2.0-flash");
-        assert_eq!(chain[1], "anthropic/claude-sonnet-4");
-        assert!(chain.contains(&"openai/gpt-4o-mini".to_string()));
+        assert_eq!(chain[0], primary);
+        assert_eq!(chain[1], parent);
+        let alternate = registry.get("openai").unwrap();
+        for model in alternate
+            .fast_model
+            .iter()
+            .chain(alternate.default_model.iter())
+        {
+            assert!(chain.contains(&format!("{}/{model}", alternate.name)));
+        }
+        for model in chain.iter().skip(2) {
+            let (provider, _) = model.split_once('/').unwrap();
+            assert!(
+                providers
+                    .iter()
+                    .any(|p| registry.get(p).is_some_and(|def| def.name == provider))
+            );
+        }
         // Deduplicated
-        assert_eq!(
-            chain
-                .iter()
-                .filter(|m| *m == "gemini/gemini-2.0-flash")
-                .count(),
-            1
-        );
+        assert_eq!(chain.iter().filter(|m| *m == &primary).count(), 1);
     }
 
     #[test]

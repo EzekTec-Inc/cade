@@ -39,7 +39,7 @@
 
 use std::any::Any;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{Event, KeyEvent, KeyEventKind};
 use ratatui::{Frame, layout::Rect};
 
 use crate::colors::ThemeColors;
@@ -78,6 +78,16 @@ pub trait OverlayComponent: Send + Sync {
     /// See [`OverlayInputResult`] for outcomes.
     fn handle_input(&mut self, key: KeyEvent) -> OverlayInputResult;
 
+    /// A modal owns pointer and paste input too, even when it has no handler.
+    /// This prevents hidden editors and extension slots receiving modal input.
+    fn handle_event(&mut self, event: &Event) -> OverlayInputResult {
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_input(*key),
+            Event::Key(_) | Event::Mouse(_) | Event::Paste(_) => OverlayInputResult::Consumed,
+            _ => OverlayInputResult::NotHandled,
+        }
+    }
+
     /// Returns `true` when the overlay has finished its work and the
     /// host should pop it.  Allows overlays to dismiss themselves
     /// asynchronously (e.g. after an awaited future resolves) rather
@@ -109,8 +119,19 @@ pub trait OverlayComponent: Send + Sync {
         0
     }
 
+    /// Responsive reservation. Width and height both determine presentation.
+    fn inline_height_for(&self, area: Rect) -> u16 {
+        self.inline_height(area.height)
+    }
+
     /// Draw the overlay inline within the layout area reserved by `inline_height`.
     fn render_inline(&self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
+
+    /// Last laid-out inline area, allowing the host to paint the decision above
+    /// extension slots without calculating a second, inconsistent layout.
+    fn inline_area(&self) -> Option<Rect> {
+        None
+    }
 }
 
 #[cfg(test)]

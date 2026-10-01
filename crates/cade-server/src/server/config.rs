@@ -30,21 +30,38 @@ pub enum LlmProviderKind {
     Gemini,
     DeepSeek,
     Ollama,
+    /// Arbitrary configured provider name (its adapter kind is defined in providers.json/DB).
+    Registered(String),
 }
 
 impl std::str::FromStr for LlmProviderKind {
     type Err = crate::server::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "anthropic" | "claude" => Ok(Self::Anthropic),
+        let definitions = cade_ai::provider_registry::ProviderRegistry::configured();
+        let lower = s.to_lowercase();
+        let definition = definitions.get(s).or_else(|| definitions.get(&lower));
+        let name = definition.map(|p| p.name.as_str()).unwrap_or(s);
+        let kind = match name.to_lowercase().as_str() {
+            "anthropic" => Ok(Self::Anthropic),
             "openai" | "openai-compatible" => Ok(Self::OpenAI),
-            "gemini" | "google" => Ok(Self::Gemini),
+            "gemini" => Ok(Self::Gemini),
             "deepseek" => Ok(Self::DeepSeek),
-            "ollama" | "local" => Ok(Self::Ollama),
+            "ollama" => Ok(Self::Ollama),
+            other
+                if !other.is_empty()
+                    && !other.contains('/')
+                    && !other.chars().any(|c| c.is_whitespace() || c.is_control()) =>
+            {
+                Ok(Self::Registered(name.into()))
+            }
             other => Err(crate::server::Error::custom(format!(
-                "Unknown LLM provider '{other}'. Valid: anthropic, openai, gemini, deepseek, ollama"
+                "Invalid LLM provider name '{other}'"
             ))),
+        }?;
+        if definition.is_some() && kind.to_string() != name {
+            return Ok(Self::Registered(name.into()));
         }
+        Ok(kind)
     }
 }
 
@@ -56,19 +73,21 @@ impl std::fmt::Display for LlmProviderKind {
             Self::Gemini => write!(f, "gemini"),
             Self::DeepSeek => write!(f, "deepseek"),
             Self::Ollama => write!(f, "ollama"),
+            Self::Registered(name) => write!(f, "{name}"),
         }
     }
 }
 
-/// Best-in-class model for each provider (used when no explicit model is set)
-pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
-    match provider {
-        LlmProviderKind::Anthropic => "claude-opus-4-5",
-        LlmProviderKind::OpenAI => "gpt-4o",
-        LlmProviderKind::Gemini => "gemini-2.5-pro",
-        LlmProviderKind::DeepSeek => "deepseek-chat",
-        LlmProviderKind::Ollama => "llama3.2", // most likely installed; user can override
-    }
+/// Configured routing ID (provider + upstream ID), used when no explicit model is set.
+pub fn default_model_for(provider: &LlmProviderKind) -> String {
+    cade_ai::provider_registry::ProviderRegistry::configured()
+        .get(&provider.to_string())
+        .and_then(|p| {
+            p.default_model
+                .as_ref()
+                .map(|model| format!("{}/{model}", p.name))
+        })
+        .unwrap_or_default()
 }
 
 /// Auto-detect the best available provider by scanning env keys.
@@ -85,56 +104,14 @@ pub fn detect_provider() -> (LlmProviderKind, String) {
         return (kind, model);
     }
 
-    // Scan for API keys in priority order
-    let providers: &[(fn() -> bool, LlmProviderKind)] = &[
-        (
-            || {
-                std::env::var("ANTHROPIC_API_KEY")
-                    .map(|k| !k.is_empty())
-                    .unwrap_or(false)
-            },
-            LlmProviderKind::Anthropic,
-        ),
-        (
-            || {
-                std::env::var("OPENAI_API_KEY")
-                    .map(|k| !k.is_empty())
-                    .unwrap_or(false)
-            },
-            LlmProviderKind::OpenAI,
-        ),
-        (
-            || {
-                std::env::var("GOOGLE_API_KEY")
-                    .map(|k| !k.is_empty())
-                    .unwrap_or(false)
-            },
-            LlmProviderKind::Gemini,
-        ),
-        (
-            || {
-                std::env::var("DEEPSEEK_API_KEY")
-                    .map(|k| !k.is_empty())
-                    .unwrap_or(false)
-            },
-            LlmProviderKind::DeepSeek,
-        ),
-    ];
-
-    for (check, kind) in providers {
-        if check() {
-            let model = std::env::var("CADE_DEFAULT_MODEL")
-                .unwrap_or_else(|_| default_model_for(kind).to_string());
-            tracing::info!("Auto-detected provider: {} → model: {}", kind, model);
-            return (kind.clone(), model);
-        }
-    }
-
-    // Ollama is always available as local fallback
-    let model = std::env::var("CADE_DEFAULT_MODEL")
-        .unwrap_or_else(|_| default_model_for(&LlmProviderKind::Ollama).to_string());
-    tracing::info!("No API keys found — falling back to Ollama ({})", model);
-    (LlmProviderKind::Ollama, model)
+    let registry = cade_ai::provider_registry::ProviderRegistry::configured();
+    let kind = registry
+        .detected_default()
+        .and_then(|p| p.name.parse().ok())
+        .unwrap_or(LlmProviderKind::Ollama);
+    let model = std::env::var("CADE_DEFAULT_MODEL").unwrap_or_else(|_| default_model_for(&kind));
+    tracing::info!("Detected provider: {kind} → model: {model}");
+    (kind, model)
 }
 
 impl Default for ServerConfig {
@@ -143,12 +120,15 @@ impl Default for ServerConfig {
             addr: std::net::SocketAddr::from(([127, 0, 0, 1], 8284)),
             db_path: ":memory:".to_string(),
             llm_provider: LlmProviderKind::Ollama,
-            default_model: "llama3.2".to_string(),
+            default_model: default_model_for(&LlmProviderKind::Ollama),
             anthropic_api_key: None,
             openai_api_key: None,
             google_api_key: None,
             deepseek_api_key: None,
-            ollama_base_url: "http://localhost:11434".to_string(),
+            ollama_base_url: cade_ai::provider_registry::ProviderRegistry::configured()
+                .get("ollama")
+                .map(|p| p.endpoint())
+                .unwrap_or_default(),
             api_key: None,
             allowed_origin: None,
             max_context_budget: None,
@@ -170,7 +150,8 @@ impl ServerConfig {
                     .and_then(|p| p.parse().ok())
             })
             .unwrap_or(8284);
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
+        let host = std::env::var("CADE_SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        let addr = configured_address(&host, port)?;
 
         let home = dirs::home_dir()
             .map(|h| {
@@ -183,6 +164,11 @@ impl ServerConfig {
         let db_path = std::env::var("CADE_DB_PATH").unwrap_or(home);
 
         let (llm_provider, default_model) = detect_provider();
+        if default_model.trim().is_empty() {
+            return Err(crate::server::Error::custom(format!(
+                "Provider '{llm_provider}' has no configured default model; set CADE_DEFAULT_MODEL or default_model in providers.json"
+            )));
+        }
 
         let mut max_context_budget = std::env::var("CADE_MAX_CONTEXT_BUDGET")
             .ok()
@@ -222,8 +208,12 @@ impl ServerConfig {
                 .or_else(|_| std::env::var("GEMINI_API_KEY"))
                 .ok(),
             deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
-            ollama_base_url: std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            ollama_base_url: std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| {
+                cade_ai::provider_registry::ProviderRegistry::configured()
+                    .get("ollama")
+                    .map(|p| p.endpoint())
+                    .unwrap_or_default()
+            }),
             api_key: resolve_api_key(),
             allowed_origin: std::env::var("CADE_ALLOWED_ORIGIN").ok(),
             max_context_budget,
@@ -267,5 +257,27 @@ fn resolve_api_key() -> Option<String> {
             tracing::error!("Failed to load/create API token at {}: {e}", path.display());
             None
         }
+    }
+}
+
+fn configured_address(host: &str, port: u16) -> crate::server::Result<SocketAddr> {
+    Ok(SocketAddr::new(host.parse::<std::net::IpAddr>()?, port))
+}
+
+#[cfg(test)]
+mod address_tests {
+    use super::configured_address;
+
+    #[test]
+    fn configured_listeners_accept_ipv4_and_ipv6() {
+        assert_eq!(
+            configured_address("0.0.0.0", 8284).unwrap().to_string(),
+            "0.0.0.0:8284"
+        );
+        assert_eq!(
+            configured_address("::1", 8284).unwrap().to_string(),
+            "[::1]:8284"
+        );
+        assert!(configured_address("invalid-host", 8284).is_err());
     }
 }

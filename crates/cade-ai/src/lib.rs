@@ -6,6 +6,7 @@ pub use error::{Error, Result};
 
 pub mod anthropic;
 pub mod catalogue;
+mod discovery;
 pub mod gemini;
 pub mod its;
 pub mod needle;
@@ -18,12 +19,13 @@ pub mod registry;
 #[cfg(feature = "rig-compat")]
 pub mod rig_adapter;
 pub mod router;
+pub mod runtime;
 pub mod tokenizer;
 pub mod types;
 pub mod utils;
 pub mod vcr;
 
-pub use catalogue::{CATALOGUE, ModelEntry};
+pub use catalogue::{CATALOGUE, CatalogueRow, ModelEntry, catalogue_snapshot};
 pub use its::{
     AdaptiveToolSelector, IntelligentToolSelector, NeedleToolSelector, PassThroughToolSelector,
     TaggedToolSchema, resolve_tool_selector,
@@ -34,7 +36,7 @@ pub use registry::{ModelPricing, ModelRegistry, PricingRule};
 pub use router::*;
 pub use tokenizer::{
     ContextBudgetResult, FALLBACK_CHARS_PER_TOKEN, PromptBudgetManager, chars_for_tokens,
-    count_tokens,
+    chars_for_tokens_for_model, count_tokens, count_tokens_with_registry,
 };
 pub use types::*;
 pub use utils::*;

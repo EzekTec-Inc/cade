@@ -24,7 +24,10 @@ impl BashTool {
         let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         let engine = ShellExecutionEngine::new();
-        let req = ShellRequest::new(command).with_timeout(Duration::from_secs(timeout_secs));
+        let cwd = super::fs::working_dir();
+        let req = ShellRequest::new(command)
+            .with_working_dir(&cwd)
+            .with_timeout(Duration::from_secs(timeout_secs));
 
         let res = engine
             .execute(req)
@@ -55,6 +58,7 @@ impl BashTool {
         use std::process::Stdio;
         let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
             let mut cmd = cade_core::shell::shell_command(command);
+            cmd.current_dir(super::fs::working_dir());
             cade_core::agent_env::apply_agent_env(&mut cmd);
             cade_core::askpass::apply_askpass_env(&mut cmd);
             cmd.stdout(Stdio::piped())

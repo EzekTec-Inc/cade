@@ -78,7 +78,8 @@ pub struct AppState {
     pub global_error: Signal<Option<String>>,
     pub active_stream_id: Signal<Option<String>>,
     pub active_stream: Signal<SafeAbortHandle>,
-    pub parsed_messages: Signal<std::collections::HashMap<String, (String, Option<String>)>>,
+    pub parsed_messages: Signal<crate::chat_session::ParsedMessageCache>,
+    pub chat_timeline: Signal<crate::chat_session::ChatTimeline>,
     pub pending_approvals: Signal<Vec<serde_json::Value>>,
     pub runs: Signal<Vec<serde_json::Value>>,
 }

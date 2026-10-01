@@ -340,10 +340,13 @@ impl HttpTransport {
             .send()
             .await;
         let Ok(r) = resp else {
-            return vec!["ollama".to_string()];
+            return Vec::new();
         };
+        if !r.status().is_success() {
+            return Vec::new();
+        }
         let Ok(body): core::result::Result<serde_json::Value, _> = r.json().await else {
-            return vec!["ollama".to_string()];
+            return Vec::new();
         };
         body["providers"]
             .as_array()
@@ -353,7 +356,7 @@ impl HttpTransport {
                     .filter_map(|v| v["name"].as_str().map(String::from))
                     .collect()
             })
-            .unwrap_or_else(|| vec!["ollama".to_string()])
+            .unwrap_or_default()
     }
 
     /// Response from `GET /v1/models`.
@@ -374,27 +377,70 @@ impl HttpTransport {
     }
 
     pub async fn server_default_model(&self) -> String {
-        let fallback = "anthropic/claude-sonnet-4-5-20250929".to_string();
-        let resp = match self
+        match self.server_default_model_checked().await {
+            Ok(model) => model,
+            Err(error) => {
+                tracing::warn!("Server default model unavailable: {error}");
+                String::new()
+            }
+        }
+    }
+
+    /// Read the authoritative server default or return an actionable failure.
+    /// Qualified/nested routing IDs are preserved, never prefixed a second time.
+    pub async fn server_default_model_checked(&self) -> Result<String> {
+        let resp = self
             .client
             .get(self.url("/config"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
-            .await
-        {
-            Ok(r) if r.status().is_success() => r,
-            _ => return fallback,
-        };
-        let body: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
-            Err(_) => return fallback,
-        };
-        // Server returns bare model name; wrap with provider prefix for storage
-        let provider = body["provider"].as_str().unwrap_or("anthropic");
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "Server model configuration request failed ({}); configure a server default or specify a model",
+                resp.status()
+            )));
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Self::configured_model_from_response(&body)
+    }
+
+    fn configured_model_from_response(body: &serde_json::Value) -> Result<String> {
         let model = body["default_model"]
             .as_str()
-            .unwrap_or("claude-sonnet-4-5-20250929");
-        format!("{provider}/{model}")
+            .filter(|model| {
+                !model.is_empty()
+                    && model.trim() == *model
+                    && !model.chars().any(char::is_control)
+                    && !model.starts_with('/')
+                    && !model.ends_with('/')
+            })
+            .ok_or_else(|| {
+                crate::Error::custom(
+                    "Server has no valid default_model; configure one or specify a model",
+                )
+            })?;
+        if let Some((provider, _)) = model.split_once('/') {
+            if provider.chars().any(char::is_whitespace) {
+                return Err(crate::Error::custom(
+                    "Server qualified default_model has an invalid provider namespace",
+                ));
+            }
+            return Ok(model.into());
+        }
+        let provider = body["provider"]
+            .as_str()
+            .filter(|provider| {
+                !provider.is_empty()
+                    && !provider.contains('/')
+                    && !provider
+                        .chars()
+                        .any(|c| c.is_whitespace() || c.is_control())
+            })
+            .ok_or_else(|| {
+                crate::Error::custom("Server bare default_model has no valid provider namespace")
+            })?;
+        Ok(format!("{provider}/{model}"))
     }
 
     // -- Agents
@@ -811,5 +857,106 @@ mod client_auth_tests {
 
         client.set_api_key("new_key");
         assert_eq!(client.api_key(), "new_key");
+    }
+
+    async fn fixture_response(
+        status: u16,
+        body: serde_json::Value,
+    ) -> (HttpTransport, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = HttpTransport::new(
+            format!("http://{}", listener.local_addr().unwrap()),
+            "fixture-key".into(),
+        )
+        .unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0; 1024];
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&chunk[..count]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        (client, task)
+    }
+
+    #[tokio::test]
+    async fn checked_server_model_preserves_qualified_nested_and_bare_defaults() {
+        for (body, expected) in [
+            (
+                json!({"provider":"office","default_model":"office/tenant/deployment"}),
+                "office/tenant/deployment",
+            ),
+            (
+                json!({"provider":"office","default_model":"office/office/tenant/deployment"}),
+                "office/office/tenant/deployment",
+            ),
+            (
+                json!({"provider":"office","default_model":"opaque-deployment"}),
+                "office/opaque-deployment",
+            ),
+            (
+                json!({"default_model":"custom/tenant/deployment"}),
+                "custom/tenant/deployment",
+            ),
+        ] {
+            let (client, server) = fixture_response(200, body).await;
+            assert_eq!(
+                client.server_default_model_checked().await.unwrap(),
+                expected
+            );
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn checked_server_model_failures_never_invent_a_default() {
+        for (status, body) in [
+            (503, json!({"error":"temporarily unavailable"})),
+            (200, json!({"provider":"office"})),
+            (200, json!({"provider":"office","default_model":""})),
+            (200, json!({"default_model":"bare-without-provider"})),
+        ] {
+            let (client, server) = fixture_response(status, body).await;
+            assert!(client.server_default_model_checked().await.is_err());
+            server.await.unwrap();
+        }
+        let (client, server) = fixture_response(503, json!({})).await;
+        assert!(client.server_default_model().await.is_empty());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unavailable_provider_listing_does_not_invent_local_liveness() {
+        for (status, body) in [
+            (503, json!({})),
+            (200, json!({})),
+            (200, json!({"providers":[]})),
+        ] {
+            let (client, server) = fixture_response(status, body).await;
+            assert!(client.available_providers().await.is_empty());
+            server.await.unwrap();
+        }
+        let (client, server) = fixture_response(
+            200,
+            json!({"providers":[
+                {"name":"office","live":true}, {"name":"disconnected","live":false}
+            ]}),
+        )
+        .await;
+        assert_eq!(client.available_providers().await, ["office"]);
+        server.await.unwrap();
     }
 }

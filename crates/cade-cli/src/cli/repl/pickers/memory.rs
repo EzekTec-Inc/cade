@@ -236,13 +236,9 @@ impl Repl {
                                 allow_other: false,
                                 progress: None,
                             };
-                            let confirmed = {
-                                let mut app = app_arc.lock();
-                                let r = app.ask_question(&q)?;
-                                app.scroll = 0;
-                                let _ = app.draw();
-                                matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-                            };
+                            let answer = self.ask_repl_question(q).await?;
+                            let confirmed =
+                                matches!(&answer, Some(a) if a.as_str().starts_with("Yes"));
                             if confirmed {
                                 break Some(MemoryPickerResult::Delete(b.clone()));
                             }

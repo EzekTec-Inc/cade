@@ -610,8 +610,15 @@ pub fn parse_markdown_lines_with_theme(
                         current_callout,
                     );
                     let body_width = max_width.saturating_sub(6);
-                    let prefix_span =
-                        Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
+                    let compact_code = max_width > 0 && max_width < 12;
+                    let prefix_span = Span::styled(
+                        if compact_code {
+                            String::new()
+                        } else {
+                            format!("{INDENT}{CODE_INDENT}")
+                        },
+                        code_border_style(colors),
+                    );
 
                     let total_lines = code_block_buf.lines().count();
                     let should_collapse = !is_expanded && total_lines > 15;
@@ -623,15 +630,22 @@ pub fn parse_markdown_lines_with_theme(
                     };
 
                     // Top border with language and line counts
-                    let border_w = if max_width > 2 {
-                        max_width.saturating_sub(INDENT.len()).max(8)
+                    let border_w = if max_width > 0 {
+                        max_width.saturating_sub(INDENT.len())
                     } else {
                         33
                     };
 
                     let line_badge = format!("[{total_lines} lines]");
                     let line_badge_w = line_badge.len();
-                    if current_lang.is_empty() {
+                    if compact_code {
+                        if !current_lang.is_empty() {
+                            lines.push(Line::from(Span::styled(
+                                pad_cell_aligned(&current_lang, max_width, Alignment::Left),
+                                colors.primary(),
+                            )));
+                        }
+                    } else if current_lang.is_empty() {
                         let dashes = "─".repeat(border_w.saturating_sub(line_badge_w + 4));
                         lines.push(Line::from(vec![
                             Span::styled(
@@ -675,7 +689,10 @@ pub fn parse_markdown_lines_with_theme(
                         .find_syntax_by_token(&current_lang)
                         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
                     #[cfg(feature = "syntax-highlighting")]
-                    let mut highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
+                    let mut highlighter = dyn_theme
+                        .settings
+                        .foreground
+                        .map(|_| HighlightLines::new(syntax, &dyn_theme));
 
                     for raw_line in lines_to_render {
                         let mut spans = vec![prefix_span.clone()];
@@ -788,7 +805,7 @@ pub fn parse_markdown_lines_with_theme(
                             ),
                             Span::styled("─╯", code_border_style(colors)),
                         ]));
-                    } else {
+                    } else if !compact_code {
                         let dashes = "─".repeat(border_w.saturating_sub(2));
                         lines.push(Line::from(Span::styled(
                             format!("{INDENT}╰{dashes}╯"),
@@ -1048,15 +1065,30 @@ pub fn parse_markdown_lines_with_theme(
 
     // Flush unclosed in-flight code block at EOF (Phase 10: Syntax-Aware In-Flight Code Fence Framing)
     if in_code_block {
-        let prefix_span = Span::styled(format!("{INDENT}{CODE_INDENT}"), code_border_style(colors));
-        let border_w = if max_width > 2 {
-            max_width.saturating_sub(INDENT.len()).max(8)
+        let compact_code = max_width > 0 && max_width < 12;
+        let prefix_span = Span::styled(
+            if compact_code {
+                String::new()
+            } else {
+                format!("{INDENT}{CODE_INDENT}")
+            },
+            code_border_style(colors),
+        );
+        let border_w = if max_width > 0 {
+            max_width.saturating_sub(INDENT.len())
         } else {
             33
         };
 
         let tag_hint = "[streaming…]";
-        if current_lang.is_empty() {
+        if compact_code {
+            if !current_lang.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    pad_cell_aligned(&current_lang, max_width, Alignment::Left),
+                    colors.primary(),
+                )));
+            }
+        } else if current_lang.is_empty() {
             let dashes = "─".repeat(border_w.saturating_sub(tag_hint.len() + 4));
             lines.push(Line::from(vec![
                 Span::styled(format!("{INDENT}╭─ {dashes} "), code_border_style(colors)),
@@ -1098,7 +1130,10 @@ pub fn parse_markdown_lines_with_theme(
             .find_syntax_by_token(&current_lang)
             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
         #[cfg(feature = "syntax-highlighting")]
-        let mut highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
+        let mut highlighter = dyn_theme
+            .settings
+            .foreground
+            .map(|_| HighlightLines::new(syntax, &dyn_theme));
 
         for raw_line in code_block_buf.lines() {
             let mut spans = vec![prefix_span.clone()];
@@ -1319,6 +1354,9 @@ fn render_table_data(
 /// to that width using the given alignment.  Truncated cells get a trailing
 /// `…` (single column) in place of the dropped tail.
 fn pad_cell_aligned(cell: &str, width: usize, align: Alignment) -> String {
+    if width == 0 {
+        return String::new();
+    }
     let cell_w = UnicodeWidthStr::width(cell);
     let display = if cell_w > width {
         // Reserve one column for the ellipsis.

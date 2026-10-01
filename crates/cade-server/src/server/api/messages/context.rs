@@ -285,7 +285,7 @@ pub(crate) async fn complete_with_overflow_recovery(
             // 2. Drop the context cache entry so build_context recomputes.
             {
                 let mut cache = state.context_cache.lock();
-                let key = format!("{agent_id}:{conversation_id:?}");
+                let key = context_cache_key(agent_id, conversation_id);
                 cache.pop(&key);
             }
 
@@ -354,49 +354,48 @@ pub(crate) fn group_into_turns(
     messages: &[LlmMessage],
     max_turn_chars: usize,
 ) -> Vec<Vec<LlmMessage>> {
-    let mut turns: Vec<Vec<LlmMessage>> = Vec::new();
-    let mut current: Vec<LlmMessage> = Vec::new();
-    let mut current_chars = 0;
-
-    for msg in messages {
-        let msg_chars = msg.content.chars().count()
-            + msg
-                .tool_calls
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|tc| tc.arguments.to_string().len())
-                .sum::<usize>();
-
-        // A new user message starts a new turn.
-        // Also split mid-turn if we've exceeded the budget and hit a safe boundary.
-        // A safe boundary is right before an assistant message (provided we aren't interrupting a tool call/result sequence).
-        let is_safe_boundary = msg.role == "assistant";
-
-        if (msg.role == "user" && !current.is_empty())
-            || (is_safe_boundary && current_chars >= max_turn_chars && !current.is_empty())
-        {
-            turns.push(std::mem::take(&mut current));
-            current_chars = 0;
-        }
-
-        current.push(msg.clone());
-        current_chars += msg_chars;
-    }
-
-    if !current.is_empty() {
-        turns.push(current);
-    }
-    turns
+    crate::server::compaction::DefaultContextCompactor::group_into_turns(messages, max_turn_chars)
 }
 
-#[allow(clippy::collapsible_if)]
+type BuiltContext = (String, Vec<LlmMessage>, Vec<Value>);
+
 pub(crate) async fn build_context(
     state: AppState,
     agent_id: String,
     conversation_id: Option<String>,
     is_tool_return: bool,
-) -> core::result::Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
+) -> core::result::Result<BuiltContext, String> {
+    let workspace = crate::server::api::run::runtime::current_execution_options()
+        .map(|options| options.cwd.clone());
+    // The summary and marker publish atomically, but memory assembly spans
+    // several reads. Retry if publication crossed those reads, rather than
+    // combining pre-publication memory with post-publication history.
+    for attempt in 0..2 {
+        if let Some(context) = build_context_attempt(
+            state.clone(),
+            agent_id.clone(),
+            conversation_id.clone(),
+            is_tool_return,
+            attempt == 0,
+            workspace.clone(),
+        )
+        .await?
+        {
+            return Ok(context);
+        }
+    }
+    Err("Consolidation changed history while assembling context; retry the request".to_string())
+}
+
+#[allow(clippy::collapsible_if)]
+async fn build_context_attempt(
+    state: AppState,
+    agent_id: String,
+    conversation_id: Option<String>,
+    is_tool_return: bool,
+    advance_turn: bool,
+    workspace: Option<std::path::PathBuf>,
+) -> core::result::Result<Option<BuiltContext>, String> {
     let build_started = std::time::Instant::now();
 
     let db_pool = state.db.clone();
@@ -404,23 +403,48 @@ pub(crate) async fn build_context(
     let conv_id_clone = conversation_id.clone();
     let state_clone = state.clone();
 
-    let (agent, mut system_static, system_dynamic) = tokio::task::spawn_blocking(move || {
-        let agent = sqlite::get_agent(&db_pool, &agent_id_clone)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Agent '{agent_id_clone}' not found"))?;
+    let (agent, mut system_static, system_dynamic, marker_before) =
+        tokio::task::spawn_blocking(move || {
+            let marker = sqlite::TimelineHorizon::marker_id(
+                &db_pool,
+                &agent_id_clone,
+                conv_id_clone.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+            let agent = sqlite::get_agent(&db_pool, &agent_id_clone)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Agent '{agent_id_clone}' not found"))?;
 
-        let (system_static, system_dynamic) = assemble_system_prompt_memory(
-            &state_clone,
-            &agent,
-            &agent_id_clone,
-            conv_id_clone.as_deref(),
-            is_tool_return,
-        );
+            let (system_static, system_dynamic) = assemble_system_prompt_memory(
+                &state_clone,
+                &agent,
+                &agent_id_clone,
+                conv_id_clone.as_deref(),
+                is_tool_return,
+                advance_turn,
+            );
 
-        Ok::<_, String>((agent, system_static, system_dynamic))
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking join error: {e}"))??;
+            Ok::<_, String>((agent, system_static, system_dynamic, marker))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking join error: {e}"))??;
+
+    if let Some(workspace) = workspace.as_deref() {
+        system_static.push_str(&format!("\n\n## Execution Workspace\nWorking directory: {}\nResolve relative tool paths against this directory.\n", workspace.display()));
+        if let Some(options) = crate::server::api::run::runtime::current_execution_options() {
+            system_static.push_str(&format!(
+                "Execution backend: {}\nPermission mode: {}\n",
+                options.runtime.backend.name(),
+                options.permissions.mode()
+            ));
+            if let Some(paths) = options.runtime.allowed_paths.as_ref() {
+                system_static.push_str(&format!(
+                    "Permitted file paths: {}\n",
+                    serde_json::json!(paths)
+                ));
+            }
+        }
+    }
 
     // Skill-counters for Phase-4 telemetry; updated when we render the
     // skills section below.
@@ -452,9 +476,28 @@ pub(crate) async fn build_context(
 
         if !all_requested_skills.is_empty() {
             let all_skills = state.all_skills.read().await;
+            // Server-wide discovery belongs to the daemon workspace. Resolve
+            // requested project skills against the accepted run workspace first.
+            let workspace_skills = workspace
+                .as_deref()
+                .map(|workspace| {
+                    cade_core::skills::discover_all_skills(workspace, Some(&agent_id), None)
+                })
+                .unwrap_or_default();
             let loaded: Vec<&cade_core::skills::Skill> = all_requested_skills
                 .iter()
-                .filter_map(|id| all_skills.iter().find(|s| s.id == *id))
+                .filter_map(|id| {
+                    workspace_skills
+                        .iter()
+                        .find(|skill| skill.id == *id)
+                        .or_else(|| {
+                            if workspace.is_none() {
+                                all_skills.iter().find(|skill| skill.id == *id)
+                            } else {
+                                None
+                            }
+                        })
+                })
                 .collect();
 
             // Phase B: load per-agent disabled-skill blacklist from DB.
@@ -537,14 +580,25 @@ pub(crate) async fn build_context(
     })
     .await
     .unwrap_or(0);
-    let cache_key = format!("{agent_id}:{conversation_id:?}");
+    let cache_key = context_cache_key(&agent_id, conversation_id.as_deref());
+    // Refresh before a cache hit: install/removal and handler readiness must
+    // invalidate cached schemas even when the message timeline is unchanged.
+    let plugin_cwd = crate::server::api::run::runtime::execution_workspace();
+    let plugin_catalog =
+        crate::server::api::run::plugin_execution::ready_catalog(&plugin_cwd, &state.mcp).await;
     let state_hash = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         system_prompt_static.hash(&mut h);
         system_dynamic.hash(&mut h);
         max_rowid.hash(&mut h);
+        marker_before.hash(&mut h);
         agent.model.hash(&mut h);
+        plugin_catalog.digest.hash(&mut h);
+        if let Some(options) = crate::server::api::run::runtime::current_execution_options() {
+            options.max_context_budget.hash(&mut h);
+            options.max_tokens_per_turn.hash(&mut h);
+        }
         h.finish()
     };
 
@@ -553,7 +607,7 @@ pub(crate) async fn build_context(
         if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key)
             && *cached_hash == state_hash
         {
-            return Ok(cached_tuple.clone());
+            return Ok(Some(cached_tuple.clone()));
         }
     }
 
@@ -593,17 +647,25 @@ pub(crate) async fn build_context(
     let db_pool = state.db.clone();
     let agent_id_clone = agent_id.clone();
     let conv_id_clone = conversation_id.clone();
-    let all_rows = tokio::task::spawn_blocking(move || {
-        sqlite::get_context_window(
+    let (all_rows, marker_after) = tokio::task::spawn_blocking(move || {
+        let rows = sqlite::get_context_window(
             &db_pool,
             &agent_id_clone,
             conv_id_clone.as_deref(),
             context_char_budget,
         )
-        .unwrap_or_default()
+        .map_err(|e| format!("load context history: {e}"))?;
+        let marker =
+            sqlite::TimelineHorizon::marker_id(&db_pool, &agent_id_clone, conv_id_clone.as_deref())
+                .map_err(|e| e.to_string())?;
+        Ok::<_, String>((rows, marker))
     })
     .await
-    .unwrap_or_default();
+    .map_err(|e| format!("load context history task: {e}"))??;
+    if marker_before != marker_after {
+        state.context_cache.lock().pop(&cache_key);
+        return Ok(None);
+    }
 
     // Convert DB rows to LlmMessages (oldest-first).
     let all_llm_msgs: Vec<LlmMessage> = all_rows
@@ -618,6 +680,10 @@ pub(crate) async fn build_context(
         .max_tokens_per_turn
         .map(cade_ai::chars_for_tokens)
         .unwrap_or(64_000);
+    let max_turn_chars = crate::server::api::run::runtime::current_execution_options()
+        .and_then(|options| options.max_tokens_per_turn)
+        .map(cade_ai::chars_for_tokens)
+        .unwrap_or(max_turn_chars);
 
     let budget_manager = PromptBudgetManager::new();
 
@@ -766,7 +832,7 @@ pub(crate) async fn build_context(
             let state_eager = state.clone();
             let agent_eager = agent_id.to_string();
             tracing::info!(agent_id = %agent_id, "build_context:  eager consolidation triggered (turn-count path)");
-            tokio::spawn(async move {
+            crate::server::api::run::runtime::spawn_in_execution_scope(async move {
                 let compactor_bg = crate::server::compaction::DefaultContextCompactor;
                 compactor_bg
                     .consolidate_background(state_eager, agent_eager, conv_for_eager, None)
@@ -900,7 +966,13 @@ pub(crate) async fn build_context(
     // Carry tags alongside each schema so ITS decisions are tag-driven
     // (no hardcoded tool name lists).
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, &agent_id).unwrap_or_default();
-    let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
+    let all_tools: Vec<_> = sqlite::list_tools(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|tool| {
+            !tool.tags.iter().any(|tag| tag == "plugin") && !tool.id.starts_with("tool-plugin-")
+        })
+        .collect();
     let mut tagged_schemas: Vec<cade_ai::TaggedToolSchema> = if agent_tool_ids.is_empty() {
         all_tools
             .into_iter()
@@ -966,6 +1038,18 @@ pub(crate) async fn build_context(
         tagged_schemas.push(cade_ai::TaggedToolSchema {
             schema: cap_schema.schema,
             tags: cap_schema.tags,
+        });
+    }
+
+    // Ready native plugin capabilities use the same catalogue as guarded dispatch.
+    for tool in plugin_catalog.tools {
+        // A persisted declaration is not the authority for a live executable
+        // plugin. Native/MCP collisions have already been excluded by the adapter.
+        tagged_schemas
+            .retain(|existing| existing.schema["name"].as_str() != Some(tool.name.as_str()));
+        tagged_schemas.push(cade_ai::TaggedToolSchema {
+            schema: tool.schema,
+            tags: vec!["cade".into(), "plugin".into()],
         });
     }
 
@@ -1077,7 +1161,7 @@ pub(crate) async fn build_context(
         cache.put(cache_key, (state_hash, result_tuple.clone()));
     }
 
-    Ok(result_tuple)
+    Ok(Some(result_tuple))
 }
 
 fn assemble_system_prompt_memory(
@@ -1086,6 +1170,7 @@ fn assemble_system_prompt_memory(
     agent_id: &str,
     conversation_id: Option<&str>,
     is_tool_return: bool,
+    advance_turn: bool,
 ) -> (String, String) {
     // -- Three-tier memory injection
     //
@@ -1095,7 +1180,7 @@ fn assemble_system_prompt_memory(
     // "20 turns idle" means 20 real user↔agent exchanges, not 20 tool calls.
 
     // 1. Advance (or read) the turn counter.
-    let current_turn = if is_tool_return {
+    let current_turn = if is_tool_return || !advance_turn {
         sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0)
     } else {
         sqlite::increment_turn_counter(&state.db, agent_id).unwrap_or(0)
@@ -1233,6 +1318,16 @@ fn assemble_system_prompt_memory(
     }
 }
 
+pub(crate) fn context_cache_key(agent_id: &str, conversation_id: Option<&str>) -> String {
+    match crate::server::api::run::runtime::current_execution_options() {
+        Some(options) => format!(
+            "{agent_id}:{conversation_id:?}:workspace:{}",
+            options.cwd.display()
+        ),
+        None => format!("{agent_id}:{conversation_id:?}"),
+    }
+}
+
 fn calculate_context_budget(state: &AppState, agent_id: &str, model: &str) -> usize {
     // Character-budget trimming — reserves space for output tokens, reasoning
     // tokens, and tool schemas so the model has room to generate a full response.
@@ -1250,6 +1345,11 @@ fn calculate_context_budget(state: &AppState, agent_id: &str, model: &str) -> us
         let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
         let mut budget = raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS);
         if let Some(max_budget) = state.config.max_context_budget {
+            budget = budget.min(max_budget);
+        }
+        if let Some(max_budget) = crate::server::api::run::runtime::current_execution_options()
+            .and_then(|options| options.max_context_budget)
+        {
             budget = budget.min(max_budget);
         }
         budget

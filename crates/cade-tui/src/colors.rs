@@ -1,4 +1,27 @@
 pub use cade_core::resources::Theme as ThemeColors;
+
+/// Include the resolved palette, not just the theme name: custom themes can be
+/// reloaded in place. Cache users own invalidation even outside TuiApp.
+pub(crate) fn theme_fingerprint(colors: &ThemeColors) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", colors.meta).hash(&mut hash);
+    let mut tokens = colors.token_names();
+    tokens.extend(colors.palette_names());
+    tokens.sort_unstable();
+    tokens.dedup();
+    for token in tokens {
+        token.hash(&mut hash);
+        format!("{:?}", colors.color(token)).hash(&mut hash);
+    }
+    let mut styles = colors.style_names();
+    styles.sort_unstable();
+    for name in styles {
+        name.hash(&mut hash);
+        format!("{:?}", colors.style(name)).hash(&mut hash);
+    }
+    hash.finish()
+}
 use ratatui::style::{Color as RC, Modifier, Style}; // Alias to Opaline Theme
 
 pub trait ThemeColorsExt {
@@ -145,13 +168,23 @@ fn resolve_fallback(theme: &ThemeColors, primary: &str, fallback: &str) -> RC {
     } else if let Some(c) = theme.try_color(fallback) {
         c.into()
     } else {
-        theme.color(primary).into()
+        // Missing tokens inherit a semantic base, never Opaline's sentinel
+        // color for both foreground and background. Reset preserves the
+        // terminal's own defaults when a sparse theme defines no base token.
+        let base = if primary.starts_with("bg.") {
+            "bg.base"
+        } else {
+            "text.primary"
+        };
+        theme.try_color(base).map(Into::into).unwrap_or(RC::Reset)
     }
 }
 
 impl ThemeColorsExt for ThemeColors {
     fn c_bg_base(&self) -> RC {
-        self.color("bg.base").into()
+        self.try_color("bg.base")
+            .map(Into::into)
+            .unwrap_or(RC::Reset)
     }
     fn c_bg_surface0(&self) -> RC {
         resolve_fallback(self, "bg.panel", "cade.user_message_bg")
@@ -164,7 +197,7 @@ impl ThemeColorsExt for ThemeColors {
     }
 
     fn c_primary(&self) -> RC {
-        self.color("accent.primary").into()
+        resolve_fallback(self, "accent.primary", "text.primary")
     }
     fn c_success(&self) -> RC {
         resolve_fallback(self, "success", "cade.success")
@@ -177,13 +210,15 @@ impl ThemeColorsExt for ThemeColors {
     }
 
     fn c_text_primary(&self) -> RC {
-        self.color("text.primary").into()
+        self.try_color("text.primary")
+            .map(Into::into)
+            .unwrap_or(RC::Reset)
     }
     fn c_text_muted(&self) -> RC {
-        self.color("text.muted").into()
+        resolve_fallback(self, "text.muted", "text.primary")
     }
     fn c_text_dim(&self) -> RC {
-        self.color("text.dim").into()
+        resolve_fallback(self, "text.dim", "text.muted")
     }
 
     fn c_border_base(&self) -> RC {
@@ -206,29 +241,29 @@ impl ThemeColorsExt for ThemeColors {
         resolve_fallback(self, "error", "cade.error")
     }
     fn c_diff_context(&self) -> RC {
-        self.color("text.muted").into()
+        self.c_text_muted()
     }
 
     fn c_md_heading(&self) -> RC {
         resolve_fallback(self, "warning", "cade.warning")
     }
     fn c_md_link(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
     fn c_md_link_url(&self) -> RC {
-        self.color("text.muted").into()
+        self.c_text_muted()
     }
     fn c_md_code(&self) -> RC {
-        self.color("accent.secondary").into()
+        resolve_fallback(self, "accent.secondary", "accent.primary")
     }
     fn c_md_code_block(&self) -> RC {
-        self.color("text.primary").into()
+        self.c_text_primary()
     }
     fn c_md_code_block_border(&self) -> RC {
         resolve_fallback(self, "border.unfocused", "cade.border")
     }
     fn c_md_quote(&self) -> RC {
-        self.color("text.muted").into()
+        self.c_text_muted()
     }
     fn c_md_quote_border(&self) -> RC {
         resolve_fallback(self, "border.unfocused", "cade.border")
@@ -237,7 +272,7 @@ impl ThemeColorsExt for ThemeColors {
         resolve_fallback(self, "border.unfocused", "cade.border")
     }
     fn c_md_list_bullet(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
 
     fn c_syntax_comment(&self) -> RC {
@@ -250,7 +285,7 @@ impl ThemeColorsExt for ThemeColors {
         resolve_fallback(self, "code.function", "cade.syntax_function")
     }
     fn c_syntax_variable(&self) -> RC {
-        self.color("text.primary").into()
+        self.c_text_primary()
     }
     fn c_syntax_string(&self) -> RC {
         resolve_fallback(self, "code.string", "cade.syntax_string")
@@ -265,17 +300,17 @@ impl ThemeColorsExt for ThemeColors {
         resolve_fallback(self, "code.keyword", "cade.syntax_keyword")
     }
     fn c_syntax_punctuation(&self) -> RC {
-        self.color("text.muted").into()
+        self.c_text_muted()
     }
 
     fn c_thinking_off(&self) -> RC {
-        self.color("text.dim").into()
+        self.c_text_dim()
     }
     fn c_thinking_minimal(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
     fn c_thinking_low(&self) -> RC {
-        self.color("accent.secondary").into()
+        resolve_fallback(self, "accent.secondary", "accent.primary")
     }
     fn c_thinking_medium(&self) -> RC {
         resolve_fallback(self, "success", "cade.success")
@@ -297,7 +332,7 @@ impl ThemeColorsExt for ThemeColors {
         resolve_fallback(self, "bg.panel", "cade.user_message_bg")
     }
     fn c_selected_bg(&self) -> RC {
-        self.color("bg.selection").into()
+        resolve_fallback(self, "bg.selection", "cade.selected_bg")
     }
     fn c_tool_success_bg(&self) -> RC {
         resolve_fallback(self, "bg.elevated", "cade.tool_success_bg")
@@ -310,40 +345,40 @@ impl ThemeColorsExt for ThemeColors {
     }
 
     fn c_ctx_bar_system(&self) -> RC {
-        self.color("text.dim").into()
+        self.c_text_dim()
     }
     fn c_ctx_bar_native_tools(&self) -> RC {
-        self.color("accent.secondary").into()
+        resolve_fallback(self, "accent.secondary", "accent.primary")
     }
     fn c_ctx_bar_mcp_tools(&self) -> RC {
-        self.color("accent.tertiary").into()
+        resolve_fallback(self, "accent.tertiary", "accent.primary")
     }
     fn c_ctx_bar_memory(&self) -> RC {
         resolve_fallback(self, "warning", "cade.warning")
     }
     fn c_ctx_bar_skills(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
     fn c_ctx_bar_messages(&self) -> RC {
-        self.color("accent.deep").into()
+        resolve_fallback(self, "accent.deep", "accent.primary")
     }
     fn c_ctx_bar_free(&self) -> RC {
-        self.color("text.dim").into()
+        self.c_text_dim()
     }
     fn c_ctx_bar_buffer(&self) -> RC {
         resolve_fallback(self, "border.unfocused", "cade.border")
     }
     fn c_spinner_0(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
     fn c_spinner_1(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
     fn c_spinner_2(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
     fn c_spinner_3(&self) -> RC {
-        self.color("accent.primary").into()
+        self.c_primary()
     }
 
     fn c_border_style(&self) -> ratatui::widgets::BorderType {
@@ -548,42 +583,42 @@ impl ThemeColorsExt for ThemeColors {
 }
 
 #[cfg(feature = "syntax-highlighting")]
-pub fn generate_syntect_theme(_colors: &ThemeColors) -> syntect::highlighting::Theme {
-    use syntect::highlighting::{Color, ThemeSettings};
+pub fn generate_syntect_theme(colors: &ThemeColors) -> syntect::highlighting::Theme {
+    use syntect::highlighting::{Color, StyleModifier, ThemeItem, ThemeSettings};
+    let rgb = |color| match color {
+        RC::Rgb(r, g, b) => Some(Color { r, g, b, a: 255 }),
+        _ => None,
+    };
+    let foreground = rgb(colors.c_text_primary());
+    let background = rgb(colors.c_bg_surface0());
+    let scopes = [
+        ("comment", colors.c_syntax_comment()),
+        ("keyword, storage", colors.c_syntax_keyword()),
+        ("string", colors.c_syntax_string()),
+        ("constant.numeric", colors.c_syntax_number()),
+        ("entity.name.function", colors.c_syntax_function()),
+        ("entity.name.type", colors.c_syntax_type()),
+    ]
+    .into_iter()
+    .filter_map(|(scope, color)| {
+        Some(ThemeItem {
+            scope: scope.parse().ok()?,
+            style: StyleModifier {
+                foreground: rgb(color),
+                ..Default::default()
+            },
+        })
+    })
+    .collect();
     syntect::highlighting::Theme {
         name: Some("CadeDynamic".to_string()),
         author: Some("CADE".to_string()),
         settings: ThemeSettings {
-            foreground: Some(Color {
-                r: 205,
-                g: 214,
-                b: 244,
-                a: 255,
-            }),
-            background: Some(Color {
-                r: 30,
-                g: 30,
-                b: 46,
-                a: 255,
-            }),
-            caret: Some(Color {
-                r: 205,
-                g: 214,
-                b: 244,
-                a: 255,
-            }),
-            line_highlight: Some(Color {
-                r: 30,
-                g: 30,
-                b: 46,
-                a: 255,
-            }),
-            misspelling: Some(Color {
-                r: 243,
-                g: 139,
-                b: 168,
-                a: 255,
-            }),
+            foreground,
+            background,
+            caret: foreground,
+            line_highlight: rgb(colors.c_bg_surface2()),
+            misspelling: rgb(colors.c_error()),
             minimap_border: None,
             accent: None,
             popup_css: None,
@@ -610,7 +645,7 @@ pub fn generate_syntect_theme(_colors: &ThemeColors) -> syntect::highlighting::T
             highlight: None,
             shadow: None,
         },
-        scopes: Vec::new(),
+        scopes,
     }
 }
 

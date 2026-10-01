@@ -53,10 +53,7 @@ impl Repl {
                 allow_other: true,
                 progress: None,
             };
-            let ans = {
-                let mut app = self.app.lock();
-                app.ask_question(&q)?
-            };
+            let ans = self.ask_repl_question(q).await?;
             match &ans {
                 Some(a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => {
                     a.as_str().to_string()

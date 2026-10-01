@@ -4,12 +4,85 @@ use std::sync::{Arc, Mutex};
 
 use crate::colors::ThemeColors;
 
+pub const LUA_QUEUE_LIMIT: usize = 128;
+pub const LUA_UI_BATCH_SIZE: usize = 16;
+
+#[cfg(test)]
+mod candidate6_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn candidate6_lua_work_wakes_and_requests_have_backpressure() {
+        let engine = LuaEngine::new().unwrap();
+        engine
+            .lua
+            .load(
+                r#"
+            CADE.bind_key("C-q", function()
+                CADE.execute_slash_command("/help")
+                CADE.call_tool("test", {value = 1})
+            end)
+        "#,
+            )
+            .exec()
+            .unwrap();
+        assert!(engine.handle_keybinding("C-q"));
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            engine.work_ready.notified(),
+        )
+        .await
+        .expect("enqueued work must wake the host");
+        assert_eq!(
+            engine.command_queue.lock().unwrap().pop_front().as_deref(),
+            Some("/help")
+        );
+        assert_eq!(
+            engine.tool_queue.lock().unwrap().pop_front().unwrap().1["value"],
+            1
+        );
+        engine
+            .lua
+            .load(format!(
+                "for i = 1, {LUA_QUEUE_LIMIT} do CADE.call_tool('test', {{}}) end"
+            ))
+            .exec()
+            .unwrap();
+        assert!(
+            engine
+                .lua
+                .load("CADE.call_tool('overflow', {})")
+                .exec()
+                .is_err()
+        );
+        assert_eq!(engine.tool_queue.lock().unwrap().len(), LUA_QUEUE_LIMIT);
+        engine
+            .lua
+            .load(format!(
+                "for i = 1, {LUA_QUEUE_LIMIT} do CADE.execute_slash_command('/help') end"
+            ))
+            .exec()
+            .unwrap();
+        assert!(
+            engine
+                .lua
+                .load("CADE.execute_slash_command('/overflow')")
+                .exec()
+                .is_err()
+        );
+        assert_eq!(engine.command_queue.lock().unwrap().len(), LUA_QUEUE_LIMIT);
+    }
+}
+
 pub struct LuaEngine {
     pub lua: Lua,
     pub command_queue: Arc<Mutex<VecDeque<String>>>,
     pub tool_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
     pub ui_event_queue: Arc<Mutex<VecDeque<(String, serde_json::Value)>>>,
     pub active_colors: Arc<Mutex<ThemeColors>>,
+    /// Coalesced host wakeup: queue contents, rather than permit count, are the
+    /// source of truth. Multiple enqueues need only one notification.
+    pub work_ready: Arc<tokio::sync::Notify>,
 }
 
 impl LuaEngine {
@@ -64,6 +137,7 @@ impl LuaEngine {
         let tool_queue = Arc::new(Mutex::new(VecDeque::new()));
         let ui_event_queue = Arc::new(Mutex::new(VecDeque::new()));
         let active_colors = Arc::new(Mutex::new(ThemeColors::default()));
+        let work_ready = Arc::new(tokio::sync::Notify::new());
 
         let colors_ref = active_colors.clone();
         let get_style_fn = lua.create_function(move |lua_ctx, token: String| {
@@ -74,25 +148,33 @@ impl LuaEngine {
         lua.globals().set("_CADE_get_style", get_style_fn)?;
 
         let cmd_q = command_queue.clone();
+        let command_wake = work_ready.clone();
         let exec_cmd = lua.create_function(move |_, cmd: String| {
             tracing::info!("[Lua] execute_slash_command: {}", cmd);
-            cmd_q
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push_back(cmd);
+            let mut queue = cmd_q.lock().unwrap_or_else(|e| e.into_inner());
+            if queue.len() >= LUA_QUEUE_LIMIT {
+                return Err(mlua::Error::RuntimeError(
+                    "Lua command queue is full".into(),
+                ));
+            }
+            queue.push_back(cmd);
+            command_wake.notify_one();
             Ok(())
         })?;
         lua.globals().set("_CADE_execute_slash_command", exec_cmd)?;
 
         let tool_q = tool_queue.clone();
+        let tool_wake = work_ready.clone();
         let call_tool_fn =
             lua.create_function(move |lua_ctx, (name, args): (String, mlua::Value)| {
                 let args_json: serde_json::Value = lua_ctx.from_value(args)?;
                 tracing::info!("[Lua] call_tool: {} with args {}", name, args_json);
-                tool_q
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push_back((name, args_json));
+                let mut queue = tool_q.lock().unwrap_or_else(|e| e.into_inner());
+                if queue.len() >= LUA_QUEUE_LIMIT {
+                    return Err(mlua::Error::RuntimeError("Lua tool queue is full".into()));
+                }
+                queue.push_back((name, args_json));
+                tool_wake.notify_one();
                 Ok(())
             })?;
         lua.globals().set("_CADE_call_tool", call_tool_fn)?;
@@ -142,6 +224,7 @@ impl LuaEngine {
             tool_queue,
             ui_event_queue,
             active_colors,
+            work_ready,
         })
     }
 
@@ -255,6 +338,24 @@ impl LuaEngine {
             return Some(footer);
         }
         None
+    }
+
+    /// Serialized, bounded callback work shared by idle and active UI ticks.
+    /// The host refreshes slot presentation once when this returns true.
+    pub fn pump_ui_events(&self) -> bool {
+        let events: Vec<_> = {
+            let mut queue = self
+                .ui_event_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let count = queue.len().min(LUA_UI_BATCH_SIZE);
+            queue.drain(..count).collect()
+        };
+        let mut changed = false;
+        for (id, value) in events {
+            changed |= self.handle_ui_event(&id, value);
+        }
+        changed
     }
 
     pub fn handle_keybinding(&self, key: &str) -> bool {

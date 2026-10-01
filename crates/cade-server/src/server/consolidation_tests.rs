@@ -28,35 +28,176 @@ fn rotate_and_archive_session_summary_db(db: &sqlite::Db, agent_id: &str, prev_l
 
     let acc =
         accumulator::SummaryAccumulator::new(std::sync::Arc::new(MockLlm), "mock".to_string());
-    let existing_blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
-    let existing_blocks_pairs: Vec<(String, String)> = existing_blocks
-        .iter()
-        .map(|(label, val, _)| (label.clone(), val.clone()))
-        .collect();
-
-    let plan = acc.plan_rotation(prev_live, "", String::new(), &existing_blocks_pairs);
-
-    // Apply the plan to the DB
-    if let Some(archive) = plan.archive_content {
-        let tags = vec!["evicted-session-summary".to_string()];
-        let _ = sqlite::insert_archival_memory(db, agent_id, &archive, &tags);
+    if prev_live.trim().is_empty() {
+        return;
     }
-    if let Some(index_line) = plan.append_to_index {
-        append_to_session_index_db(db, agent_id, &index_line);
-    }
-    for del in plan.deletes {
-        let _ = sqlite::delete_memory_block(db, agent_id, &del);
-    }
-    for (up_label, up_val) in plan.upserts {
-        // Exclude upsert of session_summary itself, as the old rotation method didn't write it.
-        if up_label != "session_summary" {
-            let _ = sqlite::upsert_memory_block(db, agent_id, &up_label, &up_val, None, None);
-        }
-    }
+    sqlite::insert_message(
+        db,
+        &sqlite::MessageRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: agent_id.to_string(),
+            conversation_id: None,
+            role: "user".to_string(),
+            content: serde_json::json!({"content": prev_live}),
+            char_count: prev_live.chars().count(),
+        },
+    )
+    .unwrap();
+    let snapshot = sqlite::consolidation::ConsolidationSnapshot::capture(db, agent_id, None)
+        .unwrap()
+        .unwrap();
+    let plan = acc.plan_rotation(
+        prev_live,
+        "test live summary",
+        String::new(),
+        snapshot.block_values(),
+    );
+    snapshot
+        .commit(snapshot.messages().len(), 1, &plan)
+        .unwrap();
 }
 
 fn m(role: &str, text: &str) -> (String, String) {
     (role.to_string(), text.to_string())
+}
+
+#[tokio::test]
+async fn candidate4_busy_snapshot_allows_inserts_and_preserves_same_second_tail() {
+    struct PausingLlm {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        calls: AtomicUsize,
+    }
+    #[async_trait]
+    impl LlmProvider for PausingLlm {
+        async fn complete(&self, _: &CompletionRequest) -> AiResult<CompletionResponse> {
+            let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+            if first {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            Ok(CompletionResponse {
+                content: Some(
+                    if first {
+                        "Captured history summary"
+                    } else {
+                        "[]"
+                    }
+                    .to_string(),
+                ),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+            })
+        }
+        async fn stream(
+            &self,
+            _: &CompletionRequest,
+        ) -> AiResult<Pin<Box<dyn Stream<Item = AiResult<StreamChunk>> + Send>>> {
+            unreachable!()
+        }
+    }
+    let db = setup_db();
+    seed_turns(&db, "a1", 30, 2_000);
+    db.get()
+        .unwrap()
+        .execute("UPDATE messages SET created_at = 100", [])
+        .unwrap();
+    let llm = Arc::new(PausingLlm {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        calls: AtomicUsize::new(0),
+    });
+    let state = mk_state(db.clone(), llm.clone());
+    let worker_state = state.clone();
+    let worker = tokio::spawn(async move {
+        ContextCompactionEngine::new(&worker_state, "a1", None)
+            .compact_report(Some(6_000))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), llm.entered.notified())
+        .await
+        .unwrap();
+    let cx = ConsolidationContext::new();
+    assert_eq!(
+        DefaultMemoryConsolidationEngine
+            .check_need(&state, "a1", &cx)
+            .await,
+        ConsolidationNeed::Busy
+    );
+    assert!(matches!(
+        ContextCompactionEngine::new(&state, "a1", None)
+            .compact_report(Some(6_000))
+            .await,
+        Err(ConsolidationError::Busy)
+    ));
+    assert_eq!(llm.calls.load(Ordering::SeqCst), 1);
+    let mut captured_tail = store_sqlite::list_messages(&db, "a1", None, 2)
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect::<Vec<_>>();
+    db.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+         VALUES ('during-llm', 'a1', 'user', '{\"content\":\"new request\"}', 11, 100)",
+            [],
+        )
+        .unwrap();
+    llm.release.notify_one();
+    let report = worker.await.unwrap().unwrap();
+    assert!(report.turns_summarized > 0);
+    assert!(!report.ring_rotation_applied);
+    assert!(report.summary_length_chars > 0);
+    let visible = store_sqlite::get_context_window(&db, "a1", None, 1_000_000).unwrap();
+    captured_tail.push("during-llm".to_string());
+    for id in &captured_tail {
+        assert!(
+            visible.iter().any(|m| &m.id == id),
+            "unsummarized row {id} must survive"
+        );
+    }
+    assert!(!store_sqlite::consolidation::is_claimed(&db, "a1", None).unwrap());
+}
+
+#[tokio::test]
+async fn candidate4_empty_merge_rotates_instead_of_erasing_previous_summary() {
+    let llm = Arc::new(MockSummaryLlm::new("   "));
+    let acc = SummaryAccumulator::new(llm, "m".into());
+    let previous = "previous decision\n".repeat(450);
+    let result = acc
+        .accumulate(&previous, "new decision", Default::default(), &[])
+        .await;
+    let (plan, rotated) = result.into_plan();
+    assert!(rotated);
+    assert!(
+        plan.upserts
+            .iter()
+            .any(|(l, v)| l == "session_summary_1" && v.contains("previous decision"))
+    );
+    assert!(
+        plan.upserts
+            .iter()
+            .any(|(l, v)| l == "session_summary" && v.contains("new decision"))
+    );
+}
+
+#[tokio::test]
+async fn candidate4_input_cap_only_advances_over_turns_sent_to_llm() {
+    let db = setup_db();
+    seed_turns(&db, "a1", 80, 2_000);
+    let state = mk_state(db.clone(), Arc::new(MockSummaryLlm::new("summary")));
+    let report = ContextCompactionEngine::new(&state, "a1", None)
+        .compact_report(Some(0))
+        .await
+        .unwrap();
+    assert!(report.turns_summarized > 0);
+    assert!(
+        report.turns_summarized < 79,
+        "input cap leaves unrepresented turns active"
+    );
+    let visible = store_sqlite::list_messages_since_last_compaction(&db, "a1", None, 1000).unwrap();
+    assert_eq!(visible.len(), 160 - report.turns_summarized * 2);
 }
 
 #[test]
@@ -810,7 +951,15 @@ async fn f2_archival_cache_survives_llm_failure() {
     let llm: Arc<dyn LlmProvider> = Arc::new(FailingLlm);
     let state = mk_state(db.clone(), llm);
 
-    consolidate_agent(state.clone(), agent_id.to_string(), None, None).await;
+    let result = ContextCompactionEngine::new(&state, agent_id, None)
+        .compact_report(None)
+        .await;
+    assert!(matches!(
+        result,
+        Err(ConsolidationError::ArchivedOnly(_, _))
+    ));
+    assert!(!store_sqlite::TimelineHorizon::has_compaction_marker(&db, agent_id, None).unwrap());
+    assert!(!store_sqlite::consolidation::is_claimed(&db, agent_id, None).unwrap());
 
     // No session_summary was written (LLM failed) — but the archival cache
     // must still hold the raw dropped turns.

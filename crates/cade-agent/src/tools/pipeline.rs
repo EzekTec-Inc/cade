@@ -214,9 +214,12 @@ impl ToolPipeline {
             ga.to_canonical(tool_name).to_string()
         };
         let canonical = canonical_owned.as_str();
+        let arguments = self.runtime.prepare_arguments(canonical, arguments);
+        let arguments = &arguments;
 
         // 2. Evaluate permission rules & plan-mode write blocking
-        let is_mcp_write = crate::tools::is_mcp_write_tool(canonical, self.runtime.mcp()).await;
+        let is_mcp_write = crate::tools::is_mcp_write_tool(canonical, self.runtime.mcp()).await
+            || self.runtime.extension_is_write(canonical);
         let is_write = is_write_schema(canonical) || is_mcp_write;
 
         if self.permissions.mode() == PermissionMode::Plan && is_write {

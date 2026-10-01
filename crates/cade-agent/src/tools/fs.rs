@@ -2,6 +2,73 @@ use crate::Result;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+tokio::task_local! {
+    static EXECUTION_WORKSPACE: PathBuf;
+}
+
+/// Keep concurrent executions independent without changing process cwd or environment.
+pub(crate) async fn in_workspace<F: std::future::Future>(root: &Path, work: F) -> F::Output {
+    EXECUTION_WORKSPACE.scope(root.to_path_buf(), work).await
+}
+
+pub(crate) fn working_dir() -> PathBuf {
+    EXECUTION_WORKSPACE
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// One path-grant check for local dispatch and alternate backend execution.
+pub(crate) fn check_path_grants(
+    name: &str,
+    args: &Value,
+    allowed: Option<&[String]>,
+    cwd: &Path,
+) -> Result<()> {
+    let Some(allowed) = allowed else {
+        return Ok(());
+    };
+    let name = super::manager::canonical_name(name);
+    if !matches!(
+        name,
+        "read_file" | "write_file" | "edit_file" | "apply_patch" | "grep" | "glob"
+    ) {
+        return Ok(());
+    }
+    let paths = if name == "apply_patch" {
+        extract_patch_paths(args["patch"].as_str().unwrap_or(""))
+    } else {
+        args["path"]
+            .as_str()
+            .or_else(|| args["file_path"].as_str())
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .into_iter()
+            .collect()
+    };
+    for path in paths {
+        let path = if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        };
+        if !allowed.iter().any(|prefix| {
+            let prefix = PathBuf::from(prefix);
+            let prefix = if prefix.is_absolute() {
+                prefix
+            } else {
+                cwd.join(prefix)
+            };
+            ensure_within_root(&prefix, &path.to_string_lossy()).is_ok()
+        }) {
+            return Err(crate::Error::custom(format!(
+                "[Blocked by RBAC] Path '{}' is outside the allowed sandbox paths",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 // -- P1-4: Filesystem sandbox default-on
 //
 // The sandbox is ACTIVE by default.  Every file-tool path is verified to
@@ -47,6 +114,9 @@ fn resolve_fs_root(
 /// subsequent calls are cheap and the sandbox can't drift mid-process
 /// (e.g. if cwd changes after a `cd`).
 fn fs_root() -> Option<PathBuf> {
+    if let Ok(root) = EXECUTION_WORKSPACE.try_with(Clone::clone) {
+        return Some(root);
+    }
     use std::sync::OnceLock;
     static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
     ROOT.get_or_init(|| {
@@ -65,7 +135,7 @@ fn fs_root() -> Option<PathBuf> {
 /// For existing paths, follows symlinks via `canonicalize`.
 /// For non-existing paths (e.g. write_file creating a new file), uses
 /// lexical normalization to detect `..` escapes.
-fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
+pub(crate) fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     let p = Path::new(raw_path);
     let abs = if p.is_absolute() {
         p.to_path_buf()
@@ -373,7 +443,7 @@ fn validate_patch_paths(patch_str: &str) -> Result<()> {
     Ok(())
 }
 
-fn extract_patch_paths(patch_str: &str) -> Vec<PathBuf> {
+pub(crate) fn extract_patch_paths(patch_str: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for line in patch_str.lines() {
         let path_opt = if let Some(rest) = line.strip_prefix("--- ") {
@@ -411,7 +481,15 @@ impl ApplyPatchTool {
         validate_patch_paths(patch_str)?;
 
         // Acquire exclusive write locks on all patch target paths to prevent concurrent write clobbering (ADR 6)
-        let patch_paths = extract_patch_paths(patch_str);
+        let cwd = working_dir();
+        let mut patch_paths: Vec<_> = extract_patch_paths(patch_str)
+            .into_iter()
+            .map(|path| cwd.join(path))
+            .collect();
+        patch_paths.sort();
+        for path in &patch_paths {
+            ensure_within_root(&cwd, &path.to_string_lossy())?;
+        }
         let mut _locks = Vec::new();
         for path in &patch_paths {
             let lock = crate::tools::file_lock::FileLockManager::global()
@@ -451,6 +529,8 @@ impl ApplyPatchTool {
         let mut cmd = tokio::process::Command::new("patch");
         cade_core::agent_env::apply_agent_env(&mut cmd);
         let output = cmd
+            .current_dir(&cwd)
+            .kill_on_drop(true)
             .args(["-p1", "--input", tmp_file.path().to_str().unwrap_or("")])
             .output()
             .await

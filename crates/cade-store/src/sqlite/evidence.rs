@@ -59,17 +59,24 @@ pub fn upsert_memory_block_typed(
 ) -> Result<()> {
     // ── Conflict detection (before upsert) ────────────────────────────────
     let conflicts = if let Some(mt) = memory_type {
-        detect_memory_conflicts(db, agent_id, label, value, mt).unwrap_or_default()
+        detect_memory_conflicts(db, agent_id, label, value, mt)?
     } else {
         Vec::new()
     };
 
-    // Core upsert first
-    upsert_memory_block(db, agent_id, label, value, description, max_chars)?;
-
-    // Ensure the conflict detection table exists
-    let conn = db.get()?;
-    let _ = conn.execute_batch(
+    // Value, identity, history and typed metadata are one write. Labels are
+    // agent-local; truly shared blocks continue to share metadata by block ID.
+    let mut conn = db.get()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    memory::upsert_memory_block_on(&tx, agent_id, label, value, description, max_chars)?;
+    let block_id: String = tx.query_row(
+        "SELECT b.id FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
+        params![agent_id, label],
+        |r| r.get(0),
+    )?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_conflicts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             agent_id TEXT NOT NULL,
@@ -79,11 +86,11 @@ pub fn upsert_memory_block_typed(
             resolved INTEGER NOT NULL DEFAULT 0,
             detected_at INTEGER NOT NULL
         );",
-    );
+    )?;
 
     // Persist any detected conflicts
     for conflict in &conflicts {
-        let _ = conn.execute(
+        tx.execute(
             "INSERT INTO memory_conflicts (agent_id, label_a, label_b, reason, detected_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -93,33 +100,34 @@ pub fn upsert_memory_block_typed(
                 conflict.reason,
                 now_ts(),
             ],
-        );
+        )?;
     }
 
     // Update typed columns (safe — ALTER TABLE already ran in migration 14)
     if memory_type.is_some() || confidence.is_some() {
         if let Some(mt) = memory_type {
-            let _ = conn.execute(
-                "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
-                params![mt, label],
-            );
+            tx.execute(
+                "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE id = ?2",
+                params![mt, block_id],
+            )?;
 
             // Apply confidence boost for durable knowledge types when no
             // explicit confidence was provided by the caller.
             if confidence.is_none() && BOOSTED_TYPES.contains(&mt) {
-                let _ = conn.execute(
-                    "UPDATE shared_memory_blocks SET confidence = MAX(confidence, ?1) WHERE label = ?2",
-                    params![TYPED_CONFIDENCE_BOOST, label],
-                );
+                tx.execute(
+                    "UPDATE shared_memory_blocks SET confidence = MAX(confidence, ?1) WHERE id = ?2",
+                    params![TYPED_CONFIDENCE_BOOST, block_id],
+                )?;
             }
         }
         if let Some(c) = confidence {
-            let _ = conn.execute(
-                "UPDATE shared_memory_blocks SET confidence = ?1 WHERE label = ?2",
-                params![c, label],
-            );
+            tx.execute(
+                "UPDATE shared_memory_blocks SET confidence = ?1 WHERE id = ?2",
+                params![c, block_id],
+            )?;
         }
     }
+    tx.commit()?;
     Ok(())
 }
 

@@ -75,6 +75,9 @@ pub async fn list_tools(
     })?;
     let mut tools: Vec<Value> = rows
         .iter()
+        .filter(|tool| {
+            !tool.tags.iter().any(|tag| tag == "plugin") && !tool.id.starts_with("tool-plugin-")
+        })
         .map(|t| {
             json!({
                 "id": t.id,
@@ -86,7 +89,6 @@ pub async fn list_tools(
 
     // Dynamically append live capability definitions from CapabilityMesh seam (ADR-0020)
     use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
-    use cade_plugin::PluginEngine;
     let cap_cx = CapabilityExecutionContext::new("api");
     let mesh_schemas = state.mcp.active_catalog(&cap_cx).await;
     for cap_s in mesh_schemas {
@@ -102,24 +104,36 @@ pub async fn list_tools(
         }));
     }
 
-    // Dynamically append live plugin tools from PluginEngine (Candidate 3)
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let plugin_engine = cade_plugin::NativePluginEngine::from_default_dirs(&cwd);
-    let _ = plugin_engine.load_all();
-    for pt in plugin_engine.list_tools() {
-        if pt.name.is_empty() || tools.iter().any(|t| t["name"].as_str() == Some(&pt.name)) {
-            continue;
-        }
+    // Use the same executable catalogue and collision policy as agent context/dispatch.
+    let cwd = crate::server::api::run::runtime::execution_workspace();
+    let plugin_catalog =
+        crate::server::api::run::plugin_execution::ready_catalog(&cwd, &state.mcp).await;
+    for pt in plugin_catalog.tools {
         let description = pt
             .schema
             .get("description")
             .and_then(|d| d.as_str())
             .map(String::from);
-        tools.push(json!({
-            "id": format!("tool-plugin-{}", pt.name),
+        let existing = tools
+            .iter()
+            .position(|tool| tool["name"].as_str() == Some(pt.name.as_str()));
+        let id = existing
+            .and_then(|index| tools[index].get("id").cloned())
+            .unwrap_or_else(|| json!(format!("tool-plugin-{}", pt.name)));
+        let entry = json!({
+            "id": id,
             "name": pt.name,
-            "description": description
-        }));
+            "description": description,
+            "source": "plugin",
+            "status": "ready",
+            "execution_kind": "native_script",
+            "json_schema": pt.schema
+        });
+        if let Some(index) = existing {
+            tools[index] = entry;
+        } else {
+            tools.push(entry);
+        }
     }
 
     Ok(Json(json!(tools)))

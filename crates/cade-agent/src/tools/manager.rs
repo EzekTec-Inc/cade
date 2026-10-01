@@ -36,54 +36,23 @@ pub async fn dispatch(
     mcp: &McpManager,
     allowed_paths: Option<&[String]>,
 ) -> ToolResult {
-    // RBAC path check for file I/O
-    if let Some(allowed) = allowed_paths
-        && matches!(
-            tool_name,
-            "read_file"
-                | "ReadFileGemini"
-                | "write_file"
-                | "WriteFileGemini"
-                | "edit_file"
-                | "Replace"
-                | "apply_patch"
-                | "grep"
-                | "SearchFileContent"
-                | "glob"
-                | "GlobGemini"
-        )
-    {
-        let target_path = arguments["path"]
-            .as_str()
-            .or_else(|| arguments["file_path"].as_str())
-            .unwrap_or("");
-        if !target_path.is_empty() {
-            // Ensure target_path resolves to under one of the allowed_paths
-            let target_path = std::path::Path::new(target_path)
-                .canonicalize()
-                .unwrap_or_else(|_| std::path::PathBuf::from(target_path));
-            let target_str = target_path.to_string_lossy().to_string();
-            let is_allowed = allowed
-                .iter()
-                .any(|p| target_str.starts_with(p) || target_path.starts_with(p));
-            if !is_allowed {
-                return ToolResult {
-                    tool_call_id,
-                    tool_name: tool_name.to_string(),
-                    output: format!(
-                        "[Blocked by RBAC] Path '{}' is outside the allowed sandbox paths: {:?}",
-                        target_path.display(),
-                        allowed
-                    ),
-                    is_error: true,
-                    ui_resource_uri: None,
-                };
-            }
-        }
+    if let Err(error) = super::fs::check_path_grants(
+        tool_name,
+        arguments,
+        allowed_paths,
+        &super::fs::working_dir(),
+    ) {
+        return ToolResult {
+            tool_call_id,
+            tool_name: tool_name.into(),
+            output: error.to_string(),
+            is_error: true,
+            ui_resource_uri: None,
+        };
     }
 
     // Constitutional Guard: Enforce non-negotiable invariants (anti-escape-hatch & mutation gates)
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = super::fs::working_dir();
     if let Ok(settings) = cade_core::settings::SettingsManager::new(&cwd) {
         let mcp_configs = settings.merged_mcp_servers();
         let governor =
@@ -167,6 +136,7 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
                 .unwrap_or("")
                 .to_string();
             let git_output = std::process::Command::new("git")
+                .current_dir(super::fs::working_dir())
                 .args(["status", "--porcelain"])
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
@@ -185,10 +155,10 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
                 "\n## {} — {}\n\n**Reason:** {}\n\n**Files modified:**\n{}\n\n---\n",
                 timestamp, summary, reason, files_modified
             );
-            let path = std::path::Path::new("CADE_AUDIT.md");
-            let existing = std::fs::read_to_string(path)
+            let path = super::fs::working_dir().join("CADE_AUDIT.md");
+            let existing = std::fs::read_to_string(&path)
                 .unwrap_or_else(|_| "# CADE Audit Log\n\n".to_string());
-            std::fs::write(path, format!("{}{}", existing, log_entry))
+            std::fs::write(&path, format!("{}{}", existing, log_entry))
                 .map(|_| "Task finished. Audit log appended to CADE_AUDIT.md.".to_string())
                 .map_err(|e| crate::Error::custom(format!("Failed to write CADE_AUDIT.md: {e}")))
         }

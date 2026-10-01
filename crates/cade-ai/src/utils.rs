@@ -489,7 +489,31 @@ fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
 /// Builds a standardized, pre-configured `reqwest::Client` with robust defaults
 /// for timeouts, connection pools, and TCP keepalives.
 pub fn build_standard_http_client() -> reqwest::Client {
+    build_standard_http_client_with_headers(reqwest::header::HeaderMap::new())
+}
+
+pub(crate) fn build_provider_http_client(
+    definition: Option<&crate::provider_registry::ProviderDef>,
+) -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(definition) = definition {
+        for (name, value) in &definition.headers {
+            if let (Ok(name), Ok(value)) = (
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                reqwest::header::HeaderValue::from_str(value),
+            ) {
+                headers.insert(name, value);
+            }
+        }
+    }
+    build_standard_http_client_with_headers(headers)
+}
+
+pub fn build_standard_http_client_with_headers(
+    headers: reqwest::header::HeaderMap,
+) -> reqwest::Client {
     reqwest::Client::builder()
+        .default_headers(headers)
         .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(15))
         .pool_idle_timeout(std::time::Duration::from_secs(90))

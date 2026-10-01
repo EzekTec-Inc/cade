@@ -43,10 +43,15 @@ use cade_store::sqlite;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-use super::messages::{err, maybe_set_conv_title, persist, resolve_conversation};
+use super::messages::{err, maybe_set_conv_title, persist, persist_checked, resolve_conversation};
 use crate::server::state::AppState;
 
+#[cfg(test)]
+mod direct_launch_tests;
+pub(crate) mod plugin_execution;
 pub mod runtime;
+#[cfg(test)]
+mod runtime_execution_tests;
 pub mod storage_impl;
 /// Maximum agentic turns per request (prevents infinite loops).
 mod subagent;
@@ -276,11 +281,14 @@ async fn emit_run_event(db: &sqlite::Db, run_id: &str, tx: &SseTx, mut payload: 
         object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
         object.insert("seq_id".to_owned(), Value::from(sequence));
     }
-    let _ = tx
-        .send(Ok(runtime::RunEventEnvelope {
+    // The durable log owns execution. A stalled presentation must not block it.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(Ok(runtime::RunEventEnvelope {
             data: payload.to_string(),
-        }))
-        .await;
+        })),
+    )
+    .await;
 }
 
 /// `POST /v1/agents/:id/run`
@@ -301,16 +309,27 @@ pub async fn run_agent(
         .get("permission_mode")
         .and_then(|v| v.as_str())
         .map(String::from);
+    let options = match serde_json::from_value::<runtime::RunExecutionOptions>(body) {
+        Ok(options) => options,
+        Err(error) => return err(axum::http::StatusCode::BAD_REQUEST, &error.to_string()),
+    };
 
     let runtime = runtime::ServerAgentRuntime::new(state);
-    let handle = runtime
-        .start(runtime::RunRequest {
-            agent_id,
-            conversation_id,
-            input,
-            permission_mode,
-        })
-        .await;
+    let handle = match runtime
+        .start_with_options(
+            runtime::RunRequest {
+                agent_id,
+                conversation_id,
+                input,
+                permission_mode,
+            },
+            options,
+        )
+        .await
+    {
+        Ok(handle) => handle,
+        Err(error) => return err(error.status, &error.message),
+    };
 
     tracing::debug!(run_id = %handle.run_id, "agent run accepted by server runtime");
     let stream = tokio_stream::StreamExt::map(
@@ -350,6 +369,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         theme_command: theme_cmd,
         input,
         permission_mode,
+        options,
     } = request;
     let send_raw = |json_string: String| {
         let database = state2.db.clone();
@@ -382,7 +402,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     .await;
 
     if let Some(t_name) = theme_cmd {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cwd = options.cwd.clone();
         let agent_dir = dirs::home_dir()
             .map(|h| h.join(".cade"))
             .unwrap_or_else(|| std::path::PathBuf::from(".cade"));
@@ -480,16 +500,13 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     }
 
     let mut turns = 0usize;
-    let max_turns = max_turns();
-    let turns_ceiling = turns_ceiling(max_turns);
+    let max_turns = options.max_turns;
+    let turns_ceiling = options.turns_ceiling;
     // P4: resolve the session cost cap from `.cade/settings.json`
     // (`max_session_cost_usd`, project wins over global).  The env var
     // override and the built-in default are applied inside
     // [`max_session_cost_usd`].
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let session_cost_cap = cade_core::settings::SettingsManager::new(&cwd)
-        .ok()
-        .and_then(|s| s.max_session_cost_usd());
+    let session_cost_cap = options.session_cost_cap;
     // M9r: track the loop exit reason so `finish_run` records the right
     // status.  Any break preceded by an `"message_type": "error"` SSE
     // event flips this to `Error`; the natural "no more tool calls"
@@ -522,7 +539,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     // the next LLM turn.
     let mut loop_degenerate: Option<String> = None;
 
-    loop {
+    'agent_loop: loop {
         turns += 1;
         let budget = adaptive_turn_budget(max_turns, turns_ceiling, distinct_tool_calls);
         if turns > budget {
@@ -551,7 +568,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         // `.cade/settings.json`, the CADE_MAX_SESSION_COST_USD env var, or
         // the built-in $120.00 default (see [`max_session_cost_usd`]).
         // Pricing comes from ~/.cade/pricing.json or the bundled fallback table.
-        if let Some(cap) = max_session_cost_usd(session_cost_cap) {
+        if let Some(cap) = session_cost_cap {
             let map = state2.agent_metrics.clone();
             if let Some(m) = map.get(&agent_id2) {
                 let pricing = pricing_registry()
@@ -622,15 +639,19 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         // embedded in run_agent_loop's Future, which combined with the
         // consolidation + LLM streaming futures overflows the tokio worker
         // thread stack when processing large archival/historic queries.
-        let (model, messages, tools) = match Box::pin(context_builder.build(
-            agent_id2.clone(),
-            conv_id2.clone(),
-            is_tool_return,
-        ))
-        .await
-        {
-            Ok(ctx) => ctx,
-            Err(e) => {
+        let context = runtime::until_cancelled(
+            &state2.db,
+            &run_id2,
+            Box::pin(context_builder.build(agent_id2.clone(), conv_id2.clone(), is_tool_return)),
+        )
+        .await;
+        let (model, messages, tools) = match context {
+            None => {
+                exit_status = RunExitStatus::Cancelled;
+                break;
+            }
+            Some(Ok(ctx)) => ctx,
+            Some(Err(e)) => {
                 send(json!({ "message_type": "error", "error": e })).await;
                 exit_status = RunExitStatus::Error;
                 break;
@@ -643,7 +664,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         // CADE_TOOL_TURN_MAX_TOKENS cap.  First turn and turns where the
         // model returns no further tool_calls (final answer) get full budget.
         let max_tokens = if turns > 1
-            && let Some(tool_cap) = tool_turn_max_tokens()
+            && let Some(tool_cap) = options.tool_turn_max_tokens
         {
             tool_cap.min(max_tokens_cap)
         } else {
@@ -654,14 +675,19 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             messages,
             tools,
             max_tokens,
-            reasoning_effort: None,
+            reasoning_effort: options.reasoning_effort.clone(),
         };
 
         // ── Stream LLM response ───────────────────────────────────────
         // First attempt; if the provider rejects with a context-overflow
         // error before any chunks arrive, run synchronous consolidation
         // and rebuild the context once, then retry exactly once.
-        let stream_result = state2.llm.stream(&req).await;
+        let Some(stream_result) =
+            runtime::until_cancelled(&state2.db, &run_id2, state2.llm.stream(&req)).await
+        else {
+            exit_status = RunExitStatus::Cancelled;
+            break;
+        };
         let mut llm_stream = match stream_result {
             Ok(s) => s,
             Err(e) if e.is_context_overflow() => {
@@ -686,17 +712,29 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                 // Without this, consolidate_agent's Future is embedded
                 // in run_agent_loop's state machine, contributing to
                 // the stack overflow on archival/historic content access.
-                Box::pin(crate::server::consolidation::consolidate_agent(
-                    state2.clone(),
-                    agent_id2.clone(),
-                    conv_id2.clone(),
-                    None,
-                ))
-                .await;
+                if runtime::until_cancelled(
+                    &state2.db,
+                    &run_id2,
+                    Box::pin(crate::server::consolidation::consolidate_agent(
+                        state2.clone(),
+                        agent_id2.clone(),
+                        conv_id2.clone(),
+                        None,
+                    )),
+                )
+                .await
+                .is_none()
+                {
+                    exit_status = RunExitStatus::Cancelled;
+                    break;
+                }
                 // Drop cached context entry so build_context recomputes.
                 {
                     let mut cache = state2.context_cache.lock();
-                    let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
+                    let key = crate::server::api::messages::context::context_cache_key(
+                        &agent_id2,
+                        conv_id2.as_deref(),
+                    );
                     cache.pop(&key);
                 }
                 // Box::pin the rebuild future — build_context's state
@@ -704,15 +742,23 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                 // multiple HashMaps, etc. Boxing moves them to the heap
                 // and prevents the overflow recovery path from doubling
                 // the stack pressure of the main build_context call.
-                let (model2, mut messages2, tools2) = match Box::pin(context_builder.build(
-                    agent_id2.clone(),
-                    conv_id2.clone(),
-                    is_tool_return, // reuse — never double-increment on retry
-                ))
-                .await
-                {
-                    Ok(ctx) => ctx,
-                    Err(build_err) => {
+                let context = runtime::until_cancelled(
+                    &state2.db,
+                    &run_id2,
+                    Box::pin(context_builder.build(
+                        agent_id2.clone(),
+                        conv_id2.clone(),
+                        is_tool_return, // reuse — never double-increment on retry
+                    )),
+                )
+                .await;
+                let (model2, mut messages2, tools2) = match context {
+                    None => {
+                        exit_status = RunExitStatus::Cancelled;
+                        break;
+                    }
+                    Some(Ok(ctx)) => ctx,
+                    Some(Err(build_err)) => {
                         send(json!({ "message_type": "error", "error": build_err })).await;
                         exit_status = RunExitStatus::Error;
                         break;
@@ -734,9 +780,16 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     messages: messages2,
                     tools: tools2,
                     max_tokens,
-                    reasoning_effort: None,
+                    reasoning_effort: options.reasoning_effort.clone(),
                 };
-                match state2.llm.stream(&retry_req).await {
+                let Some(retry) =
+                    runtime::until_cancelled(&state2.db, &run_id2, state2.llm.stream(&retry_req))
+                        .await
+                else {
+                    exit_status = RunExitStatus::Cancelled;
+                    break;
+                };
+                match retry {
                     Ok(s) => {
                         // Phase 3: tell the user that the recovery
                         // worked and the conversation continues.
@@ -769,20 +822,17 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         let mut text_acc = String::new();
         let mut tool_calls: Vec<LlmToolCall> = Vec::new();
         let mut turn_usage = cade_ai::TokenUsage::default();
-        // Race the LLM stream against tx.closed() so a mid-stream
-        // disconnect (Ctrl+C in the TUI, client process exit, network
-        // drop) aborts the LLM call instead of letting it run to
-        // completion and silently bill tokens.
+        // Race the provider stream against explicit durable cancellation.
         let mut stream_cancelled = false;
+        let mut stream_failed = false;
+        let cancellation = runtime::cancellation_requested(&state2.db, &run_id2);
+        tokio::pin!(cancellation);
         loop {
             tokio::select! {
                 biased;
-                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
-                    if sqlite::is_run_cancellation_requested(&state2.db, &run_id2).unwrap_or(false) {
-                        tracing::info!("agentic loop: cancellation requested mid-stream at turn {turns}");
-                        stream_cancelled = true;
-                        break;
-                    }
+                _ = &mut cancellation => {
+                    stream_cancelled = true;
+                    break;
                 }
                 chunk_opt = llm_stream.next() => {
                     let Some(chunk) = chunk_opt else { break };
@@ -821,6 +871,8 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                         }
                         Err(e) => {
                             send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                            stream_failed = true;
+                            break;
                         }
                         Ok(StreamChunk::Done) => {
                             // Stream ended cleanly (some providers emit Done before FinishReason)
@@ -828,6 +880,12 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     }
                 }
             }
+        }
+        if stream_failed {
+            // Never dispatch partial tool calls from a failed provider stream.
+            drop(llm_stream);
+            exit_status = RunExitStatus::Error;
+            break;
         }
         if stream_cancelled {
             // Drop the stream explicitly so the underlying HTTP connection
@@ -889,8 +947,8 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             }))
             .await;
         }
-        if has_text || has_tools {
-            persist(
+        if (has_text || has_tools)
+            && let Err(error) = persist_checked(
                 &state2,
                 &agent_id2,
                 conv_id2.as_deref(),
@@ -899,7 +957,11 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     "content": text_acc,
                     "tool_calls": tool_calls_json,
                 }),
-            );
+            )
+        {
+            send(json!({ "message_type": "error", "error": error })).await;
+            exit_status = RunExitStatus::Error;
+            break;
         }
 
         // ── Done if no tool calls ──────────────────────────────────────
@@ -926,6 +988,23 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             .await;
 
         for (result, arguments) in turn_results {
+            // Durable parent history must precede both the result event and the
+            // next context rebuild. Preserve metadata used by replay/consumers.
+            if let Err(error) = persist_checked(
+                &state2,
+                &agent_id2,
+                conv_id2.as_deref(),
+                "tool",
+                json!({
+                    "content": result.output, "tool_call_id": result.tool_call_id,
+                    "tool_name": result.tool_name, "is_error": result.is_error,
+                    "ui_resource_uri": result.ui_resource_uri,
+                }),
+            ) {
+                send(json!({"message_type":"error", "error":error})).await;
+                exit_status = RunExitStatus::Error;
+                break 'agent_loop;
+            }
             // H3: persist the FULL output to the DB so future build_context
             // calls feed complete tool results back to the LLM.  Only the
             // SSE payload is truncated for GUI responsiveness.
@@ -948,22 +1027,10 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     "name":     result.tool_name,
                     "output":   output_for_sse,
                     "is_error": result.is_error,
+                    "ui_resource_uri": result.ui_resource_uri,
                 }
             }))
             .await;
-
-            // Persist the FULL output into DB so next build_context sees it.
-            persist(
-                &state2,
-                &agent_id2,
-                conv_id2.as_deref(),
-                "tool",
-                json!({
-                    "content":      result.output,
-                    "tool_call_id": result.tool_call_id,
-                    "tool_name":    result.tool_name,
-                }),
-            );
 
             // ── P1: Record observation for this tool call ─────────────────
             // Summarise the tool invocation into a lightweight observation so
@@ -1024,6 +1091,11 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             }
         }
 
+        if sqlite::is_run_cancellation_requested(&state2.db, &run_id2).unwrap_or(true) {
+            exit_status = RunExitStatus::Cancelled;
+            break;
+        }
+
         // ── Abort on a degenerate repeated-tool loop ────────────────────
         if let Some(tool_name) = loop_degenerate.take() {
             let msg = format!(
@@ -1080,11 +1152,13 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     .await;
 
     // ── End of transport stream ────────────────────────────────────────
-    let _ = tx
-        .send(Ok(runtime::RunEventEnvelope {
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(Ok(runtime::RunEventEnvelope {
             data: "[DONE]".to_string(),
-        }))
-        .await;
+        })),
+    )
+    .await;
 }
 
 pub(super) fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str) {
@@ -1232,6 +1306,126 @@ pub struct LaunchSubagentPayload {
     pub mode: String,
 }
 
+/// Project the session's finalized outcome into the inspection run. The session
+/// still owns execution, reconciliation and cleanup; this relay owns only its
+/// durable run journal and a single run_done record.
+fn direct_subagent_status(payload: &Value) -> RunExitStatus {
+    let session_status = payload["subagent_id"].as_str().and_then(|id| {
+        match cade_agent::subagents::SubagentSession::child_status(id).ok()? {
+            cade_agent::subagents::session::SubagentStatus::Finished { outcome } => Some(outcome),
+            _ => None,
+        }
+    });
+    match session_status
+        .as_deref()
+        .or_else(|| payload["status"].as_str())
+    {
+        Some("done" | "success") => RunExitStatus::Done,
+        Some("cancelled") => RunExitStatus::Cancelled,
+        _ => RunExitStatus::Error,
+    }
+}
+
+fn finalize_direct_subagent_run(
+    db: &sqlite::Db,
+    run_id: &str,
+    status: RunExitStatus,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let mut connection = db.get().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let changed = transaction.execute(
+        "UPDATE runs SET status = ?1, updated_at = ?2 WHERE id = ?3 AND status IN ('running', 'cancelling')",
+        rusqlite::params![status.as_str(), chrono::Utc::now().timestamp(), run_id],
+    ).map_err(|error| error.to_string())?;
+    if changed == 1 {
+        let mut terminal =
+            json!({"message_type":"run_done", "run_id":run_id, "status":status.as_str()});
+        if let Some(error) = error {
+            terminal["error"] = error.into();
+        }
+        transaction
+            .execute(
+                "INSERT INTO run_events (run_id, seq_id, data) VALUES (?1,
+             (SELECT COALESCE(MAX(seq_id), -1) + 1 FROM run_events WHERE run_id = ?1), ?2)",
+                rusqlite::params![run_id, terminal.to_string()],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+async fn relay_direct_subagent_run(
+    db: sqlite::Db,
+    run_id: String,
+    mut events: tokio::sync::mpsc::Receiver<
+        Result<runtime::RunEventEnvelope, std::convert::Infallible>,
+    >,
+    mut result_rx: tokio::sync::oneshot::Receiver<cade_agent::tools::manager::ToolResult>,
+    background: bool,
+) -> Result<(), String> {
+    let mut result: Option<cade_agent::tools::manager::ToolResult> = None;
+    let mut child_outcome = None;
+    let mut events_open = true;
+    loop {
+        if let Some(result) = result.as_ref() {
+            let status = if !background || result.is_error {
+                Some(match child_outcome {
+                    Some(RunExitStatus::Cancelled) => RunExitStatus::Cancelled,
+                    _ if result.is_error => RunExitStatus::Error,
+                    Some(status) => status,
+                    None => RunExitStatus::Done,
+                })
+            } else {
+                child_outcome
+            };
+            if let Some(status) = status {
+                return finalize_direct_subagent_run(
+                    &db,
+                    &run_id,
+                    status,
+                    (status == RunExitStatus::Error && result.is_error)
+                        .then_some(result.output.as_str()),
+                );
+            }
+            if !events_open {
+                // A launch acknowledgement is not a successful terminal result.
+                return finalize_direct_subagent_run(
+                    &db,
+                    &run_id,
+                    RunExitStatus::Error,
+                    Some("Background child ended without a terminal outcome"),
+                );
+            }
+        }
+        tokio::select! {
+            biased;
+            event = events.recv(), if events_open => {
+                let Some(Ok(event)) = event else { events_open = false; continue; };
+                let mut payload: Value = serde_json::from_str(&event.data).map_err(|error| error.to_string())?;
+                if payload["message_type"] == "subagent_complete" {
+                    if child_outcome.is_some() { continue; }
+                    let status = direct_subagent_status(&payload);
+                    child_outcome = Some(status);
+                    payload["status"] = status.as_str().into();
+                    payload["is_error"] = (status != RunExitStatus::Done).into();
+                }
+                payload["run_id"] = run_id.clone().into();
+                sqlite::append_run_event(&db, &run_id, &payload.to_string()).map_err(|error| error.to_string())?;
+            }
+            returned = &mut result_rx, if result.is_none() => {
+                match returned {
+                    Ok(returned) => result = Some(returned),
+                    Err(_) => return finalize_direct_subagent_run(&db, &run_id, RunExitStatus::Error,
+                        Some("Direct launch did not return an execution result")),
+                }
+            }
+        }
+    }
+}
+
 /// CLI direct invocation uses the same server-owned session, permissions and
 /// workspace setup as a subagent invoked from a parent run.
 pub async fn launch_subagent_handler(
@@ -1265,28 +1459,24 @@ pub async fn launch_subagent_handler(
         cade_store::sqlite::create_run(&state.db, &agent_id, payload.conversation_id.as_deref())
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let run_id = run.id;
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<
+    let (tx, rx) = tokio::sync::mpsc::channel::<
         Result<runtime::RunEventEnvelope, std::convert::Infallible>,
     >(128);
     // The direct response cannot carry live events. Persist them under a
     // streamable run ID, including events after a background launch returns.
     let db = state.db.clone();
     let relay_id = run_id.clone();
-    tokio::spawn(async move {
-        let mut status = "done";
-        while let Some(Ok(event)) = rx.recv().await {
-            if let Ok(payload) = serde_json::from_str::<Value>(&event.data)
-                && payload["message_type"] == "subagent_complete"
-                && payload["status"] != "success"
-                && payload["status"] != "done"
-            {
-                status = "error";
-            }
-            if let Err(error) = cade_store::sqlite::append_run_event(&db, &relay_id, &event.data) {
-                tracing::warn!(%relay_id, %error, "failed to persist CLI subagent event");
-            }
+    let background = cade_agent::subagents::SubagentConfig::from_args(&payload.args).background;
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let relay = runtime::spawn_in_execution_scope(async move {
+        let outcome =
+            relay_direct_subagent_run(db.clone(), relay_id.clone(), rx, result_rx, background)
+                .await;
+        if let Err(error) = outcome.as_ref() {
+            tracing::error!(%relay_id, %error, "failed to journal direct subagent outcome");
+            let _ = sqlite::finish_run(&db, &relay_id, "error");
         }
-        let _ = cade_store::sqlite::finish_run(&db, &relay_id, status);
+        outcome
     });
     let result = subagent::handle_run_subagent_tool_inner(
         &state,
@@ -1298,6 +1488,18 @@ pub async fn launch_subagent_handler(
         mode,
     )
     .await;
+    result_tx.send(result.clone()).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "direct subagent outcome relay stopped".to_owned(),
+        )
+    })?;
+    if !background || result.is_error {
+        relay
+            .await
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    }
     Ok(Json(
         json!({"output": result.output, "is_error": result.is_error, "run_id": run_id}),
     ))

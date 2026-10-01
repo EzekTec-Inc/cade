@@ -281,50 +281,197 @@ async fn test_workflow_dispatch_success_with_config() {
 
 #[tokio::test]
 async fn test_workflow_dispatch_runs_background_execution() {
-    let state = make_state(Some("tok".into()));
-    let app = router(state.clone());
+    use crate::server::workflows::WorkflowEngine;
+    use cade_ai::{CompletionRequest, CompletionResponse, LlmProvider, StreamChunk};
+    use cade_api_types::WorkflowStatus;
+    use cade_store::sqlite;
 
-    // Create a temporary workflow config file on disk
+    struct ControlledWorkflowProvider {
+        started: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<CompletionRequest>>>,
+        release: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for ControlledWorkflowProvider {
+        async fn complete(&self, _: &CompletionRequest) -> cade_ai::Result<CompletionResponse> {
+            Err(cade_ai::Error::custom(
+                "Workflow fixture exercises the streaming runtime",
+            ))
+        }
+        async fn stream(
+            &self,
+            request: &CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<Box<dyn futures::Stream<Item = cade_ai::Result<StreamChunk>> + Send>>,
+        > {
+            self.started
+                .lock()
+                .await
+                .take()
+                .expect("Exactly one canonical agent turn")
+                .send(request.clone())
+                .unwrap();
+            let release = self.release.clone();
+            Ok(Box::pin(futures::StreamExt::chain(
+                futures::stream::once(async move {
+                    release.notified().await;
+                    Ok(StreamChunk::Text("actual legacy workflow outcome".into()))
+                }),
+                futures::stream::iter([Ok(StreamChunk::Done)]),
+            )))
+        }
+    }
+    struct WorkflowFixture(std::path::PathBuf);
+    impl Drop for WorkflowFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut state = make_state(Some("tok".into()));
+    state.llm = Arc::new(ControlledWorkflowProvider {
+        started: tokio::sync::Mutex::new(Some(started_tx)),
+        release: release.clone(),
+    });
+    let app = router(state.clone());
+    let name = format!("test_background_workflow_{}", uuid::Uuid::new_v4());
+    let agent_id = format!("agent-workflow-{name}");
+
+    // Exercise the supported legacy file format, without overwriting another
+    // test's or the user's workflow and without mutating process cwd.
     let workflows_dir = std::path::Path::new(".cade/workflows");
     std::fs::create_dir_all(workflows_dir).unwrap();
-    let config_path = workflows_dir.join("test_background_workflow.json");
+    let fixture = WorkflowFixture(workflows_dir.join(format!("{name}.json")));
     std::fs::write(
-        &config_path,
-        r#"{
-            "name": "test_background_workflow",
-            "agent": "test-background-agent",
-            "model": "openai/gpt-4o",
+        &fixture.0,
+        serde_json::json!({
+            "name": name, "agent": "test-background-agent",
+            "model": state.config.default_model,
             "prompt": "Test background system prompt"
-        }"#,
+        })
+        .to_string(),
     )
     .unwrap();
 
     let req = Request::builder()
         .method(Method::POST)
-        .uri("/v1/workflows/test_background_workflow")
+        .uri(format!("/v1/workflows/{name}"))
         .header("Authorization", "Bearer tok")
         .header("Content-Type", "application/json")
         .body(Body::from(r#"{"issueNumber": 42}"#))
         .unwrap();
 
-    let resp = app.oneshot(req).await.unwrap();
+    // Returning an accepted run must not wait for provider completion.
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(10), app.clone().oneshot(req))
+        .await
+        .expect("Webhook must return while the provider is still blocked")
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-    // Verify the response body contains the newly generated run ID (execution_id)
     let body_bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
         .await
         .unwrap();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let execution_id = body_json["execution_id"].as_str().unwrap();
+    let workflow_run_id = body_json["run_id"].as_str().unwrap();
 
-    // Verify that the run record exists in the database
-    let run = cade_store::sqlite::get_run(&state.db, execution_id)
+    // The legacy execution_id is a canonical agent run, already durable when
+    // the webhook acknowledges it. The DAG's aggregate ID is a separate field.
+    let run = sqlite::get_run(&state.db, execution_id)
+        .unwrap()
+        .expect("execution_id must identify an accepted canonical agent run");
+    assert_eq!(run.agent_id, agent_id);
+    assert_eq!(run.status, "running");
+    assert_ne!(execution_id, workflow_run_id);
+    assert_eq!(body_json["agent_id"], agent_id);
+    assert_eq!(body_json["status"], "triggered");
+    let record = sqlite::get_workflow_run(&state.db, workflow_run_id)
         .unwrap()
         .unwrap();
-    assert_eq!(run.agent_id, "agent-workflow-test_background_workflow");
+    assert_eq!(record.workflow_name, name);
+    assert_eq!(record.status, "running");
 
-    // Clean up
-    let _ = std::fs::remove_file(config_path);
+    let completion_request = tokio::time::timeout(std::time::Duration::from_secs(10), started_rx)
+        .await
+        .expect("Canonical runtime must reach the controlled provider")
+        .unwrap();
+    assert_eq!(completion_request.model, state.config.default_model);
+    assert!(
+        completion_request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("Test background system prompt"))
+    );
+    assert!(
+        completion_request.messages.iter().any(
+            |message| message.content.contains("issueNumber") && message.content.contains("42")
+        )
+    );
+    let mut events = WorkflowEngine::new(state.clone())
+        .subscribe_events(workflow_run_id)
+        .await
+        .unwrap();
+    release.notify_one();
+    let terminal_events = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let mut received = Vec::new();
+        while let Ok(event) = events.recv().await {
+            received.push(event);
+        }
+        received
+    })
+    .await
+    .expect("Workflow must finalize from the actual provider outcome");
+    assert!(
+        terminal_events
+            .iter()
+            .any(|event| event.status == WorkflowStatus::Succeeded
+                && event.output_chunk.as_deref() == Some("actual legacy workflow outcome"))
+    );
+    assert!(!terminal_events.iter().any(|event| matches!(
+        event.status,
+        WorkflowStatus::Failed | WorkflowStatus::Cancelled
+    )));
+    assert_eq!(
+        sqlite::get_run(&state.db, execution_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "done"
+    );
+    let record = sqlite::get_workflow_run(&state.db, workflow_run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.status, "succeeded");
+    assert!(record.completed_at.is_some());
+    let runs = sqlite::list_agent_runs(&state.db, &agent_id, 10).unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "One canonical run for the legacy webhook step"
+    );
+    let messages =
+        sqlite::list_messages(&state.db, &agent_id, run.conversation_id.as_deref(), 20).unwrap();
+    assert!(messages.iter().any(|message| message.role == "assistant"
+        && message.content["content"] == "actual legacy workflow outcome"));
+
+    let missing = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/v1/workflows/undefined_{name}"))
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(missing).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        sqlite::list_workflow_runs(&state.db, None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

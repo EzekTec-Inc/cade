@@ -555,11 +555,14 @@ pub(crate) fn prepare_timeline_entries(
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
+    item_cache.validate_context(width, colors, nerd);
+    let mut live_keys = std::collections::HashSet::with_capacity(entries.len());
+
     let last_user_idx = entries
         .iter()
         .rposition(|e| e.key.kind == TimelineItemKind::User);
 
-    entries
+    let prepared = entries
         .iter()
         .enumerate()
         .map(|(i, entry)| {
@@ -611,6 +614,7 @@ pub(crate) fn prepare_timeline_entries(
                 content_hash,
                 is_active_turn,
             };
+            live_keys.insert(cache_key.clone());
 
             if let Some(cached) = item_cache.get(&cache_key) {
                 return cached.clone();
@@ -662,7 +666,11 @@ pub(crate) fn prepare_timeline_entries(
             item_cache.insert(cache_key, prepared.clone());
             prepared
         })
-        .collect()
+        .collect();
+    // Reclaim replaced revisions, fold variants and server-compacted entries.
+    // This prunes prepared artifacts only; conversation history is untouched.
+    item_cache.cache.retain(|key, _| live_keys.contains(key));
+    prepared
 }
 
 pub(crate) fn render_timeline_viewport(
@@ -866,13 +874,35 @@ pub(crate) struct PreparedCacheKey {
 #[derive(Clone, Default)]
 pub(crate) struct PreparedCache {
     pub(crate) cache: std::collections::HashMap<PreparedCacheKey, PreparedTimelineEntry>,
+    context: Option<(usize, u64, bool)>,
+    live_revisions: std::collections::HashMap<TimelineItemKind, Option<u64>>,
 }
 
 impl PreparedCache {
     pub fn new() -> Self {
-        Self {
-            cache: std::collections::HashMap::new(),
+        Self::default()
+    }
+
+    /// All entry points (including direct prepare_entries calls) use this
+    /// validity boundary, rather than relying on caller-managed cache clears.
+    fn validate_context(&mut self, width: usize, colors: &ThemeColors, nerd: bool) -> bool {
+        let context = (width, crate::colors::theme_fingerprint(colors), nerd);
+        if self.context == Some(context) {
+            return false;
         }
+        self.cache.clear();
+        self.context = Some(context);
+        true
+    }
+
+    fn live_changed(&mut self, kind: TimelineItemKind, text: Option<&str>) -> bool {
+        use std::hash::{Hash, Hasher};
+        let revision = text.map(|text| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            text.hash(&mut hash);
+            hash.finish()
+        });
+        self.live_revisions.insert(kind, revision) != Some(revision)
     }
 
     pub fn get(&self, key: &PreparedCacheKey) -> Option<&PreparedTimelineEntry> {
@@ -885,6 +915,8 @@ impl PreparedCache {
 
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.context = None;
+        self.live_revisions.clear();
     }
 }
 
@@ -933,6 +965,7 @@ pub(crate) struct StreamingMarkdownCache {
     pub cached_width: usize,
     /// Nerd font preference used for header icon.
     pub cached_nerd: bool,
+    cached_theme: u64,
 }
 
 impl StreamingMarkdownCache {
@@ -954,10 +987,12 @@ impl StreamingMarkdownCache {
         nerd: bool,
     ) -> Vec<Line<'static>> {
         // Invalidate if width or nerd font settings change
-        if self.cached_width != width || self.cached_nerd != nerd {
+        let theme = crate::colors::theme_fingerprint(colors);
+        if self.cached_width != width || self.cached_nerd != nerd || self.cached_theme != theme {
             self.clear();
             self.cached_width = width;
             self.cached_nerd = nerd;
+            self.cached_theme = theme;
         }
 
         // Clean historical-scratchpad if present
@@ -1103,6 +1138,9 @@ impl TimelineLayoutEngine {
         if self.is_processing != processing {
             self.is_processing = processing;
             self.tail_dirty = true;
+            self.streaming_entry = None;
+            self.reasoning_entry = None;
+            self.status_entry = None;
         }
     }
 
@@ -1131,7 +1169,10 @@ impl TimelineLayoutEngine {
         if streaming.is_none() {
             self.streaming_cache.clear();
         }
-        if self.streaming_text.as_deref() != streaming {
+        if self
+            .item_cache
+            .live_changed(TimelineItemKind::StreamingAssistant, streaming)
+        {
             self.streaming_text = streaming.map(String::from);
             self.streaming_entry = None; // Invalidate the single-entry streaming cache
             self.tail_dirty = true;
@@ -1139,7 +1180,10 @@ impl TimelineLayoutEngine {
     }
 
     pub fn set_active_reasoning(&mut self, reasoning: Option<&str>) {
-        if self.reasoning_text.as_deref() != reasoning {
+        if self
+            .item_cache
+            .live_changed(TimelineItemKind::Reasoning, reasoning)
+        {
             self.reasoning_text = reasoning.map(String::from);
             self.reasoning_entry = None; // Invalidate the single-entry reasoning cache
             self.tail_dirty = true;
@@ -1147,7 +1191,10 @@ impl TimelineLayoutEngine {
     }
 
     pub fn set_active_status(&mut self, status: Option<&str>) {
-        if self.status_text.as_deref() != status {
+        if self
+            .item_cache
+            .live_changed(TimelineItemKind::Status, status)
+        {
             self.status_text = status.map(String::from);
             // The status entry is rebuilt every frame (its spinner text is
             // animated by the caller), so only the text cache is updated here.
@@ -1266,6 +1313,15 @@ impl TimelineLayoutEngine {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
+        let context_changed = self.item_cache.validate_context(timeline_w, colors, nerd);
+        if context_changed {
+            self.streaming_entry = None;
+            self.reasoning_entry = None;
+            self.status_entry = None;
+            self.streaming_cache.clear();
+            self.tail_dirty = true;
+        }
+
         // Derive a stable hash of expanded_items for cache invalidation.
         let expanded_hash = {
             let mut h = DefaultHasher::new();
@@ -1279,6 +1335,7 @@ impl TimelineLayoutEngine {
 
         // Check if historical layout remains exactly the same
         let history_clean = self.version == content_version
+            && !context_changed
             && self.timeline_w == timeline_w
             && self.expand_all == expand_all
             && self.expanded_hash == expanded_hash
@@ -1289,13 +1346,6 @@ impl TimelineLayoutEngine {
             &self.entries
         } else {
             // Cache miss for history — rebuild everything
-            if self.timeline_w != timeline_w {
-                self.item_cache.clear();
-                self.streaming_entry = None; // clear streaming cache as width changed
-                self.reasoning_entry = None; // clear reasoning cache as width changed
-                self.status_entry = None; // clear status cache as width changed
-                self.tail_dirty = true;
-            }
             let entries = build_timeline_entries(lines);
             let p = prepare_timeline_entries(
                 &entries,

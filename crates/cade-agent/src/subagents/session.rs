@@ -141,6 +141,10 @@ pub trait SubagentToolExecutor: Send + Sync {
         false
     }
 
+    /// Execute in `execution_path`: native relative file paths, filesystem root
+    /// validation and subprocess cwd must all use this request-local directory.
+    /// An adapter that cannot honor it must return an error. Process-wide cwd
+    /// and environment mutation cannot safely isolate concurrent children.
     async fn execute_tool(
         &self,
         tool_call_id: &str,
@@ -148,6 +152,17 @@ pub trait SubagentToolExecutor: Send + Sync {
         arguments: &Value,
         execution_path: &Path,
     ) -> Result<String, String>;
+}
+
+/// Host-owned ephemeral resources transferred to the session for teardown.
+/// Successful writeback and failure discard run before the terminal outcome is
+/// published. Implementations must also support synchronous discard on drop.
+#[async_trait]
+pub trait SubagentCleanup: Send + Sync {
+    /// Finalize resources; report writeback and deletion failures to the child.
+    async fn finalize(&mut self, success: bool) -> Result<(), String>;
+    /// Discard resources after abrupt owner drop. Must be idempotent.
+    fn discard(&mut self) -> Result<(), String>;
 }
 
 /// Structured memory finding produced during subagent execution for writeback.
@@ -404,6 +419,28 @@ impl SubagentEventEmitter {
             let _ = btx.send(event);
         }
     }
+
+    // Terminal state is stored before publication. Publishing must not be
+    // cancelled halfway through finalization, nor block workspace teardown.
+    fn emit_terminal(&self, outcome: SubagentOutcome) {
+        let event = SubagentEvent::Finished { outcome };
+        if let Some(tx) = &self.broadcast_tx {
+            let _ = tx.send(event.clone());
+        }
+        if let Some(tx) = &self.tx {
+            match tx.try_send(event) {
+                Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        let tx = tx.clone();
+                        handle.spawn(async move {
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                }
+                Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+            }
+        }
+    }
 }
 
 /// Human-In-The-Loop approval verdict.
@@ -615,7 +652,7 @@ pub struct SubagentSession {
     pub current_iteration: usize,
     pub cumulative_tokens: u64,
     pub total_tool_calls: usize,
-    pub workspace_guard: Option<IsolatedWorkspaceGuard>,
+    workspace_guard: Option<IsolatedWorkspaceGuard>,
     pub event_emitter: SubagentEventEmitter,
     pub findings: Vec<SubagentFinding>,
     pub approval_channel: SubagentApprovalChannel,
@@ -623,10 +660,15 @@ pub struct SubagentSession {
     pub tool_policy: Option<SubagentToolPolicy>,
     pub steering_queue: Vec<String>,
     pub pending_model_swap: Option<String>,
+    /// Legacy control handle; hosts should observe `subscribe_pause` and use the
+    /// identified-child control methods rather than mutate terminal state.
     pub pause: SubagentPause,
     model_control: Option<SubagentModelControl>,
     parent_context: Vec<SubagentMessage>,
     control: Option<SubagentControl>,
+    completion: SubagentCompletion,
+    cleanup: Vec<Box<dyn SubagentCleanup>>,
+    workspace_applied: bool,
 }
 
 /// In-process lifecycle and next-turn guidance for an identified child.
@@ -659,6 +701,7 @@ struct ControlState {
     guidance: Vec<String>,
     pause: SubagentPause,
     model: SubagentModelControl,
+    completion: SubagentCompletion,
 }
 
 fn controls() -> &'static Mutex<HashMap<String, SubagentControl>> {
@@ -680,11 +723,19 @@ impl SubagentControl {
     }
 
     pub fn running(&self) {
-        self.0.lock().unwrap().status = SubagentStatus::Running;
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.completion.is_finishing()
+            && !matches!(state.status, SubagentStatus::Finished { .. })
+        {
+            state.status = SubagentStatus::Running;
+        }
     }
 
     pub fn finished(&self, outcome: impl Into<String>) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(state.status, SubagentStatus::Finished { .. }) {
+            return;
+        }
         state.status = SubagentStatus::Finished {
             outcome: outcome.into(),
         };
@@ -698,6 +749,9 @@ impl SubagentControl {
 
     pub fn set_paused(&self, resume: bool) -> Result<SubagentPauseState, String> {
         let state = self.0.lock().unwrap();
+        if state.completion.is_finishing() {
+            return Err("subagent is finalizing or finished".into());
+        }
         (if resume {
             state.pause.resume()
         } else {
@@ -708,7 +762,9 @@ impl SubagentControl {
 
     pub fn request_model(&self, model: String) -> Result<(), String> {
         let state = self.0.lock().unwrap();
-        if matches!(state.status, SubagentStatus::Finished { .. }) {
+        if state.completion.is_finishing()
+            || matches!(state.status, SubagentStatus::Finished { .. })
+        {
             return Err("subagent is no longer accepting model changes".into());
         }
         state.model.request(model).map_err(str::to_string)
@@ -716,6 +772,9 @@ impl SubagentControl {
 
     pub fn steer(&self, message: String) -> Result<(), String> {
         let mut state = self.0.lock().unwrap();
+        if state.completion.is_finishing() {
+            return Err("subagent is finalizing or finished".into());
+        }
         let status = match state.pause.state() {
             SubagentPauseState::PauseRequested => SubagentStatus::PauseRequested,
             SubagentPauseState::Paused => SubagentStatus::Paused,
@@ -742,6 +801,9 @@ impl SubagentControl {
 impl SubagentSession {
     /// Register the stable child ID when the invocation is admitted.
     pub fn register_control(&mut self, queued: bool) -> SubagentControl {
+        if let Some(control) = &self.control {
+            return control.clone();
+        }
         let model = self
             .model_control
             .get_or_insert_with(SubagentModelControl::new)
@@ -755,6 +817,7 @@ impl SubagentSession {
             guidance: Vec::new(),
             pause: self.pause.clone(),
             model,
+            completion: self.completion(),
         })));
         controls()
             .lock()
@@ -815,15 +878,19 @@ impl SubagentSession {
 
 impl Drop for SubagentSession {
     fn drop(&mut self) {
-        if let Some(control) = &self.control
-            && !matches!(control.status(), SubagentStatus::Finished { .. })
-        {
-            control.finished("error");
+        if self.completion.outcome().is_some() {
+            return;
         }
-        self.pause.finish();
-        if let Some(model) = &self.model_control {
-            model.close();
+        if std::thread::panicking() {
+            self.completion.interrupt(SubagentLaunchFailure::Panicked);
         }
+        let reason = self
+            .completion
+            .failure()
+            .map(|f| f.to_string())
+            .unwrap_or_else(|| "Subagent execution dropped before completion".into());
+        let outcome = self.discard_resources(SubagentOutcome::Failed { error: reason });
+        self.publish_outcome(outcome);
     }
 }
 
@@ -882,21 +949,75 @@ impl std::fmt::Display for SubagentLaunchFailure {
     }
 }
 
+/// Read-only receipt for an independently owned child's actual terminal result.
+/// The receipt is populated after workspace cleanup, including interrupted or
+/// panicking executions whose owner was dropped. It cannot control the child.
+#[derive(Clone, Default)]
+pub struct SubagentCompletion(Arc<Mutex<CompletionState>>);
+
+#[derive(Default)]
+struct CompletionState {
+    outcome: Option<SubagentOutcome>,
+    failure: Option<SubagentLaunchFailure>,
+    finishing: bool,
+    cancellation_requested: bool,
+}
+
+impl SubagentCompletion {
+    /// Finalization is a commit boundary: new control requests are refused.
+    pub fn is_finishing(&self) -> bool {
+        let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.finishing || state.failure.is_some() || state.outcome.is_some()
+    }
+    /// The once-only terminal result, including reconciliation/cleanup errors.
+    pub fn outcome(&self) -> Option<SubagentOutcome> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .outcome
+            .clone()
+    }
+
+    /// Why execution was interrupted, if applicable. Cleanup can additionally
+    /// fail; consult `outcome` for the full diagnostic.
+    pub fn failure(&self) -> Option<SubagentLaunchFailure> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).failure
+    }
+
+    fn interrupt(&self, reason: SubagentLaunchFailure) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.outcome.is_none() && state.failure.is_none() {
+            state.failure = Some(reason);
+        }
+    }
+}
+
 /// A single-use cancellation request. Shared clones cannot acknowledge the
 /// same request twice, and a dropped receiver is never reported as live.
 #[derive(Clone)]
 pub struct SubagentCancellation {
     inner: Arc<Mutex<(tokio::sync::mpsc::Sender<()>, bool)>>,
+    completion: Option<SubagentCompletion>,
 }
 
 impl SubagentCancellation {
     pub fn new(sender: tokio::sync::mpsc::Sender<()>) -> Self {
         Self {
             inner: Arc::new(Mutex::new((sender, false))),
+            completion: None,
         }
     }
 
     pub fn cancel(&self) -> Result<(), &'static str> {
+        let mut completion = self
+            .completion
+            .as_ref()
+            .map(|receipt| receipt.0.lock().unwrap_or_else(|e| e.into_inner()));
+        if completion.as_ref().is_some_and(|state| {
+            state.finishing || state.failure.is_some() || state.outcome.is_some()
+        }) {
+            return Err("subagent is finalizing or finished");
+        }
         let mut state = self
             .inner
             .lock()
@@ -909,6 +1030,9 @@ impl SubagentCancellation {
             .try_send(())
             .map_err(|_| "subagent is no longer accepting cancellation")?;
         state.1 = true;
+        if let Some(completion) = completion.as_mut() {
+            completion.cancellation_requested = true;
+        }
         Ok(())
     }
 
@@ -918,13 +1042,19 @@ impl SubagentCancellation {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .1 = true;
     }
+
+    /// Bind cancellation admission to the child's finalization boundary.
+    pub fn with_completion(mut self, completion: SubagentCompletion) -> Self {
+        self.completion = Some(completion);
+        self
+    }
 }
 
 impl SubagentSession {
     /// Transfer ownership of a child to the runtime before waiting for a slot.
     /// Completion is delivered once even if the invoking future has ended.
     pub fn launch_background<R, F, Fut, D, Delivery>(
-        self,
+        mut self,
         semaphore: Arc<Semaphore>,
         timeout: Duration,
         mut cancel: tokio::sync::mpsc::Receiver<()>,
@@ -942,24 +1072,99 @@ impl SubagentSession {
             child_id: self.session_id.clone(),
             queued: semaphore.available_permits() == 0,
         };
+        let completion = self.completion();
         tokio::spawn(async move {
-            let result = tokio::select! {
-                biased;
-                Some(()) = cancel.recv() => Err(SubagentLaunchFailure::Cancelled),
-                acquired = tokio::time::timeout(timeout, semaphore.acquire_owned()) => match acquired {
-                    Ok(Ok(permit)) => tokio::select! {
+            let acquired = self.acquire_slot(semaphore, timeout, &mut cancel).await;
+            let result = match acquired {
+                Err(reason) => Err(reason),
+                Ok(permit) => {
+                    let future =
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            run(self, permit)
+                        })) {
+                            Ok(future) => future,
+                            Err(_) => {
+                                completion.interrupt(SubagentLaunchFailure::Panicked);
+                                deliver(Err(SubagentLaunchFailure::Panicked)).await;
+                                return;
+                            }
+                        };
+                    // Box the owned future explicitly: it must be dropped (and
+                    // finish cleanup) before completion is delivered.
+                    let mut running = Box::pin(std::panic::AssertUnwindSafe(future).catch_unwind());
+                    let result = tokio::select! {
                         biased;
-                        Some(()) = cancel.recv() => Err(SubagentLaunchFailure::Cancelled),
-                        outcome = std::panic::AssertUnwindSafe(run(self, permit)).catch_unwind() =>
-                            outcome.map_err(|_| SubagentLaunchFailure::Panicked),
-                    },
-                    Ok(Err(_)) => Err(SubagentLaunchFailure::Closed),
-                    Err(_) => Err(SubagentLaunchFailure::TimedOut),
+                        Some(()) = cancel.recv() => {
+                            if completion.is_finishing() {
+                                // A committed completion cannot be turned into
+                                // cancellation by dropping its cleanup owner.
+                                running.as_mut().await.map_err(|_| SubagentLaunchFailure::Panicked)
+                            } else {
+                                completion.interrupt(SubagentLaunchFailure::Cancelled);
+                                Err(SubagentLaunchFailure::Cancelled)
+                            }
+                        }
+                        outcome = &mut running => match outcome {
+                            Ok(result) => Ok(result),
+                            Err(_) => {
+                                completion.interrupt(SubagentLaunchFailure::Panicked);
+                                Err(SubagentLaunchFailure::Panicked)
+                            }
+                        },
+                    };
+                    drop(running);
+                    result
                 }
             };
             deliver(result).await;
         });
         launch
+    }
+
+    /// The stable, read-only completion receipt survives transfer to a child.
+    pub fn completion(&self) -> SubagentCompletion {
+        self.completion.clone()
+    }
+
+    /// Observe pause transitions without exposing lifecycle mutation to hosts.
+    pub fn subscribe_pause(&self) -> tokio::sync::watch::Receiver<SubagentPauseState> {
+        self.pause.subscribe()
+    }
+
+    /// Wait for a concurrency slot while retaining queued cancellation. All
+    /// admission failures finalize through the same session-owned cleanup path.
+    ///
+    /// # Errors
+    /// Returns cancellation, queue timeout, or a closed semaphore.
+    pub async fn acquire_slot(
+        &mut self,
+        semaphore: Arc<Semaphore>,
+        timeout: Duration,
+        cancel: &mut tokio::sync::mpsc::Receiver<()>,
+    ) -> Result<OwnedSemaphorePermit, SubagentLaunchFailure> {
+        if self.completion.outcome().is_some() {
+            return Err(SubagentLaunchFailure::Closed);
+        }
+        let result = tokio::select! {
+                biased;
+                Some(()) = cancel.recv() => Err(SubagentLaunchFailure::Cancelled),
+                acquired = tokio::time::timeout(timeout, semaphore.acquire_owned()) => match acquired {
+                    Ok(Ok(permit)) => Ok(permit),
+                    Ok(Err(_)) => Err(SubagentLaunchFailure::Closed),
+                    Err(_) => Err(SubagentLaunchFailure::TimedOut),
+                }
+        };
+        match &result {
+            Ok(_) => {
+                if let Some(control) = &self.control {
+                    control.running();
+                }
+            }
+            Err(reason) => {
+                self.finalize_interruption(*reason).await;
+            }
+        }
+        result
     }
     /// Create a new subagent session instance.
     pub fn new(config: SubagentConfig, parent_agent_id: impl Into<String>) -> Self {
@@ -986,6 +1191,9 @@ impl SubagentSession {
             model_control: None,
             parent_context: Vec::new(),
             control: None,
+            completion: SubagentCompletion::default(),
+            cleanup: Vec::new(),
+            workspace_applied: false,
         }
     }
 
@@ -1049,13 +1257,25 @@ impl SubagentSession {
         primary_path: &Path,
         branch_name: Option<String>,
     ) -> std::io::Result<()> {
-        self.workspace_guard = None;
+        if self.completion.outcome().is_some() || self.workspace_guard.is_some() {
+            return Err(std::io::Error::other(
+                "Subagent workspace is already prepared or finalized",
+            ));
+        }
         self.workspace_guard = Some(IsolatedWorkspaceGuard::new(primary_path, branch_name).await?);
         Ok(())
     }
 
     pub fn with_event_emitter(mut self, emitter: SubagentEventEmitter) -> Self {
         self.event_emitter = emitter;
+        self
+    }
+
+    /// Transfer ephemeral host resources to this child's cleanup owner.
+    /// Resources finalize in reverse registration order, so admission resources
+    /// outlive workspace execution and its later-registered ephemeral state.
+    pub fn with_cleanup(mut self, cleanup: Box<dyn SubagentCleanup>) -> Self {
+        self.cleanup.push(cleanup);
         self
     }
 
@@ -1148,53 +1368,166 @@ impl SubagentSession {
             .await;
     }
 
-    /// Finalize execution outcome, committing workspace if successful and emitting event.
+    /// Finalize once, reconciling successful work and closing the workspace on
+    /// every outcome. The returned result includes merge and cleanup failures.
     pub async fn finalize_outcome(&mut self, outcome: SubagentOutcome) -> SubagentOutcome {
+        if let Some(finalized) = self.completion.outcome() {
+            return finalized;
+        }
+        let mut outcome = {
+            let mut completion = self.completion.0.lock().unwrap_or_else(|e| e.into_inner());
+            // Cancellation admission and the commit boundary share this lock:
+            // an acknowledged request cannot be lost between the last turn and
+            // workspace reconciliation.
+            completion.finishing = true;
+            if completion.cancellation_requested {
+                completion.failure = Some(SubagentLaunchFailure::Cancelled);
+                let mut error = SubagentLaunchFailure::Cancelled.to_string();
+                if !outcome.is_success() && outcome.summary_text() != error.as_str() {
+                    error.push_str(&format!(
+                        "; prior execution outcome: {}",
+                        outcome.summary_text()
+                    ));
+                }
+                SubagentOutcome::Failed { error }
+            } else {
+                outcome
+            }
+        };
+        if let SubagentOutcome::Done {
+            iterations,
+            tool_calls_count,
+            token_usage,
+            ..
+        } = &mut outcome
+        {
+            *iterations = self.current_iteration;
+            *tool_calls_count = self.total_tool_calls;
+            *token_usage = self.cumulative_tokens as usize;
+        }
+        if let Some(guard) = &mut self.workspace_guard
+            && let Err(error) = guard.finalize(outcome.is_success()).await
+        {
+            outcome = Self::cleanup_failed(outcome, error);
+        }
+        self.workspace_applied |= self
+            .workspace_guard
+            .as_ref()
+            .is_some_and(IsolatedWorkspaceGuard::is_committed);
+        self.workspace_guard = None;
+        for cleanup in self.cleanup.iter_mut().rev() {
+            if let Err(error) = cleanup.finalize(outcome.is_success()).await {
+                outcome = Self::resource_cleanup_failed(outcome, error);
+            }
+        }
+        self.cleanup.clear();
+        self.annotate_applied_workspace(&mut outcome);
+        self.publish_outcome(outcome.clone());
+        outcome
+    }
+
+    fn cleanup_failed(outcome: SubagentOutcome, error: std::io::Error) -> SubagentOutcome {
+        SubagentOutcome::Failed {
+            error: format!(
+                "workspace finalization failed: {error}; prior execution outcome: {}",
+                outcome.summary_text()
+            ),
+        }
+    }
+
+    fn resource_cleanup_failed(outcome: SubagentOutcome, error: String) -> SubagentOutcome {
+        SubagentOutcome::Failed {
+            error: format!(
+                "ephemeral cleanup/writeback failed: {error}; prior execution outcome: {}",
+                outcome.summary_text()
+            ),
+        }
+    }
+
+    fn annotate_applied_workspace(&self, outcome: &mut SubagentOutcome) {
+        if self.workspace_applied
+            && let SubagentOutcome::Failed { error } = outcome
+        {
+            *error = format!(
+                "isolated workspace reconciliation succeeded before cleanup failed; {error}"
+            );
+        }
+    }
+
+    // Used by both owner drop and a finalization deadline. No asynchronous
+    // cleanup can keep a terminated child (or its concurrency slot) alive.
+    fn discard_resources(&mut self, mut outcome: SubagentOutcome) -> SubagentOutcome {
+        if let Some(mut guard) = self.workspace_guard.take() {
+            self.workspace_applied |= guard.is_committed();
+            if let Err(error) = guard.close() {
+                outcome = Self::cleanup_failed(outcome, error);
+            }
+        }
+        for mut cleanup in std::mem::take(&mut self.cleanup).into_iter().rev() {
+            if let Err(error) = cleanup.discard() {
+                outcome = Self::resource_cleanup_failed(outcome, error);
+            }
+        }
+        self.annotate_applied_workspace(&mut outcome);
+        outcome
+    }
+
+    fn publish_outcome(&mut self, outcome: SubagentOutcome) {
+        {
+            let mut completion = self.completion.0.lock().unwrap_or_else(|e| e.into_inner());
+            if completion.outcome.is_some() {
+                return;
+            }
+            completion.outcome = Some(outcome.clone());
+        }
         self.pause.finish();
         if let Some(control) = &self.model_control {
             control.close();
         }
-        let outcome = if outcome.is_success() {
-            if let Some(ref mut guard) = self.workspace_guard {
-                match guard.commit_and_merge().await {
-                    Ok(()) => outcome,
-                    Err(e) => SubagentOutcome::Failed {
-                        error: format!("Failed to merge isolated workspace changes back: {e}"),
-                    },
-                }
-            } else {
-                outcome
-            }
-        } else {
-            outcome
-        };
-        // Release the workspace on every terminal outcome, not only when the
-        // session itself is eventually dropped.
-        self.workspace_guard = None;
+        self.steering_queue.clear();
+        self.pending_model_swap = None;
         if let Some(control) = &self.control {
-            control.finished(match &outcome {
-                SubagentOutcome::Done { .. } => "done",
-                SubagentOutcome::Blocked { .. } => "blocked",
-                SubagentOutcome::Failed { .. } => "error",
-                SubagentOutcome::Exhausted { .. } => "exhausted",
+            control.finished(match self.completion.failure() {
+                Some(SubagentLaunchFailure::Cancelled) => "cancelled",
+                Some(SubagentLaunchFailure::TimedOut) => "timeout",
+                Some(SubagentLaunchFailure::Closed | SubagentLaunchFailure::Panicked) => "error",
+                None => match &outcome {
+                    SubagentOutcome::Done { .. } => "done",
+                    SubagentOutcome::Blocked { .. } => "blocked",
+                    SubagentOutcome::Failed { .. } => "error",
+                    SubagentOutcome::Exhausted { .. } => "exhausted",
+                },
             });
         }
-        self.event_emitter
-            .emit(SubagentEvent::Finished {
-                outcome: outcome.clone(),
-            })
-            .await;
-        outcome
+        self.event_emitter.emit_terminal(outcome);
+    }
+
+    /// Finalize an admission failure or interrupted run using session ownership.
+    pub async fn finalize_interruption(
+        &mut self,
+        reason: SubagentLaunchFailure,
+    ) -> SubagentOutcome {
+        self.completion.interrupt(reason);
+        self.finalize_outcome(SubagentOutcome::Failed {
+            error: reason.to_string(),
+        })
+        .await
     }
 
     /// Enqueue a steering message to be prioritized on the subagent's subsequent turn.
     pub fn steer(&mut self, message: String) -> bool {
+        if self.completion.is_finishing() {
+            return false;
+        }
         self.steering_queue.push(message);
         true
     }
 
     /// Request a model hot-swap taking effect on the subsequent turn.
     pub fn hot_swap_model(&mut self, new_model: String) -> bool {
+        if self.completion.is_finishing() {
+            return false;
+        }
         self.pending_model_swap = Some(new_model);
         true
     }
@@ -1258,8 +1591,127 @@ impl SubagentSession {
         }
     }
 
+    /// Execute with session-owned wall-clock timeout, cancellation and panic
+    /// handling. Interrupted tool/approval futures are dropped before cleanup;
+    /// the host receives the actual finalized result through this same seam.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_controlled<L: SubagentLlmExecutor, T: SubagentToolExecutor>(
+        &mut self,
+        llm: &L,
+        tools: &T,
+        model: String,
+        system_prompt: String,
+        initial_prompt: String,
+        tool_schemas: Vec<Value>,
+        failover_models: Vec<String>,
+        primary_path: &Path,
+        timeout: Duration,
+        cancel: &mut tokio::sync::mpsc::Receiver<()>,
+    ) -> SubagentOutcome {
+        if let Some(outcome) = self.completion.outcome() {
+            return outcome;
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        let result = {
+            let run = std::panic::AssertUnwindSafe(self.run_reasoning_loop(
+                llm,
+                tools,
+                model,
+                system_prompt,
+                initial_prompt,
+                tool_schemas,
+                failover_models,
+                primary_path,
+            ))
+            .catch_unwind();
+            tokio::select! {
+                biased;
+                Some(()) = cancel.recv() => Err(SubagentLaunchFailure::Cancelled),
+                result = tokio::time::timeout_at(deadline, run) => match result {
+                    Ok(Ok(outcome)) => Ok(outcome),
+                    Ok(Err(_)) => Err(SubagentLaunchFailure::Panicked),
+                    Err(_) => Err(SubagentLaunchFailure::TimedOut),
+                },
+            }
+        };
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(reason) => {
+                self.completion.interrupt(reason);
+                let error = if reason == SubagentLaunchFailure::TimedOut {
+                    format!(
+                        "Subagent wall-clock timeout after {}s",
+                        timeout.as_secs_f64()
+                    )
+                } else {
+                    reason.to_string()
+                };
+                SubagentOutcome::Failed { error }
+            }
+        };
+        let initial_summary = outcome.summary_text().to_string();
+        let finalized = tokio::time::timeout_at(
+            deadline,
+            std::panic::AssertUnwindSafe(self.finalize_outcome(outcome)).catch_unwind(),
+        )
+        .await;
+        if let Some(outcome) = self.completion.outcome() {
+            return outcome;
+        }
+        match finalized {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) => {
+                self.completion.interrupt(SubagentLaunchFailure::Panicked);
+                let outcome = self.discard_resources(SubagentOutcome::Failed {
+                    error: format!("Subagent task panicked during finalization; prior execution outcome: {initial_summary}"),
+                });
+                self.publish_outcome(outcome.clone());
+                outcome
+            }
+            Err(_) => {
+                self.completion.interrupt(SubagentLaunchFailure::TimedOut);
+                let outcome = self.discard_resources(SubagentOutcome::Failed {
+                    error: format!("Subagent wall-clock timeout during finalization after {}s; prior execution outcome: {initial_summary}", timeout.as_secs_f64()),
+                });
+                self.publish_outcome(outcome.clone());
+                outcome
+            }
+        }
+    }
+
     /// Execute the full autonomous reasoning loop until completion, budget exhaustion, or error.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_autonomous_loop<L: SubagentLlmExecutor, T: SubagentToolExecutor>(
+        &mut self,
+        llm: &L,
+        tools: &T,
+        model: String,
+        system_prompt: String,
+        initial_prompt: String,
+        tool_schemas: Vec<Value>,
+        failover_models: Vec<String>,
+        primary_path: &Path,
+    ) -> SubagentOutcome {
+        if let Some(outcome) = self.completion.outcome() {
+            return outcome;
+        }
+        let outcome = self
+            .run_reasoning_loop(
+                llm,
+                tools,
+                model,
+                system_prompt,
+                initial_prompt,
+                tool_schemas,
+                failover_models,
+                primary_path,
+            )
+            .await;
+        self.finalize_outcome(outcome).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_reasoning_loop<L: SubagentLlmExecutor, T: SubagentToolExecutor>(
         &mut self,
         llm: &L,
         tools: &T,
@@ -1271,12 +1723,13 @@ impl SubagentSession {
         primary_path: &Path,
     ) -> SubagentOutcome {
         self.pause.start();
+        if let Some(control) = &self.control {
+            control.running();
+        }
         if self.config.enforce_isolation && self.workspace_guard.is_none() {
-            return self
-                .finalize_outcome(SubagentOutcome::Failed {
+            return SubagentOutcome::Failed {
                     error: "Required subagent isolation could not be established; refusing to run in the live workspace".into(),
-                })
-                .await;
+                };
         }
         let system_prompt = format!("{system_prompt}{}", self.bounded_parent_context());
         let mut messages = vec![SubagentMessage::user(initial_prompt)];
@@ -1349,9 +1802,7 @@ impl SubagentSession {
                 Some(r) => r,
                 None => {
                     let err_msg = last_error.unwrap_or_else(|| "LLM execution failed".to_string());
-                    return self
-                        .finalize_outcome(SubagentOutcome::Failed { error: err_msg })
-                        .await;
+                    return SubagentOutcome::Failed { error: err_msg };
                 }
             };
 
@@ -1373,13 +1824,11 @@ impl SubagentSession {
 
             // 6. Check budget limits
             if let Some(reason) = self.is_budget_exhausted() {
-                return self
-                    .finalize_outcome(SubagentOutcome::Exhausted {
-                        reason,
-                        iterations: self.current_iteration,
-                        tokens_used: self.cumulative_tokens as usize,
-                    })
-                    .await;
+                return SubagentOutcome::Exhausted {
+                    reason,
+                    iterations: self.current_iteration,
+                    tokens_used: self.cumulative_tokens as usize,
+                };
             }
 
             // 7. Check for canonical finish / finish_task tool calls
@@ -1395,7 +1844,7 @@ impl SubagentSession {
                         tool_calls_count: self.total_tool_calls,
                         token_usage: self.cumulative_tokens as usize,
                     });
-                return self.finalize_outcome(outcome).await;
+                return outcome;
             }
 
             // 8. Natural completion (no tool calls and has text)
@@ -1405,14 +1854,12 @@ impl SubagentSession {
                 } else {
                     "Task concluded without tool calls.".to_string()
                 };
-                return self
-                    .finalize_outcome(SubagentOutcome::Done {
-                        summary,
-                        iterations: self.current_iteration,
-                        tool_calls_count: self.total_tool_calls,
-                        token_usage: self.cumulative_tokens as usize,
-                    })
-                    .await;
+                return SubagentOutcome::Done {
+                    summary,
+                    iterations: self.current_iteration,
+                    tool_calls_count: self.total_tool_calls,
+                    token_usage: self.cumulative_tokens as usize,
+                };
             }
 
             // 9. Execute tools
@@ -1521,7 +1968,7 @@ impl SubagentSession {
         }
 
         // Final iteration limit reached: check if last_text provides a valid answer
-        let final_outcome = if !last_text.is_empty() {
+        if !last_text.is_empty() {
             SubagentOutcome::Done {
                 summary: last_text,
                 iterations: self.current_iteration,
@@ -1537,11 +1984,13 @@ impl SubagentSession {
                 iterations: self.current_iteration,
                 tokens_used: self.cumulative_tokens as usize,
             }
-        };
-
-        self.finalize_outcome(final_outcome).await
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "session_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {

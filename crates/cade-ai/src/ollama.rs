@@ -16,11 +16,29 @@ impl OllamaProvider {
     pub fn new(base_url: String) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
         let url = format!("{base_url}/v1/chat/completions");
-        // Ollama doesn't require an API key — use a placeholder
+        // Local Ollama is keyless. A fabricated bearer token would override a
+        // gateway's configured Authorization header.
         Self {
-            inner: OpenAiProvider::new("ollama".to_string(), Some(url)),
+            inner: OpenAiProvider::new(String::new(), Some(url)),
             base_url,
         }
+    }
+
+    pub fn with_registry(
+        mut self,
+        provider_name: String,
+        models: crate::SharedModelRegistry,
+    ) -> Self {
+        self.inner = self.inner.with_registry(provider_name, models);
+        self
+    }
+
+    pub(crate) fn with_provider_definition(
+        mut self,
+        definition: &crate::provider_registry::ProviderDef,
+    ) -> Self {
+        self.inner = self.inner.with_provider_definition(definition);
+        self
     }
 
     /// Query Ollama's `/api/tags` endpoint and return installed model names.
@@ -65,5 +83,13 @@ impl LlmProvider for OllamaProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         self.inner.stream(req).await
+    }
+
+    async fn complete_structured(
+        &self,
+        req: &CompletionRequest,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.inner.complete_structured(req, schema).await
     }
 }

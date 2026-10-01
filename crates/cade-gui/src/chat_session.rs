@@ -9,6 +9,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::api::CadeApiClient;
+use crate::types::AppState;
+
+mod timeline;
+pub use timeline::{ChatTimeline, ParsedMessageCache};
 
 /// Questions share the pending queue but have their own answer UI.
 pub fn is_tool_approval(row: &serde_json::Value) -> bool {
@@ -21,22 +25,30 @@ pub fn is_tool_approval(row: &serde_json::Value) -> bool {
 /// The global feed may have already delivered the request; keep one row per ID.
 pub fn track_approval_event(pending: &mut Vec<serde_json::Value>, event: &StreamEvent) {
     match event.msg_type() {
-        "approval_required" => {
-            if let Some(request) = event.approval_request() {
-                if let Some(existing) = pending.iter_mut().find(|item| item["id"] == request.id) {
+        "approval_required" | "question_required" => {
+            if let Some(id) = event.approval_id() {
+                let mut data = event.data.clone();
+                if event.msg_type() == "question_required"
+                    && let Some(row) = data.as_object_mut()
+                {
+                    row.insert(
+                        "tool_name".into(),
+                        serde_json::Value::String("ask_user_question".into()),
+                    );
+                }
+                if let Some(existing) = pending.iter_mut().find(|item| item["id"] == id) {
                     // Queue rows fetched on reconnect have string arguments and
                     // no reason. Enrich them with the live run's reviewed data.
-                    if let (Some(row), Some(fields)) =
-                        (existing.as_object_mut(), event.data.as_object())
+                    if let (Some(row), Some(fields)) = (existing.as_object_mut(), data.as_object())
                     {
                         row.extend(fields.clone());
                     }
                 } else {
-                    pending.push(event.data.clone());
+                    pending.push(data);
                 }
             }
         }
-        "approval_resolved" => {
+        "approval_resolved" | "question_resolved" => {
             if let Some(id) = event.approval_id() {
                 pending.retain(|item| item["id"] != id);
             }
@@ -130,34 +142,35 @@ impl ChatSessionCoordinator {
                     .tool_name()
                     .or_else(|| event.data.get("name").and_then(|v| v.as_str()))
                     .unwrap_or("tool");
-                let args = event
-                    .tool_args()
-                    .or_else(|| event.data.get("arguments").and_then(|v| v.as_str()))
-                    .unwrap_or("");
+                let args = event.tool_arguments();
                 let existing = messages[idx].content.as_str().unwrap_or("").to_string();
-                let tool_block = format!("\n\n[Tool Executing: {name}]\nArguments: {args}\n");
+                let label = if event.msg_type() == "tool_executing" {
+                    "Tool Executing"
+                } else {
+                    "Tool call"
+                };
+                let tool_block = format!("\n\n[{label}: {name}]\nArguments: {args}\n");
                 messages[idx].content =
                     serde_json::Value::String(format!("{existing}{tool_block}"));
             }
             "tool_result_message" | "tool_completed" => {
                 let name = event.tool_name().unwrap_or("tool");
                 let is_error = event
-                    .data
+                    .tool_payload()
                     .get("is_error")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                let output = event
-                    .data
-                    .get("output")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let output = event.tool_output().unwrap_or("");
                 let status_label = if is_error { "Failed" } else { "Completed" };
-                let ui_meta =
-                    if let Some(uri) = event.data.get("ui_resource_uri").and_then(|v| v.as_str()) {
-                        format!("\n[UI Widget Resource: {uri}]\n")
-                    } else {
-                        String::new()
-                    };
+                let ui_meta = if let Some(uri) = event
+                    .tool_payload()
+                    .get("ui_resource_uri")
+                    .and_then(|v| v.as_str())
+                {
+                    format!("\n[UI Widget Resource: {uri}]\n")
+                } else {
+                    String::new()
+                };
                 let existing = messages[idx].content.as_str().unwrap_or("").to_string();
                 let result_block =
                     format!("\n[Tool {status_label}: {name}]{ui_meta}\nOutput: {output}\n");
@@ -207,7 +220,9 @@ impl ChatSessionCoordinator {
             }
             "error" => {
                 let err_msg = event.error().unwrap_or("Unknown error");
-                messages[idx].content = serde_json::Value::String(format!("[Error] {err_msg}"));
+                let existing = messages[idx].content.as_str().unwrap_or("");
+                messages[idx].content =
+                    serde_json::Value::String(format!("{existing}\n\n[Error] {err_msg}"));
             }
             _ => {}
         }
@@ -218,50 +233,23 @@ impl ChatSessionCoordinator {
     pub async fn dispatch_turn(
         &self,
         prompt: &str,
-        mut messages_signal: Signal<Vec<ChatMessage>>,
-        mut is_loading_signal: Signal<bool>,
-        mut pending_approvals: Signal<Vec<serde_json::Value>>,
+        mut state: AppState,
         cancel_token: Arc<AtomicBool>,
     ) -> Result<ChatTurnOutcome, String> {
         let text = prompt.trim().to_string();
-        if text.is_empty() {
-            return Err("Empty prompt".to_string());
+        Self::sync_selection(state);
+        if state.selected_agent.peek().as_ref().map(|a| a.id.as_str())
+            != Some(self.agent_id.as_str())
+            || *state.active_conversation.peek() != self.conversation_id
+        {
+            return Ok(ChatTurnOutcome::Cancelled);
         }
-
-        is_loading_signal.set(true);
-
-        #[cfg(target_arch = "wasm32")]
-        let timestamp = js_sys::Date::now() as u64;
-        #[cfg(not(target_arch = "wasm32"))]
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        let stream_id = format!("streaming-{timestamp}");
-
-        // 1. Optimistic insertions
-        let mut msgs = messages_signal();
-        msgs.push(ChatMessage {
-            id: format!("user-{timestamp}"),
-            role: "user".to_string(),
-            content: serde_json::Value::String(text.clone()),
-            conversation_id: self.conversation_id.clone(),
-        });
-        msgs.push(ChatMessage {
-            id: stream_id.clone(),
-            role: "assistant".to_string(),
-            content: serde_json::Value::String(String::new()),
-            conversation_id: self.conversation_id.clone(),
-        });
-        messages_signal.set(msgs);
-
-        // 2. Stream execution
-        let mut reasoning_acc = String::new();
-        let stream_id_clone = stream_id.clone();
-        let mut captured_conv_id: Option<String> = self.conversation_id.clone();
-
-        let stream_result = self
+        let lease = state.chat_timeline.write().begin_turn(&text)?;
+        state
+            .active_stream
+            .set(crate::types::SafeAbortHandle(cancel_token.clone()));
+        Self::publish(state);
+        let result = self
             .api_client
             .stream_messages(
                 &self.agent_id,
@@ -269,67 +257,306 @@ impl ChatSessionCoordinator {
                 self.conversation_id.as_deref(),
                 Some(cancel_token.clone()),
                 |event: StreamEvent| {
-                    let mut pending = pending_approvals();
-                    track_approval_event(&mut pending, &event);
-                    pending_approvals.set(pending);
-                    if event.msg_type() == "stream_start"
-                        && let Some(cid) =
-                            event.data.get("conversation_id").and_then(|v| v.as_str())
-                        && !cid.is_empty()
-                    {
-                        captured_conv_id = Some(cid.to_string());
-                    }
-                    let mut current_msgs = messages_signal();
-                    Self::apply_stream_event(
-                        &mut current_msgs,
-                        &stream_id_clone,
-                        event,
-                        &mut reasoning_acc,
-                    );
-                    messages_signal.set(current_msgs);
+                    Self::receive(state, lease, event);
                 },
             )
             .await;
-
-        is_loading_signal.set(false);
-
-        // 3. Finalization
-        let mut final_msgs = messages_signal();
-        let had_reasoning = !reasoning_acc.is_empty();
-        let mut final_len = 0;
-        let final_id = format!("msg-{timestamp}");
-
-        if let Some(idx) = final_msgs.iter().position(|m| m.id == stream_id) {
-            let final_content = match &stream_result {
-                Err(e) => {
-                    let existing = final_msgs[idx].content.as_str().unwrap_or("").to_string();
-                    format!(
-                        "{existing}
-
-[Stream Error: {e}]"
-                    )
-                }
-                Ok(_) => final_msgs[idx].content.as_str().unwrap_or("").to_string(),
-            };
-            final_len = final_content.len();
-            final_msgs[idx].content = serde_json::Value::String(final_content);
-            final_msgs[idx].id = final_id.clone();
-            messages_signal.set(final_msgs);
+        Self::sync_selection(state);
+        if !state.chat_timeline.peek().owns(lease)
+            || cancel_token.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(ChatTurnOutcome::Cancelled);
         }
+        // EOF is transport state, not execution success. A known run can be
+        // reattached without resubmitting the prompt or starting another run.
+        if state.chat_timeline.peek().is_loading() {
+            let run = state.chat_timeline.peek().run_id().map(str::to_owned);
+            if let Some(run) = run {
+                Self::replay(state, self.api_client.clone(), lease, run).await;
+            } else {
+                let error = result
+                    .err()
+                    .unwrap_or_else(|| "Stream closed before assigning a run.".into());
+                state.chat_timeline.write().transport_failed(lease, &error);
+                Self::publish(state);
+                return Err(error);
+            }
+        }
+        if !state.chat_timeline.peek().owns(lease) {
+            return Ok(ChatTurnOutcome::Cancelled);
+        }
+        let status = state
+            .chat_timeline
+            .peek()
+            .outcome(lease)
+            .unwrap_or("unknown")
+            .to_owned();
+        if status.starts_with("transport_error:") {
+            return Ok(ChatTurnOutcome::Failed(status));
+        }
+        let messages = state.chat_timeline.peek().messages().to_vec();
+        let last = messages.iter().rev().find(|m| m.role == "assistant");
+        let outcome = ChatTurnOutcome::Completed {
+            final_message_id: last.map(|m| m.id.clone()).unwrap_or_default(),
+            content_length: last.map(|m| m.text().len()).unwrap_or(0),
+            had_reasoning: last.is_some_and(|m| m.text().contains("<reasoning>")),
+            assigned_conversation_id: state.chat_timeline.peek().conversation().map(str::to_owned),
+        };
+        Self::refresh_history(state, self.api_client.clone());
+        match status.as_str() {
+            "done" | "completed" | "succeeded" => Ok(outcome),
+            "cancelled" | "canceled" => Ok(ChatTurnOutcome::Cancelled),
+            _ => Ok(ChatTurnOutcome::Failed(status)),
+        }
+    }
 
-        match stream_result {
-            Ok(_) => Ok(ChatTurnOutcome::Completed {
-                final_message_id: final_id,
-                content_length: final_len,
-                had_reasoning,
-                assigned_conversation_id: captured_conv_id,
-            }),
-            Err(e) => {
-                if cancel_token.load(std::sync::atomic::Ordering::Acquire) {
-                    Ok(ChatTurnOutcome::Cancelled)
-                } else {
-                    Err(e)
+    /// Signals are presentation mirrors; all timeline mutation lives here.
+    pub fn sync_selection(mut state: AppState) -> bool {
+        let agent = state
+            .selected_agent
+            .peek()
+            .as_ref()
+            .map(|a| a.id.clone())
+            .unwrap_or_default();
+        if !state
+            .chat_timeline
+            .peek()
+            .same_session(&state.api_key.peek())
+        {
+            state.pending_approvals.set(Vec::new());
+        }
+        let changed = state.chat_timeline.write().select(
+            agent,
+            state.active_conversation.peek().clone(),
+            state.api_key.peek().clone(),
+        );
+        if changed {
+            state
+                .active_stream
+                .peek()
+                .0
+                .store(true, std::sync::atomic::Ordering::Release);
+            Self::publish(state);
+        }
+        changed
+    }
+
+    fn publish(mut state: AppState) {
+        let timeline = state.chat_timeline.peek();
+        let messages = timeline.messages().to_vec();
+        let conversation = timeline.conversation().map(str::to_owned);
+        let loading = timeline.is_loading();
+        let run = if loading {
+            timeline.run_id().map(str::to_owned)
+        } else {
+            None
+        };
+        drop(timeline);
+        state.parsed_messages.write().retain_messages(&messages);
+        state.messages.set(messages);
+        state.is_loading.set(loading);
+        state.active_stream_id.set(run);
+        if *state.active_conversation.peek() != conversation {
+            state.active_conversation.set(conversation);
+        }
+    }
+
+    fn receive(mut state: AppState, lease: timeline::TurnLease, event: StreamEvent) {
+        Self::sync_selection(state);
+        let accepted = state.chat_timeline.write().apply(lease, event.clone());
+        if accepted {
+            // Publish assigned conversation before any helper synchronizes the
+            // selection; otherwise adoption would be mistaken for navigation.
+            Self::publish(state);
+            Self::pending_event(state, &event);
+            if event.is_terminal() {
+                let run = event.run_id();
+                for row in state.runs.write().iter_mut() {
+                    if row["id"].as_str() == run {
+                        row["status"] = event.data["status"].clone();
+                    }
                 }
+            }
+            if event.msg_type() == "theme_update"
+                && let Some(name) = event.data["theme_name"].as_str()
+            {
+                let mut agent = state.selected_agent.peek().clone();
+                if let Some(agent) = agent.as_mut() {
+                    agent.theme = Some(name.to_owned());
+                }
+                state.selected_agent.set(agent);
+            }
+        }
+    }
+
+    pub fn pending_event(mut state: AppState, event: &StreamEvent) {
+        Self::sync_selection(state);
+        let mut pending = state.pending_approvals.peek().clone();
+        state
+            .chat_timeline
+            .write()
+            .pending_event(&mut pending, event);
+        if pending != *state.pending_approvals.peek() {
+            state.pending_approvals.set(pending);
+        }
+    }
+
+    pub fn pending_snapshot(mut state: AppState, rows: Vec<serde_json::Value>) {
+        Self::sync_selection(state);
+        let rows = state
+            .chat_timeline
+            .peek()
+            .pending_snapshot(rows, &state.pending_approvals.peek());
+        state.pending_approvals.set(rows);
+    }
+
+    pub fn refresh_selection(mut state: AppState, client: CadeApiClient) {
+        Self::sync_selection(state);
+        if client.api_key.is_empty() {
+            return;
+        }
+        Self::refresh_history(state, client.clone());
+        let epoch = state.chat_timeline.peek().epoch();
+        let agent = state
+            .selected_agent
+            .peek()
+            .as_ref()
+            .map(|a| a.id.clone())
+            .unwrap_or_default();
+        if agent.is_empty() {
+            return;
+        }
+        spawn_forever(async move {
+            if let Ok(mut conversations) = client.list_conversations(&agent).await {
+                Self::sync_selection(state);
+                if state.chat_timeline.peek().epoch() != epoch {
+                    return;
+                }
+                conversations
+                    .sort_by_key(|conversation| std::cmp::Reverse(conversation.updated_at));
+                state.conversations.set(conversations);
+            }
+            if let Ok(runs) = crate::api::list_agent_runs(&agent, &client.api_key).await {
+                Self::sync_selection(state);
+                if state.chat_timeline.peek().epoch() != epoch {
+                    return;
+                }
+                state.runs.set(runs.clone());
+                for run in runs
+                    .iter()
+                    .filter(|run| run["status"].as_str() == Some("running"))
+                {
+                    Self::follow_run(
+                        state,
+                        client.clone(),
+                        &agent,
+                        run["conversation_id"].as_str(),
+                        run["id"].as_str().unwrap_or_default(),
+                    );
+                }
+            }
+        });
+    }
+
+    pub fn refresh_history(mut state: AppState, client: CadeApiClient) {
+        Self::sync_selection(state);
+        if client.api_key.is_empty() {
+            return;
+        }
+        let agent = state
+            .selected_agent
+            .peek()
+            .as_ref()
+            .map(|a| a.id.clone())
+            .unwrap_or_default();
+        if agent.is_empty() {
+            return;
+        }
+        let conversation = state.active_conversation.peek().clone();
+        let ticket = state.chat_timeline.write().history_ticket();
+        spawn_forever(async move {
+            if let Ok(rows) = client.get_messages(&agent, conversation.as_deref()).await {
+                Self::sync_selection(state);
+                if state.chat_timeline.write().reconcile_history(ticket, rows) {
+                    Self::publish(state);
+                }
+            }
+        });
+    }
+
+    pub fn persisted(mut state: AppState, agent: &str, message: ChatMessage) {
+        Self::sync_selection(state);
+        if state
+            .selected_agent
+            .peek()
+            .as_ref()
+            .is_some_and(|a| a.id == agent)
+        {
+            state.chat_timeline.write().persisted(message);
+            Self::publish(state);
+        }
+    }
+
+    pub fn follow_run(
+        mut state: AppState,
+        client: CadeApiClient,
+        agent: &str,
+        conversation: Option<&str>,
+        run: &str,
+    ) {
+        Self::sync_selection(state);
+        let lease = state
+            .chat_timeline
+            .write()
+            .follow_run(agent, conversation, run);
+        if let Some(lease) = lease {
+            let run = run.to_owned();
+            Self::publish(state);
+            spawn_forever(async move {
+                Self::replay(state, client.clone(), lease, run).await;
+                if state.chat_timeline.peek().owns(lease)
+                    && state
+                        .chat_timeline
+                        .peek()
+                        .outcome(lease)
+                        .is_some_and(|s| !s.starts_with("transport_error:"))
+                {
+                    Self::refresh_history(state, client);
+                }
+            });
+        }
+    }
+
+    async fn replay(
+        mut state: AppState,
+        client: CadeApiClient,
+        lease: timeline::TurnLease,
+        run: String,
+    ) {
+        for attempt in 0..3 {
+            Self::sync_selection(state);
+            if !state.chat_timeline.peek().owns(lease) || !state.chat_timeline.peek().is_loading() {
+                return;
+            }
+            let cursor = state.chat_timeline.peek().cursor(lease);
+            let result = crate::api::stream_run(&client.api_key, &run, cursor, |event| {
+                Self::receive(state, lease, event)
+            })
+            .await;
+            Self::sync_selection(state);
+            if !state.chat_timeline.peek().owns(lease) || !state.chat_timeline.peek().is_loading() {
+                return;
+            }
+            if attempt == 2 {
+                state.chat_timeline.write().transport_failed(
+                    lease,
+                    &result
+                        .err()
+                        .unwrap_or_else(|| "Run stream closed before run_done.".into()),
+                );
+                Self::publish(state);
+            } else {
+                gloo_timers::future::TimeoutFuture::new(1000).await;
             }
         }
     }

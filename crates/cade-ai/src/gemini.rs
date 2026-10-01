@@ -12,74 +12,27 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, clean_gemini_schema, inline_schema_refs, provider_error, retry_with_backoff,
+    clean_gemini_schema, inline_schema_refs, provider_error, retry_with_backoff,
 };
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
-const GEMINI_LIST_URL: &str =
-    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
 const GEMINI_TOOL_SCHEMA_CACHE_VERSION: &str = "gemini-tool-schema-v2";
 
 /// Fetch all generative-content-capable models available to this API key.
-/// Filters to models that support `generateContent` and whose names contain "gemini"
-/// (excludes embedding models, AQA, TTS, image-gen, etc.).
+/// Filters only explicitly unsupported generation methods; arbitrary model names
+/// remain eligible and pagination uses the configured gateway.
 /// Returns `(bare_id, display_name)` pairs.
 pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
-    let url = format!("{GEMINI_LIST_URL}&key={api_key}");
-    let client = reqwest::Client::new();
-    let req = client.get(&url).send();
-    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
-            tracing::warn!("fetch_gemini_models: request failed: {e}");
-            return vec![];
-        }
-        Err(_) => {
-            tracing::warn!("fetch_gemini_models: request timed out");
-            return vec![];
-        }
-    };
-    if !resp.status().is_success() {
-        tracing::warn!(
-            "fetch_gemini_models: API returned error status: {}",
-            resp.status()
-        );
-        return vec![];
-    }
-    let Ok(body) = resp.json::<Value>().await else {
-        tracing::warn!("fetch_gemini_models: failed to parse JSON response body");
-        return vec![];
-    };
-
-    body["models"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| {
-                    // name format: "models/gemini-2.0-flash"
-                    let full_name = m["name"].as_str()?;
-                    let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-
-                    // Only models that support generateContent
-                    let supports_generate = m["supportedGenerationMethods"]
-                        .as_array()
-                        .map(|a| a.iter().any(|v| v.as_str() == Some("generateContent")))
-                        .unwrap_or(false);
-                    if !supports_generate {
-                        return None;
-                    }
-
-                    // Only "gemini" family (excludes embedding-*, aqa, etc.)
-                    if !id.contains("gemini") {
-                        return None;
-                    }
-
-                    let display = m["displayName"].as_str().unwrap_or(id).to_string();
-                    Some((id.to_string(), display))
-                })
-                .collect()
+    crate::discovery::default_models("gemini", api_key)
+        .await
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .id
+                .split_once('/')
+                .map(|(_, id)| (id.to_owned(), entry.display_name.clone()))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// An in-process record of a Gemini `cachedContent` object.
@@ -126,6 +79,8 @@ pub struct GeminiProvider {
     client: Client,
     api_key: String,
     base_url: Option<String>,
+    provider_name: String,
+    models: crate::SharedModelRegistry,
     /// Per-content-hash cache of Gemini `cachedContent` names.
     /// Key   = hash(bare_model + system_text + tool_names)
     /// Value = (cache_resource_name, expiry)
@@ -152,8 +107,114 @@ impl GeminiProvider {
             client: crate::utils::build_standard_http_client(),
             api_key,
             base_url: base,
+            provider_name: "gemini".into(),
+            models: crate::runtime::shared_registry(),
             content_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_registry(
+        mut self,
+        provider_name: String,
+        models: crate::SharedModelRegistry,
+    ) -> Self {
+        self.provider_name = provider_name;
+        self.models = models;
+        self
+    }
+
+    pub(crate) fn with_provider_definition(
+        mut self,
+        definition: &crate::provider_registry::ProviderDef,
+    ) -> Self {
+        self.client = crate::utils::build_provider_http_client(Some(definition));
+        self
+    }
+
+    fn model<'a>(&self, model: &'a str) -> &'a str {
+        let model = self
+            .models
+            .read()
+            .upstream_model(&self.provider_name, model);
+        model.strip_prefix("models/").unwrap_or(model)
+    }
+
+    fn base(&self) -> &str {
+        self.base_url
+            .as_deref()
+            .unwrap_or(GEMINI_BASE)
+            .trim_end_matches('/')
+    }
+
+    fn tools(req: &CompletionRequest) -> Vec<Value> {
+        req.tools.iter().map(|schema| {
+            let function = schema.get("function").unwrap_or(schema);
+            let mut params = function.get("parameters").or_else(|| function.get("input_schema"))
+                .filter(|v| !v.is_null()).cloned().unwrap_or(json!({"type": "object", "properties": {}}));
+            inline_schema_refs(&mut params);
+            clean_gemini_schema(&mut params);
+            json!({"name": function["name"], "description": function["description"], "parameters": params})
+        }).collect()
+    }
+
+    fn generation_config(&self, req: &CompletionRequest) -> Value {
+        let model = self.model(&req.model);
+        let metadata = self.models.read().metadata(&self.provider_name, model);
+        let mut config = json!({"maxOutputTokens": req.max_tokens});
+        if let Some(effort) = req.reasoning_effort.as_deref() {
+            match metadata.thinking.as_deref() {
+                Some("budget") => {
+                    if let Some(budget) = metadata
+                        .thinking_budgets
+                        .as_ref()
+                        .and_then(|map| map.get(effort))
+                    {
+                        config["thinkingConfig"] = json!({"thinkingBudget": if *budget < 0 { *budget } else { (*budget).min(i64::from(req.max_tokens)) }});
+                    }
+                }
+                Some("level") => {
+                    if let Some(level) = metadata
+                        .reasoning_values
+                        .as_ref()
+                        .and_then(|map| map.get(effort))
+                    {
+                        config["thinkingConfig"] = json!({"thinkingLevel": level});
+                    }
+                }
+                _ => tracing::debug!(
+                    "No registered Gemini thinking configuration for {}",
+                    req.model
+                ),
+            }
+        }
+        config
+    }
+
+    async fn request_body(&self, req: &CompletionRequest, schema: Option<Value>) -> Result<Value> {
+        self.validate_model(&req.model)?;
+        if req.max_tokens == 0 {
+            return Err(crate::Error::custom("max_tokens must be greater than zero"));
+        }
+        let model = self.model(&req.model);
+        let metadata = self.models.read().metadata(&self.provider_name, model);
+        if !req.tools.is_empty() && metadata.tools == Some(false) {
+            return Err(crate::Error::custom(format!(
+                "Model '{}' is registered without tool support",
+                req.model
+            )));
+        }
+        let (system, contents) = Self::to_gemini_contents(req);
+        let mut generation = self.generation_config(req);
+        if let Some(mut schema) = schema {
+            inline_schema_refs(&mut schema);
+            clean_gemini_schema(&mut schema);
+            generation["responseMimeType"] = json!("application/json");
+            generation["responseSchema"] = schema;
+        }
+        let body = json!({"contents": contents, "generationConfig": generation});
+        Ok(self
+            .apply_system_and_tools(self.model(&req.model), body, &system, &Self::tools(req))
+            .await)
     }
 
     // -- Content-cache helpers
@@ -193,10 +254,15 @@ impl GeminiProvider {
         system_text: &Option<String>,
         tools: &[Value],
     ) -> Option<String> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/cachedContents?key={}",
-            self.api_key
-        );
+        let mut url = reqwest::Url::parse(self.base()).ok()?;
+        let root = url
+            .path()
+            .trim_end_matches('/')
+            .strip_suffix("/models")
+            .unwrap_or(url.path().trim_end_matches('/'));
+        let path = format!("{root}/cachedContents");
+        url.set_path(&path);
+        url.query_pairs_mut().append_pair("key", &self.api_key);
         let mut body = json!({
             "model": format!("models/{model}"),
             "ttl": format!("{}s", gemini_cache_ttl_secs())
@@ -210,7 +276,7 @@ impl GeminiProvider {
             body["tools"] = json!([{"functionDeclarations": tools}]);
         }
 
-        let resp = match self.client.post(&url).json(&body).send().await {
+        let resp = match self.client.post(url).json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!("Gemini cache POST failed: {e}");
@@ -223,7 +289,7 @@ impl GeminiProvider {
             // Log at debug — this is expected when payload is below the min-token threshold
             tracing::debug!(
                 "Gemini cache creation {status}: {}",
-                &text[..text.len().min(300)]
+                text.chars().take(300).collect::<String>()
             );
             return None;
         }
@@ -301,19 +367,27 @@ impl GeminiProvider {
         body
     }
 
-    fn url(&self, model: &str, stream: bool) -> String {
+    fn url(&self, model: &str, stream: bool) -> Result<String> {
+        let mut url = reqwest::Url::parse(self.base()).map_err(crate::Error::custom_from_err)?;
+        let root = url.path().trim_end_matches('/');
+        let root = if root.ends_with("/models") {
+            root.to_owned()
+        } else {
+            format!("{root}/models")
+        };
         let action = if stream {
-            "streamGenerateContent?alt=sse"
+            "streamGenerateContent"
         } else {
             "generateContent"
         };
-        let base = self
-            .base_url
-            .as_deref()
-            .map(|s| s.trim_end_matches('/'))
-            .unwrap_or(GEMINI_BASE);
-        // Strip provider prefix for URL construction
-        format!("{base}/{}:{action}&key={}", bare_model(model), self.api_key)
+        url.set_path(&format!("{root}/{}:{action}", self.model(model)));
+        let mut query = url.query_pairs_mut();
+        if stream {
+            query.append_pair("alt", "sse");
+        }
+        query.append_pair("key", &self.api_key);
+        drop(query);
+        Ok(url.into())
     }
 
     /// Convert our messages to Gemini `contents` format
@@ -524,8 +598,10 @@ impl GeminiProvider {
 
         if let Some(parts) = candidate["content"]["parts"].as_array() {
             for part in parts {
-                if let Some(text) = part["text"].as_str() {
-                    content = Some(text.to_string());
+                if let Some(text) = part["text"].as_str()
+                    && part["thought"] != true
+                {
+                    content.get_or_insert_with(String::new).push_str(text);
                 }
                 if let Some(fc) = part.get("functionCall") {
                     let thought_signature = part["thoughtSignature"]
@@ -552,33 +628,8 @@ impl GeminiProvider {
 #[async_trait]
 impl LlmProvider for GeminiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let (system_text, contents) = Self::to_gemini_contents(req);
-        let tools: Vec<Value> = req
-            .tools
-            .iter()
-            .map(|s| {
-                let mut params = s
-                    .get("parameters")
-                    .filter(|v| !v.is_null())
-                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
-                    .cloned()
-                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-                inline_schema_refs(&mut params);
-                clean_gemini_schema(&mut params);
-                json!({
-                    "name": s["name"],
-                    "description": s["description"],
-                    "parameters": params
-                })
-            })
-            .collect();
-
-        let base_body = json!({ "contents": contents });
-        let body = self
-            .apply_system_and_tools(bare_model(&req.model), base_body, &system_text, &tools)
-            .await;
-
-        let url = self.url(&req.model, false);
+        let body = self.request_body(req, None).await?;
+        let url = self.url(&req.model, false)?;
         retry_with_backoff(
             "Gemini::complete",
             3,
@@ -606,42 +657,8 @@ impl LlmProvider for GeminiProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         let req_model = req.model.clone(); // extracted before async_stream to avoid lifetime capture
-        let (system_text, contents) = Self::to_gemini_contents(req);
-        let tools: Vec<Value> = req
-            .tools
-            .iter()
-            .map(|s| {
-                let mut params = s
-                    .get("parameters")
-                    .filter(|v| !v.is_null())
-                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
-                    .cloned()
-                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-                inline_schema_refs(&mut params);
-                clean_gemini_schema(&mut params);
-
-                let name = s["name"].as_str().unwrap_or("unknown_tool").to_string();
-                if name == "unknown_tool" {
-                    tracing::warn!(
-                        "Gemini: missing tool name in schema: {}",
-                        serde_json::to_string(s).unwrap_or_default()
-                    );
-                }
-
-                json!({
-                    "name": name,
-                    "description": s["description"],
-                    "parameters": params
-                })
-            })
-            .collect();
-
-        let base_body = json!({ "contents": contents });
-        let body = self
-            .apply_system_and_tools(bare_model(&req_model), base_body, &system_text, &tools)
-            .await;
-
-        let url = self.url(&req_model, true);
+        let body = self.request_body(req, None).await?;
+        let url = self.url(&req_model, true)?;
         let resp = retry_with_backoff(
             "Gemini::stream",
             3,
@@ -758,48 +775,21 @@ impl LlmProvider for GeminiProvider {
         req: &CompletionRequest,
         schema: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        let model = self.model(&req.model);
+        let native = self
+            .models
+            .read()
+            .metadata(&self.provider_name, model)
+            .native_structured;
+        if native != Some(true) {
+            return crate::types::structured_fallback(self, req, &schema).await;
+        }
         use tracing::Instrument;
         let span = crate::gen_ai_span!("gemini", req);
 
         let fut = async move {
-            let (system_text, contents) = Self::to_gemini_contents(req);
-            let tools: Vec<Value> = req
-                .tools
-                .iter()
-                .map(|s| {
-                    let mut params = s
-                        .get("parameters")
-                        .filter(|v| !v.is_null())
-                        .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
-                        .cloned()
-                        .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-                    inline_schema_refs(&mut params);
-                    clean_gemini_schema(&mut params);
-                    json!({
-                        "name": s["name"],
-                        "description": s["description"],
-                        "parameters": params
-                    })
-                })
-                .collect();
-
-            // Clean schema specifically for Gemini constraints
-            let mut clean_schema = schema.clone();
-            inline_schema_refs(&mut clean_schema);
-            clean_gemini_schema(&mut clean_schema);
-
-            let base_body = json!({
-                "contents": contents,
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "responseSchema": clean_schema
-                }
-            });
-            let body = self
-                .apply_system_and_tools(bare_model(&req.model), base_body, &system_text, &tools)
-                .await;
-
-            let url = self.url(&req.model, false);
+            let body = self.request_body(req, Some(schema)).await?;
+            let url = self.url(&req.model, false)?;
             let res = retry_with_backoff(
                 "Gemini::complete_structured",
                 3,
@@ -822,13 +812,7 @@ impl LlmProvider for GeminiProvider {
             )
             .await?;
 
-            let text = res.content.unwrap_or_default();
-            let json_str = crate::utils::clean_json_markers(&text);
-            serde_json::from_str(&json_str).map_err(|e| {
-                crate::Error::custom(format!(
-                    "Gemini structured output parsing failed: {e}. Raw response: {text}"
-                ))
-            })
+            crate::types::parse_structured_text(res.content.as_deref().unwrap_or_default())
         };
 
         fut.instrument(span).await

@@ -7,6 +7,60 @@ use crate::Result;
 use super::{ServerBootStatus, ToastLevel, TuiApp};
 use crate::autocomplete::AutocompleteProvider;
 
+/// Host work wakes the REPL without impersonating a submitted prompt.
+pub enum InputOutcome {
+    Submitted(String),
+    Exit,
+    WorkReady,
+}
+
+pub(crate) struct OverlayDispatch {
+    pub owned: bool,
+    pub dirty: bool,
+    pub action: Option<Box<dyn std::any::Any>>,
+}
+
+/// Production modal-stack routing shared by idle keys/paste/pointer input and
+/// active-turn dispatch. Keeping the stack transition independent of terminal
+/// IO allows behavior tests to use the actual editor and ratatui TestBackend.
+pub(crate) fn dispatch_overlay_stack(
+    overlays: &mut Vec<Box<dyn crate::overlay_component::OverlayComponent>>,
+    event: &Event,
+) -> OverlayDispatch {
+    use crate::overlay_component::OverlayInputResult;
+    let count = overlays.len();
+    overlays.retain(|overlay| !overlay.is_dismissed());
+    let dirty = overlays.len() != count;
+    let Some(overlay) = overlays.last_mut() else {
+        return OverlayDispatch {
+            owned: false,
+            dirty,
+            action: None,
+        };
+    };
+    let result = overlay.handle_event(event);
+    if result == OverlayInputResult::NotHandled {
+        return OverlayDispatch {
+            owned: matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)),
+            dirty,
+            action: None,
+        };
+    }
+    let action = overlay.take_result();
+    let action = if result == OverlayInputResult::Dismiss {
+        overlays
+            .pop()
+            .and_then(|mut overlay| action.or_else(|| overlay.take_result()))
+    } else {
+        action
+    };
+    OverlayDispatch {
+        owned: true,
+        dirty: true,
+        action,
+    }
+}
+
 impl TuiApp {
     // -- Input loop
 
@@ -51,134 +105,46 @@ impl TuiApp {
         false
     }
 
-    /// Block until the user submits input or presses Ctrl+D.
-    /// Returns `None` on Ctrl+D (exit signal).
+    /// Synchronous terminal-owner adapter. The REPL uses its asynchronous
+    /// reader so the app lock is never retained while awaiting input/work.
     pub fn read_input(
         &mut self,
         history: &mut [String],
         hist_idx: &mut Option<usize>,
-    ) -> Result<Option<String>> {
-        *hist_idx = None;
-
+        tools_ready: impl Fn() -> bool,
+    ) -> Result<InputOutcome> {
         self.draw()?;
-
         loop {
-            // Redraw when dirty (draw flag, signal system, toast, or slots).
-            if self.draw_dirty
-                || self.signals.any_dirty()
-                || self.toast.is_some()
-                || self.slots.requires_tick()
-            {
+            if let Some(outcome) = self.tick_idle(true) {
+                return Ok(outcome);
+            }
+            if self.has_lua_host_work(tools_ready()) {
+                return Ok(InputOutcome::WorkReady);
+            }
+            if self.draw_dirty || self.signals.any_dirty() || self.is_animating() {
                 self.draw()?;
             }
-
-            // Dynamically govern the polling timeout:
-            // High-frequency 50ms ticks for smooth animations; relaxed 2000ms ticks when completely idle.
-            let poll_timeout = if self.is_animating() {
+            let poll_timeout = if self.is_animating() || self.lua_engine.is_some() {
                 std::time::Duration::from_millis(50)
             } else {
                 std::time::Duration::from_millis(2000)
             };
-
-            if !event::poll(poll_timeout)? {
-                // Trigger redraw if any MCP server is loading (for spinner animation)
-                // or if we are displaying the settled results before hiding the card.
-                if let Some(ref progress) = self.mcp_boot_status {
-                    let boot_map = progress.lock();
-                    let mut show_card = false;
-                    let mut all_done = true;
-                    for status in boot_map.values() {
-                        if matches!(status, ServerBootStatus::Loading) {
-                            show_card = true;
-                            all_done = false;
-                        }
-                    }
-                    if all_done {
-                        if self.mcp_all_settled_at.is_none() {
-                            self.mcp_all_settled_at = Some(std::time::Instant::now());
-                        }
-                    } else {
-                        self.mcp_all_settled_at = None;
-                        self.mcp_closed = false; // Reset if loading starts again
-                    }
-                    if let Some(settled) = self.mcp_all_settled_at
-                        && settled.elapsed() < std::time::Duration::from_secs(3)
-                    {
-                        show_card = true;
-                    }
-                    if show_card && !boot_map.is_empty() && !self.mcp_closed {
-                        self.draw_dirty = true;
-                    } else if self.mcp_all_settled_at.is_some() && !self.mcp_closed {
-                        // The display window has expired! Mark as closed and trigger exactly one redraw to erase the card.
-                        self.mcp_closed = true;
-                        self.draw_dirty = true;
-                    }
-                }
-
-                if let Some(ref ready) = self.startup_ready
-                    && !self.mcp_processed
-                    && ready.load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    self.mcp_processed = true;
-                    return Ok(Some("__MCP_READY__".to_string()));
-                }
-
-                // Background-subagent completion toast (Option 2).
-                // Surface a single toast when pending count changes so the
-                // user knows there are results waiting; the actual drain
-                // still happens in the outer REPL loop after submit.
-                if let Some(getter) = self.bg_pending_count.as_ref() {
-                    let pending = getter();
-                    let mut taken_toast = self.toast.take();
-                    let wrote = super::tick_bg_pending_toast(
-                        pending,
-                        &mut self.bg_last_announced,
-                        &mut taken_toast,
-                    );
-                    self.toast = taken_toast;
-                    if wrote {
-                        self.draw_dirty = true;
-                    }
-                    self.prune_completed_subagents();
-                }
-                continue;
-            }
-            match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    let was_empty = self.editor.is_empty();
-                    if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
-                        return Ok(result);
-                    } else {
-                        if was_empty && !self.editor.is_empty() {
-                            self.last_status = None;
-                        }
-                        if !self.is_pasting {
-                            self.draw()?;
-                        }
-                    }
-                }
-                Event::Paste(text) => {
-                    self.handle_bracketed_paste_text(&text);
-                    self.draw()?;
-                }
-                Event::Resize(_w, _h) => {
-                    self.handle_resize()?;
-                }
-                Event::Mouse(m) => {
-                    let _ = self.handle_message_area_mouse_event(m)?;
-                }
-                Event::FocusGained => {
-                    self.has_focus = true;
-                }
-                Event::FocusLost => {
-                    self.has_focus = false;
-                }
-                _ => {}
+            if event::poll(poll_timeout)?
+                && let Some(outcome) = self.handle_idle_event(event::read()?, history, hist_idx)?
+            {
+                return Ok(outcome);
             }
         }
     }
 
     pub fn handle_bracketed_paste_text(&mut self, text: &str) {
+        if self
+            .dispatch_overlay_event(&Event::Paste(text.to_owned()))
+            .map(|r| r.0)
+            .unwrap_or(true)
+        {
+            return;
+        }
         // Bracketed paste: the terminal wrapped the pasted content in
         // paste-start / paste-end markers so crossterm delivers it as one string.
         // Drag-onto-terminal often appears as a file URI/path; load image files
@@ -195,6 +161,88 @@ impl TuiApp {
         }
         self.last_status = None;
         self.draw_dirty = true;
+    }
+
+    /// The asynchronous REPL reader calls this with the app lock held only for
+    /// dispatch, then releases it before waiting for the next terminal event.
+    pub fn handle_idle_event(
+        &mut self,
+        event: Event,
+        history: &mut [String],
+        hist_idx: &mut Option<usize>,
+    ) -> Result<Option<InputOutcome>> {
+        match event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                let was_empty = self.editor.is_empty();
+                if let Some(result) = self.handle_key_input(key, history, hist_idx)? {
+                    return Ok(Some(match result {
+                        Some(text) => InputOutcome::Submitted(text),
+                        None => InputOutcome::Exit,
+                    }));
+                }
+                if was_empty && !self.editor.is_empty() {
+                    self.last_status = None;
+                }
+                self.draw_dirty = true;
+            }
+            Event::Paste(text) => self.handle_bracketed_paste_text(&text),
+            Event::Mouse(mouse) => {
+                self.handle_message_area_mouse_event(mouse)?;
+            }
+            Event::Resize(_, _) => self.handle_resize()?,
+            Event::FocusGained => self.has_focus = true,
+            Event::FocusLost => self.has_focus = false,
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    pub fn tick_idle(&mut self, allow_host_actions: bool) -> Option<InputOutcome> {
+        self.pump_lua_ui_events();
+        if allow_host_actions && self.has_lua_host_work(false) {
+            return Some(InputOutcome::WorkReady);
+        }
+        if allow_host_actions
+            && let Some(ready) = &self.startup_ready
+            && !self.mcp_processed
+            && ready.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.mcp_processed = true;
+            return Some(InputOutcome::Submitted("__MCP_READY__".into()));
+        }
+        if let Some(progress) = &self.mcp_boot_status {
+            let map = progress.lock();
+            let loading = map
+                .values()
+                .any(|status| matches!(status, ServerBootStatus::Loading));
+            if loading {
+                self.mcp_all_settled_at = None;
+                self.mcp_closed = false;
+            } else if self.mcp_all_settled_at.is_none() {
+                self.mcp_all_settled_at = Some(std::time::Instant::now());
+            }
+            let visible = loading
+                || self
+                    .mcp_all_settled_at
+                    .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(3));
+            if !visible && !self.mcp_closed {
+                self.mcp_closed = true;
+                self.draw_dirty = true;
+            }
+            if visible && !map.is_empty() && !self.mcp_closed {
+                self.draw_dirty = true;
+            }
+        }
+        if let Some(getter) = &self.bg_pending_count {
+            let pending = getter();
+            let mut toast = self.toast.take();
+            if super::tick_bg_pending_toast(pending, &mut self.bg_last_announced, &mut toast) {
+                self.draw_dirty = true;
+            }
+            self.toast = toast;
+            self.prune_completed_subagents();
+        }
+        None
     }
 
     pub fn paste_from_clipboard(&mut self) -> bool {
@@ -230,7 +278,23 @@ impl TuiApp {
         &mut self,
         m: crossterm::event::MouseEvent,
     ) -> Result<bool> {
-        if self.slots.handle_mouse(m) {
+        if self.dispatch_overlay_event(&Event::Mouse(m))?.0 {
+            self.draw()?;
+            return Ok(true);
+        }
+        if let Some(slot) = self.slots.route_mouse(m) {
+            if matches!(m.kind, crossterm::event::MouseEventKind::Down(_)) {
+                self.focused_region = crate::slots::FocusRegion::from_slot(slot);
+                for region in [
+                    crate::slots::UiSlot::Sidebar,
+                    crate::slots::UiSlot::Header,
+                    crate::slots::UiSlot::Footer,
+                ] {
+                    if let Some(widget) = self.slots.get_mut(region) {
+                        widget.set_focused(region == slot);
+                    }
+                }
+            }
             self.draw()?;
             return Ok(true);
         }
@@ -321,39 +385,9 @@ impl TuiApp {
         // None              = continue reading
 
         // -- Dynamic overlay stack (Phase 3: highest priority)
-        if let Some(overlay) = self.overlays.last_mut() {
-            use crate::overlay_component::OverlayInputResult;
-            let result = overlay.handle_input(k);
-
-            // Drain side effects (preview, insert, etc.) on every dispatch.
-            let action = overlay.take_result();
-
-            match result {
-                OverlayInputResult::Dismiss => {
-                    // Pop the overlay, then process its final action.
-                    if let Some(mut popped) = self.overlays.pop() {
-                        // Drain final result if handle_input didn't already produce one.
-                        let final_action = action.or_else(|| popped.take_result());
-                        if let Some(any_val) = final_action {
-                            return self.process_overlay_action(any_val);
-                        }
-                    }
-                }
-                OverlayInputResult::Consumed => {
-                    if let Some(any_val) = action {
-                        let _ = self.process_overlay_action(any_val);
-                    }
-                }
-                OverlayInputResult::NotHandled => {
-                    // Fall through to legacy handlers below.
-                }
-            }
-
-            if !matches!(result, OverlayInputResult::NotHandled) {
-                self.draw_dirty = true;
-                let _ = self.draw();
-                return Ok(None);
-            }
+        let (owned, action) = self.dispatch_overlay_event(&Event::Key(k))?;
+        if owned {
+            return Ok(action);
         }
 
         // -- Subagent Control Tray hotkeys & input routing
@@ -385,6 +419,7 @@ impl TuiApp {
                 }
                 return Ok(None);
             }
+            return Ok(None); // The focused tray owns unrecognized input too.
         }
 
         // Legacy overlay dispatch blocks removed — all four overlays
@@ -392,95 +427,13 @@ impl TuiApp {
         // handled by the dynamic overlay stack above (Phase 3).
 
         // -- UI extension slot focus and input routing (Phase 4)
-        {
-            use crate::slots::FocusRegion;
-            if self.focused_region != FocusRegion::Input {
-                if k.code == KeyCode::Esc {
-                    self.focused_region = FocusRegion::Input;
-                    use crate::slots::UiSlot;
-                    for s in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
-                        if let Some(w) = self.slots.get_mut(s) {
-                            w.set_focused(false);
-                        }
-                    }
-                    self.show_toast("Focus: Prompt input active", ToastLevel::Info);
-                    self.draw_dirty = true;
-                    let _ = self.draw();
-                    return Ok(None);
-                }
-
-                if k.code == KeyCode::Char('f') && k.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.cycle_focus();
-                    return Ok(None);
-                }
-
-                let mut consumed = false;
-                if let Some(slot) = self.focused_region.to_slot()
-                    && let Some(widget) = self.slots.get_mut(slot)
-                {
-                    consumed = widget.handle_input(k);
-                }
-
-                if !consumed {
-                    // Check if it's a scroll key and handle it
-                    if self.handle_scroll_key(k.code, k.modifiers) {
-                        let _ = self.draw();
-                        return Ok(None);
-                    }
-                }
-
-                // Consume all input when a slot is focused to protect prompt editor
-                self.draw_dirty = true;
-                let _ = self.draw();
-                return Ok(None);
-            }
+        if self.handle_focused_slot_key(k) {
+            return Ok(None);
         }
 
         // -- Lua global keybindings
-        if let Some(lua) = &self.lua_engine {
-            let mut key_str = String::new();
-            if k.modifiers
-                .contains(crossterm::event::KeyModifiers::CONTROL)
-            {
-                key_str.push_str("C-");
-            }
-            if k.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
-                key_str.push_str("A-");
-            }
-            if k.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
-                key_str.push_str("S-");
-            }
-            match k.code {
-                crossterm::event::KeyCode::Char(c) => key_str.push(c),
-                crossterm::event::KeyCode::Enter => key_str.push_str("Enter"),
-                crossterm::event::KeyCode::Esc => key_str.push_str("Esc"),
-                crossterm::event::KeyCode::Tab => key_str.push_str("Tab"),
-                crossterm::event::KeyCode::Backspace => key_str.push_str("Backspace"),
-                crossterm::event::KeyCode::Delete => key_str.push_str("Delete"),
-                crossterm::event::KeyCode::Up => key_str.push_str("Up"),
-                crossterm::event::KeyCode::Down => key_str.push_str("Down"),
-                crossterm::event::KeyCode::Left => key_str.push_str("Left"),
-                crossterm::event::KeyCode::Right => key_str.push_str("Right"),
-                _ => {}
-            }
-            if !key_str.is_empty() && lua.handle_keybinding(&key_str) {
-                let has_queued_cmd = !lua
-                    .command_queue
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_empty()
-                    || !lua
-                        .tool_queue
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .is_empty();
-                self.draw_dirty = true;
-                let _ = self.draw();
-                if has_queued_cmd {
-                    return Ok(Some(Some(String::new())));
-                }
-                return Ok(None); // event consumed
-            }
+        if self.handle_lua_key(k) {
+            return Ok(None);
         }
 
         // Delegate scroll keys (Alt+K/J, PageUp, PageDown, Ctrl+End) to unified handler
@@ -1152,6 +1105,113 @@ impl TuiApp {
         };
 
         Ok(None)
+    }
+
+    /// One overlay dispatch seam for idle, active and synchronous questions.
+    pub fn dispatch_overlay_event(
+        &mut self,
+        event: &Event,
+    ) -> Result<(bool, Option<Option<String>>)> {
+        let dispatch = dispatch_overlay_stack(&mut self.overlays, event);
+        self.draw_dirty |= dispatch.dirty;
+        let submission = match dispatch.action {
+            Some(action) => self.process_overlay_action(action)?,
+            None => None,
+        };
+        Ok((dispatch.owned, submission))
+    }
+
+    pub fn handle_lua_key(&mut self, key: KeyEvent) -> bool {
+        let mut name = String::new();
+        for (modifier, prefix) in [
+            (KeyModifiers::CONTROL, "C-"),
+            (KeyModifiers::ALT, "A-"),
+            (KeyModifiers::SHIFT, "S-"),
+        ] {
+            if key.modifiers.contains(modifier) {
+                name.push_str(prefix);
+            }
+        }
+        match key.code {
+            KeyCode::Char(c) => name.push(c),
+            KeyCode::Enter => name.push_str("Enter"),
+            KeyCode::Esc => name.push_str("Esc"),
+            KeyCode::Tab => name.push_str("Tab"),
+            KeyCode::BackTab => name.push_str("BackTab"),
+            KeyCode::Backspace => name.push_str("Backspace"),
+            KeyCode::Delete => name.push_str("Delete"),
+            KeyCode::Up => name.push_str("Up"),
+            KeyCode::Down => name.push_str("Down"),
+            KeyCode::Left => name.push_str("Left"),
+            KeyCode::Right => name.push_str("Right"),
+            _ => return false,
+        }
+        let handled = self
+            .lua_engine
+            .as_ref()
+            .is_some_and(|lua| lua.handle_keybinding(&name));
+        if handled {
+            self.refresh_lua_ui();
+            self.draw_dirty = true;
+        }
+        handled
+    }
+
+    pub fn handle_focused_slot_key(&mut self, key: KeyEvent) -> bool {
+        use crate::slots::{FocusRegion, UiSlot};
+        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.cycle_focus();
+            return true;
+        }
+        if self.focused_region == FocusRegion::Input {
+            return false;
+        }
+        if key.code == KeyCode::Esc {
+            self.focused_region = FocusRegion::Input;
+            for slot in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
+                if let Some(widget) = self.slots.get_mut(slot) {
+                    widget.set_focused(false);
+                }
+            }
+            self.draw_dirty = true;
+            return true;
+        }
+        let consumed = self
+            .focused_region
+            .to_slot()
+            .and_then(|slot| self.slots.get_mut(slot))
+            .is_some_and(|widget| widget.handle_input(key));
+        if !consumed {
+            self.handle_scroll_key(key.code, key.modifiers);
+        }
+        self.draw_dirty = true;
+        true // A focused slot owns even unrecognized keys.
+    }
+
+    pub fn has_lua_host_work(&self, tools_ready: bool) -> bool {
+        self.lua_engine.as_ref().is_some_and(|lua| {
+            !lua.command_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+                || (tools_ready
+                    && !lua
+                        .tool_queue
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_empty())
+        })
+    }
+
+    /// Bound callback work per tick and refresh extension slots once per batch.
+    pub fn pump_lua_ui_events(&mut self) {
+        let Some(lua) = &self.lua_engine else {
+            return;
+        };
+        if lua.pump_ui_events() {
+            self.refresh_lua_ui();
+            self.draw_dirty = true;
+        }
     }
 
     /// Cycle keyboard focus between the main prompt input and active UI slots (Sidebar, Header, Footer).

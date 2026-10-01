@@ -215,6 +215,13 @@ pub(crate) fn render_frame(
     let area = frame.area();
     if area.width < 40 || area.height < 10 {
         render_fallback_too_small(frame, area, colors);
+        if let Some(overlay) = ctx.top_overlay
+            && overlay.inline_height_for(area) > 0
+        {
+            // A small terminal must still offer a decision rather than hiding
+            // it behind the normal conversation's minimum-size fallback.
+            overlay.render_inline(frame, area, colors);
+        }
         return (0, None, ratatui::layout::Rect::default());
     }
 
@@ -255,7 +262,7 @@ pub(crate) fn render_frame(
 
     let has_inline_prompt = ctx
         .top_overlay
-        .is_some_and(|overlay| overlay.inline_height(content_area.height) > 0);
+        .is_some_and(|overlay| overlay.inline_height_for(area) > 0);
     let plan_h = if has_inline_prompt {
         // The decision needs room for a focused choice even on short screens.
         // The plan state stays intact and reappears as soon as the prompt closes.
@@ -276,7 +283,13 @@ pub(crate) fn render_frame(
     let inline_max = content_area.height.saturating_sub(footer_h + plan_h + 2);
     let inline_h = ctx
         .top_overlay
-        .map(|overlay| overlay.inline_height(inline_max))
+        .map(|overlay| {
+            if overlay.inline_height_for(area) > 0 {
+                overlay.inline_height(inline_max)
+            } else {
+                0
+            }
+        })
         .unwrap_or(0);
     let input_h = if inline_h > 0 {
         inline_h
@@ -525,7 +538,7 @@ fn render_input_or_question(
     } = ctx;
 
     let inline_h = top_overlay
-        .map(|o| o.inline_height(frame.area().height))
+        .map(|o| o.inline_height_for(frame.area()))
         .unwrap_or(0);
 
     if inline_h > 0 {
@@ -1028,9 +1041,19 @@ mod tests {
     /// Exercise the same frame seam as TuiApp::draw, including overlay placement.
     fn draw_with_prompt(
         terminal: &mut Terminal<TestBackend>,
-        prompt: Option<&dyn OverlayComponent>,
+        prompt: Option<&mut dyn OverlayComponent>,
         textarea: &mut tui_textarea::TextArea<'static>,
         layout_engine: &mut TimelineLayoutEngine,
+    ) -> (Vec<String>, Rect) {
+        draw_with_prompt_state(terminal, prompt, textarea, layout_engine, true)
+    }
+
+    fn draw_with_prompt_state(
+        terminal: &mut Terminal<TestBackend>,
+        prompt: Option<&mut dyn OverlayComponent>,
+        textarea: &mut tui_textarea::TextArea<'static>,
+        layout_engine: &mut TimelineLayoutEngine,
+        is_processing: bool,
     ) -> (Vec<String>, Rect) {
         let colors = ThemeColors::default();
         let lines = [RenderLine::SystemMsg("Earlier conversation".to_string())];
@@ -1052,7 +1075,7 @@ mod tests {
                     last_status: &None,
                     thinking_text: None,
                     thinking_elapsed: None,
-                    top_overlay: prompt,
+                    top_overlay: prompt.as_deref(),
                     queued_count: 0,
                     cwd: "/tmp",
                     context_pct: None,
@@ -1067,7 +1090,7 @@ mod tests {
                     active_plan: None,
                     sidebar_hidden: true,
                     toast: None,
-                    is_processing: true,
+                    is_processing,
                     copy_highlight: None,
                     mouse_selection: None,
                     expanded_items: &expanded,
@@ -1082,6 +1105,12 @@ mod tests {
                 };
                 messages_area =
                     render_frame(frame, ctx, textarea, &mut input_width, layout_engine).2;
+                if let Some(prompt) = prompt
+                    && prompt.inline_height_for(frame.area()) == 0
+                {
+                    let area = frame.area();
+                    prompt.render_overlay(frame, area, &colors);
+                }
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -1124,7 +1153,7 @@ mod tests {
         );
         let (rows, messages) = draw_with_prompt(
             &mut terminal,
-            Some(&prompt),
+            Some(&mut prompt),
             &mut textarea,
             &mut layout_engine,
         );
@@ -1188,7 +1217,7 @@ mod tests {
         }
         let (rows, messages) = draw_with_prompt(
             &mut terminal,
-            Some(&prompt),
+            Some(&mut prompt),
             &mut textarea,
             &mut layout_engine,
         );
@@ -1206,6 +1235,94 @@ mod tests {
                 .unwrap()
                 >= usize::from(messages.bottom())
         );
+    }
+
+    #[test]
+    fn candidate6_adaptive_decisions_preserve_draft_and_restore_composer() {
+        use crate::app::input::dispatch_overlay_stack;
+        use crate::editor_component::EditorComponent;
+        use crossterm::event::Event;
+        for is_processing in [false, true] {
+            for (width, height) in [(120, 40), (55, 13), (32, 8)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut editor = crate::editor::Editor::new();
+                editor.set_text("unsent draft with 界 text".into());
+                editor.set_cursor_pos(7);
+                let saved = (editor.text(), editor.cursor_pos());
+                let mut textarea = tui_textarea::TextArea::from(
+                    editor.text().lines().map(String::from).collect::<Vec<_>>(),
+                );
+                let mut layout = TimelineLayoutEngine::new();
+                let (tx, mut rx) = tokio::sync::oneshot::channel();
+                let permission = crate::app::permission_overlay::PermissionOverlay::new(
+                    "bash.exec",
+                    "git status",
+                    tx,
+                );
+                let mut overlays: Vec<Box<dyn OverlayComponent>> = vec![Box::new(permission)];
+                let (rows, _) = draw_with_prompt_state(
+                    &mut terminal,
+                    Some(overlays.last_mut().unwrap().as_mut()),
+                    &mut textarea,
+                    &mut layout,
+                    is_processing,
+                );
+                assert!(rows.join("\n").contains("Allow once"));
+                assert!(rows.join("\n").contains("Esc deny"));
+                for event in [
+                    Event::Paste("Allow once".into()),
+                    Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+                ] {
+                    let dispatch = dispatch_overlay_stack(&mut overlays, &event);
+                    if !dispatch.owned {
+                        match event {
+                            Event::Paste(text) => editor.handle_paste(&text),
+                            Event::Key(key) => {
+                                EditorComponent::handle_input(&mut editor, key, width);
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert!(
+                        dispatch.owned,
+                        "the real modal stack must own input in either phase"
+                    );
+                    assert_eq!((editor.text(), editor.cursor_pos()), saved);
+                }
+                let dispatch = dispatch_overlay_stack(
+                    &mut overlays,
+                    &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+                );
+                assert!(dispatch.owned && dispatch.dirty);
+                assert!(
+                    overlays.is_empty(),
+                    "confirmation/cancellation actually pops the production stack"
+                );
+                assert_eq!(
+                    *dispatch
+                        .action
+                        .unwrap()
+                        .downcast::<crate::app::permission_overlay::PermissionVerdict>()
+                        .unwrap(),
+                    crate::app::permission_overlay::PermissionVerdict::Deny
+                );
+                assert_eq!(
+                    rx.try_recv().unwrap(),
+                    crate::app::permission_overlay::PermissionVerdict::Deny
+                );
+                assert_eq!((editor.text(), editor.cursor_pos()), saved);
+                if width >= 40 && height >= 10 {
+                    let (rows, _) = draw_with_prompt_state(
+                        &mut terminal,
+                        None,
+                        &mut textarea,
+                        &mut layout,
+                        is_processing,
+                    );
+                    assert!(rows.join("\n").contains("unsent draft"));
+                }
+            }
+        }
     }
 
     #[test]

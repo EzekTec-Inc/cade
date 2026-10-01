@@ -1,190 +1,106 @@
-//! Interactive question panel — ask_question, ask_question_blocking,
-//! ask_question_async, and handle_question_key.
-
+//! Question entry points all use the same overlay event driver.
+use super::{ActiveQuestionState, RenderLine, TuiApp};
+use crate::{
+    Result,
+    question::{Question, QuestionAnswer},
+};
 use crossterm::event::{self, Event};
 
-use crate::Result;
-
-use super::{ActiveQuestionDrawState, ActiveQuestionState, RenderLine, TuiApp};
-
 impl TuiApp {
-    // -- Interactive Question
-
-    pub fn ask_question(
-        &mut self,
-        question: &crate::question::Question,
-    ) -> Result<Option<crate::question::QuestionAnswer>> {
-        // snap to bottom when asking
-        self.scroll = 0;
-
-        self.notify_if_unfocused(
-            crate::app::notifier::AttentionCue::QuestionAsked,
-            "Question Required",
-            &question.text,
-        );
-
-        let state = ActiveQuestionState {
-            draw_state: ActiveQuestionDrawState::new(question.clone()),
-            tx: None,
-            result: None,
-        };
-
-        self.overlays.push(Box::new(state));
-        self.draw()?;
-
-        let answer = loop {
-            if !event::poll(std::time::Duration::from_millis(50))? {
-                continue;
-            }
-            if let Event::Key(key) = event::read()? {
-                if let Some(top) = self.overlays.last_mut()
-                    && top.id() == "active_question"
-                {
-                    let res = top.handle_input(key);
-                    if matches!(res, crate::overlay_component::OverlayInputResult::Dismiss) {
-                        let Some(mut pop) = self.overlays.pop() else {
-                            continue;
-                        };
-                        let result = pop
-                            .take_result()
-                            .and_then(|any| {
-                                any.downcast::<Option<crate::question::QuestionAnswer>>()
-                                    .ok()
-                                    .map(|b| *b)
-                            })
-                            .flatten();
-                        break result;
-                    }
-                }
+    pub fn ask_question(&mut self, question: &Question) -> Result<Option<QuestionAnswer>> {
+        let mut answer = self.ask_question_async(question.clone())?;
+        let result = loop {
+            self.pump_lua_ui_events();
+            if self.draw_dirty {
                 self.draw()?;
             }
-        };
-
-        if let Some(ans) = &answer {
-            self.push(RenderLine::QuestionResult {
-                header: question.header.to_string(),
-                answer: ans.as_str(),
-            })?;
-        } else {
-            self.draw()?; // clear question ui on cancel
-        }
-
-        Ok(answer)
-    }
-
-    /// Blocking question in the input region, driven by keys from `key_rx`.
-    ///
-    /// Safe to call from `tokio::task::spawn_blocking`.  Does NOT poll the
-    /// crossterm event queue directly; instead the tick task forwards
-    /// `KeyEvent`s via the `SyncSender` half of the channel.  This avoids the
-    /// deadlock where the tick task consumes an Esc from the EventStream while
-    /// this function is waiting on `event::read()`.
-    ///
-    /// Sets `active_question.tx = None` so the tick task's spin-wait branch
-    /// is never entered for this question.
-    ///
-    /// This is the canonical path for `prompt_approval` and `handle_ask_user_question`.
-    pub fn ask_question_blocking(
-        &mut self,
-        question: &crate::question::Question,
-        key_rx: std::sync::mpsc::Receiver<crossterm::event::KeyEvent>,
-    ) -> Result<Option<crate::question::QuestionAnswer>> {
-        self.scroll = 0;
-
-        self.notify_if_unfocused(
-            crate::app::notifier::AttentionCue::QuestionAsked,
-            "Question Required",
-            &question.text,
-        );
-
-        let state = ActiveQuestionState {
-            draw_state: ActiveQuestionDrawState::new(question.clone()),
-            tx: None,
-            result: None,
-        };
-
-        self.overlays.push(Box::new(state));
-        self.draw()?;
-
-        let answer = loop {
-            let key_event = match key_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok(k) => k,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break None,
-            };
-
-            if let Some(top) = self.overlays.last_mut()
-                && top.id() == "active_question"
-            {
-                let res = top.handle_input(key_event);
-                if matches!(res, crate::overlay_component::OverlayInputResult::Dismiss) {
-                    let Some(mut pop) = self.overlays.pop() else {
-                        continue;
-                    };
-                    let result = pop
-                        .take_result()
-                        .and_then(|any| {
-                            any.downcast::<Option<crate::question::QuestionAnswer>>()
-                                .ok()
-                                .map(|b| *b)
-                        })
-                        .flatten();
-                    break result;
+            match answer.try_recv() {
+                Ok(result) => break result,
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => break None,
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+            }
+            if event::poll(std::time::Duration::from_millis(50))? {
+                let event = event::read()?;
+                if !self.dispatch_overlay_event(&event)?.0 {
+                    match event {
+                        Event::Resize(_, _) => self.handle_resize()?,
+                        Event::FocusGained => self.has_focus = true,
+                        Event::FocusLost => self.has_focus = false,
+                        _ => {}
+                    }
                 }
             }
-            self.draw()?;
         };
+        self.record_question_answer(question, result)
+    }
 
-        // V-01 respects the user's scroll position during normal streaming, but
-        // after a blocking modal the user MUST see the tool result and agent
-        // response immediately — they just took an explicit action (approved /
-        // denied / answered).  Reset scroll unconditionally so subsequent pushes
-        // land in the visible viewport rather than below it.
+    /// Compatibility entry point for callers that already forward keys. The
+    /// caller is the sole terminal reader; this function never reads crossterm.
+    pub fn ask_question_blocking(
+        &mut self,
+        question: &Question,
+        key_rx: std::sync::mpsc::Receiver<crossterm::event::KeyEvent>,
+    ) -> Result<Option<QuestionAnswer>> {
+        let mut answer = self.ask_question_async(question.clone())?;
+        let result = loop {
+            self.pump_lua_ui_events();
+            if self.draw_dirty {
+                self.draw()?;
+            }
+            if let Ok(result) = answer.try_recv() {
+                break result;
+            }
+            match key_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(key) => {
+                    self.dispatch_overlay_event(&Event::Key(key))?;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // Cancel through the same path so no stale modal survives.
+                    self.dispatch_overlay_event(&Event::Key(crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Esc,
+                        crossterm::event::KeyModifiers::NONE,
+                    )))?;
+                    break None;
+                }
+            }
+        };
+        self.record_question_answer(question, result)
+    }
+
+    fn record_question_answer(
+        &mut self,
+        question: &Question,
+        answer: Option<QuestionAnswer>,
+    ) -> Result<Option<QuestionAnswer>> {
         self.scroll = 0;
         self.pending_lines = 0;
-
-        if let Some(ans) = &answer {
+        if let Some(answer) = &answer {
             self.push(RenderLine::QuestionResult {
                 header: question.header.clone(),
-                answer: ans.as_str(),
+                answer: answer.as_str(),
             })?;
         } else {
-            self.draw()?; // clear overlay on cancel
+            self.draw()?;
         }
-
         Ok(answer)
     }
 
-    /// Async question via oneshot channel.
-    ///
-    /// ONLY valid when an external event driver (the tick task's spin-wait
-    /// loop) is concurrently calling `handle_question_key`.
-    ///
-    /// This is the preferred async-safe pattern: push the overlay, release
-    /// the lock, await the oneshot.  No lock is held during the wait, so
-    /// there is no deadlock risk with the TUI event loop.
+    /// Await the receiver with no app lock held. The host's sole event reader
+    /// drives dispatch_overlay_event during idle and active turns alike.
     pub fn ask_question_async(
         &mut self,
-        question: crate::question::Question,
-    ) -> Result<tokio::sync::oneshot::Receiver<Option<crate::question::QuestionAnswer>>> {
-        // snap to bottom when asking
+        question: Question,
+    ) -> Result<tokio::sync::oneshot::Receiver<Option<QuestionAnswer>>> {
         self.scroll = 0;
-
         self.notify_if_unfocused(
-            crate::app::notifier::AttentionCue::QuestionAsked,
+            super::notifier::AttentionCue::QuestionAsked,
             "Question Required",
             &question.text,
         );
-
         let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let state = ActiveQuestionState {
-            draw_state: ActiveQuestionDrawState::new(question),
-            tx: Some(tx),
-            result: None,
-        };
-
-        self.overlays.push(Box::new(state));
+        self.overlays
+            .push(Box::new(ActiveQuestionState::new(question, tx)));
         self.draw()?;
         Ok(rx)
     }

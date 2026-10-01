@@ -1,293 +1,131 @@
-//! Deep WorkflowEngine Execution Seam (PRD #99 / Issue #101).
+//! Workflow discovery, dependency scheduling and canonical agent-run orchestration.
+//! Plugin lifecycle and tool routing live in their own modules.
 
-use cade_api_types::{
-    WorkflowRunSummary, WorkflowStatus, WorkflowStepDef, WorkflowStepEvent, WorkflowSummary,
-};
-use cade_store::sqlite::{
-    Db, WorkflowRunRecord, create_workflow_run, get_workflow_run, list_workflow_runs,
-    update_workflow_run_status, update_workflow_run_step,
-};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::OnceLock;
-use tokio::sync::{RwLock, broadcast, oneshot};
-use tracing::info;
+mod definitions;
+mod execution;
+#[cfg(test)]
+mod tests;
 
-static WORKFLOW_STREAMS: OnceLock<RwLock<HashMap<String, broadcast::Sender<WorkflowStepEvent>>>> =
-    OnceLock::new();
-static WORKFLOW_CANCELS: OnceLock<RwLock<HashMap<String, oneshot::Sender<()>>>> = OnceLock::new();
+use crate::server::api::run::runtime::ServerAgentRuntime;
+use crate::server::state::AppState;
+use cade_api_types::{WorkflowRunSummary, WorkflowStatus, WorkflowStepEvent, WorkflowSummary};
+use cade_store::sqlite::{self, Db, WorkflowRunRecord};
+pub use definitions::{WorkflowConfig, WorkflowDef};
+use std::path::PathBuf;
+use tokio::sync::broadcast;
 
-fn get_workflow_streams() -> &'static RwLock<HashMap<String, broadcast::Sender<WorkflowStepEvent>>>
-{
-    WORKFLOW_STREAMS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-fn get_workflow_cancels() -> &'static RwLock<HashMap<String, oneshot::Sender<()>>> {
-    WORKFLOW_CANCELS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-/// In-memory workflow definition.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct WorkflowDef {
-    pub name: String,
-    pub description: String,
-    pub steps: Vec<WorkflowStepDef>,
-}
-
-/// Standalone, deep engine managing multi-step workflow execution loops.
 #[derive(Clone)]
 pub struct WorkflowEngine {
     db: Db,
+    runtime: ServerAgentRuntime,
+    directory: PathBuf,
+}
+
+/// Accepted workflow and the first actual canonical agent execution. The legacy
+/// webhook execution_id remains queryable through the ordinary agent-run API.
+#[derive(Debug, Clone)]
+pub struct WorkflowDispatch {
+    pub run_id: String,
+    pub execution_id: String,
+    pub agent_id: String,
 }
 
 impl WorkflowEngine {
-    /// Create a new WorkflowEngine backed by the shared SQLite database.
-    pub fn new(db: Db) -> Self {
-        Self { db }
+    pub fn new(state: AppState) -> Self {
+        Self::with_runtime(state.db.clone(), ServerAgentRuntime::new(state))
     }
 
-    /// List all discovered workflows and their last run statuses.
-    pub async fn list_workflows(&self) -> Vec<WorkflowSummary> {
-        let mut summaries = Vec::new();
-        let builtins = Self::builtin_workflows();
-
-        for def in builtins {
-            let last_run = get_workflow_run(&self.db, &def.name)
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    list_workflow_runs(&self.db, Some(&def.name), 1)
-                        .ok()
-                        .and_then(|mut v| v.pop())
-                })
-                .map(|r| WorkflowRunSummary {
-                    run_id: r.run_id,
-                    workflow_name: r.workflow_name,
-                    status: match r.status.as_str() {
-                        "running" => WorkflowStatus::Running,
-                        "succeeded" => WorkflowStatus::Succeeded,
-                        "failed" => WorkflowStatus::Failed,
-                        "cancelled" => WorkflowStatus::Cancelled,
-                        "skipped" => WorkflowStatus::Skipped,
-                        _ => WorkflowStatus::Pending,
-                    },
-                    created_at: r.created_at,
-                    completed_at: r.completed_at,
-                    current_step: r.current_step,
-                    total_steps: r.total_steps,
-                    error: r.error,
-                });
-
-            summaries.push(WorkflowSummary {
-                id: def.name.clone(),
-                name: def.name,
-                description: def.description,
-                steps_count: def.steps.len(),
-                steps: def.steps,
-                last_run,
-            });
+    /// Reuses the real runtime, including its injectable provider/context seams in tests.
+    pub fn with_runtime(db: Db, runtime: ServerAgentRuntime) -> Self {
+        Self {
+            db,
+            runtime,
+            directory: PathBuf::from(".cade/workflows"),
         }
-
-        summaries
     }
 
-    /// Subscribe to real-time event broadcasts for an active workflow run.
+    pub fn with_directory(mut self, directory: PathBuf) -> Self {
+        self.directory = directory;
+        self
+    }
+
+    pub async fn list_workflows(&self) -> Result<Vec<WorkflowSummary>, String> {
+        let definitions = self.definitions()?;
+        definitions
+            .into_iter()
+            .map(|def| {
+                let last_run = sqlite::list_workflow_runs(&self.db, Some(&def.name), 1)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .next()
+                    .map(run_summary);
+                Ok(WorkflowSummary {
+                    id: def.name.clone(),
+                    name: def.name,
+                    description: def.description,
+                    steps_count: def.steps.len(),
+                    steps: def.steps,
+                    last_run,
+                })
+            })
+            .collect()
+    }
+
     pub async fn subscribe_events(
         &self,
         run_id: &str,
     ) -> Option<broadcast::Receiver<WorkflowStepEvent>> {
-        let streams = get_workflow_streams().read().await;
-        streams.get(run_id).map(|tx| tx.subscribe())
+        sqlite::get_workflow_run(&self.db, run_id).ok().flatten()?;
+        execution::subscribe(run_id).await
     }
 
-    /// Cancel an in-flight workflow run.
-    pub async fn cancel(&self, run_id: &str) -> bool {
-        let mut cancels = get_workflow_cancels().write().await;
-        if let Some(tx) = cancels.remove(run_id) {
-            let _ = tx.send(());
-            let _ = update_workflow_run_status(
-                &self.db,
-                run_id,
-                "cancelled",
-                None,
-                Some(chrono::Utc::now().timestamp()),
-            );
-            true
-        } else {
-            false
+    /// Cancellation is a request; the engine records terminal cancellation after
+    /// the active canonical runtime run has stopped, keeping its receiver alive.
+    pub async fn cancel(&self, run_id: &str) -> Result<bool, String> {
+        if sqlite::get_workflow_run(&self.db, run_id)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Ok(false);
         }
+        execution::cancel(&self.db, run_id).await
     }
 
-    /// Dispatch a workflow run asynchronously and return its run_id and event receiver.
     pub async fn dispatch(
         &self,
         workflow: WorkflowDef,
-        params: Value,
-    ) -> (String, broadcast::Receiver<WorkflowStepEvent>) {
-        let run_id = format!("wfrun-{}", uuid::Uuid::new_v4());
-        let (tx, rx) = broadcast::channel(64);
-        let (cancel_tx, mut cancel_rx) = oneshot::channel();
-
-        {
-            let mut streams = get_workflow_streams().write().await;
-            streams.insert(run_id.clone(), tx.clone());
-            let mut cancels = get_workflow_cancels().write().await;
-            cancels.insert(run_id.clone(), cancel_tx);
-        }
-
-        let now = chrono::Utc::now().timestamp();
-        let total_steps = workflow.steps.len();
-
-        let initial_record = WorkflowRunRecord {
-            run_id: run_id.clone(),
-            workflow_name: workflow.name.clone(),
-            status: "running".to_string(),
-            current_step: 0,
-            total_steps,
-            params_json: Some(params.to_string()),
-            error: None,
-            created_at: now,
-            completed_at: None,
-        };
-        let _ = create_workflow_run(&self.db, &initial_record);
-
-        let engine = self.clone();
-        let run_id_clone = run_id.clone();
-
-        tokio::spawn(async move {
-            let step_failed = false;
-            let final_error = None;
-
-            for (idx, step) in workflow.steps.iter().enumerate() {
-                // Check if cancelled before step
-                if cancel_rx.try_recv().is_ok() {
-                    info!(run_id = %run_id_clone, "Workflow run cancelled");
-                    break;
-                }
-
-                let _ = update_workflow_run_step(&engine.db, &run_id_clone, idx);
-
-                let start_ev = WorkflowStepEvent {
-                    run_id: run_id_clone.clone(),
-                    workflow_name: workflow.name.clone(),
-                    step_index: idx,
-                    step_name: step.name.clone(),
-                    status: WorkflowStatus::Running,
-                    output_chunk: Some(format!("Starting step: {}", step.name)),
-                    error: None,
-                };
-                let _ = tx.send(start_ev);
-
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-                let success_ev = WorkflowStepEvent {
-                    run_id: run_id_clone.clone(),
-                    workflow_name: workflow.name.clone(),
-                    step_index: idx,
-                    step_name: step.name.clone(),
-                    status: WorkflowStatus::Succeeded,
-                    output_chunk: Some(format!("Step '{}' completed successfully", step.name)),
-                    error: None,
-                };
-                let _ = tx.send(success_ev);
-            }
-
-            let end_ts = chrono::Utc::now().timestamp();
-            let final_status = if step_failed { "failed" } else { "succeeded" };
-
-            let _ = update_workflow_run_status(
-                &engine.db,
-                &run_id_clone,
-                final_status,
-                final_error,
-                Some(end_ts),
-            );
-
-            // Clean up active streams
-            let mut streams = get_workflow_streams().write().await;
-            streams.remove(&run_id_clone);
-            let mut cancels = get_workflow_cancels().write().await;
-            cancels.remove(&run_id_clone);
-        });
-
-        (run_id, rx)
+        params: serde_json::Value,
+    ) -> Result<(String, broadcast::Receiver<WorkflowStepEvent>), String> {
+        let (accepted, events) = self.dispatch_with_execution(workflow, params).await?;
+        Ok((accepted.run_id, events))
     }
 
-    /// Discovered or predefined built-in workflows.
-    pub fn builtin_workflows() -> Vec<WorkflowDef> {
-        vec![
-            WorkflowDef {
-                name: "ci-validation".to_string(),
-                description: "Run cargo check, clippy -- -D warnings, and test suite verification"
-                    .to_string(),
-                steps: vec![
-                    WorkflowStepDef {
-                        name: "cargo-check".to_string(),
-                        agent: Some("worker".to_string()),
-                        prompt: "Run cargo check --all-targets".to_string(),
-                        depends_on: vec![],
-                    },
-                    WorkflowStepDef {
-                        name: "cargo-clippy".to_string(),
-                        agent: Some("reviewer".to_string()),
-                        prompt: "Run cargo clippy --all-targets -- -D warnings".to_string(),
-                        depends_on: vec!["cargo-check".to_string()],
-                    },
-                    WorkflowStepDef {
-                        name: "cargo-test".to_string(),
-                        agent: Some("tester".to_string()),
-                        prompt: "Run cargo test --workspace".to_string(),
-                        depends_on: vec!["cargo-clippy".to_string()],
-                    },
-                ],
-            },
-            WorkflowDef {
-                name: "dependency-audit".to_string(),
-                description: "Audit workspace dependencies for security vulnerabilities"
-                    .to_string(),
-                steps: vec![WorkflowStepDef {
-                    name: "cargo-audit".to_string(),
-                    agent: Some("security".to_string()),
-                    prompt: "Run cargo audit".to_string(),
-                    depends_on: vec![],
-                }],
-            },
-        ]
+    /// Wait for canonical runtime acceptance, never for provider completion.
+    pub async fn dispatch_with_execution(
+        &self,
+        workflow: WorkflowDef,
+        params: serde_json::Value,
+    ) -> Result<(WorkflowDispatch, broadcast::Receiver<WorkflowStepEvent>), String> {
+        execution::dispatch(self.clone(), workflow, params).await
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cade_store::sqlite::open;
-
-    #[tokio::test]
-    async fn test_workflow_engine_dispatch_and_stream() {
-        let db = open(":memory:").expect("Open in-memory db");
-        let engine = WorkflowEngine::new(db);
-
-        let workflows = engine.list_workflows().await;
-        assert!(!workflows.is_empty());
-        assert_eq!(workflows[0].name, "ci-validation");
-
-        let def = WorkflowEngine::builtin_workflows()[0].clone();
-        let (run_id, mut rx) = engine.dispatch(def, serde_json::json!({})).await;
-
-        let first_ev = rx.recv().await.expect("Received first event");
-        assert_eq!(first_ev.run_id, run_id);
-        assert_eq!(first_ev.step_name, "cargo-check");
-        assert_eq!(first_ev.status, WorkflowStatus::Running);
-    }
-
-    #[tokio::test]
-    async fn test_workflow_engine_cancel() {
-        let db = open(":memory:").expect("Open in-memory db");
-        let engine = WorkflowEngine::new(db);
-
-        let def = WorkflowEngine::builtin_workflows()[0].clone();
-        let (run_id, _rx) = engine.dispatch(def, serde_json::json!({})).await;
-
-        let cancelled = engine.cancel(&run_id).await;
-        assert!(cancelled);
+pub fn run_summary(record: WorkflowRunRecord) -> WorkflowRunSummary {
+    WorkflowRunSummary {
+        run_id: record.run_id,
+        workflow_name: record.workflow_name,
+        status: match record.status.as_str() {
+            "running" | "cancelling" => WorkflowStatus::Running,
+            "succeeded" => WorkflowStatus::Succeeded,
+            "failed" => WorkflowStatus::Failed,
+            "cancelled" => WorkflowStatus::Cancelled,
+            "skipped" => WorkflowStatus::Skipped,
+            _ => WorkflowStatus::Pending,
+        },
+        created_at: record.created_at,
+        completed_at: record.completed_at,
+        current_step: record.current_step,
+        total_steps: record.total_steps,
+        error: record.error,
     }
 }
