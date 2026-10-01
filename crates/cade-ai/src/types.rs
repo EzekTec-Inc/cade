@@ -94,9 +94,10 @@ pub struct LlmToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
-    /// Gemini-specific opaque token that must be echoed back verbatim in the
-    /// conversation history when the model used thinking/reasoning.  Absent
-    /// for all other providers.
+    /// Opaque provider continuation carried with a tool call through persistence.
+    /// Gemini uses its native thought signature. OpenAI Responses uses a tagged,
+    /// versioned envelope of reasoning items. Adapters interpret only their own
+    /// format; this is replay metadata, never assistant text or tool arguments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thought_signature: Option<String>,
 }

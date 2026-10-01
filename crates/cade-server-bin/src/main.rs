@@ -191,61 +191,12 @@ async fn async_main() -> Result<()> {
         let mut mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
         let mcp_clone = Arc::clone(&mcp);
         let cwd_clone = cwd.clone();
-        let db_reload = db.clone();
         tokio::spawn(async move {
             while mcp_reload_rx.recv().await.is_some() {
                 tracing::info!("Server MCP settings changed — hot-reloading MCP servers...");
                 if let Ok(settings) = SettingsManager::new(&cwd_clone) {
                     let mcp_configs = settings.merged_mcp_servers();
                     let _summary = mcp_clone.reload(&mcp_configs, None).await;
-
-                    // Sync reloaded MCP schemas into SQLite
-                    let mcp_schemas = mcp_clone.all_tool_schemas().await;
-                    for schema in mcp_schemas {
-                        let name = schema["name"].as_str().unwrap_or("").to_string();
-                        if name.is_empty() {
-                            continue;
-                        }
-                        let description = schema["description"].as_str().map(String::from);
-                        let is_core = schema
-                            .get("x-cade")
-                            .and_then(|metadata| metadata.get("core_server"))
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or_else(|| {
-                                schema["_is_core"].as_bool().unwrap_or(false)
-                                    || schema
-                                        .get("tags")
-                                        .and_then(serde_json::Value::as_array)
-                                        .map(|tags| {
-                                            tags.iter().any(|t| t.as_str() == Some("core_mcp"))
-                                        })
-                                        .unwrap_or(false)
-                            });
-
-                        let mut tags = vec!["cade".to_string(), "mcp".to_string()];
-                        if is_core {
-                            tags.push("core_mcp".to_string());
-                        }
-
-                        let stub = cade_agent::agent::tools::build_python_stub_from_schema(
-                            &name,
-                            description.as_deref().unwrap_or(""),
-                            &schema["parameters"],
-                        );
-
-                        let row = cade_store::sqlite::ToolRow {
-                            id: format!("tool-mcp-{}", name),
-                            name: name.clone(),
-                            description,
-                            source_code: Some(stub),
-                            json_schema: Some(schema),
-                            tags,
-                        };
-
-                        if let Err(e) = cade_store::sqlite::upsert_tool(&db_reload, &row) {
-                            tracing::warn!("Failed to update MCP tool {}: {}", name, e);
-                        }
-                    }
 
                     tracing::info!("Server MCP hot-reload complete");
                 }
@@ -312,53 +263,18 @@ async fn async_main() -> Result<()> {
             }
         }
 
-        let mcp_schemas = mcp.all_tool_schemas().await;
-        for schema in mcp_schemas {
-            let name = schema["name"].as_str().unwrap_or("").to_string();
-            let description = schema["description"].as_str().map(String::from);
-            let is_core = schema
-                .get("x-cade")
-                .and_then(|metadata| metadata.get("core_server"))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or_else(|| {
-                    schema["_is_core"].as_bool().unwrap_or(false)
-                        || schema
-                            .get("tags")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|tags| tags.iter().any(|t| t.as_str() == Some("core_mcp")))
-                            .unwrap_or(false)
-                });
-
-            let mut tags = vec!["cade".to_string(), "mcp".to_string()];
-            if is_core {
-                tags.push("core_mcp".to_string());
-            }
-
-            let stub = build_python_stub_from_schema(
-                &name,
-                description.as_deref().unwrap_or(""),
-                &schema["parameters"],
-            );
-            let row = ToolRow {
-                id: format!("tool-{}", uuid::Uuid::new_v4()),
-                name: name.clone(),
-                description,
-                source_code: Some(stub),
-                json_schema: Some(schema),
-                tags,
-            };
-            if let Err(e) = cade_store::sqlite::upsert_tool(&db, &row) {
-                tracing::warn!("Failed to pre-register MCP tool {}: {}", name, e);
-            } else {
-                total_registered += 1;
-            }
-        }
-
         tracing::info!(
             "Pre-registered {} total tools into the database at startup",
             total_registered
         );
     }
+
+    // One owner mirrors startup, explicit reload, watcher reload and reconnects.
+    // Model context reads the live catalog even if this durable mirror is delayed.
+    if let Err(error) = cade_server::server::api::mcp::sync_mcp_catalog(&db, &mcp).await {
+        tracing::warn!("Failed to initialize MCP catalog mirror: {error}");
+    }
+    let _catalog_sync = cade_server::server::api::mcp::spawn_catalog_sync(db.clone(), mcp.clone());
 
     let state = AppState {
         permission_sessions: Default::default(),

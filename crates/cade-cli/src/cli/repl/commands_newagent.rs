@@ -77,16 +77,12 @@ impl Repl {
         };
         match self.client.create_agent(req).await {
             Ok(a) => {
-                *self.agent_id.lock() = a.id.clone();
-                *self.agent_name.lock() = a.name.clone();
-                *self.conversation_id.lock() = None;
-                {
-                    let mut s = self.settings.lock();
-                    let _ = s.set_last_agent(&a.id);
-                }
-                {
-                    let mut s = self.session.lock();
-                    let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
+                if let Err(error) = self.select_agent(&a) {
+                    self.tui_err(format!(
+                        "Agent '{}' was created, but selection could not be saved: {error}",
+                        a.name
+                    ));
+                    return Ok(false);
                 }
                 let _ = self.app.lock().push(RenderLine::SystemMsg(format!(
                     "  ✓ New agent: {} ({})",
@@ -94,20 +90,26 @@ impl Repl {
                 )));
                 // S5: copy inherited blocks to new agent
                 if copy_memory {
+                    let mut copied = 0;
                     for (label, value, desc) in &inherit_blocks {
                         let desc_opt = if desc.is_empty() {
                             None
                         } else {
                             Some(desc.as_str())
                         };
-                        let _ = self
+                        match self
                             .client
                             .upsert_memory(&a.id, label, value, desc_opt)
-                            .await;
+                            .await
+                        {
+                            Ok(_) => copied += 1,
+                            Err(error) => self
+                                .tui_err(format!("Could not copy memory block '{label}': {error}")),
+                        }
                     }
-                    let n = inherit_blocks.len();
                     let _ = self.app.lock().push(RenderLine::SystemMsg(format!(
-                        "  ✓ Copied {n} memory block(s) from previous agent"
+                        "  Copied {copied}/{} memory block(s) from previous agent",
+                        inherit_blocks.len()
                     )));
                 }
                 self.spawn_tool_reregister();

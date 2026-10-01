@@ -6,6 +6,11 @@ edition     = "2024"
 [lib]
 doctest     = false
 
+[[test]]
+name = "mcp_idle_recovery"
+harness = false
+required-features = ["mcp"]
+
 [features]
 default = ["desktop", "web", "mcp", "backend-docker", "backend-ssh"]
 desktop = ["dep:cade-desktop"]
@@ -54,8 +59,8 @@ dirs.workspace         = true
 tar = "0.4.45"
 # -- Plugin runtimes (optional, feature-gated)
 rquickjs      = { version = "0.12", optional = true, default-features = false, features = ["macro", "parallel"] }
-wasmtime      = { version = "36", optional = true, default-features = false, features = ["cranelift", "async"] }
-wasmtime-wasi = { version = "36", optional = true }
+wasmtime      = { version = "36.0.16", optional = true, default-features = false, features = ["cranelift", "async"] }
+wasmtime-wasi = { version = "36.0.16", optional = true }
 glob          = { version = "0.3", optional = true }
 
 [lints.rust]

@@ -87,6 +87,12 @@ containing `tool_call_id` directly into `/v1/responses`. The provider seam in
 This keeps OpenAI's `input` array valid and prevents upstream 400 errors such as
 `Unknown parameter: 'input[2].tool_calls'` and invalid `null` content.
 
+Responses tool continuation also includes opaque reasoning output. The private
+Responses module preserves it in versioned provider metadata on tool calls;
+persist and replay this metadata, including through compaction. Do not render it
+as assistant text or send it as a Gemini thought signature. Incomplete function
+arguments must never be repaired into executable calls. See [ADR-0030](adr/0030-tool-continuation-readiness-and-observed-outcomes.md).
+
 ### DeepSeek provider
 
 DeepSeek is configured as an OpenAI-compatible provider with native dialect handling:
@@ -142,6 +148,32 @@ sqlite3 ~/.cade/cade.db "SELECT id, name, model FROM agents ORDER BY created_at 
 ```
 
 ## Testing
+
+### Tool-loop recovery regressions
+
+These checks use local fixtures rather than paid model requests:
+
+```bash
+cargo test -p cade-ai --test runtime_transport responses
+cargo test -p cade-server-lib --lib responses_continuation_tests
+cargo test -p cade-mcp --test lifecycle
+cargo test -p cade-server-lib --lib --features mcp server::api::mcp::tests
+cargo test -p cade-agent --test run_observation
+cargo test -p cade-sdk --test in_process_turn
+cargo test -p cade-cli --lib cli::repl::
+```
+
+The command catalogue verifies recognition, help and completion for built-ins;
+behavioral tests separately cover identity changes, queue draining, restoration,
+buffered presentation and busy terminal/Lua controls. Parser coverage alone is
+not evidence that every command's external operation succeeds. TTY-dependent
+tests are marked ignored and need a terminal or pseudo-terminal.
+
+For a live incident, record the client/daemon revisions, resolved model and wire
+endpoint, whether failure preceded or followed a tool call, and the redacted
+upstream error. Rebuild **both** binaries and restart the daemon before testing
+provider changes. Never include credentials or opaque continuation contents in
+diagnostic reports.
 
 ### Rust Workspace Tests
 

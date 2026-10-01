@@ -21,7 +21,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock, watch};
 use tracing::{error, info, warn};
 
 use rmcp::{
@@ -80,6 +80,9 @@ pub struct McpStatus {
     /// Mutability for discovered tools. Missing entries are treated as writes by callers.
     #[serde(default)]
     pub tool_mutability: HashMap<String, bool>,
+    /// Opaque connection identity, used to bind authorization to dispatch.
+    #[serde(default)]
+    pub generation: Option<String>,
     pub disabled: bool,
     #[serde(default = "default_ready_status")]
     pub status: String,
@@ -97,6 +100,17 @@ pub trait RemoteMcpClient: Send + Sync {
     ) -> Result<(String, bool, Option<String>)>;
 
     async fn list_mcp_statuses(&self) -> Result<Vec<McpStatus>>;
+
+    async fn call_mcp_tool_bound(
+        &self,
+        _name: &str,
+        _arguments: &Value,
+        _generation: &str,
+    ) -> Result<(String, bool, Option<String>)> {
+        Err(Error::custom(
+            "Remote MCP client does not support bound authorization",
+        ))
+    }
 }
 
 /// Summary returned by `McpManager::reload()`.
@@ -109,15 +123,51 @@ pub struct ReloadSummary {
 }
 
 struct McpServer {
+    generation: Arc<String>,
     key: String,
     command: String,
     tools: Vec<McpToolSchema>,
     config: McpServerConfig,
-    reconnect_attempts: u32,
-    disabled: bool,
-    _service: RunningService<RoleClient, ()>,
+    _service: Option<RunningService<RoleClient, ()>>,
     peer: rmcp::Peer<RoleClient>,
     _singleton_guard: Option<SingletonProcessGuard>,
+}
+
+impl McpServer {
+    fn is_ready(&self) -> bool {
+        self._service.is_some() && !self.peer.is_transport_closed()
+    }
+
+    fn disconnected_snapshot(&self) -> Self {
+        Self {
+            generation: self.generation.clone(),
+            key: self.key.clone(),
+            command: self.command.clone(),
+            tools: self.tools.clone(),
+            config: self.config.clone(),
+            peer: self.peer.clone(),
+            _service: None,
+            _singleton_guard: None,
+        }
+    }
+
+    async fn shutdown(self) {
+        // Stop and join the transport before releasing singleton ownership.
+        // Dropping a guard asynchronously used to race the replacement spawn.
+        // Cleanup retains the guard even if its reload/reconnect caller is cancelled.
+        let _ = tokio::spawn(async move {
+            let Self {
+                _service,
+                _singleton_guard,
+                ..
+            } = self;
+            if let Some(service) = _service {
+                let _ = service.cancel().await;
+            }
+            drop(_singleton_guard);
+        })
+        .await;
+    }
 }
 
 // endregion: --- Types
@@ -134,7 +184,11 @@ pub struct McpDiagnostic {
 
 /// Central gateway managing active MCP server connections.
 pub struct McpManager {
-    servers: RwLock<Vec<McpServer>>,
+    servers: Arc<RwLock<Vec<McpServer>>>,
+    // Serialize lifecycle mutations, never ordinary tool calls or catalog reads.
+    lifecycle: Arc<Mutex<()>>,
+    recovery_tasks: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
+    catalog_changed: watch::Sender<u64>,
     pub schemas_dirty: Arc<AtomicBool>,
     pub remote_client: Option<Arc<dyn RemoteMcpClient>>,
     pub diagnostics: Arc<RwLock<HashMap<String, McpDiagnostic>>>,
@@ -142,6 +196,19 @@ pub struct McpManager {
 
 /// Type alias for deep module naming.
 pub type McpGateway = McpManager;
+
+impl Drop for McpManager {
+    fn drop(&mut self) {
+        for task in self
+            .recovery_tasks
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
+            task.abort();
+        }
+    }
+}
 
 pub(crate) fn server_command_display(config: &McpServerConfig) -> String {
     if let Some(url) = &config.url {
@@ -151,14 +218,11 @@ pub(crate) fn server_command_display(config: &McpServerConfig) -> String {
     }
 }
 
-fn existing_identity<'a>(server: &Option<&'a McpServer>) -> Option<&'a str> {
-    let s = (*server)?;
-    let cmd = s.command.as_str();
-    if let Some(url) = cmd.strip_prefix("[http] ") {
-        Some(url)
-    } else {
-        Some(cmd)
-    }
+fn same_configuration(left: &McpServerConfig, right: &McpServerConfig) -> bool {
+    // Compare the complete serialized configuration, including future fields.
+    // A command/URL identity alone misses auth, args, environment and policy changes.
+    matches!((serde_json::to_value(left), serde_json::to_value(right)),
+        (Ok(left), Ok(right)) if left == right)
 }
 
 impl McpManager {
@@ -170,7 +234,8 @@ impl McpManager {
         let mut servers = Vec::new();
         let mut results = Vec::new();
 
-        let mut entries: Vec<(&String, &McpServerConfig)> = configs.iter().collect();
+        let mut entries: Vec<(&String, &McpServerConfig)> =
+            configs.iter().filter(|(_, cfg)| !cfg.disabled).collect();
         entries.sort_by_key(|(k, _)| k.as_str());
 
         let timeout_dur = std::time::Duration::from_secs(MCP_SERVER_TIMEOUT_SECS);
@@ -250,7 +315,10 @@ impl McpManager {
         }
 
         let mgr = McpManager {
-            servers: RwLock::new(servers),
+            servers: Arc::new(RwLock::new(servers)),
+            lifecycle: Arc::new(Mutex::new(())),
+            recovery_tasks: std::sync::Mutex::new(Vec::new()),
+            catalog_changed: watch::channel(0).0,
             schemas_dirty: Arc::new(AtomicBool::new(false)),
             remote_client: None,
             diagnostics: Arc::new(RwLock::new(diagnostics)),
@@ -261,7 +329,10 @@ impl McpManager {
     /// Construct an McpManager that delegates tool execution to a remote CADE server.
     pub fn from_remote(remote: Arc<dyn RemoteMcpClient>) -> Self {
         McpManager {
-            servers: RwLock::new(vec![]),
+            servers: Arc::new(RwLock::new(vec![])),
+            lifecycle: Arc::new(Mutex::new(())),
+            recovery_tasks: std::sync::Mutex::new(Vec::new()),
+            catalog_changed: watch::channel(0).0,
             schemas_dirty: Arc::new(AtomicBool::new(false)),
             remote_client: Some(remote),
             diagnostics: Arc::new(RwLock::new(HashMap::new())),
@@ -271,7 +342,10 @@ impl McpManager {
     /// No-op (empty) manager.
     pub fn empty() -> Self {
         McpManager {
-            servers: RwLock::new(vec![]),
+            servers: Arc::new(RwLock::new(vec![])),
+            lifecycle: Arc::new(Mutex::new(())),
+            recovery_tasks: std::sync::Mutex::new(Vec::new()),
+            catalog_changed: watch::channel(0).0,
             schemas_dirty: Arc::new(AtomicBool::new(false)),
             remote_client: None,
             diagnostics: Arc::new(RwLock::new(HashMap::new())),
@@ -280,19 +354,88 @@ impl McpManager {
 
     /// Merge servers from a completed background boot into this manager.
     pub async fn merge_from(&self, other: McpManager) {
-        let new_servers = other.servers.into_inner();
+        let _lifecycle = self.lifecycle.lock().await;
+        let new_servers: Vec<_> = other.servers.write().await.drain(..).collect();
         let mut current = self.servers.write().await;
+        let new_keys: HashSet<_> = new_servers.iter().map(|s| s.key.clone()).collect();
+        let mut retired = Vec::new();
+        let mut kept = Vec::new();
+        for server in current.drain(..) {
+            if new_keys.contains(&server.key) {
+                retired.push(server);
+            } else {
+                kept.push(server);
+            }
+        }
+        *current = kept;
         current.extend(new_servers);
+        drop(current);
+        for server in retired {
+            server.shutdown().await;
+        }
 
         let new_diags = other.diagnostics.read().await.clone();
         let mut cur_diags = self.diagnostics.write().await;
         cur_diags.extend(new_diags);
 
+        self.publish_catalog_change();
+    }
+
+    /// Each subscriber observes all lifecycle changes independently of the legacy
+    /// CLI dirty flag. Slow subscribers coalesce changes and read the latest catalog.
+    pub fn subscribe_catalog_changes(&self) -> watch::Receiver<u64> {
+        self.catalog_changed.subscribe()
+    }
+
+    /// Durable mirrors wait for the current lifecycle mutation to settle, so a
+    /// temporary withdrawal during reload cannot delete stable tool identities.
+    /// Model context uses active_catalog directly and sees withdrawal immediately.
+    pub async fn settled_catalog(
+        &self,
+    ) -> Vec<cade_core::capabilities::mesh::TaggedCapabilitySchema> {
+        use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
+        let _lifecycle = self.lifecycle.lock().await;
+        self.active_catalog(&CapabilityExecutionContext::new("catalog-mirror"))
+            .await
+    }
+
+    fn publish_catalog_change(&self) {
         self.schemas_dirty.store(true, Ordering::SeqCst);
+        self.catalog_changed
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
     /// Dynamically start and add a single MCP server on-demand.
     pub async fn start_and_add_server(&self, key: &str, config: &McpServerConfig) -> Result<()> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let old = {
+            let mut servers = self.servers.write().await;
+            self.diagnostics.write().await.insert(
+                key.to_string(),
+                McpDiagnostic {
+                    status: if config.disabled {
+                        "disabled"
+                    } else {
+                        "starting"
+                    }
+                    .into(),
+                    command: server_command_display(config),
+                    error: None,
+                },
+            );
+            servers
+                .iter()
+                .position(|s| s.key == key)
+                .map(|index| servers.remove(index))
+        };
+        self.publish_catalog_change();
+        if let Some(old) = old {
+            old.shutdown().await;
+        }
+        if config.disabled {
+            self.diagnostics.write().await.remove(key);
+            return Ok(());
+        }
         let server = match Self::connect_server(key, config).await {
             Ok(server) => {
                 let mut diags = self.diagnostics.write().await;
@@ -320,9 +463,8 @@ impl McpManager {
             }
         };
         let mut servers = self.servers.write().await;
-        servers.retain(|s| s.key != key);
         servers.push(server);
-        self.schemas_dirty.store(true, Ordering::SeqCst);
+        self.publish_catalog_change();
         Ok(())
     }
 
@@ -332,48 +474,69 @@ impl McpManager {
         new_configs: &HashMap<String, McpServerConfig>,
         mut on_progress: Option<&mut (dyn FnMut(McpStartResult) + Send)>,
     ) -> ReloadSummary {
+        let _lifecycle = self.lifecycle.lock().await;
         let mut summary = ReloadSummary::default();
 
-        let mut entries: Vec<(&String, &McpServerConfig)> = new_configs.iter().collect();
+        let mut entries: Vec<(&String, &McpServerConfig)> = new_configs
+            .iter()
+            .filter(|(_, cfg)| !cfg.disabled)
+            .collect();
         entries.sort_by_key(|(k, _)| k.as_str());
 
         let timeout_dur = std::time::Duration::from_secs(MCP_SERVER_TIMEOUT_SECS);
 
         let mut to_restart = Vec::new();
         let mut preserved = Vec::new();
+        let mut retired = Vec::new();
 
         {
             let mut current = self.servers.write().await;
             for (key, cfg) in &entries {
-                let target_identity = cfg.url.as_deref().unwrap_or(&cfg.command);
                 let existing = current.iter().find(|s| &s.key == *key);
 
-                if existing_identity(&existing) == Some(target_identity) {
+                if existing.is_some_and(|s| s.is_ready() && same_configuration(&s.config, cfg)) {
                     preserved.push((*key).clone());
+                    if let Some(ref mut cb) = on_progress {
+                        cb(McpStartResult::Ok {
+                            key: (*key).clone(),
+                            tool_count: existing.map(|s| s.tools.len()).unwrap_or_default(),
+                        });
+                    }
                 } else {
                     to_restart.push(((*key).clone(), (*cfg).clone()));
                 }
             }
 
-            let new_keys: HashSet<&str> = new_configs.keys().map(|s| s.as_str()).collect();
             let mut kept_servers = Vec::new();
+            {
+                let mut diags = self.diagnostics.write().await;
+                diags.retain(|key, _| new_configs.get(key).is_some_and(|cfg| !cfg.disabled));
+                for (key, config) in &to_restart {
+                    diags.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "starting".into(),
+                            command: server_command_display(config),
+                            error: None,
+                        },
+                    );
+                }
+            }
 
             for srv in current.drain(..) {
-                if !new_keys.contains(srv.key.as_str()) {
-                    summary.stopped.push(srv.key.clone());
-                } else if preserved.contains(&srv.key) {
+                if preserved.contains(&srv.key) {
                     summary.kept.push(srv.key.clone());
                     kept_servers.push(srv);
                 } else {
                     summary.stopped.push(srv.key.clone());
+                    retired.push(srv);
                 }
             }
             *current = kept_servers;
         }
-
-        {
-            let mut diags = self.diagnostics.write().await;
-            diags.retain(|k, _| new_configs.contains_key(k));
+        self.publish_catalog_change();
+        for server in retired {
+            server.shutdown().await;
         }
 
         let mut join_set = tokio::task::JoinSet::new();
@@ -455,7 +618,7 @@ impl McpManager {
             }
         }
 
-        self.schemas_dirty.store(true, Ordering::SeqCst);
+        self.publish_catalog_change();
         summary
     }
 
@@ -466,17 +629,23 @@ impl McpManager {
 
     /// Return all cached tool schemas across all servers in OpenAI Value format.
     pub async fn all_tool_schemas(&self) -> Vec<Value> {
-        let servers = self.servers.read().await;
-        servers
-            .iter()
-            .flat_map(|s| s.tools.iter().map(|t| t.schema.clone()))
+        self.all_typed_tool_schemas()
+            .await
+            .into_iter()
+            .map(|tool| tool.schema)
             .collect()
     }
 
     /// Return all cached typed tool schemas across all servers.
     pub async fn all_typed_tool_schemas(&self) -> Vec<McpToolSchema> {
         let servers = self.servers.read().await;
-        servers.iter().flat_map(|s| s.tools.clone()).collect()
+        let mut tools: Vec<_> = servers
+            .iter()
+            .filter(|s| s.is_ready())
+            .flat_map(|s| s.tools.clone())
+            .collect();
+        tools.sort_by(|left, right| left.prefixed_name.cmp(&right.prefixed_name));
+        tools
     }
 
     /// Return all cached tool schemas for a specific server.
@@ -484,7 +653,7 @@ impl McpManager {
         let servers = self.servers.read().await;
         servers
             .iter()
-            .find(|s| s.key == server_key)
+            .find(|s| s.key == server_key && s.is_ready())
             .map(|s| s.tools.clone())
             .unwrap_or_default()
     }
@@ -499,27 +668,39 @@ impl McpManager {
         for s in servers.iter() {
             seen.insert(s.key.clone());
             list.push(McpStatus {
+                generation: s.is_ready().then(|| s.generation.as_ref().clone()),
                 key: s.key.clone(),
                 command: s.command.clone(),
-                tools: s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
+                tools: s
+                    .tools
+                    .iter()
+                    .filter(|_| s.is_ready())
+                    .map(|t| t.prefixed_name.clone())
+                    .collect(),
                 tool_mutability: s
                     .tools
                     .iter()
+                    .filter(|_| s.is_ready())
                     .map(|t| (t.prefixed_name.clone(), t.is_write))
                     .collect(),
-                disabled: s.disabled,
-                status: if s.disabled {
-                    "disabled".to_string()
+                disabled: false,
+                status: if !s.is_ready() {
+                    diagnostics
+                        .get(&s.key)
+                        .filter(|d| d.status != "ready")
+                        .map(|d| d.status.clone())
+                        .unwrap_or_else(|| "disconnected".into())
                 } else {
                     "ready".to_string()
                 },
-                error: None,
+                error: diagnostics.get(&s.key).and_then(|d| d.error.clone()),
             });
         }
 
         for (k, diag) in diagnostics.iter() {
             if !seen.contains(k) {
                 list.push(McpStatus {
+                    generation: None,
                     key: k.clone(),
                     command: diag.command.clone(),
                     tools: vec![],
@@ -546,19 +727,20 @@ impl McpManager {
 
     /// Check if this manager has a connected server that owns the specified tool.
     pub async fn owns_tool(&self, prefixed_name: &str) -> bool {
-        self.find_tool_idx(prefixed_name).await.is_some()
+        self.ready_tool_mutability(prefixed_name).await.is_some()
     }
 
     /// Check mutability using connected metadata or the server-hosted catalog.
     /// Unknown external tools fail closed: they are treated as writes until metadata is available.
     pub async fn is_write_tool(&self, prefixed_name: &str) -> bool {
-        if let Some((_, is_write)) = self.find_tool_idx(prefixed_name).await {
+        if let Some(is_write) = self.ready_tool_mutability(prefixed_name).await {
             return is_write;
         }
         if let Some(remote) = &self.remote_client
             && let Ok(statuses) = remote.list_mcp_statuses().await
             && let Some(is_write) = statuses
                 .iter()
+                .filter(|s| !s.disabled && s.status == "ready")
                 .find_map(|s| s.tool_mutability.get(prefixed_name))
         {
             return *is_write;
@@ -566,15 +748,18 @@ impl McpManager {
         true
     }
 
-    async fn find_tool_idx(&self, prefixed_name: &str) -> Option<(usize, bool)> {
+    async fn ready_tool_mutability(&self, prefixed_name: &str) -> Option<bool> {
         let servers = self.servers.read().await;
-        for (i, server) in servers.iter().enumerate() {
+        for server in servers.iter() {
+            if !server.is_ready() {
+                continue;
+            }
             if let Some(tool) = server
                 .tools
                 .iter()
                 .find(|t| t.prefixed_name == prefixed_name)
             {
-                return Some((i, tool.is_write));
+                return Some(tool.is_write);
             }
         }
         None
@@ -586,171 +771,310 @@ impl McpManager {
         prefixed_name: &str,
         args: &Value,
     ) -> Option<Result<(String, bool, Option<String>)>> {
-        let server_idx = match self.find_tool_idx(prefixed_name).await {
-            Some((idx, _)) => idx,
-            None => {
-                if let Some(remote) = &self.remote_client {
-                    return Some(remote.call_mcp_tool(prefixed_name, args).await);
-                }
-                return None;
-            }
-        };
+        self.call_tool_inner(prefixed_name, args, None).await
+    }
 
-        let (is_disabled, server_key, original_name, peer) = {
+    /// Snapshot identity and mutability together, before permission evaluation.
+    pub async fn tool_binding(&self, name: &str) -> Option<(String, bool)> {
+        let known = {
             let servers = self.servers.read().await;
-            let server = &servers[server_idx];
-            let orig = server
-                .tools
-                .iter()
-                .find(|t| t.prefixed_name == prefixed_name)
-                .map(|t| t.original_name.clone())
-                .unwrap_or_default();
-            (
-                server.disabled,
-                server.key.clone(),
-                orig,
-                server.peer.clone(),
-            )
+            servers.iter().find_map(|server| {
+                let tool = server
+                    .tools
+                    .iter()
+                    .find(|tool| tool.prefixed_name == name)?;
+                Some((
+                    server.key.clone(),
+                    server.generation.clone(),
+                    server.is_ready(),
+                    tool.is_write,
+                ))
+            })
         };
-
-        if is_disabled {
-            return Some(Err(Error::custom(format!(
-                "MCP server '{server_key}' is disabled after {MAX_RECONNECT_ATTEMPTS} failed reconnect attempts"
-            ))));
-        }
-
-        let call_result = peer
-            .call_tool(
-                CallToolRequestParams::new(original_name)
-                    .with_arguments(args.as_object().cloned().unwrap_or_default()),
-            )
-            .await;
-
-        let call_err = match call_result {
-            Ok(ctr) => {
-                let is_error = ctr.is_error.unwrap_or(false);
-                let text = extract_content_text(&ctr.content);
-                let ui_resource_uri = ctr.meta.as_ref().and_then(|meta| {
-                    serde_json::to_value(meta).ok().and_then(|val| {
-                        val.get("ui")
-                            .and_then(|ui| ui.get("resourceUri"))
-                            .and_then(|uri| uri.as_str().map(String::from))
-                    })
-                });
-                return Some(Ok((text, is_error, ui_resource_uri)));
+        if let Some((key, generation, ready, is_write)) = known {
+            if ready {
+                return Some((generation.as_ref().clone(), is_write));
             }
-            Err(e) => e,
+            // Idle disconnects never reach invoke(), so binding resolution
+            // must initiate recovery too. The owned worker only reconnects;
+            // it has no intent to replay if this authorization caller drops.
+            let _ = self
+                .recover(
+                    key.clone(),
+                    generation,
+                    name.to_owned(),
+                    "Transport closed before authorization".into(),
+                )
+                .await;
+            // Another recovery or reload may have won the lifecycle lock.
+            // Resolve the current ready implementation afresh in either case;
+            // authorization has not happened yet. Never return stale policy.
+            let servers = self.servers.read().await;
+            let server = servers
+                .iter()
+                .find(|server| server.key == key && server.is_ready())?;
+            if let Some(tool) = server.tools.iter().find(|tool| tool.prefixed_name == name) {
+                return Some((server.generation.as_ref().clone(), tool.is_write));
+            }
+            return None;
+        }
+        if let Some(remote) = &self.remote_client {
+            for status in remote.list_mcp_statuses().await.ok()? {
+                if !status.disabled
+                    && status.status == "ready"
+                    && status.tools.iter().any(|tool| tool == name)
+                {
+                    return status.generation.map(|generation| {
+                        (
+                            generation,
+                            status.tool_mutability.get(name).copied().unwrap_or(true),
+                        )
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    pub async fn call_tool_bound(
+        &self,
+        name: &str,
+        args: &Value,
+        generation: &str,
+    ) -> Option<Result<(String, bool, Option<String>)>> {
+        self.call_tool_inner(name, args, Some(generation)).await
+    }
+
+    async fn call_tool_inner(
+        &self,
+        prefixed_name: &str,
+        args: &Value,
+        expected: Option<&str>,
+    ) -> Option<Result<(String, bool, Option<String>)>> {
+        // Capture identity and generation under one read lock. Never retain a
+        // vector index across an await: reload can remove/reorder servers.
+        let target = {
+            let servers = self.servers.read().await;
+            servers.iter().find_map(|server| {
+                server
+                    .tools
+                    .iter()
+                    .find(|tool| tool.prefixed_name == prefixed_name)
+                    .map(|tool| {
+                        (
+                            server.key.clone(),
+                            server.generation.clone(),
+                            tool.original_name.clone(),
+                            server.peer.clone(),
+                            tool.is_write,
+                        )
+                    })
+            })
         };
-
-        let error_msg = call_err.to_string();
-
+        let Some((key, generation, original, peer, was_write)) = target else {
+            return if let Some(remote) = &self.remote_client {
+                Some(match expected {
+                    Some(generation) => {
+                        remote
+                            .call_mcp_tool_bound(prefixed_name, args, generation)
+                            .await
+                    }
+                    None => remote.call_mcp_tool(prefixed_name, args).await,
+                })
+            } else {
+                None
+            };
+        };
+        // The checked peer is the peer invoked below. Reload cannot substitute
+        // another implementation between this check and the transport request.
+        if expected.is_some_and(|expected| expected != generation.as_str()) {
+            return Some(Err(Error::custom(
+                "MCP implementation changed; fresh authorization required",
+            )));
+        }
+        let error_msg = match Self::invoke(&peer, &original, args).await {
+            Ok(result) => return Some(Ok(result)),
+            Err(error) => error.to_string(),
+        };
         if Self::is_rpc_protocol_error(&error_msg) {
             return Some(Err(Error::custom(error_msg)));
         }
 
-        warn!("MCP server call failed for '{prefixed_name}': {error_msg} — attempting reconnect");
-
-        for attempt in 1..=MAX_RECONNECT_ATTEMPTS {
-            warn!(
-                "MCP reconnect attempt {attempt}/{MAX_RECONNECT_ATTEMPTS} for server at index {server_idx}…"
-            );
-            tokio::time::sleep(tokio::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
-
-            let old_tool_names: HashSet<String> = {
-                let s = self.servers.read().await;
-                s.get(server_idx)
-                    .map(|srv| srv.tools.iter().map(|t| t.prefixed_name.clone()).collect())
+        // Spawn before the next suspension point. Recovery belongs to the manager,
+        // not this Run; the worker never receives arguments and cannot replay work.
+        let recovery = self.recover(key, generation, prefixed_name.to_owned(), error_msg);
+        let recovered = recovery
+            .await
+            .map_err(|error| Error::custom(format!("MCP recovery stopped: {error}")))
+            .and_then(|result| result);
+        if was_write {
+            return Some(Err(Error::custom(format!(
+                "MCP tool '{prefixed_name}' outcome is uncertain: the transport closed after dispatch. The operation may have completed; it was not replayed. Verify its effects before retrying.{}",
+                recovered
+                    .err()
+                    .map(|error| format!(" Recovery failed: {error}"))
                     .unwrap_or_default()
+            ))));
+        }
+        if expected.is_some() {
+            return Some(Err(Error::custom(
+                "MCP connection changed during recovery; fresh authorization required",
+            )));
+        }
+        let (peer, tool) = match recovered {
+            Ok(result) => result,
+            Err(error) => return Some(Err(error)),
+        };
+        let result = match tool {
+            Some(tool) if !tool.is_write => Self::invoke(&peer, &tool.original_name, args).await,
+            Some(_) => Err(Error::custom(format!(
+                "MCP tool '{prefixed_name}' permissions changed after reconnect; retry for authorization"
+            ))),
+            None => Err(Error::custom(format!(
+                "Tool '{prefixed_name}' no longer exposed after reconnect"
+            ))),
+        };
+        if peer.is_transport_closed() {
+            self.publish_catalog_change();
+        }
+        Some(result)
+    }
+
+    fn recover(
+        &self,
+        key: String,
+        generation: Arc<String>,
+        name: String,
+        error: String,
+    ) -> tokio::task::JoinHandle<Result<(rmcp::Peer<RoleClient>, Option<McpToolSchema>)>> {
+        let servers = self.servers.clone();
+        let lifecycle = self.lifecycle.clone();
+        let diagnostics = self.diagnostics.clone();
+        let dirty = self.schemas_dirty.clone();
+        let changed = self.catalog_changed.clone();
+        let task = tokio::spawn(async move {
+            let publish = || {
+                dirty.store(true, Ordering::SeqCst);
+                changed.send_modify(|revision| *revision = revision.wrapping_add(1));
             };
-
-            let (key, config) = {
-                let servers = self.servers.read().await;
-                let s = &servers[server_idx];
-                (s.key.clone(), s.config.clone())
+            let _lifecycle = lifecycle.lock().await;
+            let old = {
+                let mut servers = servers.write().await;
+                let Some(server) = servers.iter_mut().find(|server| {
+                    server.key == key && Arc::ptr_eq(&server.generation, &generation)
+                }) else {
+                    return Err(Error::custom(format!(
+                        "MCP server '{key}' changed during execution; reauthorization required"
+                    )));
+                };
+                // Retain configuration and identity in the owner even if recovery
+                // fails. The disconnected slot cannot publish executable schemas.
+                let disconnected = server.disconnected_snapshot();
+                let old = std::mem::replace(server, disconnected);
+                diagnostics.write().await.insert(
+                    key.clone(),
+                    McpDiagnostic {
+                        status: "reconnecting".into(),
+                        command: old.command.clone(),
+                        error: Some(error.clone()),
+                    },
+                );
+                old
             };
-
-            match Self::connect_server(&key, &config).await {
-                Ok(new_server) => {
-                    info!("MCP server '{key}' reconnected successfully");
-
-                    let original_name = new_server
-                        .tools
-                        .iter()
-                        .find(|t| t.prefixed_name == prefixed_name)
-                        .map(|t| t.original_name.clone());
-
-                    let call_result = if let Some(orig) = original_name {
-                        new_server
-                            .peer
-                            .call_tool(
-                                CallToolRequestParams::new(orig)
-                                    .with_arguments(args.as_object().cloned().unwrap_or_default()),
-                            )
-                            .await
-                            .map_err(|e| Error::custom(e.to_string()))
-                    } else {
-                        Err(Error::custom(format!(
-                            "Tool '{prefixed_name}' no longer exposed by reconnected server '{key}'"
-                        )))
-                    };
-
-                    let new_tool_names: HashSet<String> = new_server
-                        .tools
-                        .iter()
-                        .map(|t| t.prefixed_name.clone())
-                        .collect();
-                    let tools_changed = old_tool_names != new_tool_names;
-
-                    {
-                        let mut servers = self.servers.write().await;
-                        if let Some(srv) = servers.get_mut(server_idx) {
-                            *srv = new_server;
-                        }
+            let config = old.config.clone();
+            publish();
+            old.shutdown().await;
+            let mut last_error = error;
+            for attempt in 1..=MAX_RECONNECT_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+                match Self::connect_server(&key, &config).await {
+                    Ok(server) => {
+                        let tool = server
+                            .tools
+                            .iter()
+                            .find(|tool| tool.prefixed_name == name)
+                            .cloned();
+                        let peer = server.peer.clone();
+                        let mut servers = servers.write().await;
+                        servers.retain(|old| old.key != key);
+                        diagnostics.write().await.insert(
+                            key.clone(),
+                            McpDiagnostic {
+                                status: "ready".into(),
+                                command: server.command.clone(),
+                                error: None,
+                            },
+                        );
+                        servers.push(server);
+                        publish();
+                        return Ok((peer, tool));
                     }
-
-                    if tools_changed {
-                        self.schemas_dirty.store(true, Ordering::SeqCst);
+                    Err(error) => {
+                        last_error = error.to_string();
+                        warn!("Reconnect attempt {attempt} for '{key}' failed: {last_error}");
                     }
-
-                    return match call_result {
-                        Ok(ctr) => {
-                            let is_error = ctr.is_error.unwrap_or(false);
-                            let text = extract_content_text(&ctr.content);
-                            let ui_resource_uri = ctr.meta.as_ref().and_then(|meta| {
-                                serde_json::to_value(meta).ok().and_then(|val| {
-                                    val.get("ui")
-                                        .and_then(|ui| ui.get("resourceUri"))
-                                        .and_then(|uri| uri.as_str().map(String::from))
-                                })
-                            });
-                            Some(Ok((text, is_error, ui_resource_uri)))
-                        }
-                        Err(e) => Some(Err(Error::custom(e.to_string()))),
-                    };
-                }
-                Err(e) => {
-                    warn!("Reconnect attempt {attempt} for '{key}' failed: {e}");
                 }
             }
-        }
+            error!("MCP server '{key}' unavailable after {MAX_RECONNECT_ATTEMPTS} reconnects");
+            diagnostics.write().await.insert(
+                key.clone(),
+                McpDiagnostic {
+                    status: "failed".into(),
+                    command: server_command_display(&config),
+                    error: Some(last_error.clone()),
+                },
+            );
+            publish();
+            Err(Error::custom(format!(
+                "MCP server '{key}' disconnected after {MAX_RECONNECT_ATTEMPTS} reconnect attempts: {last_error}"
+            )))
+        });
+        let mut tasks = self
+            .recovery_tasks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task.abort_handle());
+        task
+    }
 
-        error!(
-            "MCP server '{server_key}' marked DISABLED after {MAX_RECONNECT_ATTEMPTS} failed reconnects"
-        );
-        {
-            let mut servers = self.servers.write().await;
-            if let Some(srv) = servers.get_mut(server_idx) {
-                srv.disabled = true;
-                srv.reconnect_attempts = MAX_RECONNECT_ATTEMPTS;
-            }
-        }
-
-        Some(Err(Error::custom(format!(
-            "MCP server '{server_key}' failed and could not be reconnected after {MAX_RECONNECT_ATTEMPTS} attempts: {error_msg}"
-        ))))
+    async fn invoke(
+        peer: &rmcp::Peer<RoleClient>,
+        original: &str,
+        args: &Value,
+    ) -> Result<(String, bool, Option<String>)> {
+        let result = peer
+            .call_tool(
+                CallToolRequestParams::new(original.to_string())
+                    .with_arguments(args.as_object().cloned().unwrap_or_default()),
+            )
+            .await
+            .map_err(|error| Error::custom(error.to_string()))?;
+        let uri = result.meta.as_ref().and_then(|meta| {
+            serde_json::to_value(meta).ok().and_then(|value| {
+                value
+                    .get("ui")
+                    .and_then(|ui| ui.get("resourceUri"))
+                    .and_then(|uri| uri.as_str().map(String::from))
+            })
+        });
+        Ok((
+            extract_content_text(&result.content),
+            result.is_error.unwrap_or(false),
+            uri,
+        ))
     }
 
     async fn connect_server(key: &str, config: &McpServerConfig) -> Result<McpServer> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(MCP_SERVER_TIMEOUT_SECS),
+            Self::connect_server_inner(key, config),
+        )
+        .await
+        .map_err(|_| Error::custom(format!("MCP server '{key}' connection timed out")))?
+    }
+
+    async fn connect_server_inner(key: &str, config: &McpServerConfig) -> Result<McpServer> {
         if let Some(url) = &config.url {
             let (service, peer) = HttpTransportAdapter::connect(key, config, url).await?;
             Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}"), None)
@@ -791,13 +1115,20 @@ impl McpManager {
             .collect();
 
         Ok(McpServer {
+            generation: Arc::new({
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                format!(
+                    "{}-{}-{}",
+                    std::process::id(),
+                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                )
+            }),
             key: key.to_string(),
             command: command_display,
             tools,
             config: config.clone(),
-            reconnect_attempts: 0,
-            disabled: false,
-            _service: service,
+            _service: Some(service),
             peer,
             _singleton_guard: singleton_guard,
         })

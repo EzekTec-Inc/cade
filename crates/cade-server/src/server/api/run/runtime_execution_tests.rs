@@ -135,6 +135,343 @@ fn tool_results(events: &[Value]) -> Vec<&Value> {
 }
 
 #[tokio::test]
+async fn finalization_status_write_failure_cannot_publish_success() {
+    let state = state(Arc::new(ScriptedProvider::new(vec![])));
+    state
+        .db
+        .get()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_success BEFORE UPDATE OF status ON runs
+         WHEN NEW.status = 'done'
+         BEGIN SELECT RAISE(FAIL, 'injected status failure'); END;",
+        )
+        .unwrap();
+    let mut global = crate::server::api::agents::GLOBAL_EVENTS_TX.subscribe();
+    let mut handle = ServerAgentRuntime::new(state.clone())
+        .try_start(request())
+        .await
+        .unwrap();
+    let events = drain(&mut handle).await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["message_type"] == "run_done" && event["status"] == "done"),
+        "failed status write must not publish success: {events:?}"
+    );
+    assert_no_finalization_success(&state, &handle.run_id, &events);
+    assert_eq!(
+        sqlite::get_run(&state.db, &handle.run_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "error"
+    );
+    let terminal: Vec<_> = events
+        .iter()
+        .filter(|event| event["message_type"] == "run_done")
+        .collect();
+    assert_eq!(terminal.len(), 1, "{events:?}");
+    assert_eq!(terminal[0]["status"], "error");
+    assert!(
+        terminal[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("injected status failure")
+    );
+    let durable = sqlite::run_events_after(&state.db, &handle.run_id, -1).unwrap();
+    let (sequence, payload) = durable.last().unwrap();
+    let mut payload: Value = serde_json::from_str(payload).unwrap();
+    payload["run_id"] = handle.run_id.clone().into();
+    payload["seq_id"] = (*sequence).into();
+    assert_eq!(&payload, terminal[0]);
+    while let Ok(event) = global.try_recv() {
+        if event["run_id"] == handle.run_id && event["event_type"] == "run_finished" {
+            assert_eq!(event["status"], "error", "{event:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn finalization_journal_failure_leaves_explicit_failed_run() {
+    for input in ["work", "/theme default"] {
+        let state = state(Arc::new(ScriptedProvider::new(vec![])));
+        state
+            .db
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_terminal BEFORE INSERT ON run_events
+             WHEN json_extract(NEW.data, '$.message_type') = 'run_done'
+             BEGIN SELECT RAISE(FAIL, 'injected terminal journal failure'); END;",
+            )
+            .unwrap();
+        let mut request = request();
+        request.input = input.into();
+        let mut handle = ServerAgentRuntime::new(state.clone())
+            .try_start(request)
+            .await
+            .unwrap();
+        let events = drain(&mut handle).await;
+        assert_no_finalization_success(&state, &handle.run_id, &events);
+        assert_eq!(
+            sqlite::get_run(&state.db, &handle.run_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "error",
+            "failed terminal publication must not leave an abandoned active Run"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["message_type"] == "run_done"),
+            "{events:?}"
+        );
+        let failure = events.last().unwrap();
+        assert_eq!(failure["message_type"], "error");
+        assert!(
+            failure["error"]
+                .as_str()
+                .unwrap()
+                .contains("injected terminal journal failure")
+        );
+        let resource =
+            crate::server::api::runs::get_run(State(state.clone()), Path(handle.run_id.clone()))
+                .await;
+        let resource: Value = serde_json::from_slice(
+            &axum::body::to_bytes(resource.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resource["status"], "error");
+        let replay = crate::server::api::runs::stream_run(
+            State(state),
+            Path(handle.run_id.clone()),
+            axum::extract::Query(Default::default()),
+        )
+        .await;
+        let replay = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let replay = String::from_utf8(replay.to_vec()).unwrap();
+        assert!(
+            replay.contains("injected terminal journal failure"),
+            "{replay}"
+        );
+        assert!(!replay.contains("run_done"), "{replay}");
+    }
+}
+
+#[tokio::test]
+async fn finalization_commit_failure_rolls_back_terminal_evidence() {
+    for failed_status in ["done", "any"] {
+        let state = state(Arc::new(ScriptedProvider::new(vec![])));
+        // Both statements succeed. The deferred FK rejects COMMIT itself,
+        // including the error-outcome retry in the second case.
+        state.db.get().unwrap().execute_batch(&format!(
+            "CREATE TABLE finalization_parent (id INTEGER PRIMARY KEY);
+             CREATE TABLE finalization_fault (
+                 id INTEGER REFERENCES finalization_parent(id) DEFERRABLE INITIALLY DEFERRED
+             );
+             CREATE TRIGGER reject_commit AFTER INSERT ON run_events
+             WHEN json_extract(NEW.data, '$.message_type') = 'run_done'
+               AND ('{failed_status}' = 'any' OR json_extract(NEW.data, '$.status') = '{failed_status}')
+             BEGIN INSERT INTO finalization_fault VALUES (1); END;"
+        )).unwrap();
+        let mut handle = ServerAgentRuntime::new(state.clone())
+            .try_start(request())
+            .await
+            .unwrap();
+        let events = drain(&mut handle).await;
+        assert_eq!(
+            sqlite::get_run(&state.db, &handle.run_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "error"
+        );
+        let failure = events.last().unwrap();
+        assert!(
+            failure["error"]
+                .as_str()
+                .unwrap()
+                .contains("FOREIGN KEY constraint failed"),
+            "{failure}"
+        );
+        assert_eq!(
+            failure["message_type"],
+            if failed_status == "done" {
+                "run_done"
+            } else {
+                "error"
+            }
+        );
+        assert_no_finalization_success(&state, &handle.run_id, &events);
+        let durable = sqlite::run_events_after(&state.db, &handle.run_id, -1).unwrap();
+        assert_eq!(
+            durable.len(),
+            2,
+            "rolled-back events must not survive: {durable:?}"
+        );
+        assert_eq!(durable[1].0, 1, "rolled-back cursors must not be published");
+        assert_eq!(failure["seq_id"], 1);
+    }
+}
+
+fn assert_no_finalization_success(state: &AppState, run_id: &str, events: &[Value]) {
+    let mut observed = events.to_vec();
+    observed.extend(
+        sqlite::run_events_after(&state.db, run_id, -1)
+            .unwrap()
+            .into_iter()
+            .map(|(_, data)| serde_json::from_str::<Value>(&data).unwrap()),
+    );
+    assert!(
+        !observed
+            .iter()
+            .any(|event| event["message_type"] == "run_done" && event["status"] == "done"),
+        "{observed:?}"
+    );
+    for (_, kind, data) in sqlite::global_events_after(&state.db, 0).unwrap() {
+        let data: Value = serde_json::from_str(&data).unwrap();
+        if kind == "run_finished" && data["run_id"] == run_id {
+            assert_ne!(data["status"], "done", "{data}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn finalization_unwritable_status_surfaces_recovery_failure_without_terminal_claim() {
+    for journal_available in [true, false] {
+        let state = state(Arc::new(ScriptedProvider::new(vec![])));
+        state
+            .db
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_status BEFORE UPDATE OF status ON runs
+             BEGIN SELECT RAISE(FAIL, 'injected persistent status failure'); END;",
+            )
+            .unwrap();
+        if !journal_available {
+            state
+                .db
+                .get()
+                .unwrap()
+                .execute_batch(
+                    "CREATE TRIGGER reject_journal BEFORE INSERT ON run_events
+                 WHEN json_extract(NEW.data, '$.message_type') != 'stream_start'
+                 BEGIN SELECT RAISE(FAIL, 'injected persistent journal failure'); END;",
+                )
+                .unwrap();
+        }
+        let mut handle = ServerAgentRuntime::new(state.clone())
+            .try_start(request())
+            .await
+            .unwrap();
+        let events = drain(&mut handle).await;
+        assert_no_finalization_success(&state, &handle.run_id, &events);
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["message_type"] == "run_done"),
+            "{events:?}"
+        );
+        let failure = events.last().unwrap();
+        assert_eq!(failure["message_type"], "error");
+        assert_eq!(failure["code"], "run_finalization_failed");
+        assert_eq!(failure["terminal_status_persisted"], false);
+        assert_eq!(failure.get("seq_id").is_some(), journal_available);
+        let error = failure["error"].as_str().unwrap();
+        assert!(
+            error.contains("could not persist failed Run status"),
+            "{error}"
+        );
+        assert!(
+            error.contains("injected persistent status failure"),
+            "{error}"
+        );
+        let durable = sqlite::run_events_after(&state.db, &handle.run_id, -1).unwrap();
+        if journal_available {
+            assert!(
+                durable
+                    .last()
+                    .unwrap()
+                    .1
+                    .contains("run_finalization_failed")
+            );
+        } else {
+            assert_eq!(durable.len(), 1, "only acceptance is durable");
+            assert!(
+                error.contains("could not persist failure diagnostic"),
+                "{error}"
+            );
+        }
+        // Storage really rejected all status writes. Do not pretend it changed.
+        assert_eq!(
+            sqlite::get_run(&state.db, &handle.run_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "running"
+        );
+    }
+}
+
+#[tokio::test]
+async fn finalization_success_is_durable_before_live_completion() {
+    let state = state(Arc::new(ScriptedProvider::new(vec![])));
+    let mut handle = ServerAgentRuntime::new(state.clone())
+        .try_start(request())
+        .await
+        .unwrap();
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Some(Ok(event)) = handle.events.recv().await {
+            let event: Value = serde_json::from_str(&event.data).unwrap();
+            if event["message_type"] == "run_done" {
+                assert_eq!(
+                    sqlite::get_run(&state.db, &handle.run_id)
+                        .unwrap()
+                        .unwrap()
+                        .status,
+                    "done"
+                );
+                let durable = sqlite::run_events_after(&state.db, &handle.run_id, -1).unwrap();
+                assert_eq!(
+                    durable
+                        .iter()
+                        .filter(|(_, data)| data.contains("run_done"))
+                        .count(),
+                    1
+                );
+                assert_eq!(event["seq_id"], durable.last().unwrap().0);
+                assert_eq!(event["status"], "done");
+                return event;
+            }
+        }
+        panic!("runtime closed without a terminal outcome");
+    })
+    .await
+    .unwrap();
+    let replay = crate::server::api::runs::stream_run(
+        State(state),
+        Path(handle.run_id),
+        axum::extract::Query(Default::default()),
+    )
+    .await;
+    let replay = String::from_utf8(
+        axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(replay.contains(&terminal.to_string()), "{replay}");
+}
+
+#[tokio::test]
 async fn two_workspaces_keep_relative_paths_modes_and_reasoning_separate() {
     let first = Workspace::new();
     let second = Workspace::new();

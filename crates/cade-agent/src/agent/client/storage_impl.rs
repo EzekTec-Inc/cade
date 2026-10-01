@@ -384,4 +384,42 @@ impl StorageBackend for HttpTransport {
     async fn list_tools(&self) -> Result<Vec<crate::agent::client::ToolDef>> {
         self.list_tools().await
     }
+
+    async fn mcp_tool_binding(&self, name: &str) -> Result<Option<(String, bool)>> {
+        // Remote execution also works in clients built without local MCP support.
+        let status: Value = self
+            .client
+            .get(self.url("/mcp"))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        for server in status["servers"].as_array().into_iter().flatten() {
+            if server["disabled"].as_bool() == Some(false)
+                && server["status"].as_str() == Some("ready")
+                && server["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool.as_str() == Some(name)))
+            {
+                return Ok(server["generation"].as_str().map(|generation| {
+                    (
+                        generation.to_owned(),
+                        server["tool_mutability"][name].as_bool().unwrap_or(true),
+                    )
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn call_mcp_tool_bound(
+        &self,
+        name: &str,
+        arguments: &Value,
+        generation: &str,
+    ) -> Result<(String, bool, Option<String>)> {
+        HttpTransport::call_mcp_tool_bound(self, name, arguments, generation).await
+    }
 }

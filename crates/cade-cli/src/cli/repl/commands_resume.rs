@@ -54,10 +54,16 @@ impl Repl {
         if should_summarize {
             self.tui_dim("  Compacting and archiving current branch...");
             let cid_ref = conversation_id.as_deref();
-            if let Err(e) = self.client.compact(&agent_id, cid_ref).await {
-                self.tui_err(format!("  ✗ Branch summarization failed: {e}"));
-            } else {
-                self.tui_ok("  ✓ Branch successfully summarized and saved to archival memory.");
+            match self.client.compact(&agent_id, cid_ref).await {
+                Err(e) => self.tui_err(format!("  ✗ Branch summarization failed: {e}")),
+                Ok(result) if result.skipped => self.tui_dim(format!(
+                    "  Summarization skipped: {}",
+                    result.reason.as_deref().unwrap_or("nothing to consolidate")
+                )),
+                Ok(result) => self.tui_ok(format!(
+                    "  ✓ Branch consolidation completed ({} summary characters).",
+                    result.session_summary_chars
+                )),
             }
         }
         Ok(())
@@ -80,10 +86,9 @@ impl Repl {
                     let _ = self.ask_and_summarize_branch().await;
 
                     let cid = picked["id"].as_str().unwrap_or("").to_string();
-                    *self.conversation_id.lock() = Some(cid.clone());
-                    {
-                        let mut s = self.session.lock();
-                        let _ = s.set_conversation(Some(cid));
+                    if let Err(error) = self.select_conversation(Some(cid)) {
+                        self.tui_err(format!("Could not switch conversation: {error}"));
+                        return Ok(false);
                     }
                     self.first_turn
                         .store(false, std::sync::atomic::Ordering::SeqCst);

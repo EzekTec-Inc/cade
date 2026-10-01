@@ -67,12 +67,14 @@ pub async fn create_tool(
 pub async fn list_tools(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_tools(&state.db).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": e.to_string()})),
-        )
-    })?;
+    let rows = super::mcp::execution_catalog(&state.db, &state.mcp)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": e.to_string()})),
+            )
+        })?;
     let mut tools: Vec<Value> = rows
         .iter()
         .filter(|tool| {
@@ -86,23 +88,6 @@ pub async fn list_tools(
             })
         })
         .collect();
-
-    // Dynamically append live capability definitions from CapabilityMesh seam (ADR-0020)
-    use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
-    let cap_cx = CapabilityExecutionContext::new("api");
-    let mesh_schemas = state.mcp.active_catalog(&cap_cx).await;
-    for cap_s in mesh_schemas {
-        let name = cap_s.schema["name"].as_str().unwrap_or("").to_string();
-        if name.is_empty() || tools.iter().any(|t| t["name"].as_str() == Some(&name)) {
-            continue;
-        }
-        let description = cap_s.schema["description"].as_str().map(String::from);
-        tools.push(json!({
-            "id": format!("tool-mesh-{}", name),
-            "name": name,
-            "description": description
-        }));
-    }
 
     // Use the same executable catalogue and collision policy as agent context/dispatch.
     let cwd = crate::server::api::run::runtime::execution_workspace();

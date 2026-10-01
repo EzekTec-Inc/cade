@@ -10,9 +10,122 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::Repl;
 use super::super::input_driver::{DriverWake, EventPump};
+use super::super::slash::{SlashCmd, parse_slash_with_skills};
 use super::now_epoch_ms;
 use crate::error::Result;
 use cade_tui::RenderLine;
+
+/// Admit unowned Enter input or a command explicitly returned by an overlay.
+/// Decision Dialog keystrokes never reach this path.
+fn admit_busy_input(
+    input: String,
+    template_names: &[String],
+    handle_lua: impl FnOnce(&str, Vec<String>) -> bool,
+    followups: &parking_lot::Mutex<std::collections::VecDeque<String>>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Option<SlashCmd> {
+    if let Some(command) = busy_control_command(&input, template_names) {
+        let mut words = input.split_whitespace();
+        let name = words.next().unwrap_or_default();
+        if handle_lua(name, words.map(str::to_owned).collect()) {
+            return None;
+        }
+        if matches!(command, SlashCmd::Exit) {
+            // The transport owns cancellation/confirmation. Exit gets priority
+            // when that bounded observation ends, ahead of ordinary follow-ups.
+            followups.lock().push_front(input);
+            cancel.store(true, Ordering::SeqCst);
+        }
+        return Some(command);
+    }
+    followups.lock().push_back(input);
+    None
+}
+
+fn busy_control_command(input: &str, template_names: &[String]) -> Option<SlashCmd> {
+    let input = input.trim(); // same admission normalization as the outer REPL
+    // Match the outer REPL's template precedence. Defer template expansion to
+    // that owner rather than accidentally executing a shadowed builtin here.
+    let template = input
+        .strip_prefix('/')
+        .and_then(|text| text.split(' ').next())
+        .is_some_and(|name| template_names.iter().any(|template| template == name));
+    if template {
+        return None;
+    }
+    parse_slash_with_skills(input, &[]).filter(|command| {
+        matches!(
+            command,
+            SlashCmd::Approvals
+                | SlashCmd::Approve(_)
+                | SlashCmd::Deny(_)
+                | SlashCmd::Steer(_)
+                | SlashCmd::Exit
+        )
+    })
+}
+
+fn launch_busy_control(
+    command: SlashCmd,
+    client: cade_agent::agent::client::HttpTransport,
+    app: std::sync::Arc<parking_lot::Mutex<cade_tui::TuiApp>>,
+) {
+    if matches!(command, SlashCmd::Exit) {
+        return;
+    }
+    tokio::spawn(async move {
+        let result = super::super::commands::dispatch_run_control(&client, command).await;
+        super::super::commands::present_run_control(&app, result);
+    });
+}
+
+fn admit_lua_busy_controls(
+    lua: &cade_tui::lua_engine::LuaEngine,
+    template_names: &[String],
+    followups: &parking_lot::Mutex<std::collections::VecDeque<String>>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Vec<SlashCmd> {
+    let mut batch = Vec::new();
+    let mut more_controls = false;
+    {
+        let mut queue = lua
+            .command_queue
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        queue.retain_mut(|input| {
+            if busy_control_command(input, template_names).is_none() {
+                return true;
+            }
+            if batch.len() < cade_tui::lua_engine::LUA_UI_BATCH_SIZE {
+                batch.push(std::mem::take(input));
+                false
+            } else {
+                more_controls = true;
+                true
+            }
+        });
+    }
+    // Lua overrides may enqueue more commands. Never hold the command mutex
+    // while invoking Lua, and never consume ordinary/template commands here.
+    let controls = batch
+        .into_iter()
+        .filter_map(|input| {
+            admit_busy_input(
+                input,
+                template_names,
+                |command, args| lua.handle_command(command, args),
+                followups,
+                cancel,
+            )
+        })
+        .collect();
+    // Queue producers already notify. Only re-arm for an eligible batch tail;
+    // deferred idle commands must not keep the active driver spinning.
+    if more_controls {
+        lua.work_ready.notify_one();
+    }
+    controls
+}
 
 /// Outcome of an executed REPL agent turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,22 +191,52 @@ fn translate_turn_event(event: &Event) -> TurnInputEvent {
 }
 
 pub(crate) fn resolve_turn_outcome(
-    is_cancelled: bool,
+    confirmed_cancelled: bool,
     stream_error: Option<String>,
     summary: String,
     elapsed_secs: u64,
     token_usage: Option<u64>,
 ) -> TurnOutcome {
-    if is_cancelled {
-        TurnOutcome::Cancelled
-    } else if let Some(error) = stream_error {
+    if let Some(error) = stream_error {
         TurnOutcome::Error(error)
+    } else if confirmed_cancelled {
+        TurnOutcome::Cancelled
     } else {
         TurnOutcome::Completed {
             summary,
             elapsed_secs,
             token_usage,
         }
+    }
+}
+
+fn observed_turn_outcome(
+    stream: &Result<Vec<cade_agent::agent::client::CadeMessage>>,
+    elapsed_secs: u64,
+    token_usage: Option<u64>,
+) -> TurnOutcome {
+    let summary = stream
+        .as_ref()
+        .ok()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .rfind(|m| m.msg_type() == "assistant_message")
+                .and_then(|m| m.assistant_text())
+        })
+        .unwrap_or_default()
+        .to_owned();
+    use cade_agent::agent::client::RunOutcome;
+    let outcome = match stream {
+        Ok(messages) => RunOutcome::from_messages(messages).map_err(|e| e.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
+    match outcome {
+        Ok(RunOutcome::Completed) => {
+            resolve_turn_outcome(false, None, summary, elapsed_secs, token_usage)
+        }
+        Ok(RunOutcome::Cancelled) => TurnOutcome::Cancelled,
+        Ok(RunOutcome::Failed(error)) | Err(error) => TurnOutcome::Error(error),
     }
 }
 
@@ -135,6 +278,12 @@ impl<'a> TurnDirector<'a> {
         let tick_modal_close_ms = self.repl.last_modal_close_ms.clone();
         let tick_permissions = self.repl.permissions.clone();
         let tick_client = self.repl.client.clone();
+        let template_names: Vec<String> = self
+            .repl
+            .prompts
+            .iter()
+            .map(|prompt| prompt.name.clone())
+            .collect();
         let pump_lua_work = self.repl.lua_work_pump();
         let lua_wake = self
             .repl
@@ -153,12 +302,37 @@ impl<'a> TurnDirector<'a> {
             use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
             let _owner = input_owner;
             let mut reader = EventPump::active(EventStream::new(), lua_wake, pending_event);
+            let pump_lua_controls = |app: &mut cade_tui::TuiApp| {
+                let controls = app
+                    .lua_engine
+                    .as_ref()
+                    .map(|lua| {
+                        admit_lua_busy_controls(
+                            lua,
+                            &template_names,
+                            &tick_queued_followup,
+                            &tick_cancel,
+                        )
+                    })
+                    .unwrap_or_default();
+                for control in controls {
+                    if matches!(control, SlashCmd::Exit) {
+                        app.set_last_status(Some(
+                            "Exit requested; awaiting Run cancellation outcome…".into(),
+                        ));
+                    }
+                    launch_busy_control(control, tick_client.clone(), tick_app.clone());
+                }
+                app.queued_count = tick_queued_followup.lock().len()
+                    + usize::from(tick_queued_steering.lock().is_some());
+            };
             loop {
                 match reader.next().await {
                     DriverWake::Work => {
                         pump_lua_work();
                         if let Some(mut app) = tick_app.try_lock() {
                             app.pump_lua_ui_events();
+                            pump_lua_controls(&mut app);
                             if app.draw_dirty {
                                 let _ = app.draw();
                             }
@@ -185,6 +359,7 @@ impl<'a> TurnDirector<'a> {
                         }
                         if let Some(mut app) = tick_app.try_lock() {
                             app.pump_lua_ui_events();
+                            pump_lua_controls(&mut app);
                             if app.draw_dirty
                                 || app.thinking.is_some()
                                 || app.toast.is_some()
@@ -218,12 +393,31 @@ impl<'a> TurnDirector<'a> {
                                                 .store(now_epoch_ms(), Ordering::SeqCst);
                                         }
                                         if let Some(Some(command)) = action {
-                                            let count = {
-                                                let mut q = tick_queued_followup.lock();
-                                                q.push_back(command);
-                                                q.len()
-                                            };
-                                            app.queued_count = count;
+                                            let control = admit_busy_input(
+                                                command,
+                                                &template_names,
+                                                |command, args| {
+                                                    app.lua_engine.as_ref().is_some_and(|lua| {
+                                                        lua.handle_command(command, args)
+                                                    })
+                                                },
+                                                &tick_queued_followup,
+                                                &tick_cancel,
+                                            );
+                                            if let Some(control) = control {
+                                                if matches!(control, SlashCmd::Exit) {
+                                                    app.set_last_status(Some("Exit requested; awaiting Run cancellation outcome…".into()));
+                                                }
+                                                launch_busy_control(
+                                                    control,
+                                                    tick_client.clone(),
+                                                    tick_app.clone(),
+                                                );
+                                            }
+                                            app.queued_count = tick_queued_followup.lock().len()
+                                                + usize::from(
+                                                    tick_queued_steering.lock().is_some(),
+                                                );
                                         }
                                         let _ = app.draw();
                                     } else if app.handle_focused_slot_key(k)
@@ -437,7 +631,8 @@ impl<'a> TurnDirector<'a> {
                                                 let msg = app.editor.text().trim().to_string();
                                                 if !msg.is_empty() {
                                                     *tick_queued_steering.lock() = Some(msg);
-                                                    app.queued_count = tick_queued_followup.lock().len() + 1;
+                                                    app.queued_count =
+                                                        tick_queued_followup.lock().len() + 1;
                                                     app.editor.clear();
                                                     app.editor.set_cursor_pos(0);
                                                     app.set_last_status(None);
@@ -449,15 +644,38 @@ impl<'a> TurnDirector<'a> {
                                                 app.editor.expand_pastes();
                                                 let msg = app.editor.text().trim().to_string();
                                                 if !msg.is_empty() {
-                                                    let count = {
-                                                        let mut q = tick_queued_followup.lock();
-                                                        q.push_back(msg);
-                                                        q.len()
-                                                    };
+                                                    let control = admit_busy_input(
+                                                        msg,
+                                                        &template_names,
+                                                        |command, args| {
+                                                            app.lua_engine.as_ref().is_some_and(
+                                                                |lua| {
+                                                                    lua.handle_command(
+                                                                        command, args,
+                                                                    )
+                                                                },
+                                                            )
+                                                        },
+                                                        &tick_queued_followup,
+                                                        &tick_cancel,
+                                                    );
+                                                    let exiting =
+                                                        matches!(control, Some(SlashCmd::Exit));
+                                                    if let Some(control) = control {
+                                                        launch_busy_control(
+                                                            control,
+                                                            tick_client.clone(),
+                                                            tick_app.clone(),
+                                                        );
+                                                    }
+                                                    let count = tick_queued_followup.lock().len()
+                                                        + usize::from(
+                                                            tick_queued_steering.lock().is_some(),
+                                                        );
                                                     app.queued_count = count;
                                                     app.editor.clear();
                                                     app.editor.set_cursor_pos(0);
-                                                    app.set_last_status(None);
+                                                    app.set_last_status(exiting.then(|| "Exit requested; awaiting Run cancellation outcome…".into()));
                                                     let _ = app.draw();
                                                 }
                                             }
@@ -540,25 +758,13 @@ impl<'a> TurnDirector<'a> {
             )
             .await;
 
-        let is_cancelled = self.repl.cancel_turn.load(Ordering::SeqCst);
-        self.repl.cancel_turn.store(false, Ordering::SeqCst);
-
-        if is_cancelled {
-            let aid = self.repl.agent_id();
-            let _ = self.repl.app.lock().push(RenderLine::SystemMsg(format!(
-                "Turn detached via Ctrl+C. Agent: {aid} | Run persisting in background."
-            )));
-            let _ = self.repl.app.lock().push(RenderLine::SystemMsg(
-                "Press Ctrl+C again or type /exit to end session.".to_string(),
-            ));
-        }
-
         // Blank line after every agent turn for visual block separation
         let _ = self.repl.app.lock().push(RenderLine::Blank);
 
         // Stop thinking animation
         tick_handle.abort();
         let _ = tick_handle.await;
+        self.repl.cancel_turn.store(false, Ordering::SeqCst);
         let secs = self.repl.app.lock().stop_thinking();
         {
             let mut stats = self.repl.session_stats.lock();
@@ -568,33 +774,27 @@ impl<'a> TurnDirector<'a> {
         {
             let mut app = self.repl.app.lock();
             app.stop_thinking();
-            app.set_last_status(None);
             if app.follow {
                 app.scroll_to_bottom();
             }
             let _ = app.draw();
         }
 
-        let stream_error = stream_res.as_ref().err().map(ToString::to_string);
-        let summary = stream_res
-            .as_ref()
-            .ok()
-            .and_then(|msgs| {
-                msgs.iter()
-                    .rfind(|m| m.msg_type() == "assistant_message")
-                    .and_then(|m| m.data["content"].as_str())
-            })
-            .unwrap_or("")
-            .to_string();
         let token_usage = Some(self.repl.session_output_tokens.load(Ordering::SeqCst));
-
-        Ok(resolve_turn_outcome(
-            is_cancelled,
-            stream_error,
-            summary,
-            secs,
-            token_usage,
-        ))
+        let outcome = observed_turn_outcome(&stream_res, secs, token_usage);
+        {
+            let mut app = self.repl.app.lock();
+            match &outcome {
+                TurnOutcome::Completed { .. } => app.set_last_status(None),
+                TurnOutcome::Cancelled => {
+                    let _ = app.push(RenderLine::SystemMsg("Run cancellation confirmed.".into()));
+                    app.set_last_status(Some("Run cancelled".into()));
+                }
+                TurnOutcome::Error(error) => app.set_last_status(Some(error.clone())),
+            }
+            let _ = app.draw();
+        }
+        Ok(outcome)
     }
 }
 
@@ -602,6 +802,524 @@ impl<'a> TurnDirector<'a> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
+
+    #[tokio::test]
+    async fn finalization_storage_failure_reaches_director_as_incomplete_not_completed() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            let body = "data: {\"message_type\":\"error\",\"code\":\"run_finalization_failed\",\"terminal_status_persisted\":false,\"run_id\":\"r-cli\",\"error\":\"disk full\"}\n\ndata: [DONE]\n\n";
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let client = cade_agent::agent::client::HttpTransport::new(
+            format!("http://{address}"),
+            String::new(),
+        )
+        .unwrap();
+        let observed = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.start_run("agent", "hello", None, |_| {}),
+        )
+        .await;
+        peer.abort();
+        let observed = observed
+            .expect("director must not wait for a terminal write that failed")
+            .map_err(|e| crate::Error::custom(e.to_string()));
+        assert!(
+            matches!(observed_turn_outcome(&observed, 1, None), TurnOutcome::Error(error) if error.contains("incomplete") && error.contains("r-cli") && error.contains("disk full"))
+        );
+    }
+
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        let mut buf = [0; 4096];
+        loop {
+            let n = socket.read(&mut buf).await.unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buf[..n]);
+            if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&bytes[..end]);
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|n| n.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if bytes.len() >= end + 4 + length {
+                    return String::from_utf8(bytes).unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_controls_dispatch_over_http_while_the_owned_run_is_waiting() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        use tokio::io::AsyncWriteExt;
+        for (input, path, expected_body, rejected) in [
+            ("/approvals", "/v1/approvals", None, false),
+            (
+                "/approve ap-1",
+                "/v1/approvals/ap-1/action",
+                Some(serde_json::json!({"action":"approve"})),
+                false,
+            ),
+            (
+                "/deny ap-1 try another way",
+                "/v1/approvals/ap-1/action",
+                Some(serde_json::json!({"action":"deny","feedback":"try another way"})),
+                false,
+            ),
+            (
+                "/steer child-1 look here",
+                "/v1/subagents/child-1/steer",
+                Some(serde_json::json!({"message":"look here"})),
+                false,
+            ),
+            (
+                "/approve stale",
+                "/v1/approvals/stale/action",
+                Some(serde_json::json!({"action":"approve"})),
+                true,
+            ),
+            ("/exit", "/v1/runs/r-busy/cancel", None, false),
+            ("/quit", "/v1/runs/r-busy/cancel", None, false),
+        ] {
+            for from_lua in [false, true] {
+                let expected_body = expected_body.clone();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let exiting = matches!(parse_slash_with_skills(input, &[]), Some(SlashCmd::Exit));
+                let detached = input == "/quit";
+                let terminal = if exiting { "cancelled" } else { "done" };
+                let peer = tokio::spawn(async move {
+                    let (mut live, _) = listener.accept().await.unwrap();
+                    assert!(
+                        read_request(&mut live)
+                            .await
+                            .starts_with("POST /v1/agents/agent/run ")
+                    );
+                    live.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"message_type\":\"stream_start\",\"run_id\":\"r-busy\",\"seq_id\":0}\n\n").await.unwrap();
+                    let (mut control, _) = listener.accept().await.unwrap();
+                    let request = read_request(&mut control).await;
+                    assert_eq!(request.split_whitespace().nth(1), Some(path));
+                    if let Some(body) = expected_body {
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(
+                                request.split_once("\r\n\r\n").unwrap().1
+                            )
+                            .unwrap(),
+                            body
+                        );
+                    }
+                    if detached {
+                        std::future::pending::<()>().await;
+                    }
+                    let body = if rejected {
+                        "{\"detail\":\"decision is stale\"}"
+                    } else {
+                        "{\"status\":\"cancelling\",\"approvals\":[]}"
+                    };
+                    let code = if rejected { "409 Conflict" } else { "200 OK" };
+                    control.write_all(format!("HTTP/1.1 {code}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    live.write_all(format!("data: {{\"message_type\":\"run_done\",\"run_id\":\"r-busy\",\"seq_id\":1,\"status\":\"{terminal}\"}}\n\n").as_bytes()).await.unwrap();
+                });
+                let client = Arc::new(
+                    cade_agent::agent::client::HttpTransport::new(
+                        format!("http://{address}"),
+                        String::new(),
+                    )
+                    .unwrap(),
+                );
+                let cancel = Arc::new(AtomicBool::new(false));
+                let started = Arc::new(tokio::sync::Notify::new());
+                let run = {
+                    let (client, cancel, started) =
+                        (client.clone(), cancel.clone(), started.clone());
+                    tokio::spawn(async move {
+                        client
+                            .start_run_cancellable(
+                                "agent",
+                                "hello",
+                                None,
+                                |event| {
+                                    if event.msg_type() == "stream_start" {
+                                        started.notify_one();
+                                    }
+                                },
+                                Some(&cancel),
+                            )
+                            .await
+                    })
+                };
+                tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+                    .await
+                    .unwrap();
+                let followups = parking_lot::Mutex::new(std::collections::VecDeque::from([
+                    "later prompt".into(),
+                ]));
+                let command = if from_lua {
+                    let lua = cade_tui::lua_engine::LuaEngine::new().unwrap();
+                    let mut pump = EventPump::active(
+                        futures::stream::pending(),
+                        lua.work_ready.clone(),
+                        Default::default(),
+                    );
+                    lua.lua.load("local input = ...; CADE.execute_slash_command('/help'); CADE.execute_slash_command(input); CADE.execute_slash_command('/info')").call::<()>(input).unwrap();
+                    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                        loop {
+                            if matches!(pump.next().await, DriverWake::Work) {
+                                break;
+                            }
+                        }
+                    })
+                    .await
+                    .expect("queued Lua work must wake the active driver without a key");
+                    let mut controls = admit_lua_busy_controls(&lua, &[], &followups, &cancel);
+                    assert_eq!(
+                        controls.len(),
+                        1,
+                        "Lua busy control must pass the active wake admission"
+                    );
+                    assert_eq!(
+                        lua.command_queue
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                        ["/help", "/info"]
+                    );
+                    controls.pop().unwrap()
+                } else {
+                    admit_busy_input(input.into(), &[], |_, _| false, &followups, &cancel)
+                        .expect("busy control must not wait behind its Run")
+                };
+                if matches!(command, SlashCmd::Exit) {
+                    assert!(cancel.load(Ordering::SeqCst));
+                    assert_eq!(followups.lock().front().map(String::as_str), Some(input));
+                } else {
+                    let result =
+                        super::super::super::commands::dispatch_run_control(&client, command).await;
+                    assert_eq!(result.is_err(), rejected);
+                    if rejected {
+                        assert!(
+                            result
+                                .err()
+                                .unwrap()
+                                .to_string()
+                                .contains("decision is stale")
+                        );
+                    }
+                    assert_eq!(followups.lock().len(), 1);
+                }
+                let observed = tokio::time::timeout(std::time::Duration::from_secs(3), run)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .map_err(|e| crate::Error::custom(e.to_string()));
+                if detached {
+                    assert!(
+                        matches!(observed_turn_outcome(&observed, 1, None), TurnOutcome::Error(error) if error.contains("unconfirmed") && error.contains("r-busy"))
+                    );
+                    peer.abort();
+                } else if exiting {
+                    assert_eq!(
+                        observed_turn_outcome(&observed, 1, None),
+                        TurnOutcome::Cancelled
+                    );
+                } else {
+                    assert!(matches!(
+                        observed_turn_outcome(&observed, 1, None),
+                        TurnOutcome::Completed { .. }
+                    ));
+                }
+                if !detached {
+                    peer.await.unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn lua_busy_queue_preserves_overrides_and_does_not_spin_on_idle_commands() {
+        let lua = cade_tui::lua_engine::LuaEngine::new().unwrap();
+        let mut pump = EventPump::active(
+            futures::stream::pending(),
+            lua.work_ready.clone(),
+            Default::default(),
+        );
+        lua.lua
+            .load(
+                r#"
+            CADE._commands['/exit'] = function(args)
+                CADE_UI.footer = 'Lua override'; CADE.execute_slash_command('/help')
+            end
+            CADE.execute_slash_command('/info')
+            CADE.execute_slash_command('  /approve template-owned  ')
+            CADE.execute_slash_command('/exit')
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let followups = parking_lot::Mutex::new(std::collections::VecDeque::new());
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if matches!(pump.next().await, DriverWake::Work) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(admit_lua_busy_controls(&lua, &["approve".into()], &followups, &cancel).is_empty());
+        assert_eq!(lua.get_footer_text().as_deref(), Some("Lua override"));
+        assert!(!cancel.load(Ordering::SeqCst));
+        assert!(followups.lock().is_empty());
+        assert_eq!(
+            lua.command_queue
+                .lock()
+                .unwrap()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["/info", "  /approve template-owned  ", "/help"]
+        );
+        // The override legitimately enqueued /help, producing one coalesced
+        // wake. Deferred ordinary commands must not re-notify themselves.
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if matches!(pump.next().await, DriverWake::Work) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(admit_lua_busy_controls(&lua, &["approve".into()], &followups, &cancel).is_empty());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(60), async {
+                loop {
+                    if matches!(pump.next().await, DriverWake::Work) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .is_err(),
+            "idle-only commands must not cause busy Work wakes"
+        );
+    }
+
+    #[tokio::test]
+    async fn lua_busy_batches_rearm_only_for_remaining_controls() {
+        let lua = cade_tui::lua_engine::LuaEngine::new().unwrap();
+        let mut pump = EventPump::active(
+            futures::stream::pending(),
+            lua.work_ready.clone(),
+            Default::default(),
+        );
+        let count = cade_tui::lua_engine::LUA_UI_BATCH_SIZE + 1;
+        lua.lua.load("local count=...; CADE.execute_slash_command('/help'); for i=1,count do CADE.execute_slash_command('/approve ap-'..i) end").call::<()>(count).unwrap();
+        let followups = Default::default();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut received = Vec::new();
+        for size in [count - 1, 1] {
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    if matches!(pump.next().await, DriverWake::Work) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let controls = admit_lua_busy_controls(&lua, &[], &followups, &cancel);
+            assert_eq!(controls.len(), size);
+            received.extend(controls);
+        }
+        assert_eq!(
+            received,
+            (1..=count)
+                .map(|i| SlashCmd::Approve(format!("ap-{i}")))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            lua.command_queue
+                .lock()
+                .unwrap()
+                .front()
+                .map(String::as_str),
+            Some("/help")
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(60), async {
+                loop {
+                    if matches!(pump.next().await, DriverWake::Work) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires tty; exercised with script(1)"]
+    async fn lua_busy_control_preserves_modal_and_pending_terminal_input() {
+        let mut app = cade_tui::TuiApp::new(
+            cade_core::permissions::PermissionMode::Default,
+            "test".into(),
+            "test".into(),
+            None,
+        );
+        app.editor.set_text("/exit".into());
+        let _answer = app
+            .ask_approval_async(
+                "ap-modal".into(),
+                cade_tui::question::Question {
+                    header: "Permission".into(),
+                    text: "Allow?".into(),
+                    options: vec![],
+                    multi_select: false,
+                    allow_other: true,
+                    progress: None,
+                },
+            )
+            .unwrap();
+        let lua = app.lua_engine.as_ref().unwrap();
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let pending = std::sync::Arc::new(parking_lot::Mutex::new(Some(enter.clone())));
+        let mut pump = EventPump::active(
+            futures::stream::pending(),
+            lua.work_ready.clone(),
+            pending.clone(),
+        );
+        lua.lua
+            .load("CADE.execute_slash_command('/approve ap-modal')")
+            .exec()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if matches!(pump.next().await, DriverWake::Work) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let followups = Default::default();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(
+            admit_lua_busy_controls(lua, &[], &followups, &cancel),
+            [SlashCmd::Approve("ap-modal".into())]
+        );
+        assert_eq!(*pending.lock(), Some(enter.clone()));
+        assert_eq!(app.overlays.len(), 1);
+        let (owned, action) = app.dispatch_overlay_event(&enter).unwrap();
+        assert!(owned && action.is_none());
+        assert_eq!(app.editor.text(), "/exit");
+        assert!(!cancel.load(Ordering::SeqCst));
+        assert!(followups.lock().is_empty());
+    }
+
+    #[test]
+    fn busy_control_admission_preserves_template_and_real_lua_overrides() {
+        let lua = cade_tui::lua_engine::LuaEngine::new().unwrap();
+        lua.lua
+            .load("CADE._commands['/exit'] = function(args) CADE_UI.footer = 'override ran' end")
+            .exec()
+            .unwrap();
+        let followups = parking_lot::Mutex::new(std::collections::VecDeque::new());
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        assert!(
+            admit_busy_input(
+                "/exit".into(),
+                &["exit".into()],
+                |cmd, args| lua.handle_command(cmd, args),
+                &followups,
+                &cancel
+            )
+            .is_none()
+        );
+        assert_ne!(lua.get_footer_text().as_deref(), Some("override ran"));
+        assert_eq!(followups.lock().pop_front().as_deref(), Some("/exit"));
+        assert!(
+            admit_busy_input(
+                "/exit".into(),
+                &[],
+                |cmd, args| lua.handle_command(cmd, args),
+                &followups,
+                &cancel
+            )
+            .is_none()
+        );
+        assert_eq!(lua.get_footer_text().as_deref(), Some("override ran"));
+        assert!(followups.lock().is_empty());
+        assert!(!cancel.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn http_run_outcomes_reach_the_director_without_a_local_cancel_flag() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for status in ["done", "error", "cancelled"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = format!(
+                "data: {{\"message_type\":\"run_done\",\"status\":\"{status}\",\"run_id\":\"r-cli\",\"seq_id\":0}}\n\n"
+            );
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                let _ = socket.read(&mut buf).await.unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
+            let client = cade_agent::agent::client::HttpTransport::new(
+                format!("http://{address}"),
+                String::new(),
+            )
+            .unwrap();
+            let observed = client
+                .start_run("agent", "hello", None, |_| {})
+                .await
+                .map_err(|e| crate::Error::custom(e.to_string()));
+            let outcome = observed_turn_outcome(&observed, 1, None);
+            match status {
+                "done" => assert!(matches!(outcome, TurnOutcome::Completed { .. })),
+                "error" => assert!(matches!(outcome, TurnOutcome::Error(_)), "{outcome:?}"),
+                "cancelled" => assert_eq!(outcome, TurnOutcome::Cancelled),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn local_cancellation_cannot_overwrite_an_unconfirmed_transport_error() {
+        let observed = Err(crate::Error::custom(
+            "Detached from Run r-cli; cancellation unconfirmed",
+        ));
+        assert!(matches!(
+            observed_turn_outcome(&observed, 1, None),
+            TurnOutcome::Error(_)
+        ));
+        assert!(matches!(
+            observed_turn_outcome(&Ok(vec![]), 1, None),
+            TurnOutcome::Error(_)
+        ));
+    }
 
     #[test]
     fn resolves_completed_cancelled_and_error_turns() {
@@ -621,13 +1339,7 @@ mod tests {
             }
         );
 
-        let cancelled = resolve_turn_outcome(
-            true,
-            Some("ignored after cancellation".to_string()),
-            String::new(),
-            5,
-            Some(150),
-        );
+        let cancelled = resolve_turn_outcome(true, None, String::new(), 5, Some(150));
         assert_eq!(cancelled, TurnOutcome::Cancelled);
 
         let error = resolve_turn_outcome(
@@ -765,7 +1477,7 @@ mod tests {
             }
         );
 
-        // 2. Cancellation takes precedence over stream error
+        // 2. A cancellation request cannot erase an observation error.
         let cancelled_with_err = resolve_turn_outcome(
             true,
             Some("stream broken".to_string()),
@@ -773,7 +1485,10 @@ mod tests {
             2,
             None,
         );
-        assert_eq!(cancelled_with_err, TurnOutcome::Cancelled);
+        assert_eq!(
+            cancelled_with_err,
+            TurnOutcome::Error("stream broken".into())
+        );
 
         // 3. Error without cancellation returns TurnOutcome::Error
         let error_outcome = resolve_turn_outcome(

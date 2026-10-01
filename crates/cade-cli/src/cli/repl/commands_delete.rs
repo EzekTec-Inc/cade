@@ -56,9 +56,21 @@ impl Repl {
                             Ok(_) => {
                                 self.tui_ok(format!("  ✓ Deleted: {}", a.name));
                                 if a.id == self.agent_id() {
-                                    self.tui_dim(
-                                        "  Active agent deleted — use /new or /agents to continue",
-                                    );
+                                    if let Some(next) = agents.iter().find(|next| next.id != a.id) {
+                                        match self.select_agent(next) {
+                                            Ok(()) => {
+                                                self.tui_ok(format!("  → Now using: {}", next.name))
+                                            }
+                                            Err(error) => self.tui_err(format!(
+                                                "Could not select remaining agent: {error}"
+                                            )),
+                                        }
+                                    } else {
+                                        if let Err(error) = self.select_conversation(None) {
+                                            self.tui_err(format!("Could not clear deleted agent conversation: {error}"));
+                                        }
+                                        self.tui_dim("  Active agent deleted — use /new-agent to create an agent");
+                                    }
                                 }
                             }
                             Err(e) => self.tui_err(e.to_string()),

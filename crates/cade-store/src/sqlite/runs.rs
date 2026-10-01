@@ -49,6 +49,75 @@ pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+/// Commit an active Run's terminal status and journal event together. The
+/// returned cursor is publishable only after commit; an existing terminal Run
+/// is left alone. Missing Runs and ignored writes are errors, not completion.
+pub fn finish_run_with_event(
+    db: &Db,
+    run_id: &str,
+    status: &str,
+    data: &str,
+) -> Result<Option<i64>> {
+    if !matches!(status, "done" | "error" | "cancelled") {
+        return Err(crate::error::Error::custom("Run outcome must be terminal"));
+    }
+    let mut conn = db.get()?;
+    let tx = conn.transaction()?;
+    if !set_active_run_terminal_status(&tx, run_id, status)? {
+        return Ok(None);
+    }
+    let sequence = tx.query_row(
+        "INSERT INTO run_events (run_id, seq_id, data)
+         VALUES (?1, (SELECT COALESCE(MAX(seq_id), -1) + 1 FROM run_events WHERE run_id = ?1), ?2)
+         RETURNING seq_id",
+        params![run_id, data],
+        |row| row.get(0),
+    )?;
+    tx.commit()?;
+    Ok(Some(sequence))
+}
+
+/// Last-resort failure state when terminal journaling is unavailable. Never
+/// converts an already-terminal Run or claims a journal entry was persisted.
+pub fn mark_run_failed(db: &Db, run_id: &str) -> Result<bool> {
+    let mut conn = db.get()?;
+    let tx = conn.transaction()?;
+    let changed = set_active_run_terminal_status(&tx, run_id, "error")?;
+    tx.commit()?;
+    Ok(changed)
+}
+
+fn set_active_run_terminal_status(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    status: &str,
+) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE runs SET status = ?1, updated_at = ?2
+         WHERE id = ?3 AND status IN ('running', 'cancelling')",
+        params![status, now_ts(), run_id],
+    )?;
+    let stored: String = conn.query_row(
+        "SELECT status FROM runs WHERE id = ?1",
+        params![run_id],
+        |row| row.get(0),
+    )?;
+    if changed == 0 {
+        if matches!(stored.as_str(), "done" | "error" | "cancelled") {
+            return Ok(false);
+        }
+        return Err(crate::error::Error::custom(
+            "Run terminal status was not written",
+        ));
+    }
+    if stored != status {
+        return Err(crate::error::Error::custom(
+            "Run terminal status was not retained",
+        ));
+    }
+    Ok(true)
+}
+
 /// Request cancellation for an active run without overwriting a terminal outcome.
 ///
 /// Returns `true` when a running run was transitioned to `cancelling`.
@@ -200,6 +269,25 @@ mod tests {
         finish_run(&db, &run.id, "completed")?;
         let got = get_run(&db, &run.id)?.unwrap();
         assert_eq!(got.status, "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_commit_is_idempotent_and_cannot_rewrite_an_outcome() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let run = create_run(&db, "a1", None)?;
+        let data = r#"{"message_type":"run_done","status":"cancelled"}"#;
+        assert_eq!(
+            finish_run_with_event(&db, &run.id, "cancelled", data)?,
+            Some(0)
+        );
+        assert_eq!(finish_run_with_event(&db, &run.id, "done", "unused")?, None);
+        assert!(!mark_run_failed(&db, &run.id)?);
+        assert_eq!(get_run(&db, &run.id)?.unwrap().status, "cancelled");
+        assert_eq!(run_events_after(&db, &run.id, -1)?, vec![(0, data.into())]);
+        assert!(finish_run_with_event(&db, "missing", "done", "unused").is_err());
+        assert!(mark_run_failed(&db, "missing").is_err());
         Ok(())
     }
 

@@ -6,6 +6,11 @@ edition     = "2024"
 [lib]
 doctest     = false
 
+[[test]]
+name = "lifecycle"
+path = "tests/lifecycle.rs"
+harness = false
+
 [dependencies]
 # -- Workspace crates
 cade-core.path       = "../cade-core"

@@ -171,3 +171,208 @@ async fn test_in_process_session_memory_blocks() -> Result<()> {
 }
 
 // endregion: --- Tests
+
+#[tokio::test]
+async fn embedded_observation_rejects_failed_terminal_publication() -> Result<()> {
+    let session = EmbeddedSession::builder()
+        .in_memory()
+        .provider(Arc::new(MockStreamingProvider::new("partial output")))
+        .build()
+        .await?;
+    // Terminal publication and status are atomic. Failure to persist success
+    // must roll back success and publish an error outcome through recovery.
+    session
+        .db()
+        .get()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER drop_success BEFORE INSERT ON run_events
+         WHEN json_extract(NEW.data, '$.message_type') = 'run_done'
+          AND json_extract(NEW.data, '$.status') = 'done'
+         BEGIN SELECT RAISE(FAIL, 'injected terminal publication failure'); END;",
+        )
+        .unwrap();
+    let events: Vec<_> = session
+        .stream_prompt("observe status")
+        .await?
+        .collect()
+        .await;
+    assert!(
+        events.iter().any(|event| matches!(event,
+        CadeStreamEvent::Finished { outcome } if outcome == "error")),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(event,
+        CadeStreamEvent::Finished { outcome } if outcome == "done")),
+        "{events:?}"
+    );
+    let response = session.prompt("observe through prompt").await;
+    assert!(response.is_err(), "{response:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn embedded_prompt_cannot_succeed_without_terminal_evidence() -> Result<()> {
+    let session = EmbeddedSession::builder()
+        .in_memory()
+        .provider(Arc::new(MockStreamingProvider::new("partial output")))
+        .build()
+        .await?;
+    session
+        .db()
+        .get()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER drop_terminal BEFORE INSERT ON run_events
+         WHEN json_extract(NEW.data, '$.message_type') = 'run_done'
+         BEGIN SELECT RAISE(FAIL, 'injected terminal publication failure'); END;
+         CREATE TRIGGER drop_finish BEFORE UPDATE OF status ON runs
+         BEGIN SELECT RAISE(FAIL, 'injected status failure'); END;",
+        )
+        .unwrap();
+    let result = session.prompt("observe incomplete Run").await;
+    assert!(
+        result.is_err(),
+        "partial output is not completion: {result:?}"
+    );
+    let events: Vec<_> = session
+        .stream_prompt("observe failed finalization")
+        .await?
+        .collect()
+        .await;
+    let errors: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            CadeStreamEvent::Error(error) => Some(error),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        errors.len(),
+        1,
+        "finalization diagnostic must end observation once: {events:?}"
+    );
+    assert!(errors[0].contains("incomplete"), "{errors:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, CadeStreamEvent::Finished { .. }))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_sdk_reports_failed_finalization_instead_of_following_stale_running_status() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let path = request.split_whitespace().nth(1).unwrap();
+            let (kind, body) = if path.ends_with("/run") {
+                (
+                    "text/event-stream",
+                    "data: {\"message_type\":\"error\",\"run_id\":\"r-sdk\",\"code\":\"run_finalization_failed\",\"terminal_status_persisted\":false,\"error\":\"disk full\"}\n\ndata: [DONE]\n\n",
+                )
+            } else if path.contains("/stream") {
+                ("text/event-stream", "data: [DONE]\n\n")
+            } else {
+                ("application/json", "{\"status\":\"running\"}")
+            };
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+    });
+    let session = cade_sdk::AgentSession::create(cade_sdk::SessionOptions {
+        server_url: format!("http://{address}"),
+        agent_id: Some("a-sdk".into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for streaming in [false, true] {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            if streaming {
+                session.prompt_stream("hello", |_| {}).await
+            } else {
+                session.prompt("hello").await
+            }
+        })
+        .await
+        .expect("SDK must end observation on explicit persistence failure");
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("incomplete") && error.contains("r-sdk") && error.contains("disk full"),
+            "{error}"
+        );
+    }
+    peer.abort();
+}
+
+#[tokio::test]
+async fn http_tail_recovery_and_embedded_observation_have_equivalent_events() -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let session = EmbeddedSession::builder()
+        .in_memory()
+        .provider(Arc::new(MockStreamingProvider::new("same execution trace")))
+        .build()
+        .await?;
+    let embedded: Vec<_> = session
+        .stream_prompt("compare adapters")
+        .await?
+        .collect()
+        .await;
+    let run = cade_store::sqlite::list_agent_runs(session.db(), session.agent_id(), 1)
+        .unwrap()
+        .remove(0);
+    let rows = cade_store::sqlite::run_events_after(session.db(), &run.id, -1).unwrap();
+    let frames: Vec<_> = rows
+        .into_iter()
+        .map(|(seq, data)| {
+            let mut value: serde_json::Value = serde_json::from_str(&data).unwrap();
+            value["run_id"] = run.id.clone().into();
+            value["seq_id"] = seq.into();
+            format!("data: {value}\n\n")
+        })
+        .collect();
+    let live = frames[..2].concat();
+    let replay = frames.concat();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        for body in [live, replay] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 8192];
+            let _ = socket.read(&mut buf).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let client =
+        cade_agent::agent::client::HttpTransport::new(format!("http://{address}"), String::new())
+            .unwrap();
+    let messages = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        client.start_run("agent", "compare adapters", None, |_| {}),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let remote: Vec<_> = messages
+        .iter()
+        .filter_map(|message| {
+            let event = serde_json::from_value(serde_json::to_value(message).unwrap()).unwrap();
+            CadeStreamEvent::from_stream_event(&event)
+        })
+        .collect();
+    assert_eq!(remote, embedded);
+    peer.await.unwrap();
+    Ok(())
+}

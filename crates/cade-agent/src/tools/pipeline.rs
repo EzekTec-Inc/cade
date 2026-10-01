@@ -218,8 +218,8 @@ impl ToolPipeline {
         let arguments = &arguments;
 
         // 2. Evaluate permission rules & plan-mode write blocking
-        let is_mcp_write = crate::tools::is_mcp_write_tool(canonical, self.runtime.mcp()).await
-            || self.runtime.extension_is_write(canonical);
+        let binding = self.runtime.bind_tool(canonical).await;
+        let is_mcp_write = binding.is_write(canonical);
         let is_write = is_write_schema(canonical) || is_mcp_write;
 
         if self.permissions.mode() == PermissionMode::Plan && is_write {
@@ -323,7 +323,12 @@ impl ToolPipeline {
         // 4. Dispatch tool execution via ToolRuntime
         let run_result = self
             .runtime
-            .execute(tool_call_id.to_string(), canonical, &effective_args)
+            .execute_bound(
+                tool_call_id.to_string(),
+                canonical,
+                &effective_args,
+                &binding,
+            )
             .await;
 
         let (mut output, is_error, ui_resource_uri) = match run_result {
@@ -468,6 +473,86 @@ mod tests {
         assert!(outcome.permission_denied);
         assert!(outcome.is_error);
         assert!(outcome.output.contains("denied permission"));
+        Ok(())
+    }
+
+    #[derive(Default)]
+    struct InvocationRecorder {
+        approvals: std::sync::Mutex<Vec<Value>>,
+        executions: std::sync::Mutex<Vec<Value>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalDelegate for InvocationRecorder {
+        async fn request_approval(&self, _: &str, _: &str, args: &Value, _: &str) -> Result<bool> {
+            self.approvals.lock().unwrap().push(args.clone());
+            Ok(true)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::runtime::ToolExtension for InvocationRecorder {
+        fn has_tool(&self, name: &str) -> bool {
+            name == "probe__write_record"
+        }
+
+        async fn execute(&self, id: &str, name: &str, args: &Value) -> RuntimeToolResult {
+            self.executions.lock().unwrap().push(args.clone());
+            RuntimeToolResult {
+                tool_call_id: id.into(),
+                tool_name: name.into(),
+                output: "recorded".into(),
+                is_error: false,
+                ui_resource_uri: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_arguments_are_exactly_the_executed_capability_intent() -> Result<()> {
+        let workspace = tempfile::tempdir().unwrap();
+        let recorder = Arc::new(InvocationRecorder::default());
+        let storage = Arc::new(crate::agent::HttpTransport::new(
+            "http://localhost:0".into(),
+            "test".into(),
+        )?);
+        let runtime = ToolRuntime::new(
+            storage,
+            Arc::new(crate::mcp::McpManager::empty()),
+            "test-agent".into(),
+            workspace.path().into(),
+        )
+        .with_extension(recorder.clone());
+        let pipeline = ToolPipeline::new(
+            Arc::new(runtime),
+            PermissionManager::new(PermissionMode::Default),
+            Arc::new(HookEngine::new(
+                cade_core::settings::HooksConfig::default(),
+                workspace.path().into(),
+                "test".into(),
+            )),
+            recorder.clone(),
+        );
+        let args =
+            json!({"filePath": "output.txt", "target": "HEAD~1", "project": "named-project"});
+        let result = pipeline
+            .execute("call", "probe__write_record", &args)
+            .await?;
+        assert!(!result.is_error, "{}", result.output);
+        let approvals = recorder.approvals.lock().unwrap();
+        let executions = recorder.executions.lock().unwrap();
+        assert_eq!(*approvals, *executions);
+        assert_eq!(executions.len(), 1);
+        assert_eq!(
+            executions[0]["filePath"],
+            workspace
+                .path()
+                .join("output.txt")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(executions[0]["target"], "HEAD~1");
+        assert_eq!(executions[0]["project"], "named-project");
         Ok(())
     }
 }

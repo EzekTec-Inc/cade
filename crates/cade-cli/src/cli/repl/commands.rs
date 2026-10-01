@@ -14,6 +14,109 @@ use crate::ui::{RenderLine, ToastLevel};
 use cade_agent::subagents::discover_all_subagents;
 use cade_core::permissions::PermissionMode;
 
+/// Shared idle/busy control dispatch. Only acknowledged commands produce a
+/// success line. This takes no Repl borrow or UI lock across network awaits.
+pub(super) async fn dispatch_run_control(
+    client: &cade_agent::agent::client::HttpTransport,
+    command: SlashCmd,
+) -> Result<Vec<RenderLine>> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let message = match command {
+            SlashCmd::Approvals => {
+                let value = client.raw_get("/approvals").await?;
+                let mut lines = Vec::new();
+                if let Some(approvals) = value["approvals"].as_array() {
+                    for approval in approvals {
+                        lines.push(RenderLine::SystemMsg(format!(
+                            "  [{}] Subagent: {} -> tool: {}\n    arguments: {}",
+                            approval["id"].as_str().unwrap_or("?"),
+                            approval["subagent_id"].as_str().unwrap_or("?"),
+                            approval["tool_name"].as_str().unwrap_or("?"),
+                            approval["arguments"]
+                        )));
+                    }
+                }
+                lines.push(RenderLine::SystemMsg(if lines.is_empty() {
+                    "No pending approvals found.".into()
+                } else {
+                    "Use /approve <id> or /deny <id> [feedback] to take action.".into()
+                }));
+                return Ok(lines);
+            }
+            SlashCmd::Approve(id) => {
+                let id = id.trim();
+                if id.is_empty() {
+                    return Err(crate::Error::custom("Usage: /approve <id>"));
+                }
+                client
+                    .raw_post(
+                        &format!("/approvals/{id}/action"),
+                        &serde_json::json!({"action":"approve"}),
+                    )
+                    .await?;
+                format!("Approval for '{id}' accepted.")
+            }
+            SlashCmd::Deny(arguments) => {
+                let arguments = arguments.trim();
+                if arguments.is_empty() {
+                    return Err(crate::Error::custom("Usage: /deny <id> [feedback...]"));
+                }
+                let (id, feedback) = arguments
+                    .split_once(char::is_whitespace)
+                    .map(|(id, text)| (id, Some(text.trim())))
+                    .unwrap_or((arguments, None));
+                client
+                    .raw_post(
+                        &format!("/approvals/{id}/action"),
+                        &serde_json::json!({"action":"deny", "feedback":feedback}),
+                    )
+                    .await?;
+                format!("Denial for '{id}' accepted.")
+            }
+            SlashCmd::Steer(arguments) => {
+                let (id, message) = arguments
+                    .trim()
+                    .split_once(char::is_whitespace)
+                    .filter(|(_, message)| !message.trim().is_empty())
+                    .ok_or_else(|| crate::Error::custom("Usage: /steer <subagent_id> <message>"))?;
+                client
+                    .raw_post(
+                        &format!("/subagents/{id}/steer"),
+                        &serde_json::json!({"message":message.trim()}),
+                    )
+                    .await?;
+                format!("Steering instruction accepted for '{id}'.")
+            }
+            _ => return Err(crate::Error::custom("Not an active Run control")),
+        };
+        Ok(vec![RenderLine::SystemMsg(message)])
+    })
+    .await
+    .map_err(|_| {
+        crate::Error::custom("Control acknowledgement timed out; delivery is unconfirmed")
+    })?
+}
+
+pub(super) fn present_run_control(
+    app: &parking_lot::Mutex<cade_tui::TuiApp>,
+    result: Result<Vec<RenderLine>>,
+) {
+    let mut app = app.lock();
+    match result {
+        Ok(lines) => {
+            for line in lines {
+                let _ = app.push(line);
+            }
+        }
+        Err(error) => {
+            let message = format!("Run control failed: {error}");
+            app.show_toast(message.clone(), ToastLevel::Error);
+            let _ = app.push(RenderLine::ErrorMsg(message));
+        }
+    }
+    let _ = app.draw();
+}
+
 // ── /new helpers (pure) ───────────────────────────────────────────────────────
 //
 // `/new` clears the agent's `active_goal` memory block so the agent forgets
@@ -252,12 +355,22 @@ impl Repl {
                 match parsed {
                     Ok(servers) => {
                         let mut s = self.settings.lock();
+                        let previous = s.global_settings_mut().mcp_servers.clone();
+                        let mut saved_names = Vec::new();
                         for (k, v) in servers {
                             s.global_settings_mut().mcp_servers.insert(k.clone(), v);
-                            self.tui_ok(format!("  ✓ Saved MCP server: {}", k));
+                            saved_names.push(k);
                         }
-                        let _ = s.save_global();
+                        if let Err(error) = s.save_global() {
+                            s.global_settings_mut().mcp_servers = previous;
+                            drop(s);
+                            self.tui_err(format!("Failed to save MCP configuration: {error}"));
+                            return Ok(false);
+                        }
                         drop(s);
+                        for name in saved_names {
+                            self.tui_ok(format!("  ✓ Saved MCP server: {name}"));
+                        }
                         self.do_settings_reload().await;
                     }
                     Err(e) => {
@@ -424,16 +537,18 @@ impl Repl {
                         self.app.lock().show_toast(&msg, ToastLevel::Success);
                         self.tui_ok(msg);
 
-                        if let Ok(stats) =
-                            self.client.get_context_stats(&agent_id, conv_id.as_deref()).await
+                        if let Ok(stats) = self
+                            .client
+                            .get_context_stats(&agent_id, conv_id.as_deref())
+                            .await
+                            && let Some(total) = stats.get("total_tokens").and_then(|v| v.as_u64())
                         {
-                            if let Some(total) = stats.get("total_tokens").and_then(|v| v.as_u64()) {
-                                let window =
-                                    stats.get("window_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                                if window > 0 {
-                                    let pct = ((total * 100) / window).min(100) as u8;
-                                    self.app.lock().set_context_pct(pct);
-                                }
+                            let window = stats
+                                .get("window_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            if let Some(pct) = total.saturating_mul(100).checked_div(window) {
+                                self.app.lock().set_context_pct(pct.min(100) as u8);
                             }
                         }
                     }
@@ -566,14 +681,27 @@ impl Repl {
                 let _ = self.ask_and_summarize_branch().await;
 
                 let agent_id = self.agent_id();
+                let previous_conversation = self.conversation_id();
                 match self.client.create_conversation(&agent_id, "").await {
                     Ok(conv) => {
-                        let cid = conv["id"].as_str().unwrap_or("").to_string();
+                        let cid = match conv["id"].as_str().filter(|id| !id.is_empty()) {
+                            Some(id) => id.to_owned(),
+                            None => {
+                                self.tui_err("Server did not return a conversation ID");
+                                return Ok(false);
+                            }
+                        };
 
                         // P4: Build a structured session handoff before clearing state.
                         // Collects active_goal + recent_edits + session_summary into a
                         // rich snapshot that survives in archival memory.
-                        let blocks = self.client.get_memory(&agent_id).await.unwrap_or_default();
+                        let blocks = match self.client.get_memory(&agent_id).await {
+                            Ok(blocks) => blocks,
+                            Err(error) => {
+                                self.tui_err(format!("Conversation was created, but prior memory could not be read: {error}. Previous conversation remains selected."));
+                                return Ok(false);
+                            }
+                        };
                         let active_goal = blocks
                             .iter()
                             .find(|b| b.label == "active_goal")
@@ -595,34 +723,46 @@ impl Repl {
                             active_goal,
                             recent_edits,
                             session_summary,
-                            Some(&cid),
-                        ) {
-                            let _ = self
-                                .client
-                                .insert_archival_memory(
-                                    &agent_id,
-                                    &handoff,
-                                    &session_handoff_tags(),
-                                )
-                                .await;
+                            previous_conversation.as_deref(),
+                        ) && let Err(error) = self
+                            .client
+                            .insert_archival_memory(&agent_id, &handoff, &session_handoff_tags())
+                            .await
+                        {
+                            self.tui_err(format!("Could not archive session handoff: {error}. Previous conversation and active goal were retained."));
+                            return Ok(false);
                         }
 
                         // Also archive raw active_goal for backward compat
-                        if let Some(snapshot) =
-                            build_active_goal_archive_snapshot(active_goal, Some(&cid))
+                        if let Some(snapshot) = build_active_goal_archive_snapshot(
+                            active_goal,
+                            previous_conversation.as_deref(),
+                        ) && let Err(error) = self
+                            .client
+                            .insert_archival_memory(
+                                &agent_id,
+                                &snapshot,
+                                &active_goal_archive_tags(),
+                            )
+                            .await
                         {
-                            let _ = self
-                                .client
-                                .insert_archival_memory(
-                                    &agent_id,
-                                    &snapshot,
-                                    &active_goal_archive_tags(),
-                                )
-                                .await;
+                            self.tui_err(format!("Could not archive active goal: {error}. Previous conversation and active goal were retained."));
+                            return Ok(false);
                         }
 
+                        if let Err(error) = self.select_conversation(Some(cid.clone())) {
+                            self.tui_err(format!(
+                                "Conversation was created but could not be selected: {error}"
+                            ));
+                            return Ok(false);
+                        }
                         // Clear the active_goal memory block so the agent forgets the previous task
-                        let _ = self.client.delete_memory(&agent_id, "active_goal").await;
+                        if blocks.iter().any(|block| block.label == "active_goal")
+                            && let Err(error) =
+                                self.client.delete_memory(&agent_id, "active_goal").await
+                        {
+                            self.tui_err(format!("New conversation selected, but prior active goal could not be cleared: {error}"));
+                        }
                         // Reset the C3 staleness counter so the next session starts clean
                         // and the recurring `update_memory(active_goal)` reminder fires
                         // on schedule.
@@ -630,11 +770,6 @@ impl Repl {
                             .store(0, std::sync::atomic::Ordering::SeqCst);
                         self.writes_at_last_active_goal_update
                             .store(0, std::sync::atomic::Ordering::SeqCst);
-                        *self.conversation_id.lock() = Some(cid.clone());
-                        {
-                            let mut s = self.session.lock();
-                            let _ = s.set_conversation(Some(cid.clone()));
-                        }
                         self.first_turn
                             .store(true, std::sync::atomic::Ordering::SeqCst);
                         self.tui_ok(format!(
@@ -815,119 +950,34 @@ impl Repl {
     }
 
     pub(crate) async fn cmd_approvals(&self) -> Result<bool> {
-        match self.client.raw_get("/approvals").await {
-            Ok(v) => {
-                let approvals = v["approvals"].as_array();
-                let Some(approvals) = approvals.filter(|a| !a.is_empty()) else {
-                    self.tui_dim("  No pending approvals found.".to_string());
-                    return Ok(false);
-                };
-                self.tui_blank();
-                self.tui_hdr("  Pending approvals queue:");
-                for app in approvals {
-                    let id = app["id"].as_str().unwrap_or("?");
-                    let subagent = app["subagent_id"].as_str().unwrap_or("?");
-                    let tool = app["tool_name"].as_str().unwrap_or("?");
-                    let args = app["arguments"].as_str().unwrap_or("{}");
-                    self.tui_sys(format!("  [{id}] Subagent: {} -> tool: {}", subagent, tool));
-                    self.tui_dim(format!("    arguments: {}", args));
-                }
-                self.tui_blank();
-                self.tui_dim("  Tip: Use /approve <id> or /deny <id> to take action.".to_string());
-            }
-            Err(e) => self.tui_err(format!("Failed to list approvals: {e}")),
-        }
+        present_run_control(
+            &self.app,
+            dispatch_run_control(&self.client, SlashCmd::Approvals).await,
+        );
         Ok(false)
     }
 
     pub(crate) async fn cmd_approve(&self, id: String) -> Result<bool> {
-        let trimmed_id = id.trim();
-        if trimmed_id.is_empty() {
-            self.tui_err("Usage: /approve <id>".to_string());
-            return Ok(false);
-        }
-        let body = serde_json::json!({ "action": "approve" });
-        match self
-            .client
-            .raw_post(&format!("/approvals/{trimmed_id}/action"), &body)
-            .await
-        {
-            Ok(_) => {
-                self.tui_ok(format!(
-                    "  ✓ Request '{trimmed_id}' APPROVED successfully. Subagent resumed."
-                ));
-            }
-            Err(e) => self.tui_err(format!("Failed to approve request: {e}")),
-        }
+        present_run_control(
+            &self.app,
+            dispatch_run_control(&self.client, SlashCmd::Approve(id)).await,
+        );
         Ok(false)
     }
 
     pub(crate) async fn cmd_deny(&self, id: String) -> Result<bool> {
-        let trimmed = id.trim();
-        if trimmed.is_empty() {
-            self.tui_err("Usage: /deny <id> [feedback...]".to_string());
-            return Ok(false);
-        }
-
-        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
-        let trimmed_id = parts[0];
-        let feedback = parts.get(1).map(|&s| s.trim().to_string());
-
-        let body = serde_json::json!({
-            "action": "deny",
-            "feedback": feedback,
-        });
-        match self
-            .client
-            .raw_post(&format!("/approvals/{trimmed_id}/action"), &body)
-            .await
-        {
-            Ok(_) => {
-                if let Some(ref fb) = feedback {
-                    self.tui_ok(format!(
-                        "  ✗ Request '{trimmed_id}' DENIED with feedback: \"{fb}\". Subagent notified."
-                    ));
-                } else {
-                    self.tui_ok(format!(
-                        "  ✗ Request '{trimmed_id}' DENIED successfully. Subagent notified."
-                    ));
-                }
-            }
-            Err(e) => self.tui_err(e.to_string()),
-        }
+        present_run_control(
+            &self.app,
+            dispatch_run_control(&self.client, SlashCmd::Deny(id)).await,
+        );
         Ok(false)
     }
 
     pub(crate) async fn cmd_steer(&self, arg: String) -> Result<bool> {
-        let trimmed = arg.trim();
-        if trimmed.is_empty() {
-            self.tui_err("Usage: /steer <subagent_id> <message>".to_string());
-            return Ok(false);
-        }
-
-        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
-        let subagent_id = parts[0];
-        let message = match parts.get(1) {
-            Some(&m) => m.trim(),
-            None => {
-                self.tui_err("Usage: /steer <subagent_id> <message>".to_string());
-                return Ok(false);
-            }
-        };
-
-        let body = serde_json::json!({ "message": message });
-        match self
-            .client
-            .raw_post(&format!("/subagents/{subagent_id}/steer"), &body)
-            .await
-        {
-            Ok(_) => {
-                self.tui_ok(format!(
-                    "  ✓ Steering instruction successfully sent to subagent '{subagent_id}'."
-                ));
-            }
-            Err(e) => self.tui_err(format!("Failed to steer subagent: {e}")),
-        }
+        present_run_control(
+            &self.app,
+            dispatch_run_control(&self.client, SlashCmd::Steer(arg)).await,
+        );
         Ok(false)
     }
 }

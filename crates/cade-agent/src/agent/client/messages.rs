@@ -1,5 +1,24 @@
 use super::*;
 
+enum ReplayFailure {
+    Transport(crate::Error),
+    Invalid(crate::Error),
+}
+
+impl From<crate::Error> for ReplayFailure {
+    fn from(error: crate::Error) -> Self {
+        Self::Transport(error)
+    }
+}
+
+impl ReplayFailure {
+    fn into_error(self) -> crate::Error {
+        match self {
+            Self::Transport(error) | Self::Invalid(error) => error,
+        }
+    }
+}
+
 impl HttpTransport {
     // -- Messages
 
@@ -194,6 +213,8 @@ impl HttpTransport {
     ///
     /// The server owns context construction, policy, model calls, tool execution,
     /// persistence, and cancellation. Clients only render this event stream.
+    /// Fatal observation diagnostics carry no replay cursor: callers must retain
+    /// the last delivered journal sequence so reattachment can recover the tail.
     pub async fn start_run<F>(
         &self,
         agent_id: &str,
@@ -267,7 +288,10 @@ impl HttpTransport {
         if let Some(conversation_id) = conversation_id {
             body["conversation_id"] = conversation_id.into();
         }
-        self.consume_run_stream(
+        // The cancellation command runs alongside observation, including
+        // connection setup and replay. Never block the event reader on its ACK.
+        let identity = std::sync::Mutex::new(None::<String>);
+        let observe = self.consume_run_stream(
             EventSource::new(
                 self.client
                     .post(self.url(&format!("/agents/{agent_id}/run")))
@@ -275,13 +299,19 @@ impl HttpTransport {
                     .json(&body),
             )
             .map_err(|error| crate::Error::custom(format!("EventSource: {error}")))?,
-            agent_id,
-            conversation_id,
             Vec::new(),
-            on_event,
-            cancel,
-        )
-        .await
+            |event| {
+                if let Some(id) = event.run_id() {
+                    *identity.lock().unwrap() = Some(id.to_owned());
+                }
+                on_event(event);
+            },
+        );
+        tokio::select! {
+            biased;
+            result = observe => result,
+            error = self.cancel_observation(cancel, &identity) => Err(error),
+        }
     }
 
     /// Start a server-owned run and translate a presentation cancellation flag
@@ -334,26 +364,94 @@ impl HttpTransport {
     /// Upper bound on the exponential reconnect backoff (open-ended retries).
     const RUN_STREAM_MAX_BACKOFF_MS: u64 = 10_000;
 
-    /// Poll `GET /v1/runs/{run_id}/stream?starting_after=` and return the data
-    /// payloads.  Used by the resume path (plain reqwest — no auto-reconnect,
-    /// no SSE event-source state to leak across retries).
-    async fn poll_run_events(&self, run_id: &str, after_seq: i64) -> Result<Vec<String>> {
+    async fn cancel_observation(
+        &self,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        identity: &std::sync::Mutex<Option<String>>,
+    ) -> crate::Error {
+        if cancel.is_none() {
+            return std::future::pending().await;
+        }
+        loop {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        // Allow acceptance to deliver identity even when cancellation races it.
+        // Dropping observation never drops the server-owned accepted execution.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let id = loop {
+                let id = identity.lock().unwrap().clone();
+                if let Some(id) = id {
+                    break id;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            };
+            let result = self.cancel_run(&id).await;
+            if let Err(error) = result {
+                tracing::warn!(run_id = %id, %error, "Run cancellation request failed");
+            }
+            // A successful command ACK only confirms a request, not cancellation.
+            // Keep observing terminal evidence until the bounded grace expires.
+            std::future::pending::<()>().await;
+        })
+        .await;
+        let id = identity.lock().unwrap().clone();
+        crate::Error::custom(match id {
+            Some(id) => format!("Detached from Run {id}; cancellation unconfirmed. The Run may still be active; resume this Run ID to check its outcome."),
+            None => "Detached before Run identity was received; cancellation unconfirmed. The server may have accepted the Run. Check its history before starting another Run.".into(),
+        })
+    }
+
+    /// The replay endpoint can also follow a running Run. Deliver incrementally
+    /// and stop on terminal evidence, not HTTP EOF. Retry from the delivered cursor.
+    async fn poll_run_events(
+        &self,
+        run_id: &str,
+        cursor: &mut i64,
+        messages: &mut Vec<CadeMessage>,
+        on_event: &impl Fn(&CadeMessage),
+    ) -> std::result::Result<bool, ReplayFailure> {
         let url = self.url(&format!("/runs/{run_id}/stream"));
-        let resp = self
+        let request = self
             .client
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&[("starting_after", after_seq.to_string())])
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(crate::Error::custom(format!(
-                "run stream replay failed: {}",
-                resp.status()
-            )));
+            .query(&[("starting_after", cursor.to_string())]);
+        let mut events = EventSource::new(request)
+            .map_err(|e| crate::Error::custom(format!("Run replay: {e}")))?;
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.next())
+                .await
+                .map_err(|_| crate::Error::custom("Run replay idle timeout"))?;
+            match event {
+                Some(Ok(Event::Open)) => {}
+                Some(Ok(Event::Message(event))) => {
+                    if event.data.trim() == "[DONE]" {
+                        events.close();
+                        return Ok(false);
+                    }
+                    if !event.data.trim().is_empty()
+                        && deliver_replay(vec![event.data], run_id, cursor, messages, on_event)
+                            .map_err(ReplayFailure::Invalid)?
+                    {
+                        events.close();
+                        return Ok(true);
+                    }
+                }
+                None | Some(Err(reqwest_eventsource::Error::StreamEnded)) => {
+                    events.close();
+                    return Ok(false);
+                }
+                Some(Err(error)) => {
+                    events.close();
+                    return Err(ReplayFailure::Transport(crate::Error::custom(format!(
+                        "Run replay: {error}"
+                    ))));
+                }
+            }
         }
-        let body = resp.text().await?;
-        Ok(parse_sse_data(&body))
     }
 
     /// Fetch the current status of a run (`GET /v1/runs/{id}`).  `None` when
@@ -364,6 +462,7 @@ impl HttpTransport {
         let resp = self
             .client
             .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await
@@ -373,42 +472,6 @@ impl HttpTransport {
         }
         let body: serde_json::Value = resp.json().await.ok()?;
         body["status"].as_str().map(str::to_owned)
-    }
-
-    /// If the SSE handshake dropped before any event delivered a `run_id`,
-    /// the server may still have accepted the run (it processes independently
-    /// of the client connection).  Recover the run id from the agent's recent
-    /// runs rather than erroring out or — worse — re-POSTing a duplicate run.
-    async fn discover_latest_run_id(
-        &self,
-        agent_id: &str,
-        conversation_id: Option<&str>,
-    ) -> Option<String> {
-        let url = self.url(&format!("/agents/{agent_id}/runs"));
-        let resp = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .send()
-            .await
-            .ok()?;
-        let body: serde_json::Value = resp.json().await.ok()?;
-        body["runs"]
-            .as_array()?
-            .iter()
-            .filter(|r| {
-                conversation_id.is_none_or(|cid| r["conversation_id"].as_str() == Some(cid))
-            })
-            .filter(|r| {
-                let status = r["status"].as_str().unwrap_or("");
-                matches!(status, "running" | "cancelling")
-            })
-            .max_by(|a, b| {
-                let ka = a["created_at"].as_str().unwrap_or("");
-                let kb = b["created_at"].as_str().unwrap_or("");
-                ka.cmp(kb)
-            })
-            .and_then(|r| r["id"].as_str().map(String::from))
     }
 
     /// Resume an interrupted run by backfilling the durable event log.  The
@@ -422,7 +485,7 @@ impl HttpTransport {
         mut after_seq: i64,
         mut messages: Vec<CadeMessage>,
         on_event: &F,
-        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        through_seq: Option<i64>,
     ) -> Result<Vec<CadeMessage>>
     where
         F: Fn(&CadeMessage),
@@ -436,64 +499,48 @@ impl HttpTransport {
                 on_event(&CadeMessage::system_notice("Reconnecting to stream..."));
             }
 
-            // Honour a user cancellation request while offline: fire the
-            // durable cancel endpoint so the server stops work, then surface
-            // cancellation like the live path does.
-            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
-                let _ = self.cancel_run(run_id).await;
-                return Err(crate::Error::custom("__cancelled__"));
-            }
-
             if std::time::Instant::now() >= deadline {
                 return Err(crate::Error::custom(format!(
-                    "run {run_id} is still running but unreachable after {} min — reconnect and resume with the same prompt to pick it up",
+                    "Run {run_id} observation incomplete after {} min — resume this Run ID to check its outcome",
                     Self::RUN_STREAM_RETRY_WINDOW_SECS / 60,
                 )));
             }
 
-            match self.poll_run_events(run_id, after_seq).await {
-                Ok(payloads) => {
-                    let mut completed = false;
-                    let mut saw_any = false;
-                    for payload in payloads {
-                        if payload == "[DONE]" {
-                            // Replay snapshot exhausted — keep following.
-                            continue;
-                        }
-                        let Ok(message) = serde_json::from_str::<CadeMessage>(&payload) else {
-                            continue;
-                        };
-                        if let Some(seq) = message.seq_id() {
-                            if seq <= after_seq {
-                                // Defensive dedup: replayed/duplicated event.
-                                continue;
-                            }
-                            after_seq = seq;
-                            saw_any = true;
-                        }
-                        if message.msg_type() == "run_done" {
-                            completed = true;
-                        }
-                        on_event(&message);
-                        messages.push(message);
-                    }
-
-                    if completed {
-                        return Ok(messages);
-                    }
-
+            match self
+                .poll_run_events(run_id, &mut after_seq, &mut messages, on_event)
+                .await
+            {
+                Ok(true) => return Ok(messages),
+                Ok(false) => {
                     // If the log is quiescent, confirm terminal state via the
                     // run resource (covers the ordering race where the run
                     // status flips before the run_done event is persisted).
-                    if !saw_any
-                        && let Some(status) = self.run_status(run_id).await
+                    if let Some(status) = self.run_status(run_id).await
                         && matches!(status.as_str(), "done" | "error" | "cancelled")
                     {
+                        // Capture any final output published between the replay
+                        // snapshot and the terminal status read before synthesizing.
+                        if self
+                            .poll_run_events(run_id, &mut after_seq, &mut messages, on_event)
+                            .await
+                            .map_err(ReplayFailure::into_error)?
+                        {
+                            return Ok(messages);
+                        }
+                        if through_seq.is_some_and(|seq| seq > after_seq) {
+                            return Err(crate::Error::custom(format!(
+                                "Run {run_id} observation incomplete: missing journal events after {after_seq}"
+                            )));
+                        }
+                        let terminal = CadeMessage::run_terminal(run_id, &status).unwrap();
+                        on_event(&terminal);
+                        messages.push(terminal);
                         return Ok(messages);
                     }
                     attempt = 0;
                 }
-                Err(error) => {
+                Err(ReplayFailure::Invalid(error)) => return Err(error),
+                Err(ReplayFailure::Transport(error)) => {
                     // Transient network/HTTP failure — back off and retry.
                     // Keep the previous last_seq; the durable log has it all.
                     tracing::debug!(run_id = %run_id, %error, "run stream replay failed, retrying");
@@ -514,18 +561,14 @@ impl HttpTransport {
     async fn consume_run_stream<F>(
         &self,
         mut events: EventSource,
-        agent_id: &str,
-        conversation_id: Option<&str>,
         mut messages: Vec<CadeMessage>,
         on_event: F,
-        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
     where
         F: Fn(&CadeMessage),
     {
         let mut run_id = None;
         let mut last_seq_id: i64 = -1;
-        let mut cancellation_requested = false;
 
         let deliver = |message: &CadeMessage,
                        messages: &mut Vec<CadeMessage>,
@@ -543,23 +586,9 @@ impl HttpTransport {
         };
 
         loop {
-            if !cancellation_requested
-                && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
-                && let Some(id) = run_id.as_deref()
-            {
-                self.cancel_run(id).await?;
-                cancellation_requested = true;
-            }
-            // A blocked tool may produce no stream events. Poll the cancellation
-            // flag independently rather than waiting forever for the next frame.
-            let event =
-                match tokio::time::timeout(std::time::Duration::from_millis(100), events.next())
-                    .await
-                {
-                    Ok(Some(event)) => event,
-                    Ok(None) => break,
-                    Err(_) => continue,
-                };
+            let Some(event) = events.next().await else {
+                break;
+            };
             match event {
                 Ok(reqwest_eventsource::Event::Open) => {}
                 Ok(reqwest_eventsource::Event::Message(message)) => {
@@ -574,6 +603,20 @@ impl HttpTransport {
                     let message: CadeMessage = serde_json::from_str(data).map_err(|error| {
                         crate::Error::custom(format!("invalid run event: {error}"))
                     })?;
+                    if let (Some(expected), Some(actual)) = (run_id.as_deref(), message.run_id())
+                        && expected != actual
+                    {
+                        return Err(crate::Error::custom(
+                            "Run identity changed during observation",
+                        ));
+                    }
+                    if let Some(error) = deliver_observation_error(&message, &on_event) {
+                        // A storage outage can leave the resource "running"
+                        // indefinitely. Preserve its diagnostic/identity without
+                        // entering recovery or manufacturing run_done.
+                        events.close();
+                        return Err(error);
+                    }
                     if let Some(sequence) = message.seq_id() {
                         if sequence <= last_seq_id {
                             continue;
@@ -583,19 +626,31 @@ impl HttpTransport {
                             // Recover the exact ordered log instead of losing output.
                             if let Some(id) = run_id.as_deref().or_else(|| message.run_id()) {
                                 events.close();
+                                // The first delivered live frame may itself have
+                                // a gap. Preserve its identity without displaying
+                                // out-of-order output or advancing the cursor.
+                                let mut notice =
+                                    CadeMessage::system_notice("Recovering Run event gap...");
+                                notice.data["run_id"] = id.into();
+                                on_event(&notice);
                                 return self
                                     .backfill_follow_run(
                                         id,
                                         last_seq_id,
                                         messages,
                                         &on_event,
-                                        cancel,
+                                        Some(sequence),
                                     )
                                     .await;
                             }
                         }
                     }
                     deliver(&message, &mut messages, &mut run_id, &mut last_seq_id);
+                    if message.msg_type() == "run_done" {
+                        events.close();
+                        RunOutcome::from_messages(&messages)?;
+                        return Ok(messages);
+                    }
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
                 Err(reqwest_eventsource::Error::InvalidStatusCode(status, response)) => {
@@ -608,30 +663,20 @@ impl HttpTransport {
                     events.close();
                     tracing::warn!("SSE run transport error: {error:?}");
 
-                    // Transparent connection recovery: the
-                    // server persists every event durably and keeps running
-                    // independently of the client connection, so a dropped SSE
-                    // body loses nothing.  Resume from the last observed
-                    // sequence id by backfilling the durable log and following
-                    // the run to completion.  If the handshake died before any
-                    // event carried a run_id, the run may still have been
-                    // accepted — recover it from the agent's recent runs rather
-                    // than erroring out or re-POSTing a duplicate.
-                    let id = match run_id.clone() {
-                        Some(id) => Some(id),
-                        None => self.discover_latest_run_id(agent_id, conversation_id).await,
-                    };
-                    if !cancellation_requested && let Some(id) = id {
-                        return self
-                            .backfill_follow_run(&id, last_seq_id, messages, &on_event, cancel)
-                            .await;
-                    }
-
-                    return Err(crate::Error::custom(error.to_string()));
+                    break;
                 }
             }
         }
-        Ok(messages)
+        events.close();
+        match run_id {
+            Some(id) => {
+                self.backfill_follow_run(&id, last_seq_id, messages, &on_event, None)
+                    .await
+            }
+            None => Err(crate::Error::custom(
+                "Run observation incomplete: connection ended before Run identity; acceptance is unconfirmed. Check history before starting another Run.",
+            )),
+        }
     }
 
     /// Resume a run that is still active from a given seq_id.
@@ -1023,6 +1068,68 @@ impl HttpTransport {
     }
 }
 
+/// Fatal diagnostics are out-of-band observation failures, not acknowledged
+/// journal progress. They may arrive ahead of dropped frames. Even when adjacent,
+/// leave the diagnostic replayable so a later attachment cannot skip the only
+/// evidence of failed finalization and follow a stale "running" status forever.
+fn deliver_observation_error(
+    message: &CadeMessage,
+    on_event: &impl Fn(&CadeMessage),
+) -> Option<crate::Error> {
+    let error = run_observation_error(message.msg_type(), &message.data)?;
+    let mut diagnostic = message.clone();
+    if let Some(data) = diagnostic.data.as_object_mut() {
+        data.remove("seq_id");
+    }
+    on_event(&diagnostic);
+    Some(crate::Error::custom(error))
+}
+
+/// Ordered replay delivery is shared by normal recovery and the post-status
+/// tail snapshot. A missing journal entry is incomplete observation, not success.
+fn deliver_replay(
+    payloads: Vec<String>,
+    run_id: &str,
+    cursor: &mut i64,
+    messages: &mut Vec<CadeMessage>,
+    on_event: &impl Fn(&CadeMessage),
+) -> Result<bool> {
+    for payload in payloads {
+        if payload.trim() == "[DONE]" {
+            continue;
+        }
+        let message: CadeMessage = serde_json::from_str(&payload)
+            .map_err(|e| crate::Error::custom(format!("Invalid replay for Run {run_id}: {e}")))?;
+        if message.run_id().is_some_and(|id| id != run_id) {
+            return Err(crate::Error::custom(format!(
+                "Replay identity mismatch for Run {run_id}"
+            )));
+        }
+        if let Some(error) = deliver_observation_error(&message, on_event) {
+            return Err(error);
+        }
+        if let Some(seq) = message.seq_id() {
+            if seq <= *cursor {
+                continue;
+            }
+            if seq != *cursor + 1 {
+                return Err(crate::Error::custom(format!(
+                    "Run {run_id} observation incomplete: journal gap after {cursor}"
+                )));
+            }
+            *cursor = seq;
+        }
+        let terminal = message.msg_type() == "run_done";
+        on_event(&message);
+        messages.push(message);
+        if terminal {
+            RunOutcome::from_messages(messages)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 // -- Non-200 SSE handshake errors
 
 /// Read the response body of a failed SSE handshake and build a human-readable
@@ -1057,73 +1164,6 @@ fn format_status_error(status: reqwest::StatusCode, body: &str) -> String {
         detail.push('…');
     }
     format!("Server returned HTTP {status}: {detail}")
-}
-
-/// Pure SSE frame parser: extract the `data:` payload from raw SSE text.
-/// Returns the list of data payloads in order (including `"[DONE]"`).
-fn parse_sse_data(body: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut buf = String::new();
-    for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("data: ") {
-            buf.push_str(rest);
-        } else if line.starts_with(':') || line.starts_with("event:") || line.starts_with("retry:")
-        {
-            // SSE comments and non-data fields — ignore.
-        } else if line.trim().is_empty() && !buf.is_empty() {
-            out.push(std::mem::take(&mut buf));
-        }
-        // Any other line (e.g. continuation) is also ignored per spec.
-    }
-    // Flush trailing data (no final blank line).
-    if !buf.is_empty() {
-        out.push(buf);
-    }
-    out
-}
-
-#[cfg(test)]
-mod parse_sse_tests {
-    use super::*;
-
-    #[test]
-    fn single_event() {
-        assert_eq!(parse_sse_data("data: {\"seq\":1}\n\n"), vec!["{\"seq\":1}"]);
-    }
-
-    #[test]
-    fn done_marker() {
-        assert_eq!(
-            parse_sse_data("data: {\"seq\":1}\n\ndata: [DONE]\n\n"),
-            vec!["{\"seq\":1}", "[DONE]"]
-        );
-    }
-
-    #[test]
-    fn multiline_data() {
-        assert_eq!(
-            parse_sse_data("data: line1\ndata: line2\n\n"),
-            vec!["line1line2"]
-        );
-    }
-
-    #[test]
-    fn trailing_data_no_final_blank() {
-        assert_eq!(parse_sse_data("data: only\n"), vec!["only"]);
-    }
-
-    #[test]
-    fn comments_and_retry_ignored() {
-        assert_eq!(
-            parse_sse_data(": keepalive\nretry: 5000\ndata: x\n\n"),
-            vec!["x"]
-        );
-    }
-
-    #[test]
-    fn empty_body() {
-        assert!(parse_sse_data("").is_empty());
-    }
 }
 
 #[cfg(test)]

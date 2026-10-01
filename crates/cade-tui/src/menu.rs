@@ -1,7 +1,4 @@
-/// Full-screen `/menu` command browser for CADE.
-///
-/// Renders a navigable list of all slash commands grouped by category.
-/// Returns the selected command string (e.g. "/agents") or None if cancelled.
+//! Full-screen command browser. The host supplies the executable catalogue.
 use crate::colors::ThemeColorsExt;
 use crate::{Result, colors::ThemeColors, overlay};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -13,326 +10,11 @@ use ratatui::{
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 
-// -- Command catalogue
-
-struct CmdEntry {
-    cmd: &'static str,
-    desc: &'static str,
+pub struct CommandMenuEntry {
+    pub command: String,
+    pub description: String,
+    pub section: &'static str,
 }
-
-struct Section {
-    name: &'static str,
-    items: &'static [CmdEntry],
-}
-
-const SECTIONS: &[Section] = &[
-    Section {
-        name: "Session",
-        items: &[
-            CmdEntry {
-                cmd: "/info",
-                desc: "Agent, model, mode, cwd",
-            },
-            CmdEntry {
-                cmd: "/agent",
-                desc: "Show current agent name and ID",
-            },
-            CmdEntry {
-                cmd: "/agents",
-                desc: "List + switch agents  (r rename, d delete)",
-            },
-            CmdEntry {
-                cmd: "/new-agent",
-                desc: "Create a brand-new agent",
-            },
-            CmdEntry {
-                cmd: "/rename",
-                desc: "Rename current agent",
-            },
-            CmdEntry {
-                cmd: "/delete",
-                desc: "/delete <name>  — delete an agent by name/id",
-            },
-            CmdEntry {
-                cmd: "/pin",
-                desc: "Pin current agent to settings",
-            },
-            CmdEntry {
-                cmd: "/new",
-                desc: "Start a fresh conversation on the current agent",
-            },
-            CmdEntry {
-                cmd: "/resume",
-                desc: "Browse past conversations and switch to one",
-            },
-            CmdEntry {
-                cmd: "/checkpoint",
-                desc: "/checkpoint [label]  — save a checkpoint",
-            },
-            CmdEntry {
-                cmd: "/tree",
-                desc: "Browse and restore checkpoints  (fullscreen picker)",
-            },
-            CmdEntry {
-                cmd: "/fork",
-                desc: "/fork [label]  — create a new conversation from a checkpoint",
-            },
-            CmdEntry {
-                cmd: "/artifacts",
-                desc: "List stored artifacts (logs, diffs, reports)",
-            },
-        ],
-    },
-    Section {
-        name: "Model & Mode",
-        items: &[
-            CmdEntry {
-                cmd: "/theme",
-                desc: "Change colorscheme  (/theme [name])",
-            },
-            CmdEntry {
-                cmd: "/theme list",
-                desc: "List all available themes (built-in + custom)",
-            },
-            CmdEntry {
-                cmd: "/model",
-                desc: "Interactive model picker  (or /model provider/name)",
-            },
-            CmdEntry {
-                cmd: "/compaction-model",
-                desc: "Set the cheaper model to use for history summarization",
-            },
-            CmdEntry {
-                cmd: "/reasoning",
-                desc: "Set reasoning effort (none, low, medium, high, xhigh)",
-            },
-            CmdEntry {
-                cmd: "/toolset",
-                desc: "/toolset [default|codex|gemini]",
-            },
-            CmdEntry {
-                cmd: "/mode",
-                desc: "Show or set permission mode",
-            },
-            CmdEntry {
-                cmd: "/plan",
-                desc: "Switch to read-only plan mode (write/exec tools blocked)",
-            },
-            CmdEntry {
-                cmd: "/todo",
-                desc: "Display the agent's scratchpad (.cade-todo.md)",
-            },
-            CmdEntry {
-                cmd: "/todos",
-                desc: "Toggle live plan panel (set via set_plan tool)",
-            },
-            CmdEntry {
-                cmd: "/default",
-                desc: "Return to default permission mode",
-            },
-            CmdEntry {
-                cmd: "/yolo",
-                desc: "Bypass permissions (auto-approve all tools)",
-            },
-            CmdEntry {
-                cmd: "/approve-always",
-                desc: "/approve-always <pattern>  — add allow rule",
-            },
-            CmdEntry {
-                cmd: "/deny-always",
-                desc: "/deny-always <pattern>   — add deny rule",
-            },
-            CmdEntry {
-                cmd: "/permissions",
-                desc: "Show current permission mode + rules",
-            },
-        ],
-    },
-    Section {
-        name: "Memory",
-        items: &[
-            CmdEntry {
-                cmd: "/memory",
-                desc: "List all memory blocks",
-            },
-            CmdEntry {
-                cmd: "/memory view",
-                desc: "/memory view <label>  — show full block",
-            },
-            CmdEntry {
-                cmd: "/memory set",
-                desc: "/memory set <label> <value>",
-            },
-            CmdEntry {
-                cmd: "/memory edit",
-                desc: "/memory edit <label>  — interactive edit",
-            },
-            CmdEntry {
-                cmd: "/memory delete",
-                desc: "/memory delete <label>",
-            },
-            CmdEntry {
-                cmd: "/memory history",
-                desc: "/memory history <label>  — last 5 revisions",
-            },
-            CmdEntry {
-                cmd: "/memory export",
-                desc: "/memory export [path]  — dump memory as .md files for cade-rag-mcp",
-            },
-            CmdEntry {
-                cmd: "/init",
-                desc: "Analyse project + populate memory",
-            },
-            CmdEntry {
-                cmd: "/remember",
-                desc: "/remember [text]  — ask agent to update memory",
-            },
-        ],
-    },
-    Section {
-        name: "Tools & Providers",
-        items: &[
-            CmdEntry {
-                cmd: "/backend",
-                desc: "/backend [local|docker|ssh|readonly|virtual]  — show or switch backend",
-            },
-            CmdEntry {
-                cmd: "/link",
-                desc: "Register + attach all tools to current agent",
-            },
-            CmdEntry {
-                cmd: "/unlink",
-                desc: "Detach all tools from current agent",
-            },
-            CmdEntry {
-                cmd: "/mcp",
-                desc: "Show MCP server status + tools",
-            },
-            CmdEntry {
-                cmd: "/connect",
-                desc: "Connect a new AI provider interactively",
-            },
-            CmdEntry {
-                cmd: "/disconnect",
-                desc: "/disconnect <name>  — remove a provider",
-            },
-            CmdEntry {
-                cmd: "/providers",
-                desc: "List configured providers",
-            },
-        ],
-    },
-    Section {
-        name: "Web & Grounding",
-        items: &[
-            CmdEntry {
-                cmd: "web_search",
-                desc: "Agent tool: search the web (set BRAVE_SEARCH_API_KEY)",
-            },
-            CmdEntry {
-                cmd: "fetch_doc",
-                desc: "Agent tool: fetch and read a URL as clean text",
-            },
-            CmdEntry {
-                cmd: "index_repository",
-                desc: "Agent tool: index the repository for symbol search",
-            },
-        ],
-    },
-    Section {
-        name: "Skills",
-        items: &[
-            CmdEntry {
-                cmd: "/skills",
-                desc: "Open interactive skills manager",
-            },
-            CmdEntry {
-                cmd: "/skills new",
-                desc: "/skills new <name>  — scaffold a new skill",
-            },
-            CmdEntry {
-                cmd: "/skills reload",
-                desc: "Reload skills from disk",
-            },
-            CmdEntry {
-                cmd: "/teams",
-                desc: "List available teams and their members",
-            },
-        ],
-    },
-    Section {
-        name: "Diagnostics",
-        items: &[
-            CmdEntry {
-                cmd: "/search",
-                desc: "/search <query>  — search message history",
-            },
-            CmdEntry {
-                cmd: "/compact",
-                desc: "Manually consolidate dropped turns (alias: /consolidate)",
-            },
-            CmdEntry {
-                cmd: "/context",
-                desc: "Show context window usage bar chart",
-            },
-            CmdEntry {
-                cmd: "/usage",
-                desc: "Token usage this session",
-            },
-            CmdEntry {
-                cmd: "/cost",
-                desc: "Estimate API costs for this session",
-            },
-            CmdEntry {
-                cmd: "/stats",
-                desc: "Full session stats — tokens, tool calls, timing, per-model breakdown",
-            },
-            CmdEntry {
-                cmd: "/stats model",
-                desc: "Per-model detail: requests, input, cache, output per model",
-            },
-            CmdEntry {
-                cmd: "/stream",
-                desc: "Toggle streaming mode",
-            },
-            CmdEntry {
-                cmd: "/hooks",
-                desc: "Show configured hooks",
-            },
-            CmdEntry {
-                cmd: "/doctor",
-                desc: "Check system health, multiplexer & key passthrough",
-            },
-            CmdEntry {
-                cmd: "/feedback",
-                desc: "Report issues / give feedback",
-            },
-        ],
-    },
-    Section {
-        name: "Misc",
-        items: &[
-            CmdEntry {
-                cmd: "/export",
-                desc: "/export [file.json]  — export agent to JSON",
-            },
-            CmdEntry {
-                cmd: "/clear",
-                desc: "Clear screen + context window",
-            },
-            CmdEntry {
-                cmd: "/logout",
-                desc: "Clear stored API key and exit",
-            },
-            CmdEntry {
-                cmd: "/help",
-                desc: "Show this menu",
-            },
-        ],
-    },
-];
-
-// -- Flat item list
 
 #[derive(Clone)]
 enum MenuItem {
@@ -340,108 +22,36 @@ enum MenuItem {
     Cmd { cmd: String, desc: String },
 }
 
-/// Commands that require specific capabilities.
-fn cmd_required_capability(cmd: &str) -> Option<cade_core::capabilities::Capability> {
-    use cade_core::capabilities::Capability;
-    match cmd {
-        "/agents" | "/teams" | "/reflect" | "/artifacts" => Some(Capability::Agentic),
-        "/mcp" => Some(Capability::Mcp),
-        "web_search" | "fetch_doc" => Some(Capability::Web),
-        _ => None,
+fn filtered_items(entries: &[CommandMenuEntry], query: &str) -> Vec<MenuItem> {
+    let query = query.to_lowercase();
+    let mut items = Vec::new();
+    let mut section = None;
+    for entry in entries {
+        if !entry.command.to_lowercase().contains(&query)
+            && !entry.description.to_lowercase().contains(&query)
+        {
+            continue;
+        }
+        if section != Some(entry.section) {
+            section = Some(entry.section);
+            items.push(MenuItem::Header(entry.section.into()));
+        }
+        items.push(MenuItem::Cmd {
+            cmd: entry.command.clone(),
+            desc: entry.description.clone(),
+        });
     }
+    items
 }
 
-fn build_flat_items_filtered(
-    caps: Option<&cade_core::capabilities::CapabilitySet>,
-) -> Vec<MenuItem> {
-    let mut out = Vec::new();
-    for section in SECTIONS {
-        let mut section_items = Vec::new();
-        for entry in section.items {
-            let visible = match caps {
-                None => true,
-                Some(cs) => match cmd_required_capability(entry.cmd) {
-                    None => true,
-                    Some(cap) => cs.is_enabled(cap),
-                },
-            };
-            if visible {
-                section_items.push(MenuItem::Cmd {
-                    cmd: entry.cmd.to_string(),
-                    desc: entry.desc.to_string(),
-                });
-            }
-        }
-        if !section_items.is_empty() {
-            out.push(MenuItem::Header(section.name.to_string()));
-            out.extend(section_items);
-        }
-    }
-    out
-}
-
-// -- Public entry point
-
-/// Present the full-screen command browser. Returns the selected command
-/// string (e.g. `"/agents"`) or `None` if the user cancels.
+/// Present the host's command catalogue with type-to-filter. Capability filtering
+/// and command identity belong to the host, not a second TUI command registry.
 pub fn show_command_menu(
     terminal: &mut DefaultTerminal,
     colors: &ThemeColors,
+    entries: &[CommandMenuEntry],
 ) -> Result<Option<String>> {
-    show_command_menu_with_caps(terminal, colors, None)
-}
-
-/// Present the full-screen command browser with type-to-filter.
-///
-/// - Type any text to filter commands by name or description in real time.
-/// - ↑↓ arrows  always navigate; j/k navigate only when filter is empty.
-/// - Backspace   removes the last filter character.
-/// - Enter       runs the selected command.
-/// - Esc         closes without running anything.
-pub fn show_command_menu_with_caps(
-    terminal: &mut DefaultTerminal,
-    colors: &ThemeColors,
-    caps: Option<&cade_core::capabilities::CapabilitySet>,
-) -> Result<Option<String>> {
-    let all_items = build_flat_items_filtered(caps);
     let mut query = String::new();
-
-    // Build filtered list from a query string (section headers only shown if ≥1 child matches).
-    let apply_filter = |q: &str, items: &[MenuItem]| -> Vec<MenuItem> {
-        let q_low = q.to_lowercase();
-        if q_low.is_empty() {
-            return items.to_vec();
-        }
-        let mut out: Vec<MenuItem> = Vec::new();
-        let mut i = 0;
-        while i < items.len() {
-            if matches!(&items[i], MenuItem::Header(_)) {
-                let mut matching: Vec<MenuItem> = Vec::new();
-                let mut j = i + 1;
-                while j < items.len() {
-                    if matches!(items[j], MenuItem::Header(_)) {
-                        break;
-                    }
-                    if let MenuItem::Cmd { cmd, desc } = &items[j]
-                        && (cmd.to_lowercase().contains(&q_low)
-                            || desc.to_lowercase().contains(&q_low))
-                    {
-                        matching.push(items[j].clone());
-                    }
-                    j += 1;
-                }
-                if !matching.is_empty() {
-                    out.push(items[i].clone());
-                    out.extend(matching);
-                }
-                i = j;
-            } else {
-                i += 1;
-            }
-        }
-        out
-    };
-
     let first_cmd = |items: &[MenuItem]| -> usize {
         items
             .iter()
@@ -476,8 +86,7 @@ pub fn show_command_menu_with_caps(
         }
         pos
     };
-
-    let mut items = apply_filter(&query, &all_items);
+    let mut items = filtered_items(entries, &query);
     let mut sel = first_cmd(&items);
 
     loop {
@@ -500,7 +109,7 @@ pub fn show_command_menu_with_caps(
                     let is_sel = i == sel;
                     ListItem::new(Line::from(vec![
                         Span::styled(
-                            if is_sel { "  ▶ " } else { "    " }.to_string(),
+                            if is_sel { "  ▶ " } else { "    " },
                             Style::default().fg(if is_sel {
                                 colors.c_primary()
                             } else {
@@ -532,9 +141,7 @@ pub fn show_command_menu_with_caps(
         } else {
             None
         };
-
         let mut ls = ListState::default().with_selected(Some(sel));
-        let query_display = query.clone();
         terminal.draw(|f| {
             let area = f.area();
             let inner = overlay::render_overlay_shell(
@@ -550,17 +157,15 @@ pub fn show_command_menu_with_caps(
                 Constraint::Length(1),
             ])
             .areas(inner);
-
-            // Filter bar — shows placeholder when empty, query text when active
             let filter_line = Line::from(vec![
                 Span::styled(" / ", colors.text_muted()),
                 Span::styled(
-                    if query_display.is_empty() {
-                        "type to filter…".to_string()
+                    if query.is_empty() {
+                        "type to filter…".into()
                     } else {
-                        query_display.clone()
+                        query.clone()
                     },
-                    Style::default().fg(if query_display.is_empty() {
+                    Style::default().fg(if query.is_empty() {
                         colors.c_text_muted()
                     } else {
                         colors.c_text_primary()
@@ -568,12 +173,10 @@ pub fn show_command_menu_with_caps(
                 ),
             ]);
             f.render_widget(Paragraph::new(filter_line), filter_area);
-
             let list = List::new(list_items)
                 .block(Block::default().style(Style::default().bg(colors.c_bg_surface2())))
                 .highlight_style(overlay::overlay_selected_style(colors));
             f.render_stateful_widget(list, list_area, &mut ls);
-
             let detail_line = if let Some((cmd, desc)) = &detail {
                 Line::from(vec![
                     Span::raw(" "),
@@ -607,19 +210,10 @@ pub fn show_command_menu_with_caps(
                         return Ok(Some(cmd.clone()));
                     }
                 }
-                // j/k navigate only when filter empty (typing a filter uses these chars)
-                KeyCode::Char('k') if query.is_empty() => {
-                    sel = prev_sel(&items, sel);
-                }
-                KeyCode::Char('j') if query.is_empty() => {
-                    sel = next_sel(&items, sel);
-                }
-                KeyCode::Up => {
-                    sel = prev_sel(&items, sel);
-                }
-                KeyCode::Down => {
-                    sel = next_sel(&items, sel);
-                }
+                KeyCode::Char('k') if query.is_empty() => sel = prev_sel(&items, sel),
+                KeyCode::Char('j') if query.is_empty() => sel = next_sel(&items, sel),
+                KeyCode::Up => sel = prev_sel(&items, sel),
+                KeyCode::Down => sel = next_sel(&items, sel),
                 KeyCode::PageUp => {
                     for _ in 0..8 {
                         sel = prev_sel(&items, sel);
@@ -632,7 +226,7 @@ pub fn show_command_menu_with_caps(
                 }
                 KeyCode::Backspace => {
                     query.pop();
-                    items = apply_filter(&query, &all_items);
+                    items = filtered_items(entries, &query);
                     sel = first_cmd(&items);
                 }
                 KeyCode::Char(c)
@@ -640,11 +234,37 @@ pub fn show_command_menu_with_caps(
                         && !k.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     query.push(c);
-                    items = apply_filter(&query, &all_items);
+                    items = filtered_items(entries, &query);
                     sel = first_cmd(&items);
                 }
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_filters_host_commands_and_alias_descriptions_without_empty_sections() {
+        let entries = [
+            CommandMenuEntry {
+                command: "/info".into(),
+                description: "Show agent".into(),
+                section: "Session",
+            },
+            CommandMenuEntry {
+                command: "/tree".into(),
+                description: "Checkpoints (aliases: /timeline)".into(),
+                section: "History",
+            },
+        ];
+        let items = filtered_items(&entries, "TIMELINE");
+        assert_eq!(items.len(), 2);
+        assert!(matches!(&items[0], MenuItem::Header(section) if section == "History"));
+        assert!(matches!(&items[1], MenuItem::Cmd { cmd, .. } if cmd == "/tree"));
+        assert!(filtered_items(&entries, "missing").is_empty());
     }
 }

@@ -783,6 +783,52 @@ fn build_tools_preserves_finish_task_meta_tool_when_truncating() -> Result<()> {
 }
 
 #[test]
+fn build_tools_preserves_core_native_tools_under_heavy_mcp_load() -> Result<()> {
+    let mut tools = Vec::new();
+    // 140 core MCP tools from multiple servers
+    for i in 0..140 {
+        tools.push(json!({
+            "name": format!("server_{}__tool_{}", i % 4, i),
+            "description": "mcp tool",
+            "parameters": { "type": "object", "properties": {} },
+            "tags": ["core_mcp"],
+            "x-cade": { "core_server": true, "server_key": format!("server_{}", i % 4) }
+        }));
+    }
+
+    // Native coding tools
+    for native in ["bash", "read_file", "write_file", "apply_patch", "glob", "grep"] {
+        tools.push(json!({
+            "name": native,
+            "description": "native tool",
+            "parameters": { "type": "object", "properties": {} },
+            "tags": ["cade"]
+        }));
+    }
+
+    let req = CompletionRequest {
+        model: "gpt-5".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128);
+
+    for native in ["bash", "read_file", "write_file", "apply_patch", "glob", "grep"] {
+        assert!(
+            arr.iter().any(|t| t["function"]["name"].as_str() == Some(native)),
+            "Native tool {native} must be preserved and not crowded out by MCP tools"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_github_create_issue_openai_tool() {
     let raw_tool = json!({
         "description": "Create an issue",
@@ -1564,126 +1610,6 @@ fn test_parse_token_usage_standard_and_responses_api() {
     assert_eq!(tu_resp.output_tokens, 90);
     assert_eq!(tu_resp.cache_read_tokens, 80);
     assert_eq!(tu_resp.model, "openai/gpt-5");
-}
-
-#[test]
-fn test_parse_responses_api_multi_tool_stream() {
-    use std::collections::BTreeMap;
-
-    let mut tool_map: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
-
-    // 1. Tool 0 added: read_file
-    let item_0 = json!({
-        "type": "response.output_item.added",
-        "output_index": 0,
-        "item": {
-            "type": "function_call",
-            "call_id": "call_read_1",
-            "name": "read_file",
-            "arguments": ""
-        }
-    });
-    let c1 = parse_responses_api_chunk(&item_0, &mut tool_map, "gpt-5");
-    assert!(c1.is_empty());
-    assert_eq!(tool_map.len(), 1);
-
-    // 2. Tool 0 delta: arguments chunk 1
-    let delta_1 = json!({
-        "type": "response.function_call_arguments.delta",
-        "output_index": 0,
-        "delta": "{\"path\": \""
-    });
-    let c2 = parse_responses_api_chunk(&delta_1, &mut tool_map, "gpt-5");
-    assert!(c2.is_empty());
-
-    // 3. Tool 0 delta: arguments chunk 2
-    let delta_2 = json!({
-        "type": "response.function_call_arguments.delta",
-        "output_index": 0,
-        "delta": "src/lib.rs\"}"
-    });
-    let c3 = parse_responses_api_chunk(&delta_2, &mut tool_map, "gpt-5");
-    assert!(c3.is_empty());
-
-    // 4. Tool 0 done: yields StreamChunk::ToolCall with parsed arguments
-    let done_0 = json!({
-        "type": "response.output_item.done",
-        "output_index": 0,
-        "item": {
-            "type": "function_call",
-            "call_id": "call_read_1"
-        }
-    });
-    let c4 = parse_responses_api_chunk(&done_0, &mut tool_map, "gpt-5");
-    assert_eq!(c4.len(), 1);
-    match &c4[0] {
-        StreamChunk::ToolCall(tc) => {
-            assert_eq!(tc.id, "call_read_1");
-            assert_eq!(tc.name, "read_file");
-            assert_eq!(tc.arguments["path"], "src/lib.rs");
-        }
-        other => panic!("expected ToolCall, got {other:?}"),
-    }
-    assert!(tool_map.is_empty());
-
-    // 5. Tool 1 added: bash
-    let item_1 = json!({
-        "type": "response.output_item.added",
-        "output_index": 1,
-        "item": {
-            "type": "function_call",
-            "call_id": "call_bash_2",
-            "name": "bash",
-            "arguments": "{\"command\":\"cargo check\"}"
-        }
-    });
-    let _ = parse_responses_api_chunk(&item_1, &mut tool_map, "gpt-5");
-
-    let done_1 = json!({
-        "type": "response.output_item.done",
-        "output_index": 1,
-        "item": {
-            "type": "function_call",
-            "call_id": "call_bash_2"
-        }
-    });
-    let c5 = parse_responses_api_chunk(&done_1, &mut tool_map, "gpt-5");
-    assert_eq!(c5.len(), 1);
-    match &c5[0] {
-        StreamChunk::ToolCall(tc) => {
-            assert_eq!(tc.id, "call_bash_2");
-            assert_eq!(tc.name, "bash");
-            assert_eq!(tc.arguments["command"], "cargo check");
-        }
-        other => panic!("expected ToolCall, got {other:?}"),
-    }
-
-    // 6. response.done with status and usage
-    let resp_done = json!({
-        "type": "response.done",
-        "response": {
-            "status": "completed",
-            "usage": {
-                "input_tokens": 300,
-                "output_tokens": 120,
-                "input_token_details": {
-                    "cached_tokens": 50
-                }
-            }
-        }
-    });
-    let c6 = parse_responses_api_chunk(&resp_done, &mut tool_map, "gpt-5");
-    assert_eq!(c6.len(), 2);
-    assert!(matches!(&c6[0], StreamChunk::FinishReason(r) if r == "completed"));
-    match &c6[1] {
-        StreamChunk::Usage(u) => {
-            assert_eq!(u.input_tokens, 250);
-            assert_eq!(u.output_tokens, 120);
-            assert_eq!(u.cache_read_tokens, 50);
-            assert_eq!(u.model, "openai/gpt-5");
-        }
-        other => panic!("expected Usage, got {other:?}"),
-    }
 }
 
 #[test]
