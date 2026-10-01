@@ -1,4 +1,5 @@
 pub mod capability_gate;
+mod command_lifecycle;
 pub mod commands;
 pub mod commands_agents;
 pub mod commands_artifacts;
@@ -195,7 +196,8 @@ pub struct Repl {
     pub(crate) mcp_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Receives a signal whenever a Lua plugin file changes on disk.
     pub(crate) plugin_reload_rx: tokio::sync::mpsc::Receiver<()>,
-    /// Whether SSE token streaming is enabled (toggled by /stream).
+    /// Whether text is displayed live (toggled by /stream). SSE control events
+    /// remain live even when presentation buffers assistant/reasoning text.
     pub(crate) streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Receives the full MCP manager once the background boot completes.
     pub(crate) mcp_rx:
@@ -926,6 +928,18 @@ impl Repl {
                 app.refresh_lua_ui();
             }
 
+            // Admission belongs to every iteration, not only the ordinary turn
+            // completion path: slash commands and other early continues must
+            // not strand accepted follow-ups. Preserve pending/menu priority.
+            pending_input = command_lifecycle::next_input(
+                &mut pending_input,
+                &self.queued_followup,
+                &self.queued_steering,
+            );
+            let queued_count = self.queued_followup.lock().len()
+                + usize::from(self.queued_steering.lock().is_some());
+            self.app.lock().queued_count = queued_count;
+
             // Drain Lua command queue into pending_input if empty
             if pending_input.is_none() {
                 let app = self.app.lock();
@@ -1218,26 +1232,6 @@ impl Repl {
             self.agent_turn_with_images(&mut stdout, &final_input, submit_images)
                 .await?;
             let _ = self.app.lock().commit_streaming();
-
-            // I-01: drain queued messages into pending_input.
-            // Follow-up runs after the turn completes naturally.
-            // Steering runs after a cancelled turn.
-            // Follow-up takes priority — if both are set (edge case), run
-            // follow-up first; steering is re-queued on the next iteration.
-            let queued_msg = {
-                let mut q = self.queued_followup.lock();
-                q.pop_front().map(|msg| (msg, q.len()))
-            };
-
-            if let Some((follow, count)) = queued_msg {
-                self.app.lock().queued_count = count;
-                pending_input = Some(follow);
-            } else if let Some(steer) = self.queued_steering.lock().take() {
-                self.app.lock().queued_count = self.queued_followup.lock().len();
-                pending_input = Some(steer);
-            } else {
-                self.app.lock().queued_count = 0;
-            }
         }
 
         // SessionEnd hook (non-blocking)

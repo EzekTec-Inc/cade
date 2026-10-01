@@ -8,9 +8,8 @@
 use rmcp::transport::TokioChildProcess;
 use rmcp::{RoleClient, ServiceExt, service::RunningService};
 use std::collections::HashSet;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tokio::process::Command;
-use tokio::sync::Mutex;
 
 use crate::{Error, Result};
 use cade_core::settings::McpServerConfig;
@@ -43,7 +42,9 @@ impl SingletonProcessGuard {
         }
 
         let sig = format!("{}:{}", key, config.command);
-        let mut set = get_active_singleton_processes().lock().await;
+        let mut set = get_active_singleton_processes()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if set.contains(&sig) {
             return Err(Error::custom(format!(
                 "Singleton process guard: MCP server '{key}' ({}) is already executing as an active singleton process. Refusing duplicate spawn.",
@@ -57,8 +58,14 @@ impl SingletonProcessGuard {
     }
 
     pub async fn release(&mut self) {
+        self.release_now();
+    }
+
+    fn release_now(&mut self) {
         if let Some(sig) = self.signature.take() {
-            let mut set = get_active_singleton_processes().lock().await;
+            let mut set = get_active_singleton_processes()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             set.remove(&sig);
         }
     }
@@ -66,14 +73,7 @@ impl SingletonProcessGuard {
 
 impl Drop for SingletonProcessGuard {
     fn drop(&mut self) {
-        if let Some(sig) = self.signature.take()
-            && let Ok(handle) = tokio::runtime::Handle::try_current()
-        {
-            handle.spawn(async move {
-                let mut set = get_active_singleton_processes().lock().await;
-                set.remove(&sig);
-            });
-        }
+        self.release_now();
     }
 }
 
@@ -124,7 +124,7 @@ impl StdioTransportAdapter {
         if let Ok(mut log_file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/mcp_server_err.log")
+            .open(std::env::temp_dir().join("mcp_server_err.log"))
         {
             use std::io::Write;
             let now = chrono::Utc::now().to_rfc3339();
@@ -140,7 +140,7 @@ impl StdioTransportAdapter {
         let stderr_io = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/mcp_server_err.log")
+            .open(std::env::temp_dir().join("mcp_server_err.log"))
             .map(std::process::Stdio::from)
             .unwrap_or_else(|_| std::process::Stdio::null());
 

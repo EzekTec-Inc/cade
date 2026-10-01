@@ -256,19 +256,10 @@ impl AgentSession {
 // endregion: --- AgentSession
 
 fn check_run_errors(messages: &[cade_agent::agent::client::CadeMessage]) -> Result<()> {
-    for message in messages {
-        if message.msg_type() == "error" {
-            return Err(crate::Error::custom(
-                message.data["error"].as_str().unwrap_or("Run failed"),
-            ));
-        }
-        if message.msg_type() == "run_done" {
-            match message.data["status"].as_str() {
-                Some("cancelled") => return Err(crate::Error::custom("Run cancelled")),
-                Some("error") => return Err(crate::Error::custom("Run failed")),
-                _ => {}
-            }
-        }
+    use cade_agent::agent::client::RunOutcome;
+    match RunOutcome::from_messages(messages).map_err(|e| crate::Error::custom(e.to_string()))? {
+        RunOutcome::Completed => Ok(()),
+        RunOutcome::Cancelled => Err(crate::Error::custom("Run cancelled")),
+        RunOutcome::Failed(error) => Err(crate::Error::custom(error)),
     }
-    Ok(())
 }

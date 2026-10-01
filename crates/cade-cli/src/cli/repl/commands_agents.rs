@@ -5,6 +5,52 @@ use crate::Result;
 use std::sync::Arc;
 
 impl Repl {
+    fn command_session(&self) -> super::command_lifecycle::CommandSession<'_> {
+        super::command_lifecycle::CommandSession {
+            agent_id: &self.agent_id,
+            agent_name: &self.agent_name,
+            conversation_id: &self.conversation_id,
+            store: &self.session,
+        }
+    }
+
+    pub(crate) fn select_conversation(&self, conversation: Option<String>) -> Result<()> {
+        self.command_session().select_conversation(conversation)
+    }
+
+    pub(crate) fn select_agent(
+        &mut self,
+        agent: &cade_agent::agent::client::AgentState,
+    ) -> Result<()> {
+        let changed = self.agent_id() != agent.id;
+        self.command_session().select_agent(agent)?;
+        if changed {
+            self.first_turn
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.last_assistant_text.lock().clear();
+            self.last_reasoning.lock().clear();
+            self.write_tool_calls
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+            self.writes_at_last_active_goal_update
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+            if let Some(model) = agent.model.as_ref().filter(|model| !model.is_empty()) {
+                *self.current_model.lock() = model.clone();
+            }
+            let mut app = self.app.lock();
+            let _ = app.clear_content();
+            app.update_agent_name(agent.name.clone());
+            app.update_model(self.model());
+        }
+        // Working Session and its grants deliberately survive selection.
+        let saved = self.settings.lock().set_last_agent(&agent.id);
+        if let Err(error) = saved {
+            self.tui_err(format!(
+                "Agent selected, but could not save last-agent preference: {error}"
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn cmd_agents(&mut self) -> Result<bool> {
         if self.require_capability(cade_core::capabilities::Capability::Agentic, "/agents") {
             return Ok(false);
@@ -21,15 +67,9 @@ impl Repl {
                 {
                     match result {
                         AgentPickerResult::Switch(a) => {
-                            *self.agent_id.lock() = a.id.clone();
-                            *self.agent_name.lock() = a.name.clone();
-                            {
-                                let mut s = self.settings.lock();
-                                let _ = s.set_last_agent(&a.id);
-                            }
-                            {
-                                let mut s = self.session.lock();
-                                let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
+                            if let Err(error) = self.select_agent(&a) {
+                                self.tui_err(format!("Could not switch agent: {error}"));
+                                return Ok(false);
                             }
                             self.tui_ok(format!("  ✓ Switched to: {} ({})", a.name, a.id));
                         }
@@ -55,6 +95,9 @@ impl Repl {
                                         self.tui_ok(format!("  ✓ Deleted: {}", a.name));
                                         if a.id == current_id {
                                             deleted_active = true;
+                                            if let Err(error) = self.select_conversation(None) {
+                                                self.tui_err(format!("Could not clear deleted agent conversation: {error}"));
+                                            }
                                         }
                                     }
                                     Err(e) => self.tui_err(e.to_string()),
@@ -64,26 +107,18 @@ impl Repl {
                                 match self.client.list_agents().await {
                                     Ok(remaining) if !remaining.is_empty() => {
                                         let first = &remaining[0];
-                                        *self.agent_id.lock() = first.id.clone();
-                                        *self.agent_name.lock() = first.name.clone();
-                                        {
-                                            let mut s = self.settings.lock();
-                                            let _ = s.set_last_agent(&first.id);
-                                        }
-                                        {
-                                            let mut s = self.session.lock();
-                                            let _ = s.set_agent(
-                                                first.id.clone(),
-                                                Some(first.name.clone()),
-                                            );
+                                        if let Err(error) = self.select_agent(first) {
+                                            self.tui_err(format!("Could not select remaining agent: {error}"));
+                                            return Ok(false);
                                         }
                                         self.tui_dim(format!("  → Now using: {}", first.name));
                                     }
-                                    _ => {
+                                    Ok(_) => {
                                         self.tui_dim(
-                                            "  No remaining agents — run /new to create one",
+                                            "  No remaining agents — run /new-agent to create one",
                                         );
                                     }
+                                    Err(error) => self.tui_err(format!("Could not load remaining agents: {error}. Use /agents or /new-agent.")),
                                 }
                             }
                         }

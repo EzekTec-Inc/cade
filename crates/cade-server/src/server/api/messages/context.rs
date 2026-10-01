@@ -586,6 +586,7 @@ async fn build_context_attempt(
     let plugin_cwd = crate::server::api::run::runtime::execution_workspace();
     let plugin_catalog =
         crate::server::api::run::plugin_execution::ready_catalog(&plugin_cwd, &state.mcp).await;
+    let mcp_catalog = state.mcp.all_tool_schemas().await;
     let state_hash = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -595,6 +596,9 @@ async fn build_context_attempt(
         marker_before.hash(&mut h);
         agent.model.hash(&mut h);
         plugin_catalog.digest.hash(&mut h);
+        serde_json::to_string(&mcp_catalog)
+            .unwrap_or_default()
+            .hash(&mut h);
         if let Some(options) = crate::server::api::run::runtime::current_execution_options() {
             options.max_context_budget.hash(&mut h);
             options.max_tokens_per_turn.hash(&mut h);
@@ -647,18 +651,87 @@ async fn build_context_attempt(
     let db_pool = state.db.clone();
     let agent_id_clone = agent_id.clone();
     let conv_id_clone = conversation_id.clone();
-    let (all_rows, marker_after) = tokio::task::spawn_blocking(move || {
-        let rows = sqlite::get_context_window(
+    let (all_rows, missing_user_anchor, marker_after) = tokio::task::spawn_blocking(move || {
+        let mut rows = sqlite::get_context_window(
             &db_pool,
             &agent_id_clone,
             conv_id_clone.as_deref(),
             context_char_budget,
         )
         .map_err(|e| format!("load context history: {e}"))?;
+        // A row budget may stop inside the newest parallel tool exchange. Load
+        // its assistant and all result rows atomically before inline selection.
+        // Every expansion uses the visible-history query (never resurrecting
+        // covered source rows), and scans at most the declared call count + 1.
+        if rows.last().is_some_and(|row| row.role == "tool")
+            && let Some(assistant) =
+                sqlite::last_assistant_message(&db_pool, &agent_id_clone, conv_id_clone.as_deref())
+                    .map_err(|e| format!("load current tool exchange: {e}"))?
+            && let Some(calls) = assistant.content["tool_calls"]
+                .as_array()
+                .filter(|calls| !calls.is_empty())
+            && !rows.iter().any(|row| row.id == assistant.id)
+        {
+            for _ in 0..=calls.len() {
+                let expanded_budget = rows
+                    .iter()
+                    .fold(0usize, |total, row| total.saturating_add(row.char_count));
+                let mut expanded = sqlite::get_context_window(
+                    &db_pool,
+                    &agent_id_clone,
+                    conv_id_clone.as_deref(),
+                    expanded_budget,
+                )
+                .map_err(|e| format!("load current tool exchange: {e}"))?;
+                if let Some(index) = expanded.iter().position(|row| row.id == assistant.id) {
+                    rows = expanded.split_off(index);
+                    break;
+                }
+                if expanded.len() <= rows.len() {
+                    return Err(
+                        "Current tool exchange is outside visible context history".to_string()
+                    );
+                }
+                rows = expanded;
+            }
+            if !rows.iter().any(|row| row.id == assistant.id) {
+                return Err("Could not load a complete current tool exchange".to_string());
+            }
+        }
+        // When the DB window contains only a suffix of one user turn, retain a
+        // small textual anchor rather than reloading that entire long turn.
+        let missing_user_anchor = if rows
+            .first()
+            .is_some_and(|row| matches!(row.role.as_str(), "assistant" | "tool"))
+            && !rows.iter().any(|row| row.role == "user")
+            && rows.iter().any(|row| {
+                row.role == "assistant"
+                    && row.content["tool_calls"]
+                        .as_array()
+                        .is_some_and(|calls| !calls.is_empty())
+            }) {
+            sqlite::get_latest_user_message(&db_pool, &agent_id_clone, conv_id_clone.as_deref())
+                .map_err(|e| format!("load user anchor: {e}"))?
+                .map(|content| {
+                    crate::server::compaction::DefaultContextCompactor::user_anchor(
+                        &LlmMessage {
+                            role: "user".into(),
+                            content,
+                            tool_call_id: None,
+                            tool_calls: None,
+                            images: None,
+                            cache_control: None,
+                        },
+                        1024,
+                    )
+                })
+        } else {
+            None
+        };
         let marker =
             sqlite::TimelineHorizon::marker_id(&db_pool, &agent_id_clone, conv_id_clone.as_deref())
                 .map_err(|e| e.to_string())?;
-        Ok::<_, String>((rows, marker))
+        Ok::<_, String>((rows, missing_user_anchor, marker))
     })
     .await
     .map_err(|e| format!("load context history task: {e}"))??;
@@ -668,9 +741,9 @@ async fn build_context_attempt(
     }
 
     // Convert DB rows to LlmMessages (oldest-first).
-    let all_llm_msgs: Vec<LlmMessage> = all_rows
-        .iter()
-        .flat_map(db_row_to_llm)
+    let all_llm_msgs: Vec<LlmMessage> = missing_user_anchor
+        .into_iter()
+        .chain(all_rows.iter().flat_map(db_row_to_llm))
         .map(|m| truncate_oversize_message(m, PER_MESSAGE_CHAR_CAP))
         .collect();
 
@@ -966,7 +1039,8 @@ async fn build_context_attempt(
     // Carry tags alongside each schema so ITS decisions are tag-driven
     // (no hardcoded tool name lists).
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, &agent_id).unwrap_or_default();
-    let all_tools: Vec<_> = sqlite::list_tools(&state.db)
+    let all_tools: Vec<_> = crate::server::api::mcp::execution_catalog(&state.db, &state.mcp)
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|tool| {
@@ -1020,27 +1094,6 @@ async fn build_context_attempt(
             .collect()
     };
 
-    // Dynamically inject live capability schemas from CapabilityMesh seam (ADR-0020)
-    use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
-    let cap_cx = CapabilityExecutionContext::new(agent_id.to_string());
-    let live_mesh_schemas = state.mcp.active_catalog(&cap_cx).await;
-    for cap_schema in live_mesh_schemas {
-        let name = cap_schema.schema["name"].as_str().unwrap_or("").to_string();
-        if name.is_empty() {
-            continue;
-        }
-        if tagged_schemas
-            .iter()
-            .any(|ts| ts.schema["name"].as_str() == Some(&name))
-        {
-            continue;
-        }
-        tagged_schemas.push(cade_ai::TaggedToolSchema {
-            schema: cap_schema.schema,
-            tags: cap_schema.tags,
-        });
-    }
-
     // Ready native plugin capabilities use the same catalogue as guarded dispatch.
     for tool in plugin_catalog.tools {
         // A persisted declaration is not the authority for a live executable
@@ -1082,9 +1135,9 @@ async fn build_context_attempt(
     let history_chars: usize = messages
         .iter()
         .skip_while(|m| m.role == "system")
-        .map(|m| m.content.chars().count())
+        .map(|m| budget_manager.turn_cost_fallback_chars(std::slice::from_ref(m)))
         .sum();
-    let total_assembled_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+    let total_assembled_chars = budget_manager.turn_cost_fallback_chars(&messages);
     // Phase 4 Pt 2: native-token counts for history + total assembled.
     // Done in one pass over the assembled message list so we count
     // exactly what the provider will see on the wire (post-truncation,

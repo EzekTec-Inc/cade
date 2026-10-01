@@ -156,4 +156,19 @@ pub trait StorageBackend: Send + Sync {
     async fn list_tools(&self) -> Result<Vec<crate::agent::client::ToolDef>> {
         Ok(vec![])
     }
+
+    async fn mcp_tool_binding(&self, _name: &str) -> Result<Option<(String, bool)>> {
+        Ok(None)
+    }
+
+    async fn call_mcp_tool_bound(
+        &self,
+        _name: &str,
+        _arguments: &Value,
+        _generation: &str,
+    ) -> Result<(String, bool, Option<String>)> {
+        Err(crate::Error::custom(
+            "Storage backend does not support bound MCP authorization",
+        ))
+    }
 }

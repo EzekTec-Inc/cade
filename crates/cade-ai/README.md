@@ -97,6 +97,22 @@ gateway override follows the same pairing. Responses uses `input`,
 `max_output_tokens`, and `text.format` for native structured output; Chat
 Completions uses `messages`, its registered token parameter, and `response_format`.
 
+Responses tool turns request encrypted reasoning content and preserve reasoning
+items and function-item identities through the existing serialized
+`LlmToolCall.thought_signature` field. OpenAI uses a versioned
+`cade:openai-responses:v1:` envelope; Gemini retains its native signature format
+and never sends the OpenAI envelope as a Gemini signature. This metadata is
+separate from visible text and arguments, survives Conversation persistence and
+context rebuilding, and is included in context-budget estimates. Historical
+turns written before this support cannot recover previously discarded reasoning.
+
+Responses streaming publishes tool calls only after terminal output has been
+validated. Failed streams, premature EOF/`[DONE]`, unfinished calls, missing call
+identities, and empty/malformed/non-object arguments cannot become executable
+calls. An incomplete response may retain explicitly completed calls, but an
+unfinished call rejects the complete call set. Chat Completions keeps its own
+terminal/sentinel compatibility behavior.
+
 Gemini accepts an API root or a `/models` root. Generation, streaming, structured
 generation, and cache creation stay on the configured gateway. Authentication
 query values are URL encoded. Every generation path includes `maxOutputTokens`.

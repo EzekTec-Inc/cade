@@ -20,7 +20,6 @@ use cade_core::tool_ids::*;
 
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
-use crate::tools::dispatch;
 use crate::tools::memory as store_memory;
 
 // region:    --- Types
@@ -40,6 +39,24 @@ pub struct RuntimeToolResult {
 pub trait ToolExtension: Send + Sync {
     fn has_tool(&self, name: &str) -> bool;
     async fn execute(&self, call_id: &str, name: &str, args: &Value) -> RuntimeToolResult;
+}
+
+/// Fallback selection is captured before approvals/hooks and never re-resolved.
+pub(crate) enum ToolBinding {
+    Mcp { generation: String, is_write: bool },
+    Remote { generation: String, is_write: bool },
+    Extension(Arc<dyn ToolExtension>),
+    Unavailable,
+}
+
+impl ToolBinding {
+    pub(crate) fn is_write(&self, name: &str) -> bool {
+        match self {
+            Self::Mcp { is_write, .. } | Self::Remote { is_write, .. } => *is_write,
+            Self::Extension(_) => true,
+            Self::Unavailable => name.contains("__"),
+        }
+    }
 }
 
 // endregion: --- Types
@@ -152,6 +169,31 @@ impl ToolRuntime {
             .is_some_and(|extension| extension.has_tool(name))
     }
 
+    pub(crate) async fn bind_tool(&self, name: &str) -> ToolBinding {
+        if name.contains("__")
+            && let Some((generation, is_write)) = self.mcp.tool_binding(name).await
+        {
+            return ToolBinding::Mcp {
+                generation,
+                is_write,
+            };
+        }
+        if let Some(extension) = &self.extension
+            && extension.has_tool(name)
+        {
+            return ToolBinding::Extension(extension.clone());
+        }
+        if name.contains("__")
+            && let Ok(Some((generation, is_write))) = self.storage.mcp_tool_binding(name).await
+        {
+            return ToolBinding::Remote {
+                generation,
+                is_write,
+            };
+        }
+        ToolBinding::Unavailable
+    }
+
     /// Access the working directory.
     pub fn working_dir(&self) -> &std::path::Path {
         &self.cwd
@@ -180,9 +222,32 @@ impl ToolRuntime {
         args: &Value,
     ) -> Option<RuntimeToolResult> {
         let args = self.prepare_arguments(tool_name, args);
+        self.execute_prepared(tool_call_id, tool_name, &args).await
+    }
+
+    /// Dispatch prepared arguments. ToolPipeline uses execute_bound to retain its
+    /// pre-authorization implementation snapshot across approvals and hooks.
+    pub(crate) async fn execute_prepared(
+        &self,
+        tool_call_id: String,
+        tool_name: &str,
+        args: &Value,
+    ) -> Option<RuntimeToolResult> {
+        let binding = self.bind_tool(tool_name).await;
+        self.execute_bound(tool_call_id, tool_name, args, &binding)
+            .await
+    }
+
+    pub(crate) async fn execute_bound(
+        &self,
+        tool_call_id: String,
+        tool_name: &str,
+        args: &Value,
+        binding: &ToolBinding,
+    ) -> Option<RuntimeToolResult> {
         crate::tools::fs::in_workspace(
             &self.cwd,
-            self.execute_in_workspace(tool_call_id, tool_name, &args),
+            self.execute_in_workspace(tool_call_id, tool_name, args, binding),
         )
         .await
     }
@@ -192,6 +257,7 @@ impl ToolRuntime {
         tool_call_id: String,
         tool_name: &str,
         args: &Value,
+        binding: &ToolBinding,
     ) -> Option<RuntimeToolResult> {
         // Normalise Gemini / Codex aliases back to canonical IDs.
         let canonical_owned: String = {
@@ -307,20 +373,20 @@ impl ToolRuntime {
 
             // -- Everything else: native Rust tools + MCP (local or remote server)
             _ => {
-                let normalized_args =
-                    crate::tools::normalize_mcp_arguments(canonical, args, &self.cwd);
-                let r = dispatch(
+                let r = crate::tools::manager::dispatch_prepared(
                     tool_call_id.clone(),
                     canonical,
-                    &normalized_args,
+                    args,
                     &self.mcp,
                     self.allowed_paths.as_deref(),
+                    match binding {
+                        ToolBinding::Mcp { generation, .. } => Some(generation.as_str()),
+                        _ => None,
+                    },
                 )
                 .await;
                 if r.is_error && r.output.starts_with("Unknown tool:") {
-                    if let Some(extension) = &self.extension
-                        && extension.has_tool(canonical)
-                    {
+                    if let ToolBinding::Extension(extension) = binding {
                         if !self.is_local_backend() || !self.backend.is_writable() {
                             return Some(RuntimeToolResult {
                                 tool_call_id,
@@ -331,25 +397,25 @@ impl ToolRuntime {
                                 ui_resource_uri: None,
                             });
                         }
-                        return Some(
-                            extension
-                                .execute(&tool_call_id, canonical, &normalized_args)
-                                .await,
-                        );
+                        return Some(extension.execute(&tool_call_id, canonical, args).await);
                     }
                     // Try remote server-hosted MCP
-                    match self
-                        .storage
-                        .call_mcp_tool(canonical, &normalized_args)
-                        .await
-                    {
+                    let remote = match binding {
+                        ToolBinding::Remote { generation, .. } => {
+                            self.storage
+                                .call_mcp_tool_bound(canonical, args, generation)
+                                .await
+                        }
+                        _ => Err(crate::Error::custom(r.output.clone())),
+                    };
+                    match remote {
                         Ok((out, err_flag, uri)) => {
                             ui_resource_uri = uri;
                             (out, err_flag)
                         }
-                        Err(_) => {
+                        Err(error) => {
                             ui_resource_uri = r.ui_resource_uri;
-                            (r.output, r.is_error)
+                            (error.to_string(), true)
                         }
                     }
                 } else {
@@ -1030,15 +1096,23 @@ mod tests {
             Ok(())
         }
         async fn list_agents(&self) -> crate::Result<Vec<crate::agent::client::AgentState>> {
-            Ok(vec![])
+            Ok(vec![crate::agent::client::AgentState {
+                id: "helper-id".into(),
+                name: "helper".into(),
+                model: None,
+                description: None,
+                system_prompt: None,
+            }])
         }
         async fn message_agent(
             &self,
             _agent_id: &str,
-            _target: &str,
-            _message: &str,
+            target: &str,
+            message: &str,
         ) -> crate::Result<String> {
-            Ok(String::new())
+            assert_eq!(target, "helper-id");
+            assert_eq!(message, "hello");
+            Ok("received".into())
         }
         async fn log_tool_execution_spawn(
             &self,
@@ -1060,6 +1134,18 @@ mod tests {
             _tool_call_id: Option<&str>,
         ) -> crate::Result<()> {
             Ok(())
+        }
+        async fn mcp_tool_binding(&self, name: &str) -> crate::Result<Option<(String, bool)>> {
+            Ok((name == self.expected_name).then(|| ("fixture".into(), false)))
+        }
+        async fn call_mcp_tool_bound(
+            &self,
+            name: &str,
+            arguments: &Value,
+            generation: &str,
+        ) -> crate::Result<(String, bool, Option<String>)> {
+            assert_eq!(generation, "fixture");
+            self.call_mcp_tool(name, arguments).await
         }
         async fn call_mcp_tool(
             &self,
@@ -1104,6 +1190,30 @@ mod tests {
         assert!(!res.is_error);
         assert_eq!(res.output, "Symbol found: fn main()");
         assert_eq!(res.ui_resource_uri.as_deref(), Some("ui://test"));
+    }
+
+    #[tokio::test]
+    async fn runtime_message_agent_preserves_target_through_preparation_and_dispatch() {
+        let workspace = tempfile::tempdir().unwrap();
+        let rt = ToolRuntime::new(
+            Arc::new(MockRemoteMcpStorage {
+                expected_name: String::new(),
+                return_output: String::new(),
+            }),
+            Arc::new(crate::mcp::McpManager::empty()),
+            "parent".into(),
+            workspace.path().into(),
+        );
+        let result = rt
+            .execute(
+                "message".into(),
+                "message_agent",
+                &serde_json::json!({"target": "helper", "message": "hello"}),
+            )
+            .await
+            .unwrap();
+        assert!(!result.is_error, "{}", result.output);
+        assert_eq!(result.output, "received");
     }
 }
 

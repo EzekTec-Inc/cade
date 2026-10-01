@@ -126,7 +126,10 @@ pub(crate) fn persist_checked(
                     .as_deref()
                     .unwrap_or_default()
                     .iter()
-                    .map(|tc| tc.arguments.to_string().len())
+                    .map(|tc| {
+                        tc.arguments.to_string().len()
+                            + tc.thought_signature.as_deref().map_or(0, str::len)
+                    })
                     .sum::<usize>()
         })
         .sum();

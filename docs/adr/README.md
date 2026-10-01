@@ -32,3 +32,4 @@ This directory documents the significant architectural decisions made in the evo
 | [ADR-0027](0027-owned-execution-and-historical-snapshot-publication.md) | Owned Execution Scopes and Historical Snapshot Publication | Accepted | Execution & Consolidation |
 | [ADR-0028](0028-working-session-tool-grants-and-shared-approval-outcomes.md) | Working Session Tool Grants and Shared Approval Outcomes | Accepted | Working Sessions & Approvals |
 | [ADR-0029](0029-ignore-aware-incremental-rag-indexing.md) | Ignore-Aware Incremental RAG Indexing and Responsive Retrieval | Accepted | RAG & Semantic Search |
+| [ADR-0030](0030-tool-continuation-readiness-and-observed-outcomes.md) | Tool Continuation, Capability Readiness and Observed Outcomes | Accepted | Models, MCP, Runs & Commands |

@@ -61,7 +61,95 @@ pub struct CadeMessage {
 
 pub use cade_api_types::ApprovalRequest;
 
+/// An explicit failed-finalization diagnostic ends observation, but does not
+/// prove a durable Run outcome. Shared by HTTP, embedded and outcome consumers.
+pub fn run_observation_error(message_type: &str, data: &Value) -> Option<String> {
+    if message_type != "error"
+        || data["code"].as_str() != Some("run_finalization_failed")
+        || data["terminal_status_persisted"].as_bool() != Some(false)
+    {
+        return None;
+    }
+    let run = data["run_id"].as_str().unwrap_or("unknown");
+    let detail = data["error"]
+        .as_str()
+        .unwrap_or("terminal status could not be persisted");
+    Some(format!("Run {run} observation incomplete: {detail}"))
+}
+
+/// Verified outcome of observing a Run. A local cancellation request or a
+/// closed connection is not evidence of any of these outcomes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOutcome {
+    Completed,
+    Failed(String),
+    Cancelled,
+}
+
+impl RunOutcome {
+    pub fn from_status(status: &str) -> Option<Self> {
+        match status {
+            "done" => Some(Self::Completed),
+            "error" => Some(Self::Failed("Run failed".into())),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+
+    /// Interpret the observation returned by either adapter, never inferring
+    /// completion from partial output, a provider finish reason, or empty EOF.
+    pub fn from_messages(messages: &[CadeMessage]) -> Result<Self> {
+        if let Some(error) = messages
+            .iter()
+            .find_map(|message| run_observation_error(message.msg_type(), &message.data))
+        {
+            return Err(crate::Error::custom(error));
+        }
+        let terminal = messages
+            .iter()
+            .find(|m| m.msg_type() == "run_done")
+            .ok_or_else(|| {
+                crate::Error::custom("Run observation incomplete: no terminal outcome")
+            })?;
+        let outcome = terminal.run_outcome().ok_or_else(|| {
+            crate::Error::custom("Run observation has an invalid terminal status")
+        })?;
+        if outcome == Self::Cancelled {
+            return Ok(outcome);
+        }
+        if let Some(error) = messages.iter().find(|m| m.msg_type() == "error") {
+            return Ok(Self::Failed(
+                error.data["error"]
+                    .as_str()
+                    .unwrap_or("Run failed")
+                    .to_owned(),
+            ));
+        }
+        Ok(outcome)
+    }
+}
+
 impl CadeMessage {
+    pub fn run_outcome(&self) -> Option<RunOutcome> {
+        (self.msg_type() == "run_done")
+            .then(|| {
+                self.data["status"]
+                    .as_str()
+                    .and_then(RunOutcome::from_status)
+            })
+            .flatten()
+    }
+
+    /// Status evidence has no journal sequence: never advance a replay cursor
+    /// for an event synthesized from the persisted Run resource.
+    pub fn run_terminal(run_id: &str, status: &str) -> Option<Self> {
+        RunOutcome::from_status(status)?;
+        Some(Self {
+            id: None,
+            message_type: Some("run_done".into()),
+            data: json!({"run_id": run_id, "status": status}),
+        })
+    }
     /// Return the message_type string, or empty if absent
     pub fn msg_type(&self) -> &str {
         self.data
@@ -781,11 +869,32 @@ impl HttpTransport {
         name: &str,
         arguments: &serde_json::Value,
     ) -> Result<(String, bool, Option<String>)> {
+        self.call_mcp_tool_with_generation(name, arguments, None)
+            .await
+    }
+
+    pub async fn call_mcp_tool_bound(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        generation: &str,
+    ) -> Result<(String, bool, Option<String>)> {
+        self.call_mcp_tool_with_generation(name, arguments, Some(generation))
+            .await
+    }
+
+    async fn call_mcp_tool_with_generation(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        generation: Option<&str>,
+    ) -> Result<(String, bool, Option<String>)> {
         #[derive(Serialize)]
         struct CallRequest<'a> {
             name: &'a str,
             arguments: &'a serde_json::Value,
             workspace_dir: Option<String>,
+            generation: Option<&'a str>,
         }
         let cwd = std::env::current_dir()
             .ok()
@@ -794,6 +903,7 @@ impl HttpTransport {
             name,
             arguments,
             workspace_dir: cwd,
+            generation,
         };
         let resp = self
             .client
@@ -831,6 +941,16 @@ pub mod storage_impl;
 #[cfg(feature = "mcp")]
 #[async_trait::async_trait]
 impl cade_mcp::RemoteMcpClient for HttpTransport {
+    async fn call_mcp_tool_bound(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        generation: &str,
+    ) -> cade_mcp::Result<(String, bool, Option<String>)> {
+        HttpTransport::call_mcp_tool_bound(self, name, arguments, generation)
+            .await
+            .map_err(|error| cade_mcp::Error::custom(error.to_string()))
+    }
     async fn call_mcp_tool(
         &self,
         name: &str,

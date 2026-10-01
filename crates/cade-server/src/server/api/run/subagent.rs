@@ -1476,7 +1476,8 @@ async fn run_subagent_with_permit(
     let (parent_tool_schemas, inherited_tools): (Vec<serde_json::Value>, Vec<String>) = {
         let parent_tool_ids =
             cade_store::sqlite::get_agent_tool_ids(&state.db, parent_agent_id).unwrap_or_default();
-        let all = cade_store::sqlite::list_tools(&state.db)
+        let all = crate::server::api::mcp::execution_catalog(&state.db, &state.mcp)
+            .await
             .unwrap_or_default()
             .into_iter()
             .filter(|tool| {
@@ -1487,21 +1488,12 @@ async fn run_subagent_with_permit(
             all.into_iter().filter_map(|t| t.json_schema).collect()
         } else {
             all.into_iter()
-                .filter(|t| parent_tool_ids.contains(&t.id))
+                .filter(|t| {
+                    parent_tool_ids.contains(&t.id) || crate::server::api::mcp::is_mcp_tool(t)
+                })
                 .filter_map(|t| t.json_schema)
                 .collect()
         };
-        // Dynamically include live capability schemas from CapabilityMesh seam (ADR-0020)
-        use cade_core::capabilities::mesh::{CapabilityExecutionContext, CapabilityMesh};
-        let cap_cx = CapabilityExecutionContext::new(parent_agent_id.to_string());
-        let live_mesh = state.mcp.active_catalog(&cap_cx).await;
-        for cap_s in live_mesh {
-            let name = cap_s.schema["name"].as_str().unwrap_or("").to_string();
-            if name.is_empty() || raw.iter().any(|r| r["name"].as_str() == Some(&name)) {
-                continue;
-            }
-            raw.push(cap_s.schema);
-        }
         for tool in super::plugin_execution::ready_catalog(&cwd_for_defs, &state.mcp)
             .await
             .tools

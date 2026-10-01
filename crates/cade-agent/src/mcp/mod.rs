@@ -36,6 +36,17 @@ mod stub {
         pub async fn owns_tool(&self, _name: &str) -> bool {
             false
         }
+        pub async fn tool_binding(&self, _name: &str) -> Option<(String, bool)> {
+            None
+        }
+        pub async fn call_tool_bound(
+            &self,
+            _name: &str,
+            _args: &Value,
+            _generation: &str,
+        ) -> Option<Result<(String, bool, Option<String>), cade_core::Error>> {
+            None
+        }
         pub async fn is_write_tool(&self, _name: &str) -> bool {
             true
         }

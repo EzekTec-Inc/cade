@@ -1,713 +1,229 @@
 use crate::ui::SlashCommandDef;
+use cade_core::capabilities::{Capability, CapabilitySet};
 
-/// All known slash-command trigger words with a one-line description.
-/// Used by the TUI autocomplete overlay so users can Tab-complete every
-/// registered command instead of only a hardcoded subset.
-pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
-    vec![
-        SlashCommandDef {
-            name: "help".into(),
-            description: "Show available commands".into(),
-        },
-        SlashCommandDef {
-            name: "?".into(),
-            description: "Show available commands".into(),
-        },
-        SlashCommandDef {
-            name: "menu".into(),
-            description: "Show available commands".into(),
-        },
-        SlashCommandDef {
-            name: "exit".into(),
-            description: "Exit CADE".into(),
-        },
-        SlashCommandDef {
-            name: "quit".into(),
-            description: "Exit CADE".into(),
-        },
-        SlashCommandDef {
-            name: "q".into(),
-            description: "Exit CADE".into(),
-        },
-        SlashCommandDef {
-            name: "clear".into(),
-            description: "Clear the timeline".into(),
-        },
-        SlashCommandDef {
-            name: "agent".into(),
-            description: "Switch to a different agent".into(),
-        },
-        SlashCommandDef {
-            name: "info".into(),
-            description: "Show session and agent info".into(),
-        },
-        SlashCommandDef {
-            name: "new".into(),
-            description: "Start a new conversation".into(),
-        },
-        SlashCommandDef {
-            name: "new-agent".into(),
-            description: "Create a brand-new agent".into(),
-        },
-        SlashCommandDef {
-            name: "pin".into(),
-            description: "Pin or unpin a memory block".into(),
-        },
-        SlashCommandDef {
-            name: "agents".into(),
-            description: "Browse all agents".into(),
-        },
-        SlashCommandDef {
-            name: "resume".into(),
-            description: "Pick a conversation to resume".into(),
-        },
-        SlashCommandDef {
-            name: "session".into(),
-            description: "List or resume sessions (/session new for new)".into(),
-        },
-        SlashCommandDef {
-            name: "timeline".into(),
-            description: "Browse session timeline and checkpoints".into(),
-        },
-        SlashCommandDef {
-            name: "save".into(),
-            description: "Save current TUI display toggles to ~/.cade/tui.toml".into(),
-        },
-        SlashCommandDef {
-            name: "timeline".into(),
-            description: "Browse session timeline and checkpoints".into(),
-        },
-        SlashCommandDef {
-            name: "init".into(),
-            description: "Analyse project + populate memory".into(),
-        },
-        SlashCommandDef {
-            name: "remember".into(),
-            description: "Ask agent to update memory".into(),
-        },
-        SlashCommandDef {
-            name: "memory".into(),
-            description: "View or manage memory blocks".into(),
-        },
-        SlashCommandDef {
-            name: "search".into(),
-            description: "Search conversation history".into(),
-        },
-        SlashCommandDef {
-            name: "feedback".into(),
-            description: "Send feedback to the developers".into(),
-        },
-        SlashCommandDef {
-            name: "skills".into(),
-            description: "List, reload or create skills".into(),
-        },
-        SlashCommandDef {
-            name: "skill".into(),
-            description: "List, reload or create skills".into(),
-        },
-        SlashCommandDef {
-            name: "subagents".into(),
-            description: "Browse available subagent modes".into(),
-        },
-        SlashCommandDef {
-            name: "agents-list".into(),
-            description: "Browse available subagent modes".into(),
-        },
-        SlashCommandDef {
-            name: "teams".into(),
-            description: "Manage agent teams".into(),
-        },
-        SlashCommandDef {
-            name: "team".into(),
-            description: "Manage agent teams".into(),
-        },
-        SlashCommandDef {
-            name: "approvals".into(),
-            description: "Review pending approvals".into(),
-        },
-        SlashCommandDef {
-            name: "approval-list".into(),
-            description: "Review pending approvals".into(),
-        },
-        SlashCommandDef {
-            name: "approve".into(),
-            description: "Approve a pending action".into(),
-        },
-        SlashCommandDef {
-            name: "deny".into(),
-            description: "Deny a pending action".into(),
-        },
-        SlashCommandDef {
-            name: "steer".into(),
-            description: "Send steering to an active operation".into(),
-        },
-        SlashCommandDef {
-            name: "providers".into(),
-            description: "Show all configured AI providers".into(),
-        },
-        SlashCommandDef {
-            name: "provider-list".into(),
-            description: "Show all configured AI providers".into(),
-        },
-        SlashCommandDef {
-            name: "connect".into(),
-            description: "Connect a new AI provider interactively".into(),
-        },
-        SlashCommandDef {
-            name: "disconnect".into(),
-            description: "Remove a provider by name".into(),
-        },
-        SlashCommandDef {
-            name: "approve-always".into(),
-            description: "Always approve a tool by name".into(),
-        },
-        SlashCommandDef {
-            name: "deny-always".into(),
-            description: "Always deny a tool by name".into(),
-        },
-        SlashCommandDef {
-            name: "permissions".into(),
-            description: "Manage tool approval permissions".into(),
-        },
-        SlashCommandDef {
-            name: "hooks".into(),
-            description: "Manage custom session hooks".into(),
-        },
-        SlashCommandDef {
-            name: "rename".into(),
-            description: "Rename the current agent".into(),
-        },
-        SlashCommandDef {
-            name: "theme".into(),
-            description: "Change UI colour theme".into(),
-        },
-        SlashCommandDef {
-            name: "toolset".into(),
-            description: "Switch active toolset".into(),
-        },
-        SlashCommandDef {
-            name: "delete".into(),
-            description: "Delete the current agent".into(),
-        },
-        SlashCommandDef {
-            name: "del".into(),
-            description: "Delete the current agent".into(),
-        },
-        SlashCommandDef {
-            name: "rm-agent".into(),
-            description: "Delete the current agent".into(),
-        },
-        SlashCommandDef {
-            name: "yolo".into(),
-            description: "Enable bypass-permissions mode".into(),
-        },
-        SlashCommandDef {
-            name: "plan".into(),
-            description: "Show or switch to plan mode".into(),
-        },
-        SlashCommandDef {
-            name: "todos".into(),
-            description: "List current todos".into(),
-        },
-        SlashCommandDef {
-            name: "todo".into(),
-            description: "Manage a specific todo".into(),
-        },
-        SlashCommandDef {
-            name: "default".into(),
-            description: "Return to auto mode".into(),
-        },
-        SlashCommandDef {
-            name: "normal".into(),
-            description: "Return to auto mode".into(),
-        },
-        SlashCommandDef {
-            name: "mode".into(),
-            description: "Set permission mode".into(),
-        },
-        SlashCommandDef {
-            name: "model".into(),
-            description: "Show or switch active LLM".into(),
-        },
-        SlashCommandDef {
-            name: "reasoning".into(),
-            description: "Set reasoning effort".into(),
-        },
-        SlashCommandDef {
-            name: "mcp".into(),
-            description: "Show MCP server status".into(),
-        },
-        SlashCommandDef {
-            name: "mcp-save".into(),
-            description: "Save MCP server configuration".into(),
-        },
-        SlashCommandDef {
-            name: "link".into(),
-            description: "Register + attach all tools".into(),
-        },
-        SlashCommandDef {
-            name: "unlink".into(),
-            description: "Detach all tools".into(),
-        },
-        SlashCommandDef {
-            name: "logout".into(),
-            description: "Log out and return to login".into(),
-        },
-        SlashCommandDef {
-            name: "stream".into(),
-            description: "Toggle token streaming".into(),
-        },
-        SlashCommandDef {
-            name: "usage".into(),
-            description: "Show token usage for this session".into(),
-        },
-        SlashCommandDef {
-            name: "stats".into(),
-            description: "Show per-model token statistics".into(),
-        },
-        SlashCommandDef {
-            name: "export".into(),
-            description: "Export the current agent to JSON".into(),
-        },
-        SlashCommandDef {
-            name: "context".into(),
-            description: "Show context window usage".into(),
-        },
-        SlashCommandDef {
-            name: "debug-last".into(),
-            description: "Dump the last assistant message".into(),
-        },
-        SlashCommandDef {
-            name: "debug_last".into(),
-            description: "Dump the last assistant message".into(),
-        },
-        SlashCommandDef {
-            name: "details".into(),
-            description: "Toggle timeline detail expansion".into(),
-        },
-        SlashCommandDef {
-            name: "detail".into(),
-            description: "Toggle timeline detail expansion".into(),
-        },
-        SlashCommandDef {
-            name: "cost".into(),
-            description: "Show session cost breakdown".into(),
-        },
-        SlashCommandDef {
-            name: "pricing".into(),
-            description: "Manage token pricing rules".into(),
-        },
-        SlashCommandDef {
-            name: "checkpoint".into(),
-            description: "Create a working-tree checkpoint".into(),
-        },
-        SlashCommandDef {
-            name: "cp".into(),
-            description: "Create a working-tree checkpoint".into(),
-        },
-        SlashCommandDef {
-            name: "undo".into(),
-            description: "Undo the last checkpoint".into(),
-        },
-        SlashCommandDef {
-            name: "tree".into(),
-            description: "Browse and restore checkpoints".into(),
-        },
-        SlashCommandDef {
-            name: "session-tree".into(),
-            description: "Browse and restore checkpoints".into(),
-        },
-        SlashCommandDef {
-            name: "checkpoints".into(),
-            description: "Browse and restore checkpoints".into(),
-        },
-        SlashCommandDef {
-            name: "fork".into(),
-            description: "Fork a conversation from a checkpoint".into(),
-        },
-        SlashCommandDef {
-            name: "artifacts".into(),
-            description: "Browse stored artifacts".into(),
-        },
-        SlashCommandDef {
-            name: "reflect".into(),
-            description: "Extract memory from conversation".into(),
-        },
-        SlashCommandDef {
-            name: "summarize".into(),
-            description: "Show session summary".into(),
-        },
-        SlashCommandDef {
-            name: "summary".into(),
-            description: "Show session summary".into(),
-        },
-        SlashCommandDef {
-            name: "compact".into(),
-            description: "Trigger session consolidation".into(),
-        },
-        SlashCommandDef {
-            name: "consolidate".into(),
-            description: "Trigger session consolidation".into(),
-        },
-        SlashCommandDef {
-            name: "compaction-model".into(),
-            description: "Set the compaction model".into(),
-        },
-        SlashCommandDef {
-            name: "backend".into(),
-            description: "Show or switch execution backend".into(),
-        },
-        SlashCommandDef {
-            name: "marketplace".into(),
-            description: "Browse the plugin marketplace".into(),
-        },
-        SlashCommandDef {
-            name: "plugins".into(),
-            description: "Browse the plugin marketplace".into(),
-        },
-        SlashCommandDef {
-            name: "reload".into(),
-            description: "Reload Lua UI plugins".into(),
-        },
-        SlashCommandDef {
-            name: "update".into(),
-            description: "Check for CADE updates".into(),
-        },
-        SlashCommandDef {
-            name: "trust".into(),
-            description: "Trust the current project directory".into(),
-        },
-        SlashCommandDef {
-            name: "mouse".into(),
-            description: "Toggle mouse capture for native text selection".into(),
-        },
-        SlashCommandDef {
-            name: "gui".into(),
-            description: "Open the Web GUI dashboard in browser".into(),
-        },
-        SlashCommandDef {
-            name: "doctor".into(),
-            description: "Check system health, multiplexer & key passthrough".into(),
-        },
-        SlashCommandDef {
-            name: "dashboard".into(),
-            description: "Open the Web GUI dashboard in browser".into(),
-        },
-    ]
+struct CommandDef {
+    names: &'static [&'static str],
+    section: &'static str,
+    description: &'static str,
+    needs_args: bool,
+    capability: Option<Capability>,
+    parse: fn(&str, Option<String>) -> SlashCmd,
+    examples: &'static [(&'static str, bool)],
 }
 
-#[cfg(test)]
-const PARSED_SLASH_TRIGGERS: &[&str] = &[
-    "help",
-    "?",
-    "menu",
-    "exit",
-    "quit",
-    "q",
-    "clear",
-    "summarize",
-    "summary",
-    "agent",
-    "info",
-    "new",
-    "new-agent",
-    "pin",
-    "agents",
-    "resume",
-    "session",
-    "timeline",
-    "save",
-    "delete",
-    "del",
-    "rm-agent",
-    "init",
-    "remember",
-    "memory",
-    "search",
-    "feedback",
-    "skills",
-    "skill",
-    "subagents",
-    "agents-list",
-    "teams",
-    "team",
-    "approvals",
-    "approval-list",
-    "approve",
-    "deny",
-    "steer",
-    "marketplace",
-    "plugins",
-    "reload",
-    "update",
-    "trust",
-    "mouse",
-    "theme",
-    "providers",
-    "provider-list",
-    "connect",
-    "disconnect",
-    "approve-always",
-    "deny-always",
-    "permissions",
-    "hooks",
-    "rename",
-    "toolset",
-    "yolo",
-    "plan",
-    "todos",
-    "todo",
-    "default",
-    "normal",
-    "mode",
-    "model",
-    "reasoning",
-    "mcp",
-    "mcp-save",
-    "link",
-    "unlink",
-    "logout",
-    "stream",
-    "usage",
-    "stats",
-    "cost",
-    "details",
-    "detail",
-    "pricing",
-    "context",
-    "debug-last",
-    "debug_last",
-    "export",
-    "checkpoint",
-    "cp",
-    "undo",
-    "tree",
-    "session-tree",
-    "checkpoints",
-    "fork",
-    "artifacts",
-    "reflect",
-    "backend",
-    "compaction-model",
-    "compact",
-    "consolidate",
-    "gui",
-    "dashboard",
-    "doctor",
-];
+// One declaration owns the builtin variants, aliases, parsing and discoverability.
+// The exhaustive handler match in commands.rs makes a newly declared variant
+// require an implementation. Dynamic templates/Lua/Skills keep their existing
+// precedence in the REPL; they are not inserted into this builtin catalogue.
+macro_rules! command_catalogue {
+    ($( $variant:ident $(($arg:ty))? => [$($name:literal),+], $section:literal,
+        $description:literal, $needs_args:expr, $capability:expr, $parse:expr
+        $(, examples: [$($example:literal => $example_args:expr),*])?; )*) => {
+        #[derive(Debug, PartialEq, Eq)]
+        pub(crate) enum SlashCmd {
+            RunSkill(String, Option<String>),
+            $( $variant $(($arg))?, )*
+        }
 
-#[derive(Debug)]
-pub(crate) enum SlashCmd {
-    Help,
-    /// Invoke a loaded skill by its id (e.g. /commit → RunSkill("commit", Some("custom prompt")))
-    RunSkill(String, Option<String>),
-    Exit,
-    Clear,
-    Agent,
-    Info,
-    Model(String),
-    Reasoning(String),
-    New,      // new conversation on same agent
-    NewAgent, // create a brand-new agent
-    Pin,
-    Agents,
-    Resume, // conversation picker
-    Init,
-    Remember(String),
-    Memory,
-    Search(String),
-    Feedback,
-    /// /skills [list|create <name>|show <id>|reload]
-    Skills(Option<String>),
-    Subagents,
-    Teams,
-    Approvals,
-    Approve(String),
-    Deny(String),
-    Steer(String),
-    Providers,
-    Connect(Option<String>),
-    Disconnect(String),
-    ApproveAlways(String),
-    DenyAlways(String),
-    Permissions,
-    Hooks,
-    Rename(String),
-    Theme(Option<String>),
-    Toolset(Option<String>),
-    Delete(Option<String>),
-    Yolo,
-    Plan,
-    Todos,
-    Todo,
-    Default,
-    Mode(Option<String>),
-    Mcp,
-    McpSave(String),
-    Link(Option<String>),
-    Unlink(Option<String>),
-    Logout,
-    Stream,
-    Usage,
-    /// /stats [model]
-    Stats(Option<String>),
-    /// Export the current agent to a JSON file: /export [output.json]
-    Export(Option<String>),
-    /// Show current context window usage.
-    Context,
-    /// Toggle global timeline detail expansion.
-    Details,
-    /// Dump the last assistant message as stored on the server.
-    DebugLast,
-    /// Show session cost breakdown (tokens × pricing).
-    Cost,
-    /// Configure or sync pricing rules.
-    Pricing(Option<String>),
-    /// Create a checkpoint of the current working-tree state.
-    Checkpoint(Option<String>),
-    Undo,
-    /// Browse and restore checkpoints (session tree).
-    Tree,
-    /// Fork a new conversation from a checkpoint.
-    Fork(Option<String>),
-    /// Save current running TUI settings back to ~/.cade/tui.toml.
-    Save,
-    /// List all stored artifacts for this agent.
-    Artifacts,
-    /// Trigger reflection to extract memory from conversation history.
-    Reflect(Option<String>),
-    /// Show the background-computed session summary.
-    Summarize,
-    /// Show or change the execution backend.
-    Backend(Option<String>),
-    CompactionModel(String),
-    /// Manually trigger session_summary consolidation.
-    Compact,
+        const COMMANDS: &[CommandDef] = &[
+            $(CommandDef {
+                names: &[$($name),+], section: $section,
+                description: $description, needs_args: $needs_args,
+                capability: $capability, parse: $parse,
+                examples: &[$($(($example, $example_args)),*)?],
+            },)*
+        ];
+    };
+}
 
-    /// Browse the plugin marketplace.
-    Marketplace,
-    /// Manage PluginEngine inventory and lifecycle.
-    Plugin(Option<String>),
-    /// Reload Lua UI plugins.
-    Reload,
-    /// Check for and apply CADE updates.
-    Update,
-    /// Trust the current project directory.
-    Trust,
-    /// Toggle mouse capture dynamically
-    Mouse,
-    /// Open the Web GUI dashboard in browser (ADR 17)
-    Gui,
-    /// Run diagnostic health checks (multiplexers, key passthrough, etc.)
-    Doctor,
+command_catalogue! {
+    Help => ["help", "?", "menu"], "Session", "Browse available commands", false, None, |_, _| SlashCmd::Help;
+    Exit => ["exit", "quit", "q"], "Session", "Exit CADE", false, None, |_, _| SlashCmd::Exit;
+    Clear => ["clear"], "Session", "Clear the timeline and agent message context", false, None, |_, _| SlashCmd::Clear;
+    Agent => ["agent"], "Session", "Show the current agent name and ID", false, None, |_, _| SlashCmd::Agent;
+    Info => ["info"], "Session", "Show agent, conversation, model, mode and workspace", false, None, |_, _| SlashCmd::Info;
+    New => ["new"], "Session", "Start a new conversation on the current agent", false, None, |_, _| SlashCmd::New;
+    NewAgent => ["new-agent"], "Session", "Create a brand-new agent", false, None, |_, _| SlashCmd::NewAgent;
+    Pin => ["pin"], "Session", "Pin the current agent in settings", false, None, |_, _| SlashCmd::Pin;
+    Agents => ["agents"], "Session", "Browse, switch, rename or delete agents", false, Some(Capability::Agentic), |_, _| SlashCmd::Agents;
+    Resume => ["resume", "session"], "Session", "Resume a conversation; /session new starts a fresh one", false, None, |name, arg| {
+        if name == "session" && arg.as_deref() == Some("new") { SlashCmd::New } else { SlashCmd::Resume }
+    };
+    Rename(String) => ["rename"], "Session", "Rename the current agent", true, None, |_, arg| SlashCmd::Rename(arg.unwrap_or_default());
+    Delete(Option<String>) => ["delete", "del", "rm-agent"], "Session", "Delete an agent by name or ID", true, None, |_, arg| SlashCmd::Delete(arg);
+    Save => ["save"], "Session", "Save current TUI display settings", false, None, |_, _| SlashCmd::Save;
+    Logout => ["logout"], "Session", "Clear the API key and exit", false, None, |_, _| SlashCmd::Logout;
+    Model(String) => ["model"], "Model & Mode", "Show or switch the active model", false, None, |_, arg| SlashCmd::Model(arg.unwrap_or_default());
+    Reasoning(String) => ["reasoning"], "Model & Mode", "Set reasoning effort (none, low, medium, high, xhigh)", false, None, |_, arg| SlashCmd::Reasoning(arg.unwrap_or_default());
+    CompactionModel(String) => ["compaction-model"], "Model & Mode", "Set compaction model; bare command clears the override", true, None, |_, arg| SlashCmd::CompactionModel(arg.unwrap_or_default());
+    Theme(Option<String>) => ["theme"], "Model & Mode", "Change theme; /theme list or /theme reload", false, None, |_, arg| SlashCmd::Theme(arg), examples: ["/theme list" => false];
+    Toolset(Option<String>) => ["toolset"], "Model & Mode", "Show or switch the active toolset", false, None, |_, arg| SlashCmd::Toolset(arg);
+    Mode(Option<String>) => ["mode"], "Model & Mode", "Show or set permission mode", false, None, |_, arg| SlashCmd::Mode(arg);
+    Yolo => ["yolo"], "Model & Mode", "Enable bypass-permissions mode", false, None, |_, _| SlashCmd::Yolo;
+    Plan => ["plan"], "Model & Mode", "Switch to read-only plan mode", false, None, |_, _| SlashCmd::Plan;
+    Default => ["default", "normal"], "Model & Mode", "Return to default permission mode", false, None, |_, _| SlashCmd::Default;
+    Todos => ["todos"], "Model & Mode", "Toggle the active plan panel", false, None, |_, _| SlashCmd::Todos;
+    Todo => ["todo"], "Model & Mode", "Display the agent scratchpad (.cade-todo.md)", false, None, |_, _| SlashCmd::Todo;
+    ApproveAlways(String) => ["approve-always"], "Permissions & Supervision", "Add a configured tool allow rule", true, None, |_, arg| SlashCmd::ApproveAlways(arg.unwrap_or_default());
+    DenyAlways(String) => ["deny-always"], "Permissions & Supervision", "Add a configured tool deny rule", true, None, |_, arg| SlashCmd::DenyAlways(arg.unwrap_or_default());
+    Permissions => ["permissions"], "Permissions & Supervision", "Manage tool permissions", false, None, |_, _| SlashCmd::Permissions;
+    Approvals => ["approvals", "approval-list"], "Permissions & Supervision", "List pending approvals", false, None, |_, _| SlashCmd::Approvals;
+    Approve(String) => ["approve"], "Permissions & Supervision", "Approve a pending action: /approve <id>", true, None, |_, arg| SlashCmd::Approve(arg.unwrap_or_default());
+    Deny(String) => ["deny"], "Permissions & Supervision", "Deny a pending action: /deny <id> [feedback]", true, None, |_, arg| SlashCmd::Deny(arg.unwrap_or_default());
+    Steer(String) => ["steer"], "Permissions & Supervision", "Guide a running child: /steer <subagent_id> <message>", true, None, |_, arg| SlashCmd::Steer(arg.unwrap_or_default());
+    Subagents => ["subagents", "agents-list"], "Permissions & Supervision", "Browse available subagent modes", false, Some(Capability::Agentic), |_, _| SlashCmd::Subagents;
+    Teams => ["teams", "team"], "Permissions & Supervision", "List discovered teams and their members", false, Some(Capability::Agentic), |_, _| SlashCmd::Teams;
+    Memory => ["memory"], "Memory & History", "View/manage memory: view, set, edit, delete, history, export", false, None, |_, _| SlashCmd::Memory, examples: ["/memory view" => true, "/memory set" => true, "/memory edit" => true, "/memory delete" => true, "/memory history" => true, "/memory export" => true];
+    Init => ["init"], "Memory & History", "Analyse the project and populate memory", false, None, |_, _| SlashCmd::Init;
+    Remember(String) => ["remember"], "Memory & History", "Ask the agent to update memory", true, None, |_, arg| SlashCmd::Remember(arg.unwrap_or_default());
+    Search(String) => ["search"], "Memory & History", "Search conversation history", true, None, |_, arg| SlashCmd::Search(arg.unwrap_or_default());
+    Summarize => ["summarize", "summary"], "Memory & History", "Show the background-computed session summary", false, None, |_, _| SlashCmd::Summarize;
+    Reflect(Option<String>) => ["reflect"], "Memory & History", "Extract memory from conversation history", false, Some(Capability::Agentic), |_, arg| SlashCmd::Reflect(arg);
+    Compact => ["compact", "consolidate"], "Memory & History", "Consolidate dropped conversation turns", false, None, |_, _| SlashCmd::Compact;
+    Checkpoint(Option<String>) => ["checkpoint", "cp"], "Memory & History", "Create a working-tree checkpoint: /checkpoint [label]", true, None, |_, arg| SlashCmd::Checkpoint(arg);
+    Undo => ["undo"], "Memory & History", "Restore the latest checkpoint", false, None, |_, _| SlashCmd::Undo;
+    Tree => ["tree", "session-tree", "checkpoints", "timeline"], "Memory & History", "Browse and restore checkpoints", false, None, |_, _| SlashCmd::Tree;
+    Fork(Option<String>) => ["fork"], "Memory & History", "Fork a conversation from a checkpoint", true, None, |_, arg| SlashCmd::Fork(arg);
+    Artifacts => ["artifacts"], "Memory & History", "Browse stored artifacts", false, Some(Capability::Agentic), |_, _| SlashCmd::Artifacts;
+    Export(Option<String>) => ["export"], "Memory & History", "Export the current agent to JSON", true, None, |_, arg| SlashCmd::Export(arg);
+    Backend(Option<String>) => ["backend"], "Tools & Providers", "Show/switch execution backend (local, docker, ssh, readonly, virtual)", false, None, |_, arg| SlashCmd::Backend(arg);
+    Providers => ["providers", "provider-list"], "Tools & Providers", "Show configured AI providers", false, None, |_, _| SlashCmd::Providers;
+    Connect(Option<String>) => ["connect"], "Tools & Providers", "Connect an AI provider interactively", true, None, |_, arg| SlashCmd::Connect(arg);
+    Disconnect(String) => ["disconnect"], "Tools & Providers", "Remove a provider by name", true, None, |_, arg| SlashCmd::Disconnect(arg.unwrap_or_default());
+    Mcp => ["mcp"], "Tools & Providers", "Show MCP server status and tools", false, Some(Capability::Mcp), |_, _| SlashCmd::Mcp;
+    McpSave(String) => ["mcp-save"], "Tools & Providers", "Save MCP server configuration as JSON", true, None, |_, arg| SlashCmd::McpSave(arg.unwrap_or_default());
+    Link(Option<String>) => ["link"], "Tools & Providers", "Register and attach tools", false, None, |_, arg| SlashCmd::Link(arg);
+    Unlink(Option<String>) => ["unlink"], "Tools & Providers", "Detach tools", false, None, |_, arg| SlashCmd::Unlink(arg);
+    Skills(Option<String>) => ["skills", "skill"], "Extensions", "Manage skills: list, new, show, reload", false, None, |_, arg| SlashCmd::Skills(arg), examples: ["/skills new" => true, "/skills reload" => false];
+    Hooks => ["hooks"], "Extensions", "Manage session hooks", false, None, |_, _| SlashCmd::Hooks;
+    Marketplace => ["marketplace", "plugins"], "Extensions", "Browse the plugin marketplace", false, None, |_, _| SlashCmd::Marketplace;
+    Plugin(Option<String>) => ["plugin"], "Extensions", "Manage installed plugin inventory and lifecycle", false, None, |_, arg| SlashCmd::Plugin(arg);
+    Reload => ["reload"], "Extensions", "Reload Lua UI plugins", false, None, |_, _| SlashCmd::Reload;
+    Stream => ["stream"], "Display & Diagnostics", "Toggle live text output (off buffers text until turn end)", false, None, |_, _| SlashCmd::Stream;
+    Details => ["details", "detail"], "Display & Diagnostics", "Toggle timeline detail expansion", false, None, |_, _| SlashCmd::Details;
+    Mouse => ["mouse"], "Display & Diagnostics", "Toggle mouse capture for native text selection", false, None, |_, _| SlashCmd::Mouse;
+    Usage => ["usage"], "Display & Diagnostics", "Show token usage for this session", false, None, |_, _| SlashCmd::Usage;
+    Stats(Option<String>) => ["stats"], "Display & Diagnostics", "Show session statistics; /stats model for per-model detail", false, None, |_, arg| SlashCmd::Stats(arg), examples: ["/stats model" => false];
+    Cost => ["cost"], "Display & Diagnostics", "Show session cost breakdown", false, None, |_, _| SlashCmd::Cost;
+    Pricing(Option<String>) => ["pricing"], "Display & Diagnostics", "Manage token pricing rules", false, None, |_, arg| SlashCmd::Pricing(arg);
+    Context => ["context"], "Display & Diagnostics", "Show context window usage", false, None, |_, _| SlashCmd::Context;
+    DebugLast => ["debug-last", "debug_last"], "Display & Diagnostics", "Show the last assistant message stored by the server", false, None, |_, _| SlashCmd::DebugLast;
+    Gui => ["gui", "dashboard"], "Display & Diagnostics", "Open the Web GUI dashboard", false, None, |_, _| SlashCmd::Gui;
+    Doctor => ["doctor"], "Display & Diagnostics", "Check system health and terminal key passthrough", false, None, |_, _| SlashCmd::Doctor;
+    Trust => ["trust"], "Display & Diagnostics", "Trust the current project directory", false, None, |_, _| SlashCmd::Trust;
+    Update => ["update"], "Display & Diagnostics", "Check for and apply CADE updates", false, None, |_, _| SlashCmd::Update;
+    Feedback => ["feedback"], "Display & Diagnostics", "Show the issue and feedback URL", false, None, |_, _| SlashCmd::Feedback;
+}
+
+pub(crate) fn all_slash_command_defs() -> Vec<SlashCommandDef> {
+    COMMANDS
+        .iter()
+        .flat_map(|command| {
+            command.names.iter().map(|name| SlashCommandDef {
+                name: (*name).into(),
+                description: command.description.into(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn command_menu_entries(
+    caps: Option<&CapabilitySet>,
+) -> Vec<crate::ui::menu::CommandMenuEntry> {
+    let mut entries: Vec<_> = COMMANDS
+        .iter()
+        .filter(|command| {
+            caps.is_none_or(|caps| command.capability.is_none_or(|cap| caps.is_enabled(cap)))
+        })
+        .flat_map(|command| {
+            let aliases = &command.names[1..];
+            let description = if aliases.is_empty() {
+                command.description.to_owned()
+            } else {
+                format!(
+                    "{} (aliases: /{})",
+                    command.description,
+                    aliases.join(", /")
+                )
+            };
+            let primary = crate::ui::menu::CommandMenuEntry {
+                command: format!("/{}", command.names[0]),
+                description,
+                section: command.section,
+            };
+            std::iter::once(primary).chain(command.examples.iter().map(|(example, _)| {
+                crate::ui::menu::CommandMenuEntry {
+                    command: (*example).into(),
+                    description: command.description.into(),
+                    section: command.section,
+                }
+            }))
+        })
+        .collect();
+    // Informational agent-tool hints are not executable slash commands.
+    for (command, description, capability) in [
+        (
+            "web_search",
+            "Agent tool: search the web",
+            Some(Capability::Web),
+        ),
+        (
+            "fetch_doc",
+            "Agent tool: fetch a URL as text",
+            Some(Capability::Web),
+        ),
+        (
+            "index_repository",
+            "Agent tool: index repository symbols",
+            None,
+        ),
+    ] {
+        if caps.is_none_or(|caps| capability.is_none_or(|cap| caps.is_enabled(cap))) {
+            entries.push(crate::ui::menu::CommandMenuEntry {
+                command: command.into(),
+                description: description.into(),
+                section: "Agent tool hints",
+            });
+        }
+    }
+    entries
+}
+
+pub(crate) fn menu_selection_needs_args(input: &str) -> bool {
+    let Some(name) = input.strip_prefix('/') else {
+        return true;
+    };
+    if let Some((_, needs_args)) = COMMANDS
+        .iter()
+        .flat_map(|command| command.examples)
+        .find(|(example, _)| *example == input)
+    {
+        return *needs_args;
+    }
+    COMMANDS
+        .iter()
+        .find(|command| command.names.contains(&name))
+        .is_none_or(|command| command.needs_args)
 }
 
 pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
-    let trimmed = input.trim();
-    if !trimmed.starts_with('/') {
-        return None;
+    let input = input.trim().strip_prefix('/')?;
+    let (name, arg) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
+    let arg = (!arg.trim().is_empty()).then(|| arg.trim().to_owned());
+    if let Some(command) = COMMANDS
+        .iter()
+        .find(|command| command.names.contains(&name))
+    {
+        return Some((command.parse)(name, arg));
     }
-    let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
-    let arg = parts
-        .get(1)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    // NOTE: prompt template expansion is handled separately in the REPL loop
-    // before this function is called, so templates won't appear here.
-    match parts[0] {
-        "help" | "?" | "menu" => Some(SlashCmd::Help),
-        "exit" | "quit" | "q" => Some(SlashCmd::Exit),
-        "clear" => Some(SlashCmd::Clear),
-        "summarize" | "summary" => Some(SlashCmd::Summarize),
-        "agent" => Some(SlashCmd::Agent),
-        "info" => Some(SlashCmd::Info),
-        "new" => Some(SlashCmd::New),
-        "new-agent" => Some(SlashCmd::NewAgent),
-        "pin" => Some(SlashCmd::Pin),
-        "agents" => Some(SlashCmd::Agents),
-        "resume" => Some(SlashCmd::Resume),
-        "session" => match arg.as_deref() {
-            Some("new") => Some(SlashCmd::New),
-            _ => Some(SlashCmd::Resume),
-        },
-        "timeline" => Some(SlashCmd::Tree),
-        "save" => Some(SlashCmd::Save),
-        "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
-        "init" => Some(SlashCmd::Init),
-        "remember" => Some(SlashCmd::Remember(arg.unwrap_or_default())),
-        "memory" => Some(SlashCmd::Memory),
-        "search" => Some(SlashCmd::Search(arg.unwrap_or_default())),
-        "feedback" => Some(SlashCmd::Feedback),
-        "skills" | "skill" => Some(SlashCmd::Skills(arg)),
-        "subagents" | "agents-list" => Some(SlashCmd::Subagents),
-        "teams" | "team" => Some(SlashCmd::Teams),
-        "approvals" | "approval-list" => Some(SlashCmd::Approvals),
-        "approve" => Some(SlashCmd::Approve(arg.unwrap_or_default())),
-        "deny" => Some(SlashCmd::Deny(arg.unwrap_or_default())),
-        "steer" => Some(SlashCmd::Steer(arg.unwrap_or_default())),
-        "marketplace" | "plugins" => Some(SlashCmd::Marketplace),
-        "plugin" => Some(SlashCmd::Plugin(arg)),
-        "reload" => Some(SlashCmd::Reload),
-        "update" => Some(SlashCmd::Update),
-        "trust" => Some(SlashCmd::Trust),
-        "mouse" => Some(SlashCmd::Mouse),
-        "theme" => Some(SlashCmd::Theme(arg)),
-        "providers" | "provider-list" => Some(SlashCmd::Providers),
-        "connect" => Some(SlashCmd::Connect(arg)),
-        "disconnect" => Some(SlashCmd::Disconnect(arg.unwrap_or_default())),
-        "approve-always" => Some(SlashCmd::ApproveAlways(arg.unwrap_or_default())),
-        "deny-always" => Some(SlashCmd::DenyAlways(arg.unwrap_or_default())),
-        "permissions" => Some(SlashCmd::Permissions),
-        "hooks" => Some(SlashCmd::Hooks),
-        "rename" => Some(SlashCmd::Rename(arg.unwrap_or_default())),
-        "toolset" => Some(SlashCmd::Toolset(arg)),
-        "yolo" => Some(SlashCmd::Yolo),
-        "plan" => Some(SlashCmd::Plan),
-        "todos" => Some(SlashCmd::Todos),
-        "todo" => Some(SlashCmd::Todo),
-        "default" | "normal" => Some(SlashCmd::Default),
-        "mode" => Some(SlashCmd::Mode(arg)),
-        "model" => Some(SlashCmd::Model(arg.unwrap_or_default())),
-        "reasoning" => Some(SlashCmd::Reasoning(arg.unwrap_or_default())),
-        "mcp" => Some(SlashCmd::Mcp),
-        "mcp-save" => Some(SlashCmd::McpSave(arg.unwrap_or_default())),
-        "link" => Some(SlashCmd::Link(arg)),
-        "unlink" => Some(SlashCmd::Unlink(arg)),
-        "logout" => Some(SlashCmd::Logout),
-        "stream" => Some(SlashCmd::Stream),
-        "usage" => Some(SlashCmd::Usage),
-        "stats" => Some(SlashCmd::Stats(arg)),
-        "cost" => Some(SlashCmd::Cost),
-        "details" | "detail" => Some(SlashCmd::Details),
-        "pricing" => Some(SlashCmd::Pricing(arg)),
-        "context" => Some(SlashCmd::Context),
-        "debug-last" | "debug_last" => Some(SlashCmd::DebugLast),
-        "export" => Some(SlashCmd::Export(arg)),
-        "checkpoint" | "cp" => Some(SlashCmd::Checkpoint(arg)),
-        "undo" => Some(SlashCmd::Undo),
-        "tree" | "session-tree" | "checkpoints" => Some(SlashCmd::Tree),
-        "fork" => Some(SlashCmd::Fork(arg)),
-        "artifacts" => Some(SlashCmd::Artifacts),
-        "reflect" => Some(SlashCmd::Reflect(arg)),
-        "backend" => Some(SlashCmd::Backend(arg)),
-        "compaction-model" => Some(SlashCmd::CompactionModel(arg.unwrap_or_default())),
-        "compact" | "consolidate" => Some(SlashCmd::Compact),
-        "gui" | "dashboard" => Some(SlashCmd::Gui),
-        "doctor" => Some(SlashCmd::Doctor),
-        // Skill slash commands: /skill:commit, /skill:review, or just /commit, /review, etc.
-        other if skill_ids.contains(&other.to_string()) => {
-            Some(SlashCmd::RunSkill(other.to_string(), arg))
-        }
-        other if other.starts_with("skill:") => {
-            let id = other.strip_prefix("skill:").unwrap_or("").to_string();
-            if !id.is_empty() && skill_ids.contains(&id) {
-                Some(SlashCmd::RunSkill(id, arg))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    // A loaded literal ID has priority over the explicit skill: prefix, as before.
+    let id = if skill_ids.iter().any(|id| id == name) {
+        name
+    } else {
+        name.strip_prefix("skill:")?
+    };
+    (!id.is_empty() && skill_ids.iter().any(|skill| skill == id))
+        .then(|| SlashCmd::RunSkill(id.into(), arg))
 }
 
 #[cfg(test)]
@@ -716,49 +232,134 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn slash_autocomplete_defs_cover_every_parsed_trigger() {
-        let defs: BTreeSet<String> = all_slash_command_defs()
-            .into_iter()
-            .map(|cmd| cmd.name)
-            .collect();
-
-        let missing: Vec<&str> = PARSED_SLASH_TRIGGERS
-            .iter()
-            .copied()
-            .filter(|trigger| !defs.contains(*trigger))
-            .collect();
-
+    fn executable_plugin_command_is_discoverable() {
+        assert_eq!(
+            parse_slash_with_skills("/plugin list", &[]),
+            Some(SlashCmd::Plugin(Some("list".into())))
+        );
         assert!(
-            missing.is_empty(),
-            "autocomplete is missing parsed slash triggers: {missing:?}"
+            all_slash_command_defs()
+                .iter()
+                .any(|def| def.name == "plugin")
+        );
+        assert!(
+            command_menu_entries(None)
+                .iter()
+                .any(|entry| entry.command == "/plugin")
         );
     }
 
     #[test]
-    fn every_declared_parsed_trigger_dispatches() {
-        let skill_ids = Vec::new();
-        let undispatched: Vec<&str> = PARSED_SLASH_TRIGGERS
-            .iter()
-            .copied()
-            .filter(|trigger| parse_slash_with_skills(&format!("/{trigger}"), &skill_ids).is_none())
-            .collect();
+    fn command_completion_names_are_unique() {
+        let defs = all_slash_command_defs();
+        let names: BTreeSet<_> = defs.iter().map(|def| &def.name).collect();
+        assert_eq!(names.len(), defs.len());
+        assert_eq!(names.len(), 97, "builtin compatibility inventory changed");
+    }
 
-        assert!(
-            undispatched.is_empty(),
-            "declared slash triggers do not dispatch: {undispatched:?}"
+    #[test]
+    fn every_builtin_is_reachable_from_help_and_completion() {
+        let entries = command_menu_entries(None);
+        assert_eq!(
+            entries.len(),
+            87,
+            "74 builtin commands, 10 examples and 3 tool hints"
+        );
+        let mut variants = std::collections::HashSet::new();
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.command.starts_with('/') && !entry.command.contains(' '))
+        {
+            let command =
+                parse_slash_with_skills(&entry.command, &[]).expect("menu command must dispatch");
+            assert!(
+                variants.insert(std::mem::discriminant(&command)),
+                "{} duplicates another handler",
+                entry.command
+            );
+        }
+        assert_eq!(variants.len(), 74);
+        for example in entries
+            .iter()
+            .filter(|entry| entry.command.starts_with('/') && entry.command.contains(' '))
+        {
+            assert!(parse_slash_with_skills(&example.command, &[]).is_some());
+        }
+        for completion in all_slash_command_defs() {
+            assert!(parse_slash_with_skills(&format!("/{}", completion.name), &[]).is_some());
+        }
+    }
+
+    #[test]
+    fn help_filters_only_disabled_capabilities_and_keeps_control_commands() {
+        let core = CapabilitySet::core();
+        let entries = command_menu_entries(Some(&core));
+        let names: BTreeSet<_> = entries.iter().map(|entry| entry.command.as_str()).collect();
+        assert!(!names.contains("/agents"));
+        assert!(!names.contains("/subagents"));
+        assert!(!names.contains("/mcp"));
+        for control in ["/approvals", "/approve", "/deny", "/steer", "/plugin"] {
+            assert!(names.contains(control));
+        }
+        assert_eq!(command_menu_entries(Some(&CapabilitySet::full())).len(), 87);
+    }
+
+    #[test]
+    fn aliases_arguments_and_skill_precedence_remain_compatible() {
+        let skills = vec!["plugin".into(), "review".into()];
+        assert_eq!(
+            parse_slash_with_skills(" /session new ", &skills),
+            Some(SlashCmd::New)
+        );
+        assert_eq!(
+            parse_slash_with_skills("/resume new", &skills),
+            Some(SlashCmd::Resume)
+        );
+        assert_eq!(
+            parse_slash_with_skills("/timeline", &skills),
+            Some(SlashCmd::Tree)
+        );
+        assert_eq!(
+            parse_slash_with_skills("/plugin", &skills),
+            Some(SlashCmd::Plugin(None))
+        );
+        assert_eq!(
+            parse_slash_with_skills("/skill:plugin inspect", &skills),
+            Some(SlashCmd::RunSkill("plugin".into(), Some("inspect".into())))
+        );
+        assert_eq!(
+            parse_slash_with_skills("/review details", &skills),
+            Some(SlashCmd::RunSkill("review".into(), Some("details".into())))
+        );
+        assert_eq!(parse_slash_with_skills("/unknown", &skills), None);
+        assert_eq!(
+            parse_slash_with_skills("/approve\tapp-1", &skills),
+            Some(SlashCmd::Approve("app-1".into()))
         );
     }
 
     #[test]
-    fn test_parse_doctor_slash_command() {
-        let skills = Vec::new();
-        assert!(matches!(
-            parse_slash_with_skills("/doctor", &skills),
-            Some(SlashCmd::Doctor)
-        ));
-        assert!(matches!(
-            parse_slash_with_skills("  /doctor  ", &skills),
-            Some(SlashCmd::Doctor)
-        ));
+    fn help_does_not_execute_argument_required_commands_on_selection() {
+        for command in [
+            "/approve",
+            "/deny",
+            "/steer",
+            "/mcp-save",
+            "/compaction-model",
+            "/rename",
+        ] {
+            assert!(menu_selection_needs_args(command), "{command}");
+        }
+        for command in [
+            "/approvals",
+            "/agents",
+            "/plugin",
+            "/stream",
+            "/skills reload",
+            "/theme list",
+            "/stats model",
+        ] {
+            assert!(!menu_selection_needs_args(command), "{command}");
+        }
     }
 }

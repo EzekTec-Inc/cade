@@ -201,7 +201,7 @@ async fn registered_responses_complete_preserves_nested_ids_images_and_final_cal
         "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
         "output": [
             {"type": "message", "content": [{"type": "output_text", "text": "one"}, {"type": "output_text", "text": "two"}]},
-            {"type": "function_call", "id": "item_id", "call_id": "replay_id", "name": "inspect", "arguments": "{\"path\":\"src\"}"}
+            {"type": "function_call", "id": "item_id", "call_id": "replay_id", "name": "inspect", "arguments": "{\"path\":\"src\"}", "status":"completed"}
         ]
     }))]).await;
     let mut router = LlmRouter::empty("private".into(), models());
@@ -353,6 +353,281 @@ async fn responses_stream_errors_are_not_successful_done_or_cross_protocol_text(
         http.request().await;
         http.finish().await;
     }
+}
+
+#[tokio::test]
+async fn responses_replay_preserves_opaque_reasoning_for_gpt5_and_gpt6() {
+    for model in ["gpt-5", "gpt-6-sol"] {
+        for streaming in [false, true] {
+            let reasoning = json!({"type":"reasoning", "id":"rs_fixture", "summary":[], "encrypted_content":"opaque-fixture"});
+            let call = json!({"type":"function_call", "id":"fc_fixture", "call_id":"call_fixture", "name":"inspect", "arguments":"{\"path\":\"src\"}", "status":"completed"});
+            let first = json!({"status":"completed", "output":[reasoning, call]});
+            let reply = if streaming {
+                Reply::sse(&[
+                    json!({"type":"response.output_item.done", "output_index":0, "item":reasoning}),
+                    json!({"type":"response.output_item.done", "output_index":1, "item":call}),
+                    json!({"type":"response.completed", "response":first}),
+                ])
+            } else {
+                Reply::json(first)
+            };
+            let mut http = HttpFixture::start(vec![reply, Reply::json(response("done"))]).await;
+            let provider =
+                cade_ai::openai::OpenAiProvider::new("".into(), Some(format!("{}/v1", http.base)))
+                    .with_registry("openai".into(), models());
+            let mut req = request(model);
+            req.tools = vec![json!({"name":"inspect", "parameters":{"type":"object"}})];
+            req.reasoning_effort = Some("high".into());
+            let calls = if streaming {
+                provider
+                    .stream(&req)
+                    .await
+                    .unwrap()
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .collect::<cade_ai::Result<Vec<_>>>()
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|chunk| match chunk {
+                        StreamChunk::ToolCall(call) => Some(call),
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                provider.complete(&req).await.unwrap().tool_calls
+            };
+            let mut assistant = req.messages[0].clone();
+            assistant.role = "assistant".into();
+            assistant.content.clear();
+            assistant.tool_calls = Some(calls);
+            // Public serialized message roundtrip, without knowing the opaque envelope format.
+            req.messages
+                .push(serde_json::from_value(serde_json::to_value(assistant).unwrap()).unwrap());
+            let mut result = req.messages[0].clone();
+            result.role = "tool".into();
+            result.content = "fixture result".into();
+            result.tool_call_id = Some("call_fixture".into());
+            req.messages.push(result);
+            provider.complete(&req).await.unwrap();
+            let initial = http.request().await;
+            assert_eq!(initial.target, "/v1/responses");
+            let followup = http.request().await;
+            assert_eq!(
+                followup.body["input"][1], reasoning,
+                "{model}, streaming={streaming}"
+            );
+            assert_eq!(followup.body["input"][2]["call_id"], "call_fixture");
+            assert_eq!(followup.body["input"][2]["id"], "fc_fixture");
+            assert_eq!(followup.body["input"][3]["type"], "function_call_output");
+            assert!(
+                !followup.body["input"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("opaque-fixture")
+            );
+            http.finish().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn responses_incomplete_calls_and_sentinel_never_dispatch() {
+    for model in ["gpt-5", "gpt-6-sol"] {
+        let item = json!({"type":"function_call", "call_id":"call_a", "name":"inspect", "arguments":"", "status":"incomplete"});
+        let incomplete = json!({"status":"incomplete", "incomplete_details":{"reason":"max_output_tokens"}, "output":[item]});
+        let replies = [
+            Reply::json(incomplete.clone()),
+            Reply::sse(&[json!({"type":"response.incomplete", "response":incomplete})]),
+            Reply::sse(&[
+                json!({"type":"response.output_item.done", "output_index":0, "item":item}),
+                json!({"type":"response.incomplete", "response":incomplete}),
+            ]),
+            Reply {
+                body: format!(
+                    "data: {}\n\ndata: [DONE]\n\n",
+                    json!({"type":"response.output_item.added", "output_index":0, "item":{"type":"function_call", "call_id":"call_a", "name":"inspect", "arguments":"{}", "status":"in_progress"}})
+                ),
+                ..Reply::sse(&[])
+            },
+            Reply::sse(&[
+                json!({"type":"response.output_item.done", "output_index":0, "item":{"type":"function_call", "call_id":"call_a", "name":"inspect", "arguments":"{}", "status":"completed"}}),
+                json!({"type":"response.failed", "response":{"status":"failed", "error":{"message":"fixture failure"}}}),
+            ]),
+        ];
+        for (index, reply) in replies.into_iter().enumerate() {
+            let mut http = HttpFixture::start(vec![reply]).await;
+            let provider =
+                cade_ai::openai::OpenAiProvider::new("".into(), Some(format!("{}/v1", http.base)))
+                    .with_registry("openai".into(), models());
+            if index == 0 {
+                assert!(provider.complete(&request(model)).await.is_err());
+            } else {
+                let chunks = provider
+                    .stream(&request(model))
+                    .await
+                    .unwrap()
+                    .collect::<Vec<_>>()
+                    .await;
+                assert!(
+                    chunks.iter().any(Result::is_err),
+                    "{model}, case {index}: {chunks:?}"
+                );
+                assert!(
+                    !chunks
+                        .iter()
+                        .any(|c| matches!(c, Ok(StreamChunk::ToolCall(_) | StreamChunk::Done))),
+                    "{model}, case {index}: {chunks:?}"
+                );
+            }
+            http.request().await;
+            http.finish().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn responses_parallel_delta_fallback_replays_reasoning_in_output_order() {
+    let reasoning_a =
+        json!({"type":"reasoning", "id":"rs_a", "summary":[], "encrypted_content":"opaque-a"});
+    let reasoning_b =
+        json!({"type":"reasoning", "id":"rs_b", "summary":[], "encrypted_content":"opaque-b"});
+    let reasoning_tail = json!({"type":"reasoning", "id":"rs_tail", "summary":[]});
+    let mut http = HttpFixture::start(vec![Reply::sse(&[
+        json!({"type":"response.output_item.added", "output_index":0, "item":{"type":"reasoning", "id":"rs_a", "summary":[], "status":"in_progress"}}),
+        json!({"type":"response.output_item.done", "output_index":0, "item":reasoning_a}),
+        json!({"type":"response.output_item.added", "output_index":1, "item":{"type":"function_call", "id":"fc_a", "call_id":"call_a", "name":"inspect", "arguments":""}}),
+        json!({"type":"response.function_call_arguments.delta", "output_index":1, "delta":"{\"path\":"}),
+        json!({"type":"response.function_call_arguments.done", "output_index":1, "arguments":"{\"path\":\"a\"}"}),
+        json!({"type":"response.output_item.done", "output_index":1, "item":{"type":"function_call", "call_id":"call_a"}}),
+        json!({"type":"response.output_item.done", "output_index":2, "item":reasoning_b}),
+        json!({"type":"response.output_item.done", "output_index":3, "item":{"type":"function_call", "id":"fc_b", "call_id":"call_b", "name":"inspect", "arguments":"{\"path\":\"b\"}"}}),
+        json!({"type":"response.output_item.done", "output_index":4, "item":reasoning_tail}),
+        // Compatibility terminal without output; completed items are the fallback.
+        json!({"type":"response.done", "response":{"status":"completed"}}),
+    ]), Reply::json(response("done"))]).await;
+    let provider =
+        cade_ai::openai::OpenAiProvider::new("".into(), Some(format!("{}/responses", http.base)));
+    let mut req = request("gpt-6-sol");
+    let chunks = provider
+        .stream(&req)
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<cade_ai::Result<Vec<_>>>()
+        .unwrap();
+    let calls: Vec<_> = chunks
+        .into_iter()
+        .filter_map(|chunk| match chunk {
+            StreamChunk::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].arguments["path"], "a");
+    assert_eq!(calls[1].arguments["path"], "b");
+    let mut assistant = req.messages[0].clone();
+    assistant.role = "assistant".into();
+    assistant.content.clear();
+    assistant.tool_calls = Some(calls);
+    req.messages.push(assistant);
+    let budget = cade_ai::PromptBudgetManager::new();
+    let with_continuation = budget.turn_cost("openai/gpt-6-sol", &req.messages);
+    let mut without = req.messages.clone();
+    for call in without[1].tool_calls.as_mut().unwrap() {
+        call.thought_signature = None;
+    }
+    assert!(with_continuation > budget.turn_cost("openai/gpt-6-sol", &without));
+    for id in ["call_a", "call_b"] {
+        let mut output = req.messages[0].clone();
+        output.role = "tool".into();
+        output.content = "result".into();
+        output.tool_call_id = Some(id.into());
+        req.messages.push(output);
+    }
+    provider.complete(&req).await.unwrap();
+    http.request().await;
+    let replay = http.request().await.body;
+    // The synthetic completion status belongs to calls, never to opaque reasoning.
+    assert_eq!(replay["input"][1], reasoning_a);
+    assert_eq!(replay["input"][2]["id"], "fc_a");
+    assert_eq!(replay["input"][3], reasoning_b);
+    assert_eq!(replay["input"][4]["id"], "fc_b");
+    assert_eq!(replay["input"][5], reasoning_tail);
+    http.finish().await;
+}
+
+#[tokio::test]
+async fn responses_invalid_later_call_rejects_the_whole_turn() {
+    for args in ["", "{", "null", "[]", "\"text\""] {
+        let valid = json!({"type":"function_call", "call_id":"call_a", "name":"inspect", "arguments":"{}", "status":"completed"});
+        let invalid = json!({"type":"function_call", "call_id":"call_b", "name":"inspect", "arguments":args, "status":"completed"});
+        let mut http = HttpFixture::start(vec![Reply::sse(&[
+            json!({"type":"response.output_item.done", "output_index":0, "item":valid}),
+            json!({"type":"response.output_item.done", "output_index":1, "item":invalid}),
+            json!({"type":"response.completed", "response":{"status":"completed", "output":[valid, invalid]}}),
+        ])]).await;
+        let provider = cade_ai::openai::OpenAiProvider::new(
+            "".into(),
+            Some(format!("{}/responses", http.base)),
+        );
+        let chunks = provider
+            .stream(&request("gpt-5"))
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(chunks.iter().any(Result::is_err));
+        assert!(
+            !chunks
+                .iter()
+                .any(|chunk| matches!(chunk, Ok(StreamChunk::ToolCall(_) | StreamChunk::Done)))
+        );
+        http.request().await;
+        http.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn responses_continuation_is_not_sent_as_a_gemini_signature_after_model_switch() {
+    let mut openai = HttpFixture::start(vec![Reply::json(json!({"status":"completed", "output":[
+        {"type":"reasoning", "id":"rs_fixture", "summary":[], "encrypted_content":"opaque-fixture"},
+        {"type":"function_call", "call_id":"call_a", "name":"inspect", "arguments":"{\"path\":\"src\"}"}
+    ]}))]).await;
+    let provider =
+        cade_ai::openai::OpenAiProvider::new("".into(), Some(format!("{}/responses", openai.base)));
+    let calls = provider
+        .complete(&request("gpt-5"))
+        .await
+        .unwrap()
+        .tool_calls;
+    let mut gemini = HttpFixture::start(vec![Reply::json(
+        json!({"candidates":[{"content":{"parts":[{"text":"done"}]}}]}),
+    )])
+    .await;
+    let provider =
+        cade_ai::gemini::GeminiProvider::new("fixture".into(), Some(format!("{}/v1", gemini.base)));
+    let mut req = request("gemini-2.5-flash");
+    let mut assistant = req.messages[0].clone();
+    assistant.role = "assistant".into();
+    assistant.content.clear();
+    assistant.tool_calls = Some(calls);
+    req.messages.push(assistant);
+    let mut output = req.messages[0].clone();
+    output.role = "tool".into();
+    output.content = "result".into();
+    output.tool_call_id = Some("call_a".into());
+    req.messages.push(output);
+    provider.complete(&req).await.unwrap();
+    let sent = gemini.request().await.body.to_string();
+    assert!(sent.contains("skip_thought_signature_validator"));
+    assert!(!sent.contains("opaque-fixture"));
+    assert!(!sent.contains("cade:openai-responses"));
+    openai.request().await;
+    openai.finish().await;
+    gemini.finish().await;
 }
 
 #[tokio::test]

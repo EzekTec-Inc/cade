@@ -6,36 +6,17 @@ use crate::ui::RenderLine;
 impl Repl {
     pub(crate) async fn cmd_help(&mut self, pending_input: &mut Option<String>) -> Result<bool> {
         // Open full-screen command browser (filtered by capabilities)
+        let entries = super::slash::command_menu_entries(Some(&self.capabilities));
         let chosen = {
             let mut app = self.app.lock();
             let colors = app.colors.clone();
-            crate::ui::menu::show_command_menu_with_caps(
-                &mut app.terminal,
-                &colors,
-                Some(&self.capabilities),
-            )?
+            crate::ui::menu::show_command_menu(&mut app.terminal, &colors, &entries)?
         };
         let _ = self.app.lock().draw();
         if let Some(cmd) = chosen {
             // If it's a tool hint (no slash) or a command that needs arguments,
             // insert it into the editor instead of executing immediately.
-            let needs_args = !cmd.starts_with('/')
-                || (cmd.contains(' ')
-                    && !["/stats model", "/skills reload"].contains(&cmd.as_str()))
-                || [
-                    "/delete",
-                    "/checkpoint",
-                    "/fork",
-                    "/approve-always",
-                    "/deny-always",
-                    "/remember",
-                    "/disconnect",
-                    "/search",
-                    "/export",
-                    "/rename",
-                    "/connect",
-                ]
-                .contains(&cmd.as_str());
+            let needs_args = super::slash::menu_selection_needs_args(&cmd);
             if needs_args {
                 let mut app = self.app.lock();
                 app.editor.insert_str(&format!("{cmd} "));

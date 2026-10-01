@@ -6,6 +6,11 @@ edition     = "2024"
 [lib]
 doctest     = false
 
+[[test]]
+name = "mcp_idle_recovery"
+harness = false
+required-features = ["mcp"]
+
 [features]
 default = ["desktop", "web", "mcp", "backend-docker", "backend-ssh"]
 desktop = ["dep:cade-desktop"]

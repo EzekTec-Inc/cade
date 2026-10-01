@@ -883,15 +883,19 @@ impl EmbeddedSession {
                 CadeStreamEvent::Error(err) => {
                     return Err(Error::custom(err));
                 }
-                CadeStreamEvent::Finished { outcome }
-                    if outcome == "error" || outcome == "cancelled" =>
-                {
-                    return Err(Error::custom(format!("Run {outcome}")));
+                CadeStreamEvent::Finished { outcome } => {
+                    use cade_agent::agent::client::RunOutcome;
+                    return match RunOutcome::from_status(&outcome) {
+                        Some(RunOutcome::Completed) => Ok(final_content),
+                        _ => Err(Error::custom(format!("Run {outcome}"))),
+                    };
                 }
                 _ => {}
             }
         }
-        Ok(final_content)
+        Err(Error::custom(
+            "Run observation incomplete: no terminal outcome",
+        ))
     }
 
     /// Stream typed [`CadeStreamEvent`] telemetry in real-time during execution.
@@ -928,6 +932,10 @@ impl EmbeddedSession {
                         if !replay_embedded_events(&db, &run_id, &mut cursor, &tx).await {
                             return;
                         }
+                        if cursor < sequence {
+                            let _ = tx.send(CadeStreamEvent::Error(format!("Run {run_id} observation incomplete: missing journal events after {cursor}"))).await;
+                            return;
+                        }
                         continue;
                     }
                     cursor = sequence;
@@ -937,7 +945,37 @@ impl EmbeddedSession {
                 }
             }
             // Tail replay covers a terminal frame skipped under backpressure.
-            let _ = replay_embedded_events(&db, &run_id, &mut cursor, &tx).await;
+            if !replay_embedded_events(&db, &run_id, &mut cursor, &tx).await {
+                return;
+            }
+            let status = cade_store::sqlite::get_run(&db, &run_id);
+            match status {
+                Ok(Some(run))
+                    if cade_agent::agent::client::RunOutcome::from_status(&run.status)
+                        .is_some() =>
+                {
+                    // Re-read after terminal status: a final event may have been
+                    // committed between the previous snapshot and status lookup.
+                    if replay_embedded_events(&db, &run_id, &mut cursor, &tx).await {
+                        let _ = tx
+                            .send(CadeStreamEvent::Finished {
+                                outcome: run.status,
+                            })
+                            .await;
+                    }
+                }
+                other => {
+                    let detail = other
+                        .err()
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "no terminal outcome".into());
+                    let _ = tx
+                        .send(CadeStreamEvent::Error(format!(
+                            "Run {run_id} observation incomplete: {detail}"
+                        )))
+                        .await;
+                }
+            }
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))
@@ -1002,10 +1040,37 @@ impl EmbeddedSession {
 // endregion: --- EmbeddedSession
 
 async fn forward_embedded_event(tx: &mpsc::Sender<CadeStreamEvent>, data: &str) -> bool {
-    if let Ok(event) = serde_json::from_str::<cade_api_types::StreamEvent>(data)
-        && let Some(event) = CadeStreamEvent::from_stream_event(&event)
+    let event = match serde_json::from_str::<cade_api_types::StreamEvent>(data) {
+        Ok(event) => event,
+        Err(error) => {
+            let _ = tx
+                .send(CadeStreamEvent::Error(format!(
+                    "Invalid Run event: {error}"
+                )))
+                .await;
+            return false;
+        }
+    };
+    if let Some(error) =
+        cade_agent::agent::client::run_observation_error(event.msg_type(), &event.data)
     {
-        return tx.send(event).await.is_ok();
+        let _ = tx.send(CadeStreamEvent::Error(error)).await;
+        return false;
+    }
+    if event.msg_type() == "run_done"
+        && event.data["status"]
+            .as_str()
+            .and_then(cade_agent::agent::client::RunOutcome::from_status)
+            .is_none()
+    {
+        let _ = tx
+            .send(CadeStreamEvent::Error("Invalid Run terminal status".into()))
+            .await;
+        return false;
+    }
+    let terminal = event.msg_type() == "run_done";
+    if let Some(event) = CadeStreamEvent::from_stream_event(&event) {
+        return tx.send(event).await.is_ok() && !terminal;
     }
     true
 }
@@ -1028,8 +1093,24 @@ async fn replay_embedded_events(
         }
     };
     for (sequence, data) in rows {
-        let Ok(mut payload) = serde_json::from_str::<Value>(&data) else {
-            continue;
+        if sequence != *cursor + 1 {
+            let _ = tx
+                .send(CadeStreamEvent::Error(format!(
+                    "Run {run_id} observation incomplete: journal gap after {cursor}"
+                )))
+                .await;
+            return false;
+        }
+        let mut payload = match serde_json::from_str::<Value>(&data) {
+            Ok(payload) => payload,
+            Err(error) => {
+                let _ = tx
+                    .send(CadeStreamEvent::Error(format!(
+                        "Invalid replay for Run {run_id}: {error}"
+                    )))
+                    .await;
+                return false;
+            }
         };
         payload["run_id"] = run_id.into();
         payload["seq_id"] = sequence.into();

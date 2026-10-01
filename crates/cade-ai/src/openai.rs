@@ -12,6 +12,9 @@ use super::{
     clean_openai_schema, provider_error, retry_with_backoff, seal_top_level_additional_properties,
 };
 
+mod responses;
+pub(crate) use responses::is_continuation as is_responses_continuation;
+
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
@@ -155,127 +158,6 @@ pub(crate) fn parse_token_usage(usage: &Value, model: &str) -> Option<TokenUsage
     } else {
         None
     }
-}
-
-/// Parse a single SSE JSON event from OpenAI's modern Responses API (`/v1/responses`).
-pub(crate) fn parse_responses_api_chunk(
-    v: &Value,
-    tool_map: &mut std::collections::BTreeMap<usize, (String, String, String)>,
-    req_model: &str,
-) -> Vec<StreamChunk> {
-    let mut chunks = Vec::new();
-    if let Some(event_type) = v.get("type").and_then(Value::as_str) {
-        match event_type {
-            "response.output_item.added" => {
-                let item = &v["item"];
-                if item["type"].as_str() == Some("function_call") {
-                    let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                    let entry = tool_map
-                        .entry(idx)
-                        .or_insert_with(|| (String::new(), String::new(), String::new()));
-                    if let Some(call_id) = item["call_id"].as_str().or_else(|| item["id"].as_str())
-                    {
-                        entry.0 = call_id.to_string();
-                    }
-                    if let Some(name) = item["name"].as_str() {
-                        entry.1 = name.to_string();
-                    }
-                    if let Some(args) = item["arguments"].as_str() {
-                        entry.2.push_str(args);
-                    }
-                }
-            }
-            "response.output_item.done" => {
-                let item = &v["item"];
-                if item["type"].as_str() == Some("function_call") {
-                    let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                    let entry = tool_map.entry(idx).or_default();
-                    if let Some(id) = item["call_id"].as_str().or_else(|| item["id"].as_str()) {
-                        entry.0 = id.into();
-                    }
-                    if let Some(name) = item["name"].as_str() {
-                        entry.1 = name.into();
-                    }
-                    // The final item is authoritative, not another argument delta.
-                    if let Some(args) = item["arguments"].as_str() {
-                        entry.2 = args.into();
-                    }
-                    if let Some((id, name, args_str)) = tool_map.remove(&idx)
-                        && !name.is_empty()
-                    {
-                        let args = serde_json::from_str(if args_str.trim().is_empty() {
-                            "{}"
-                        } else {
-                            &args_str
-                        })
-                        .unwrap_or_default();
-                        chunks.push(StreamChunk::ToolCall(LlmToolCall {
-                            id,
-                            name,
-                            arguments: args,
-                            thought_signature: None,
-                        }));
-                    }
-                }
-            }
-            "response.function_call_arguments.delta" => {
-                let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                let entry = tool_map
-                    .entry(idx)
-                    .or_insert_with(|| (String::new(), String::new(), String::new()));
-                if let Some(delta_args) = v["delta"].as_str() {
-                    entry.2.push_str(delta_args);
-                }
-            }
-            "response.function_call_arguments.done" => {
-                let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                if let Some(args) = v["arguments"].as_str() {
-                    tool_map.entry(idx).or_default().2 = args.into();
-                }
-            }
-            "response.text.delta" | "response.output_text.delta" | "response.refusal.delta" => {
-                if let Some(txt) = v["delta"].as_str()
-                    && !txt.is_empty()
-                {
-                    chunks.push(StreamChunk::Text(txt.to_string()));
-                }
-            }
-            "response.reasoning.delta"
-            | "response.reasoning_text.delta"
-            | "response.reasoning_summary_text.delta" => {
-                if let Some(res) = v["delta"].as_str()
-                    && !res.is_empty()
-                {
-                    chunks.push(StreamChunk::Reasoning(res.to_string()));
-                }
-            }
-            "response.done" | "response.completed" | "response.incomplete" => {
-                if let Some(status) = v["response"]["incomplete_details"]["reason"]
-                    .as_str()
-                    .or_else(|| v["response"]["status"].as_str())
-                {
-                    chunks.push(StreamChunk::FinishReason(status.into()));
-                } else {
-                    chunks.push(StreamChunk::FinishReason(
-                        event_type.trim_start_matches("response.").into(),
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let usage_opt = v
-        .get("usage")
-        .or_else(|| v.get("response").and_then(|r| r.get("usage")))
-        .filter(|u| !u.is_null());
-    if let Some(usage) = usage_opt
-        && let Some(tu) = parse_token_usage(usage, req_model)
-    {
-        chunks.push(StreamChunk::Usage(tu));
-    }
-
-    chunks
 }
 
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
@@ -784,12 +666,7 @@ impl OpenAiProvider {
                     }
                     if let Some(tool_calls) = &m.tool_calls {
                         for tc in tool_calls {
-                            json_items.push(json!({
-                                "type": "function_call",
-                                "call_id": tc.id,
-                                "name": tc.name,
-                                "arguments": tc.arguments.to_string()
-                            }));
+                            responses::replay(tc, &mut json_items);
                         }
                     }
                 }
@@ -893,60 +770,7 @@ impl OpenAiProvider {
             }
             return Ok(Self::parse_response(body));
         }
-        if body["status"] == "failed" || body["status"] == "cancelled" {
-            return Err(crate::Error::custom(format!(
-                "Responses request {}: {}",
-                body["status"], body["error"]
-            )));
-        }
-        let output = body["output"]
-            .as_array()
-            .ok_or_else(|| crate::Error::custom("Expected Responses output array"))?;
-        let mut text = String::new();
-        let mut tools = Vec::new();
-        for item in output {
-            match item["type"].as_str() {
-                Some("message") => {
-                    if let Some(parts) = item["content"].as_array() {
-                        for part in parts {
-                            if let Some(content) =
-                                part["text"].as_str().or_else(|| part["refusal"].as_str())
-                            {
-                                text.push_str(content);
-                            }
-                        }
-                    }
-                }
-                Some("function_call") => {
-                    let arguments = item["arguments"].as_str().unwrap_or("{}");
-                    tools.push(LlmToolCall {
-                        id: item["call_id"]
-                            .as_str()
-                            .or_else(|| item["id"].as_str())
-                            .unwrap_or_default()
-                            .into(),
-                        name: item["name"].as_str().unwrap_or_default().into(),
-                        arguments: parse_tool_arguments(arguments)?,
-                        thought_signature: None,
-                    });
-                }
-                _ => {}
-            }
-        }
-        let finish_reason = if body["status"] == "incomplete" {
-            body["incomplete_details"]["reason"]
-                .as_str()
-                .unwrap_or("incomplete")
-        } else if !tools.is_empty() {
-            "tool_calls"
-        } else {
-            "stop"
-        };
-        Ok(CompletionResponse {
-            content: (!text.is_empty()).then_some(text),
-            tool_calls: tools,
-            finish_reason: finish_reason.into(),
-        })
+        responses::decode(body)
     }
 
     async fn send_completion(
@@ -1152,6 +976,7 @@ impl OpenAiProvider {
             "model": bare_model_id,
             "input": input,
             "max_output_tokens": req.max_tokens,
+            "include": ["reasoning.encrypted_content"],
         });
         if !req.tools.is_empty() && metadata.tools != Some(false) {
             body["tools"] =
@@ -1242,8 +1067,7 @@ impl LlmProvider for OpenAiProvider {
             let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
                 std::collections::BTreeMap::new();
             let mut finish_emitted = false;
-            let mut text_emitted = false;
-            let mut finished_tools = std::collections::HashSet::new();
+            let mut responses = responses::StreamState::default();
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); return; } };
@@ -1258,6 +1082,9 @@ impl LlmProvider for OpenAiProvider {
                         if let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
                             if data.is_empty() { start = end + 1; continue; }
                             if data == "[DONE]" {
+                        if protocol == ApiProtocol::Responses {
+                            yield Err(crate::Error::custom("Responses stream ended before a terminal event")); return;
+                        }
                         let remaining: Vec<(String, String, String)> =
                             std::mem::take(&mut tool_map).into_values().collect();
                         for (id, name, args_str) in remaining {
@@ -1329,56 +1156,14 @@ impl LlmProvider for OpenAiProvider {
                         }
                         // 2. Modern Responses API / Realtime wire events
                         else if protocol == ApiProtocol::Responses && v.get("type").is_some() {
-                            if event == "response.output_item.done" && v["item"]["type"] == "function_call" {
-                                let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
-                                let args = v["item"]["arguments"].as_str()
-                                    .or_else(|| tool_map.get(&idx).map(|e| e.2.as_str())).unwrap_or("{}");
-                                if !args.trim().is_empty() && serde_json::from_str::<Value>(args).is_err() {
-                                    yield Err(crate::Error::custom("Invalid Responses function arguments")); return;
-                                }
-                                if !finished_tools.insert(idx) { start = end + 1; continue; }
-                            }
-                            let resp_chunks =
-                                parse_responses_api_chunk(&v, &mut tool_map, &req_model);
-                            for c in resp_chunks {
-                                if let StreamChunk::FinishReason(_) = &c {
-                                    if !finish_emitted {
-                                        finish_emitted = true;
-                                        yield Ok(c);
-                                    }
-                                } else {
-                                    if matches!(&c, StreamChunk::Text(_)) { text_emitted = true; }
-                                    yield Ok(c);
-                                }
-                            }
-                            if matches!(event, "response.completed" | "response.incomplete" | "response.done") {
-                                // A terminal response contains final items even when a
-                                // gateway omitted intermediate output_item events.
-                                if let Some(output) = v["response"]["output"].as_array() {
-                                    if !text_emitted {
-                                        match Self::decode_response(&v["response"], ApiProtocol::Responses) {
-                                            Ok(response) => if let Some(content) = response.content { yield Ok(StreamChunk::Text(content)); },
-                                            Err(e) => { yield Err(e); return; }
-                                        }
-                                    }
-                                    for (index, item) in output.iter().enumerate() {
-                                        if item["type"] == "function_call" && !finished_tools.contains(&index) {
-                                            let synthetic = json!({"output": [item], "status": "completed"});
-                                            match Self::decode_response(&synthetic, ApiProtocol::Responses) {
-                                                Ok(response) => for call in response.tool_calls { yield Ok(StreamChunk::ToolCall(call)); },
-                                                Err(e) => { yield Err(e); return; }
-                                            }
-                                            tool_map.remove(&index);
-                                        }
-                                    }
-                                }
-                                for (_, (id, name, args)) in std::mem::take(&mut tool_map) {
-                                    if !name.is_empty() {
-                                        let arguments = match parse_tool_arguments(&args) { Ok(v) => v, Err(e) => { yield Err(e); return; } };
-                                        yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments, thought_signature: None }));
-                                    }
-                                }
-                                yield Ok(StreamChunk::Done); return;
+                            let chunks = match responses.push(&v, &req_model) {
+                                Ok(chunks) => chunks,
+                                Err(e) => { yield Err(e); return; }
+                            };
+                            for chunk in chunks {
+                                let done = matches!(chunk, StreamChunk::Done);
+                                yield Ok(chunk);
+                                if done { return; }
                             }
                         } else {
                             // Standard Chat Completions usage chunk (empty choices, top-level usage)

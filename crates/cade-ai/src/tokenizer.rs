@@ -152,6 +152,9 @@ impl PromptBudgetManager {
                     if !json.is_empty() {
                         total_tokens = total_tokens.saturating_add(counter.count(&json));
                     }
+                    if let Some(signature) = &tc.thought_signature {
+                        total_tokens = total_tokens.saturating_add(counter.count(signature));
+                    }
                 }
             }
         }
@@ -161,14 +164,20 @@ impl PromptBudgetManager {
     /// Compute the fallback character-based cost of a turn for backward compatibility
     pub fn turn_cost_fallback_chars(&self, turn: &[LlmMessage]) -> usize {
         turn.iter().fold(0usize, |total, m| {
-            let tools = m
-                .tool_calls
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .fold(0usize, |total, tc| {
-                    total.saturating_add(tc.arguments.to_string().chars().count())
-                });
+            let tools =
+                m.tool_calls
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .fold(0usize, |total, tc| {
+                        total
+                            .saturating_add(tc.arguments.to_string().chars().count())
+                            .saturating_add(
+                                tc.thought_signature
+                                    .as_deref()
+                                    .map_or(0, |s| s.chars().count()),
+                            )
+                    });
             total
                 .saturating_add(m.content.chars().count())
                 .saturating_add(tools)

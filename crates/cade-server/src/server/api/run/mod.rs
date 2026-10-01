@@ -49,6 +49,8 @@ use crate::server::state::AppState;
 #[cfg(test)]
 mod direct_launch_tests;
 pub(crate) mod plugin_execution;
+#[cfg(test)]
+mod responses_continuation_tests;
 pub mod runtime;
 #[cfg(test)]
 mod runtime_execution_tests;
@@ -281,6 +283,10 @@ async fn emit_run_event(db: &sqlite::Db, run_id: &str, tx: &SseTx, mut payload: 
         object.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
         object.insert("seq_id".to_owned(), Value::from(sequence));
     }
+    forward_run_event(tx, payload).await;
+}
+
+async fn forward_run_event(tx: &SseTx, payload: Value) {
     // The durable log owns execution. A stalled presentation must not block it.
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(1),
@@ -289,6 +295,80 @@ async fn emit_run_event(db: &sqlite::Db, run_id: &str, tx: &SseTx, mut payload: 
         })),
     )
     .await;
+}
+
+/// Publish completion only after the status and terminal journal entry commit.
+async fn complete_run(
+    db: &sqlite::Db,
+    run_id: &str,
+    agent_id: &str,
+    tx: &SseTx,
+    status: RunExitStatus,
+) {
+    let event = match finalize_run(db, run_id, status, None) {
+        Ok(event) => event,
+        Err(error) => Some(recover_run_finalization(db, run_id, &error)),
+    };
+    if let Some(event) = event {
+        if event["message_type"] == "run_done" {
+            crate::server::api::agents::publish_global_event(
+                Some(db),
+                "run_finished",
+                json!({"run_id": run_id, "agent_id": agent_id, "status": event["status"]}),
+            );
+        }
+        forward_run_event(tx, event).await;
+    }
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(Ok(runtime::RunEventEnvelope {
+            data: "[DONE]".into(),
+        })),
+    )
+    .await;
+}
+
+fn recover_run_finalization(db: &sqlite::Db, run_id: &str, error: &str) -> Value {
+    let mut error = format!("Run finalization failed: {error}");
+    tracing::error!(%run_id, %error);
+    match finalize_run(db, run_id, RunExitStatus::Error, Some(&error)) {
+        Ok(Some(terminal)) => return terminal,
+        Ok(None) => {
+            // A concurrent finalizer owns the existing outcome.
+            return json!({"message_type": "error", "run_id": run_id, "error": error});
+        }
+        Err(recovery_error) => error.push_str(&format!(
+            "; could not commit failure outcome: {recovery_error}"
+        )),
+    }
+    let status_persisted = match sqlite::mark_run_failed(db, run_id) {
+        Ok(changed) => changed,
+        Err(status_error) => {
+            error.push_str(&format!(
+                "; could not persist failed Run status: {status_error}"
+            ));
+            false
+        }
+    };
+    // Diagnostics are not terminal evidence. Keep them replayable if the
+    // journal still accepts nonterminal events, even when status writes fail.
+    let mut event = json!({
+        "message_type": "error", "run_id": run_id, "error": error,
+        "code": "run_finalization_failed", "terminal_status_persisted": status_persisted,
+    });
+    match sqlite::append_run_event(db, run_id, &event.to_string()) {
+        Ok(sequence) => event["seq_id"] = sequence.into(),
+        Err(journal_error) => {
+            error.push_str(&format!(
+                "; could not persist failure diagnostic: {journal_error}"
+            ));
+            event["error"] = error.clone().into();
+        }
+    }
+    // A total storage outage cannot be repaired with another write. Surface it
+    // live (without a cursor) and in logs rather than inventing durable success.
+    tracing::error!(%run_id, %error, status_persisted, "Run finalization recovery incomplete");
+    event
 }
 
 /// `POST /v1/agents/:id/run`
@@ -474,28 +554,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             })).await;
         }
 
-        let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
-        crate::server::api::agents::publish_global_event(
-            Some(&state2.db),
-            "run_finished",
-            json!({
-                "run_id": run_id2,
-                "agent_id": agent_id2,
-                "status": "done",
-            }),
-        );
-        emit_run_event(
-            &state2.db,
-            &run_id2,
-            &tx,
-            json!({ "message_type": "run_done", "status": "done" }),
-        )
-        .await;
-        let _ = tx
-            .send(Ok(runtime::RunEventEnvelope {
-                data: "[DONE]".to_string(),
-            }))
-            .await;
+        complete_run(&state2.db, &run_id2, &agent_id2, &tx, RunExitStatus::Done).await;
         return;
     }
 
@@ -507,7 +566,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     // override and the built-in default are applied inside
     // [`max_session_cost_usd`].
     let session_cost_cap = options.session_cost_cap;
-    // M9r: track the loop exit reason so `finish_run` records the right
+    // M9r: track the loop exit reason so finalization records the right
     // status.  Any break preceded by an `"message_type": "error"` SSE
     // event flips this to `Error`; the natural "no more tool calls"
     // termination keeps `Done`.
@@ -1128,37 +1187,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
         // Loop → re-invoke LLM with tool results
     }
 
-    let _ = sqlite::finish_run(&state2.db, &run_id2, exit_status.as_str());
-    crate::server::api::agents::publish_global_event(
-        Some(&state2.db),
-        "run_finished",
-        json!({
-            "run_id": run_id2,
-            "agent_id": agent_id2,
-            "status": exit_status.as_str(),
-        }),
-    );
-
-    // ── Durable terminal outcome ───────────────────────────────────────
-    emit_run_event(
-        &state2.db,
-        &run_id2,
-        &tx,
-        json!({
-            "message_type": "run_done",
-            "status": exit_status.as_str(),
-        }),
-    )
-    .await;
-
-    // ── End of transport stream ────────────────────────────────────────
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        tx.send(Ok(runtime::RunEventEnvelope {
-            data: "[DONE]".to_string(),
-        })),
-    )
-    .await;
+    complete_run(&state2.db, &run_id2, &agent_id2, &tx, exit_status).await;
 }
 
 pub(super) fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str) {
@@ -1328,35 +1357,25 @@ fn direct_subagent_status(payload: &Value) -> RunExitStatus {
     }
 }
 
-fn finalize_direct_subagent_run(
+fn finalize_run(
     db: &sqlite::Db,
     run_id: &str,
     status: RunExitStatus,
     error: Option<&str>,
-) -> Result<(), String> {
-    let mut connection = db.get().map_err(|error| error.to_string())?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    let changed = transaction.execute(
-        "UPDATE runs SET status = ?1, updated_at = ?2 WHERE id = ?3 AND status IN ('running', 'cancelling')",
-        rusqlite::params![status.as_str(), chrono::Utc::now().timestamp(), run_id],
-    ).map_err(|error| error.to_string())?;
-    if changed == 1 {
-        let mut terminal =
-            json!({"message_type":"run_done", "run_id":run_id, "status":status.as_str()});
-        if let Some(error) = error {
-            terminal["error"] = error.into();
-        }
-        transaction
-            .execute(
-                "INSERT INTO run_events (run_id, seq_id, data) VALUES (?1,
-             (SELECT COALESCE(MAX(seq_id), -1) + 1 FROM run_events WHERE run_id = ?1), ?2)",
-                rusqlite::params![run_id, terminal.to_string()],
-            )
-            .map_err(|error| error.to_string())?;
+) -> Result<Option<Value>, String> {
+    let mut terminal =
+        json!({"message_type":"run_done", "run_id":run_id, "status":status.as_str()});
+    if let Some(error) = error {
+        terminal["error"] = error.into();
     }
-    transaction.commit().map_err(|error| error.to_string())
+    sqlite::finish_run_with_event(db, run_id, status.as_str(), &terminal.to_string())
+        .map(|sequence| {
+            sequence.map(|sequence| {
+                terminal["seq_id"] = sequence.into();
+                terminal
+            })
+        })
+        .map_err(|error| error.to_string())
 }
 
 async fn relay_direct_subagent_run(
@@ -1384,22 +1403,24 @@ async fn relay_direct_subagent_run(
                 child_outcome
             };
             if let Some(status) = status {
-                return finalize_direct_subagent_run(
+                return finalize_run(
                     &db,
                     &run_id,
                     status,
                     (status == RunExitStatus::Error && result.is_error)
                         .then_some(result.output.as_str()),
-                );
+                )
+                .map(|_| ());
             }
             if !events_open {
                 // A launch acknowledgement is not a successful terminal result.
-                return finalize_direct_subagent_run(
+                return finalize_run(
                     &db,
                     &run_id,
                     RunExitStatus::Error,
                     Some("Background child ended without a terminal outcome"),
-                );
+                )
+                .map(|_| ());
             }
         }
         tokio::select! {
@@ -1420,8 +1441,8 @@ async fn relay_direct_subagent_run(
             returned = &mut result_rx, if result.is_none() => {
                 match returned {
                     Ok(returned) => result = Some(returned),
-                    Err(_) => return finalize_direct_subagent_run(&db, &run_id, RunExitStatus::Error,
-                        Some("Direct launch did not return an execution result")),
+                    Err(_) => return finalize_run(&db, &run_id, RunExitStatus::Error,
+                        Some("Direct launch did not return an execution result")).map(|_| ()),
                 }
             }
         }
@@ -1488,7 +1509,7 @@ pub async fn launch_subagent_handler(
                 .await;
         if let Err(error) = outcome.as_ref() {
             tracing::error!(%relay_id, %error, "failed to journal direct subagent outcome");
-            let _ = sqlite::finish_run(&db, &relay_id, "error");
+            recover_run_finalization(&db, &relay_id, error);
         }
         outcome
     });

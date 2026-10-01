@@ -40,10 +40,11 @@ impl Repl {
                 {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
-                        *self.conversation_id.lock() = Some(cid.clone());
-                        {
-                            let mut s = self.session.lock();
-                            let _ = s.set_conversation(Some(cid.clone()));
+                        if let Err(error) = self.select_conversation(Some(cid.clone())) {
+                            self.tui_err(format!(
+                                "Fork was created but could not be selected: {error}"
+                            ));
+                            return Ok(false);
                         }
                         self.first_turn
                             .store(true, std::sync::atomic::Ordering::SeqCst);

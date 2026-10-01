@@ -36,6 +36,37 @@ pub async fn dispatch(
     mcp: &McpManager,
     allowed_paths: Option<&[String]>,
 ) -> ToolResult {
+    dispatch_inner(tool_call_id, tool_name, arguments, mcp, allowed_paths, None).await
+}
+
+/// Native dispatch with an explicitly bound (or disabled) MCP fallback.
+pub(crate) async fn dispatch_prepared(
+    tool_call_id: String,
+    tool_name: &str,
+    arguments: &Value,
+    mcp: &McpManager,
+    allowed_paths: Option<&[String]>,
+    generation: Option<&str>,
+) -> ToolResult {
+    dispatch_inner(
+        tool_call_id,
+        tool_name,
+        arguments,
+        mcp,
+        allowed_paths,
+        Some(generation),
+    )
+    .await
+}
+
+async fn dispatch_inner(
+    tool_call_id: String,
+    tool_name: &str,
+    arguments: &Value,
+    mcp: &McpManager,
+    allowed_paths: Option<&[String]>,
+    binding: Option<Option<&str>>,
+) -> ToolResult {
     if let Err(error) = super::fs::check_path_grants(
         tool_name,
         arguments,
@@ -75,7 +106,14 @@ pub async fn dispatch(
         Some(Err(e)) => (format!("Error: {e}"), true, None),
         None => {
             // Not a native tool — try MCP servers
-            match mcp.call_tool(tool_name, arguments).await {
+            let result = match binding {
+                None => mcp.call_tool(tool_name, arguments).await,
+                Some(Some(generation)) => {
+                    mcp.call_tool_bound(tool_name, arguments, generation).await
+                }
+                Some(None) => None,
+            };
+            match result {
                 Some(Ok((out, err_flag, uri))) => (out, err_flag, uri),
                 Some(Err(e)) => {
                     let msg = e.to_string();
@@ -87,6 +125,11 @@ pub async fn dispatch(
                         (format!("MCP error: {msg}"), true, None)
                     }
                 }
+                None if matches!(binding, Some(Some(_))) => (
+                    "MCP implementation unavailable; fresh authorization required".into(),
+                    true,
+                    None,
+                ),
                 None => (format!("Unknown tool: '{tool_name}'"), true, None),
             }
         }

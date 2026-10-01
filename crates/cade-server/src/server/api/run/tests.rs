@@ -5108,6 +5108,15 @@ mod advanced_execution_tests {
 
         #[async_trait::async_trait]
         impl RemoteMcpClient for Remote {
+            async fn call_mcp_tool_bound(
+                &self,
+                name: &str,
+                arguments: &serde_json::Value,
+                generation: &str,
+            ) -> cade_mcp::Result<(String, bool, Option<String>)> {
+                assert_eq!(generation, "remote-fixture");
+                self.call_mcp_tool(name, arguments).await
+            }
             async fn call_mcp_tool(
                 &self,
                 _name: &str,
@@ -5119,6 +5128,7 @@ mod advanced_execution_tests {
 
             async fn list_mcp_statuses(&self) -> cade_mcp::Result<Vec<McpStatus>> {
                 Ok(vec![McpStatus {
+                    generation: Some("remote-fixture".into()),
                     key: "external".into(),
                     command: "remote".into(),
                     tools: vec!["external__transact".into()],

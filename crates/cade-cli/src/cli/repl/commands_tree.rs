@@ -101,17 +101,18 @@ impl Repl {
                                 .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
                                 .and_then(|cp| cp["git_commit_hash"].as_str())
                                 .map(String::from);
-                            if let Some(c) = commit_hash {
-                                use cade_agent::tools::git_checkpoint;
-                                match git_checkpoint::restore_git_checkpoint(&c, &self.cwd).await {
-                                    Ok(()) => self.tui_ok(format!("  ✓ Git reset applied: {c}")),
-                                    Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
-                                }
+                            if let Err(error) = super::commands_session::restore_checkpoint(
+                                &self.client,
+                                &agent_id,
+                                &checkpoint_id,
+                                commit_hash.as_deref(),
+                                &self.cwd,
+                            )
+                            .await
+                            {
+                                self.tui_err(format!("  ✗ Restore failed: {error}"));
+                                break;
                             }
-                            let _ = self
-                                .client
-                                .restore_checkpoint(&agent_id, &checkpoint_id)
-                                .await;
                             self.app.lock().show_toast(
                                 format!("Restored checkpoint {checkpoint_id}"),
                                 ToastLevel::Success,

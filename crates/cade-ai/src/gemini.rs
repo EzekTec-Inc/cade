@@ -478,7 +478,11 @@ impl GeminiProvider {
                         fc.insert("args".to_string(), tc.arguments.clone());
                         let mut part = serde_json::Map::new();
                         part.insert("functionCall".to_string(), Value::Object(fc));
-                        if let Some(sig) = &tc.thought_signature {
+                        if let Some(sig) = tc
+                            .thought_signature
+                            .as_ref()
+                            .filter(|sig| !crate::openai::is_responses_continuation(sig))
+                        {
                             part.insert("thoughtSignature".to_string(), json!(sig));
                         } else {
                             // Gemini 2.5/3 requires a thought signature for tool calls to work correctly.
