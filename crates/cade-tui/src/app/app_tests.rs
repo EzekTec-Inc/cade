@@ -1969,3 +1969,76 @@ fn test_app_state_reset_context() -> Result<()> {
     assert!(app.footer_extra.is_none(), "footer_extra should be cleared");
     Ok(())
 }
+
+#[test]
+fn test_question_modal_renders_advisory_badges_and_section() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use crate::question::{Question, QuestionOption};
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let colors = ThemeColors::default();
+
+    let question = Question {
+        header: "Approve bash · [Risk: Low] [Scope: Aligned]".to_string(),
+        text: "Approval app-1: allow 'bash' to run?\n\nReason: Run tests\n\nAdvisory: Diff looks aligned\nProvider: jev-1.13.0\n\nArguments:\n```json\n{\n  \"command\": \"cargo test\"\n}\n```".to_string(),
+        options: vec![
+            QuestionOption {
+                label: "Allow once".to_string(),
+                description: "Approve single run".to_string(),
+            },
+            QuestionOption {
+                label: "Deny".to_string(),
+                description: "Reject tool execution".to_string(),
+            },
+        ],
+        multi_select: false,
+        allow_other: false,
+        progress: None,
+    };
+
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    let mut state = ActiveQuestionState {
+        draw_state: ActiveQuestionDrawState::new(question),
+        tx: Some(tx),
+        result: None,
+        approval_id: None,
+    };
+
+    terminal
+        .draw(|f| {
+            let full_area = f.area();
+            state.render_overlay(f, full_area, &colors);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rendered: String = (0..buffer.area.height)
+        .map(|y| {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("[Risk: Low]"),
+        "modal header must render [Risk: Low] badge"
+    );
+    assert!(
+        rendered.contains("[Scope: Aligned]"),
+        "modal header must render [Scope: Aligned] badge"
+    );
+    assert!(
+        rendered.contains("Advisory: Diff looks aligned"),
+        "modal body must render advisory summary"
+    );
+    assert!(
+        rendered.contains("Provider: jev-1.13.0"),
+        "modal body must render advisory provider"
+    );
+}

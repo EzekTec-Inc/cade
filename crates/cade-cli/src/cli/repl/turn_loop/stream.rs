@@ -562,15 +562,42 @@ impl Repl {
                             .map(|command| format!("\n\nCommand:\n```bash\n{command}\n```"))
                             .unwrap_or_default();
 
+                        let advisory: Option<cade_core::permissions::AdvisoryReport> = msg
+                            .data
+                            .get("advisory")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+                        let badge_str = match &advisory {
+                            Some(adv) if !adv.badges.is_empty() => {
+                                let labels: Vec<String> = adv
+                                    .badges
+                                    .iter()
+                                    .map(|b| format!("[{}]", b.label))
+                                    .collect();
+                                format!(" · {}", labels.join(" "))
+                            }
+                            _ => String::new(),
+                        };
+
+                        let advisory_section = match &advisory {
+                            Some(adv) => {
+                                format!(
+                                    "\n\n**Advisory**: {}\n*Provider: {}*",
+                                    adv.summary, adv.provider
+                                )
+                            }
+                            None => String::new(),
+                        };
+
                         let question = cade_tui::question::Question {
                             header: match subagent {
                                 Some(subagent_id) => {
-                                    format!("Approve {tool} · Subagent {subagent_id}")
+                                    format!("Approve {tool} · Subagent {subagent_id}{badge_str}")
                                 }
-                                None => format!("Approve {tool}"),
+                                None => format!("Approve {tool}{badge_str}"),
                             },
                             text: format!(
-                                "Approval {id}: allow '{tool}' to run?\n\nReason: {reason}{command_preview}\n\nArguments:\n```json\n{args_preview}\n```"
+                                "Approval {id}: allow '{tool}' to run?\n\nReason: {reason}{advisory_section}{command_preview}\n\nArguments:\n```json\n{args_preview}\n```"
                             ),
                             options: vec![
                                 cade_tui::question::QuestionOption {

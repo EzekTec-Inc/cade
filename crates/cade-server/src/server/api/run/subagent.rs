@@ -903,6 +903,7 @@ impl cade_agent::tools::ApprovalDelegate for ChildPipelineApproval {
         name: &str,
         arguments: &serde_json::Value,
         _: &str,
+        _advisory: Option<&cade_core::permissions::AdvisoryReport>,
     ) -> cade_agent::Result<bool> {
         // SubagentSession already authorized this exact normalized call. A hook
         // changing its parameters must go back through the child's own queue.

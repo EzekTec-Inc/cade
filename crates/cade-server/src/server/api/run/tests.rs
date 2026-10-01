@@ -773,7 +773,7 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
     };
     assert!(
         delegate
-            .request_approval("tc", "write_file", &json!({}), "reason")
+            .request_approval("tc", "write_file", &json!({}), "reason", None)
             .await
             .is_err()
     );
@@ -801,6 +801,7 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
             "write_file",
             &json!({}),
             "reason",
+            None,
             std::time::Duration::from_millis(10),
         )
         .await;
@@ -843,7 +844,7 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
     };
     let waiting = tokio::spawn(async move {
         delegate
-            .request_approval("tc", "write_file", &json!({}), "reason")
+            .request_approval("tc", "write_file", &json!({}), "reason", None)
             .await
     });
     let event = rx.recv().await.unwrap().unwrap();
@@ -875,6 +876,59 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
     assert_eq!(resolved.msg_type(), "approval_resolved");
     assert_eq!(resolved.approval_id(), value["id"].as_str());
     assert_eq!(resolved.data["status"], "denied:Approval request cancelled");
+}
+
+#[tokio::test]
+async fn test_approval_request_with_advisory_payload() {
+    let state = build_state_with_llm(Arc::new(PanicOnCallLlm));
+    let run_id = approval_test_run(&state.db, "agent-adv");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let delegate = super::execution::SseApprovalDelegate {
+        db: state.db.clone(),
+        agent_id: "agent-adv".into(),
+        run_id,
+        conversation_id: None,
+        permission_sessions: Arc::clone(&state.permission_sessions),
+        permissions: cade_core::permissions::PermissionManager::default(),
+        tx,
+    };
+
+    let report = cade_core::permissions::AdvisoryReport {
+        risk_score: 1,
+        summary: "Jev assessed safe diff".to_string(),
+        metrics: Default::default(),
+        badges: vec![
+            cade_core::permissions::AdvisoryBadge::new(
+                "Risk: Low",
+                cade_core::permissions::BadgeTone::Success,
+            ),
+            cade_core::permissions::AdvisoryBadge::new(
+                "Scope: Aligned",
+                cade_core::permissions::BadgeTone::Success,
+            ),
+        ],
+        provider: "jev-1.13.0".to_string(),
+    };
+
+    let _result = delegate
+        .request_with_timeout(
+            "tc-adv-1",
+            "write_file",
+            &json!({"path": "src/lib.rs"}),
+            "modify file",
+            Some(&report),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+
+    let event = rx.recv().await.unwrap().unwrap();
+    let value: Value = serde_json::from_str(&event.data).unwrap();
+    assert_eq!(value["message_type"], "approval_required");
+    assert_eq!(value["advisory"]["risk_score"], 1);
+    assert_eq!(value["advisory"]["provider"], "jev-1.13.0");
+    assert_eq!(value["advisory"]["summary"], "Jev assessed safe diff");
+    assert_eq!(value["advisory"]["badges"][0]["label"], "Risk: Low");
+    assert_eq!(value["advisory"]["badges"][1]["label"], "Scope: Aligned");
 }
 
 #[tokio::test]
@@ -4790,6 +4844,7 @@ mod advanced_execution_tests {
                     "bash",
                     &json!({ "command": "cargo build" }),
                     "requires confirmation",
+                    None,
                 )
                 .await
         });
@@ -4935,6 +4990,7 @@ mod advanced_execution_tests {
                     "Replace",
                     &json!({ "path": "src/main.rs", "old_string": "foo", "new_string": "bar" }),
                     "requires confirmation in default mode",
+                    None,
                 )
                 .await
         });

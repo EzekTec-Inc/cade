@@ -2,6 +2,7 @@
 
 // endregion: --- Modules
 
+pub mod advisor;
 pub mod authority;
 pub mod checks;
 pub mod constitution;
@@ -10,6 +11,7 @@ pub mod rules;
 pub mod service;
 mod session;
 
+pub use advisor::*;
 pub use authority::*;
 pub use checks::*;
 pub use constitution::*;

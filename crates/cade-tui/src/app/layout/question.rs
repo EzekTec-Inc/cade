@@ -129,6 +129,72 @@ pub(crate) fn render_question_modal(
     render_panel(frame, aq, area, colors);
 }
 
+fn format_header_spans(
+    header: &str,
+    accent: Style,
+    colors: &ThemeColors,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    spans.push(Span::styled(" ◆ ", accent.add_modifier(Modifier::BOLD)));
+
+    if !header.contains('[') {
+        spans.push(Span::styled(
+            format!("{header} "),
+            accent.add_modifier(Modifier::BOLD),
+        ));
+        return spans;
+    }
+
+    let mut remaining = header;
+    while let Some(open) = remaining.find('[') {
+        if open > 0 {
+            spans.push(Span::styled(
+                remaining[..open].to_string(),
+                accent.add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(close) = remaining[open..].find(']') {
+            let badge_content = &remaining[open..=open + close];
+            let badge_style = if badge_content.contains("High")
+                || badge_content.contains("Sensitive")
+                || badge_content.contains("Critical")
+            {
+                colors.error().add_modifier(Modifier::BOLD)
+            } else if badge_content.contains("Elevated")
+                || badge_content.contains("Uncertain")
+                || badge_content.contains("Drift")
+            {
+                colors.warning().add_modifier(Modifier::BOLD)
+            } else if badge_content.contains("Low")
+                || badge_content.contains("Minimal")
+                || badge_content.contains("Aligned")
+            {
+                colors.success().add_modifier(Modifier::BOLD)
+            } else {
+                colors.primary_bold()
+            };
+
+            spans.push(Span::styled(badge_content.to_string(), badge_style));
+            remaining = &remaining[open + close + 1..];
+        } else {
+            spans.push(Span::styled(
+                remaining.to_string(),
+                accent.add_modifier(Modifier::BOLD),
+            ));
+            remaining = "";
+            break;
+        }
+    }
+    if !remaining.is_empty() {
+        spans.push(Span::styled(
+            remaining.to_string(),
+            accent.add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::raw(" "));
+    spans
+}
+
 fn render_panel(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: Rect, colors: &ThemeColors) {
     let area = area.intersection(frame.area());
     // Geometry is replaced on each draw, including after resize.
@@ -149,10 +215,7 @@ fn render_panel(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: Rect, col
     } else {
         colors.primary()
     };
-    let title = Line::from(vec![Span::styled(
-        format!(" ◆ {} ", aq.question.header),
-        accent.add_modifier(Modifier::BOLD),
-    )]);
+    let title = Line::from(format_header_spans(&aq.question.header, accent, colors));
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(colors.c_border_style())

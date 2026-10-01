@@ -14,7 +14,10 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use cade_core::hooks::{HookEngine, HookOutcome};
-use cade_core::permissions::{PermissionManager, PermissionMode, Verdict, is_write_schema};
+use cade_core::permissions::{
+    AdvisoryReport, AdvisoryRequest, PermissionManager, PermissionMode, ToolAdvisor, Verdict,
+    is_write_schema,
+};
 
 use crate::Result;
 use crate::tools::runtime::{RuntimeToolResult, ToolRuntime};
@@ -34,6 +37,7 @@ pub trait ApprovalDelegate: Send + Sync {
         tool_name: &str,
         arguments: &Value,
         reason: &str,
+        advisory: Option<&AdvisoryReport>,
     ) -> Result<bool>;
 }
 
@@ -49,6 +53,7 @@ impl ApprovalDelegate for AutoApprovalDelegate {
         _tool_name: &str,
         _arguments: &Value,
         _reason: &str,
+        _advisory: Option<&AdvisoryReport>,
     ) -> Result<bool> {
         Ok(true)
     }
@@ -66,6 +71,7 @@ impl ApprovalDelegate for DenyAllApprovalDelegate {
         _tool_name: &str,
         _arguments: &Value,
         _reason: &str,
+        _advisory: Option<&AdvisoryReport>,
     ) -> Result<bool> {
         Ok(false)
     }
@@ -149,6 +155,8 @@ pub struct ToolPipeline {
     hooks: Arc<HookEngine>,
     approval_delegate: Arc<dyn ApprovalDelegate>,
     mutation_observer: Option<Arc<dyn crate::tools::mutation_observer::FileMutationObserver>>,
+    advisor: Arc<dyn ToolAdvisor>,
+    active_task: Option<String>,
 }
 
 impl ToolPipeline {
@@ -165,6 +173,8 @@ impl ToolPipeline {
             hooks,
             approval_delegate,
             mutation_observer: None,
+            advisor: Arc::new(cade_core::permissions::NoopAdvisor),
+            active_task: None,
         }
     }
 
@@ -175,6 +185,23 @@ impl ToolPipeline {
     ) -> Self {
         self.mutation_observer = Some(observer);
         self
+    }
+
+    /// Attach an advisory evaluator for pre-screening tool execution requests.
+    pub fn with_advisor(mut self, advisor: Arc<dyn ToolAdvisor>) -> Self {
+        self.advisor = advisor;
+        self
+    }
+
+    /// Set the active task description for advisory context.
+    pub fn with_active_task(mut self, task: Option<String>) -> Self {
+        self.active_task = task;
+        self
+    }
+
+    /// Access the underlying advisor.
+    pub fn advisor(&self) -> &Arc<dyn ToolAdvisor> {
+        &self.advisor
     }
 
     /// Access the underlying permissions manager.
@@ -257,11 +284,25 @@ impl ToolPipeline {
                     target: "cade_agent::pipeline",
                     tool_name = %canonical,
                     reason = %reason,
-                    "Requesting permission from ApprovalDelegate"
+                    "Evaluating advisory report and requesting permission from ApprovalDelegate"
                 );
+
+                let req = AdvisoryRequest {
+                    tool_name: canonical,
+                    arguments,
+                    active_task: self.active_task.as_deref(),
+                };
+                let advisory = self.advisor.advise(&req).await;
+
                 let approved = self
                     .approval_delegate
-                    .request_approval(tool_call_id, canonical, arguments, &reason)
+                    .request_approval(
+                        tool_call_id,
+                        canonical,
+                        arguments,
+                        &reason,
+                        advisory.as_ref(),
+                    )
                     .await?;
 
                 if !approved {
@@ -484,7 +525,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ApprovalDelegate for InvocationRecorder {
-        async fn request_approval(&self, _: &str, _: &str, args: &Value, _: &str) -> Result<bool> {
+        async fn request_approval(
+            &self,
+            _: &str,
+            _: &str,
+            args: &Value,
+            _: &str,
+            _advisory: Option<&cade_core::permissions::AdvisoryReport>,
+        ) -> Result<bool> {
             self.approvals.lock().unwrap().push(args.clone());
             Ok(true)
         }
@@ -553,6 +601,66 @@ mod tests {
         );
         assert_eq!(executions[0]["target"], "HEAD~1");
         assert_eq!(executions[0]["project"], "named-project");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_advisor_enriches_approval_delegate() -> Result<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use cade_core::permissions::{AdvisoryBadge, AdvisoryReport, BadgeTone};
+        use crate::advisors::MockAdvisor;
+
+        #[derive(Default)]
+        struct InspectingDelegate {
+            saw_advisory: AtomicBool,
+        }
+
+        #[async_trait::async_trait]
+        impl ApprovalDelegate for InspectingDelegate {
+            async fn request_approval(
+                &self,
+                _tool_call_id: &str,
+                _tool_name: &str,
+                _arguments: &Value,
+                _reason: &str,
+                advisory: Option<&AdvisoryReport>,
+            ) -> Result<bool> {
+                if let Some(adv) = advisory {
+                    if adv.risk_score == 2 && adv.provider == "mock-advisor" {
+                        self.saw_advisory.store(true, Ordering::SeqCst);
+                    }
+                }
+                Ok(true)
+            }
+        }
+
+        let delegate = Arc::new(InspectingDelegate::default());
+        let report = AdvisoryReport {
+            risk_score: 2,
+            summary: "Elevated risk".to_string(),
+            metrics: Default::default(),
+            badges: vec![AdvisoryBadge::new("Risk: Elevated", BadgeTone::Warning)],
+            provider: "mock-advisor".to_string(),
+        };
+        let advisor = Arc::new(MockAdvisor::new(Some(report)));
+
+        let pipeline = create_test_pipeline(PermissionMode::Default, delegate.clone())?
+            .with_advisor(advisor.clone())
+            .with_active_task(Some("integration test task".to_string()));
+
+        let _ = pipeline
+            .execute(
+                "call_adv",
+                "write_file",
+                &json!({"path": "test.txt", "content": "hello"}),
+            )
+            .await?;
+
+        assert_eq!(advisor.call_count(), 1, "advisor must be called once");
+        assert!(
+            delegate.saw_advisory.load(Ordering::SeqCst),
+            "approval delegate must receive enriched advisory report"
+        );
         Ok(())
     }
 }

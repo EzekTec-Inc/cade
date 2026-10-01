@@ -132,6 +132,7 @@ async fn working_session_remote_grant_resolves_the_parent_dialog_in_live_stream_
                 "write_file",
                 &json!({"path":"parent.txt", "content":"parent"}),
                 "test",
+                None,
             )
             .await
     });

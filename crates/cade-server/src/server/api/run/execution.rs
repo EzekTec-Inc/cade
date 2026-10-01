@@ -312,6 +312,7 @@ impl SseApprovalDelegate {
         tool_name: &str,
         arguments: &Value,
         reason: &str,
+        advisory: Option<&cade_core::permissions::AdvisoryReport>,
         timeout: std::time::Duration,
     ) -> cade_agent::Result<bool> {
         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
@@ -328,6 +329,7 @@ impl SseApprovalDelegate {
             "tool_name": tool_name,
             "arguments": arguments,
             "reason": reason,
+            "advisory": advisory,
         });
         let sequence = cade_store::sqlite::create_run_approval(
             &self.db,
@@ -363,6 +365,7 @@ impl SseApprovalDelegate {
                 "tool_name": tool_name,
                 "arguments": arguments,
                 "reason": reason,
+                "advisory": advisory,
             }),
         );
 
@@ -399,12 +402,14 @@ impl cade_agent::tools::ApprovalDelegate for SseApprovalDelegate {
         tool_name: &str,
         arguments: &Value,
         reason: &str,
+        advisory: Option<&cade_core::permissions::AdvisoryReport>,
     ) -> cade_agent::Result<bool> {
         self.request_with_timeout(
             tool_call_id,
             tool_name,
             arguments,
             reason,
+            advisory,
             std::time::Duration::from_secs(600),
         )
         .await
