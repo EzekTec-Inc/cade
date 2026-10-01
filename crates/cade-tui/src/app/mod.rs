@@ -681,6 +681,7 @@ use std::any::Any;
 
 #[derive(Debug)]
 pub struct ActiveQuestionState {
+    pub approval_id: Option<String>,
     pub draw_state: ActiveQuestionDrawState,
     pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::question::QuestionAnswer>>>,
     pub result: Option<Option<crate::question::QuestionAnswer>>,
@@ -692,6 +693,7 @@ impl ActiveQuestionState {
         tx: tokio::sync::oneshot::Sender<Option<crate::question::QuestionAnswer>>,
     ) -> Self {
         Self {
+            approval_id: None,
             draw_state: ActiveQuestionDrawState::new(question),
             tx: Some(tx),
             result: None,
@@ -702,6 +704,10 @@ impl ActiveQuestionState {
 impl OverlayComponent for ActiveQuestionState {
     fn id(&self) -> &'static str {
         "active_question"
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
     fn render_overlay(&mut self, frame: &mut Frame, _area: Rect, colors: &ThemeColors) {

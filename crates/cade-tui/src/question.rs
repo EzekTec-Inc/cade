@@ -46,6 +46,7 @@ impl QuestionWidget {
     ) -> Result<Option<QuestionAnswer>> {
         use crate::overlay_component::{OverlayComponent, OverlayInputResult};
         let mut state = crate::app::ActiveQuestionState {
+            approval_id: None,
             draw_state: crate::app::ActiveQuestionDrawState::new(question.clone()),
             tx: None,
             result: None,

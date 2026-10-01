@@ -1,182 +1,129 @@
--- cade/edit.lua
+-- cade/edit.lua — interactive edits with explicit review and guarded application.
 local M = {}
 local http = require("cade.http")
+local sessions = require("cade.edit_session")
 
 function M.fetch_edit(prefix, selected_text, suffix, instruction, language, on_token, on_done, on_error)
   local cfg = require("cade.config").get()
-
+  local cancelled, terminal = false, false
+  local function deliver(callback, value)
+    vim.schedule(function()
+      if not cancelled then callback(value) end
+    end)
+  end
+  local function finish(callback, value)
+    if cancelled or terminal then return end
+    terminal = true
+    deliver(callback, value)
+  end
+  local handle
+  local function cancel()
+    cancelled = true
+    if handle then pcall(function() handle:kill(15) end) end
+  end
   if cfg.agent_id == "" then
-    on_error("cade.nvim: agent_id not configured")
-    return function() end
+    finish(on_error, "cade.nvim: agent_id not configured")
+    return cancel
   end
-
-  local url = string.format("http://127.0.0.1:%d/v1/agents/%s/edit", cfg.server_port, cfg.agent_id)
-
   local body = vim.json.encode({
-    prefix        = prefix,
-    selected_text = selected_text,
-    suffix        = suffix,
-    instruction   = instruction,
-    language      = language,
-    max_tokens    = 4096,
-    model         = cfg.model ~= "" and cfg.model or vim.NIL,
+    prefix = prefix, selected_text = selected_text, suffix = suffix,
+    instruction = instruction, language = language, max_tokens = 4096,
+    model = cfg.model ~= "" and cfg.model or vim.NIL,
   })
-
-  local headers = { "-H", "Content-Type: application/json", "-H", "Accept: text/event-stream" }
-  if cfg.api_key ~= "" then
-    vim.list_extend(headers, { "-H", "Authorization: Bearer " .. cfg.api_key })
+  local cmd = { "curl", "--silent", "--fail-with-body", "--show-error", "--no-buffer", "-N", "-X", "POST",
+    "-d", body, "-H", "Content-Type: application/json", "-H", "Accept: text/event-stream" }
+  if cfg.api_key ~= "" then vim.list_extend(cmd, { "-H", "Authorization: Bearer " .. cfg.api_key }) end
+  table.insert(cmd, string.format("http://127.0.0.1:%d/v1/agents/%s/edit", cfg.server_port, cfg.agent_id))
+  local accumulated, pending, raw = "", "", ""
+  local function line_received(line)
+    if cancelled or terminal then return end
+    local parsed = http._parse_sse_line(line)
+    if not parsed then return end
+    if parsed.type == "done" then
+      finish(on_done)
+    elseif parsed.type == "error" then
+      finish(on_error, parsed.message)
+    elseif parsed.type == "delta" then
+      accumulated = accumulated .. parsed.content
+      deliver(on_token, accumulated)
+    end
   end
-
-  local cmd = vim.list_extend({ "curl", "--silent", "--fail-with-body", "--show-error", "--no-buffer", "-N", "-X", "POST", "-d", body }, headers)
-  table.insert(cmd, url)
-
-  local accumulated = ""
-  local sse_buffer = ""
-  local raw_stdout = ""
-  local done = false
-
-  local handle = vim.system(cmd, {
+  local ok, result = pcall(vim.system, cmd, {
     text = true,
     stdout = function(err, chunk)
-      if done then return end
-      if err then
-        vim.schedule(function() on_error(err) end)
-        return
-      end
+      if cancelled or terminal then return end
+      if err then finish(on_error, err); return end
       if not chunk then return end
-
-      raw_stdout = raw_stdout .. chunk
-      sse_buffer = sse_buffer .. chunk
-      local lines = vim.split(sse_buffer, "\n", { plain = true })
-      sse_buffer = table.remove(lines) or ""
-
-      for _, line in ipairs(lines) do
-        local parsed = http._parse_sse_line(line)
-        if parsed then
-          if parsed.type == "done" then
-            done = true
-            vim.schedule(on_done)
-            return
-          elseif parsed.type == "delta" then
-            accumulated = accumulated .. parsed.content
-            local snap = accumulated
-            vim.schedule(function() on_token(snap) end)
-          elseif parsed.type == "error" then
-            done = true
-            vim.schedule(function() on_error(parsed.message) end)
-            return
-          end
-        end
-      end
+      raw = (raw .. chunk):sub(-4096)
+      pending = pending .. chunk
+      local lines = vim.split(pending, "\n", { plain = true })
+      pending = table.remove(lines) or ""
+      for _, line in ipairs(lines) do line_received(line) end
     end,
-  }, function(result)
-    if not done then
-      if result.code ~= 0 then
-        vim.schedule(function()
-          local err_msg = "cade.nvim: curl exited with code " .. result.code
-          if raw_stdout ~= "" then
-            local clean_body = vim.trim(raw_stdout)
-            if clean_body:find("Unauthorized") or clean_body:find("invalid API key") then
-              err_msg = "CADE server returned 401 Unauthorized. Please check that CADE_API_KEY is configured correctly on both server and client."
-            else
-              err_msg = err_msg .. "\nServer response: " .. clean_body
-            end
-          elseif result.stderr and result.stderr ~= "" then
-            err_msg = err_msg .. "\nError: " .. vim.trim(result.stderr)
-          end
-          on_error(err_msg)
-        end)
-      else
-        vim.schedule(on_done)
+  }, function(exit)
+    if cancelled or terminal then return end
+    if exit.code ~= 0 then
+      local err = "cade.nvim: curl exited with code " .. exit.code
+      if raw:find("Unauthorized") or raw:find("invalid API key") then
+        err = "CADE server returned 401 Unauthorized. Check CADE_API_KEY on server and client."
+      elseif raw ~= "" then
+        err = err .. "\nServer response: " .. vim.trim(raw)
+      elseif exit.stderr and exit.stderr ~= "" then
+        err = err .. "\nError: " .. vim.trim(exit.stderr)
       end
+      finish(on_error, err)
+    else
+      -- Process a final unterminated SSE line, but EOF alone is never success.
+      if pending ~= "" then line_received(pending) end
+      finish(on_error, "CADE edit stream ended without a completion event")
     end
   end)
-
-  return function()
-    done = true
-    pcall(function() handle:kill(9) end)
-  end
+  if ok then handle = result else finish(on_error, tostring(result)) end
+  return cancel
 end
 
 local function get_visual_selection()
-  local s_pos = vim.fn.getpos("'<")
-  local e_pos = vim.fn.getpos("'>")
+  local first, last = vim.fn.getpos("'<"), vim.fn.getpos("'>")
   local mode = vim.fn.visualmode()
-
-  -- Use robust getregion (Neovim >= 0.10 native, zero column-math crashes)
-  local region_lines = {}
-  local ok, err_reg = pcall(function()
-    region_lines = vim.fn.getregion(s_pos, e_pos, { type = mode })
-  end)
-  if not ok or not region_lines or #region_lines == 0 then
-    -- Fallback to standard line collection
-    region_lines = vim.api.nvim_buf_get_lines(0, s_pos[2] - 1, e_pos[2], false)
-  end
-  local selected_text = table.concat(region_lines, "\n")
-
-  local start_row = s_pos[2] - 1
-  local start_col = s_pos[3] - 1
-  local end_row = e_pos[2] - 1
-  local end_col = e_pos[3]
-
-  local last_line = vim.api.nvim_buf_get_lines(0, end_row, end_row + 1, true)[1] or ""
-  local line_len = string.len(last_line)
-
+  if mode == "\22" then error("CADE edits do not support blockwise selections") end
+  local sr, er = first[2] - 1, last[2] - 1
+  local start_line = vim.api.nvim_buf_get_lines(0, sr, sr + 1, true)[1] or ""
+  local end_line = vim.api.nvim_buf_get_lines(0, er, er + 1, true)[1] or ""
+  local sc, ec = math.min(math.max(first[3] - 1, 0), #start_line), math.min(last[3] - 1, #end_line)
   if mode == "V" then
-    start_col = 0
-    end_col = line_len
-  else
-    -- Clamp end_col safely
-    if end_col > line_len or end_col < 0 then
-      end_col = line_len
-    end
-    if start_col < 0 then
-      start_col = 0
-    end
+    sc, ec = 0, #end_line
+  elseif vim.o.selection ~= "exclusive" and ec < #end_line then
+    -- Marks contain byte columns; include the entire final UTF-8 character.
+    local char = vim.fn.strcharpart(end_line:sub(ec + 1), 0, 1)
+    ec = ec + #char
   end
-
-  return selected_text, start_row, start_col, end_row, end_col, mode
+  local selected = table.concat(vim.api.nvim_buf_get_text(0, sr, sc, er, ec, {}), "\n")
+  return selected, sr, sc, er, ec, mode
 end
 
-local function replace_text(buf, start_row, start_col, end_row, end_col, new_text)
-  local new_lines = vim.split(new_text, "\n", { plain = true })
-  vim.api.nvim_buf_set_text(buf, start_row, start_col, end_row, end_col, new_lines)
+local function replace_text(buf, sr, sc, er, ec, new_text)
+  vim.api.nvim_buf_set_text(buf, sr, sc, er, ec, vim.split(new_text, "\n", { plain = true }))
 end
 
 local hint_ns = vim.api.nvim_create_namespace("cade_edit_hint")
-
 function M.update_visual_hint()
   local mode = vim.fn.mode()
-  if mode ~= "v" and mode ~= "V" and mode ~= "\22" then
-    vim.api.nvim_buf_clear_namespace(0, hint_ns, 0, -1)
-    return
-  end
-  
-  local v_pos = vim.fn.getpos("v")
-  local cur_pos = vim.fn.getpos(".")
-  local row = math.max(v_pos[2], cur_pos[2]) - 1
-  
   vim.api.nvim_buf_clear_namespace(0, hint_ns, 0, -1)
-  
+  if mode ~= "v" and mode ~= "V" and mode ~= "\22" then return end
+  local row = math.max(vim.fn.getpos("v")[2], vim.fn.getpos(".")[2]) - 1
   local cfg = require("cade.config").get()
   local key = (cfg.keymaps and cfg.keymaps.edit) or "<leader>ce"
-  
   local ok, err = pcall(vim.api.nvim_buf_set_extmark, 0, hint_ns, row, 0, {
     virt_text = { { " [" .. key .. ": ask cade]", "DiagnosticInfo" } },
-    virt_text_pos = "eol",
-    hl_mode = "combine",
+    virt_text_pos = "eol", hl_mode = "combine",
   })
-  if not ok then
-    vim.notify("Hint error: " .. tostring(err), vim.log.levels.WARN)
-  end
+  if not ok then vim.notify("Hint error: " .. tostring(err), vim.log.levels.WARN) end
 end
 
 function M.setup_hints()
-  local group = vim.api.nvim_create_augroup("CadeEditHints", { clear = true })
   vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
-    group = group,
-    pattern = "*",
-    callback = M.update_visual_hint,
+    group = vim.api.nvim_create_augroup("CadeEditHints", { clear = true }),
+    pattern = "*", callback = M.update_visual_hint,
   })
 end
 
@@ -186,228 +133,116 @@ function M.hover_edit()
     vim.notify("CADE interactive edits are disabled", vim.log.levels.INFO)
     return
   end
-
   local mode = vim.fn.mode()
-  local is_normal = (mode == "n")
-  if mode ~= "v" and mode ~= "V" and mode ~= "\22" and not is_normal then
+  if mode == "\22" then
+    vim.notify("CADE edits do not support blockwise selections; use characterwise or linewise selection.", vim.log.levels.WARN)
+    return
+  end
+  if mode ~= "n" and mode ~= "v" and mode ~= "V" then
     vim.notify("CADE edit requires normal or visual mode", vim.log.levels.WARN)
     return
   end
-  
-  if not is_normal then
-    -- Escape to normal mode to set '< and '> marks
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+  local buf = vim.api.nvim_get_current_buf()
+  if not vim.bo[buf].modifiable or vim.bo[buf].readonly then
+    vim.notify("Target buffer is not writable", vim.log.levels.WARN)
+    return
   end
-
-  vim.schedule(function()
-    local selected_text, s_row, s_col, e_row, e_col, sel_mode
-    if is_normal then
-      local cursor = vim.api.nvim_win_get_cursor(0)
-      local r = cursor[1] - 1
-      local line = vim.api.nvim_get_current_line()
-      s_row, s_col = r, 0
-      e_row, e_col = r, #line
-      selected_text = line
-      sel_mode = "V"
+  if mode ~= "n" then
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  end
+  -- Capture the source before scheduling/UI focus changes.
+  local sr, sc, er, ec
+  if mode == "n" then
+    sr = vim.api.nvim_win_get_cursor(0)[1] - 1
+    sc, er, ec = 0, sr, #vim.api.nvim_get_current_line()
+  else
+    local _, a, b, c, d = get_visual_selection()
+    sr, sc, er, ec = a, b, c, d
+  end
+  local prefix_lines = vim.api.nvim_buf_get_lines(buf, math.max(0, sr - 50), sr, false)
+  table.insert(prefix_lines, vim.api.nvim_buf_get_text(buf, sr, 0, sr, sc, {})[1])
+  local end_line = vim.api.nvim_buf_get_lines(buf, er, er + 1, false)[1]
+  local suffix_lines = vim.api.nvim_buf_get_lines(buf, er + 1, er + 21, false)
+  table.insert(suffix_lines, 1, end_line:sub(ec + 1))
+  local context = { prefix = table.concat(prefix_lines, "\n"), suffix = table.concat(suffix_lines, "\n"), language = vim.bo[buf].filetype }
+  local prompt_buf = vim.api.nvim_create_buf(false, true)
+  local review_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[prompt_buf].bufhidden, vim.bo[review_buf].bufhidden = "wipe", "wipe"
+  vim.bo[prompt_buf].filetype, vim.bo[review_buf].filetype = "markdown", "diff"
+  local width = math.max(1, math.min(80, vim.o.columns - 4))
+  local height = math.max(1, math.min(12, vim.o.lines - 9))
+  local prompt_win = vim.api.nvim_open_win(prompt_buf, true, {
+    relative = "editor", row = 1, col = 1, width = width, height = 3,
+    style = "minimal", border = "rounded", title = " CADE instruction: Enter submits; Esc cancels ",
+  })
+  local review_win = vim.api.nvim_open_win(review_buf, false, {
+    relative = "editor", row = 6, col = 1, width = width, height = height,
+    style = "minimal", border = "rounded", title = " CADE review ",
+  })
+  local closed, session = false, nil
+  local autocmds = {}
+  local function close_all()
+    if closed then return end
+    closed = true
+    for _, id in ipairs(autocmds) do pcall(vim.api.nvim_del_autocmd, id) end
+    if session then session:cancel() end
+    for _, win in ipairs({ prompt_win, review_win }) do
+      if vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
+    end
+    for _, scratch in ipairs({ prompt_buf, review_buf }) do
+      if vim.api.nvim_buf_is_valid(scratch) then pcall(vim.api.nvim_buf_delete, scratch, { force = true }) end
+    end
+  end
+  local function render(s)
+    if closed then return end
+    if s.state == "cancelled" or s.state == "applied" then close_all(); return end
+    if not vim.api.nvim_buf_is_valid(review_buf) then close_all(); return end
+    local lines = { "Enter: generate/retry | Ctrl-s: apply completed proposal | Esc: cancel" }
+    if s.state == "failed" then
+      vim.list_extend(lines, { "", "FAILED: " .. s.error:gsub("\n", " | "), "Instruction retained above. Edit it or press Enter to retry." })
+    elseif s.state == "ready" then
+      vim.list_extend(lines, { "", s.proposal == "" and "READY — empty replacement deletes selected text" or "READY — review before applying", "--- original", "+++ proposal" })
+      local diff = vim.diff(s.original .. "\n", s.proposal .. "\n", { result_type = "unified" })
+      vim.list_extend(lines, vim.split(diff == "" and "(No text changes)" or diff, "\n", { plain = true }))
+    elseif s.state == "streaming" then
+      vim.list_extend(lines, { "", "STREAMING — cannot apply", "" })
+      vim.list_extend(lines, vim.split(s.proposal or "", "\n", { plain = true }))
+    end
+    vim.bo[review_buf].modifiable = true
+    vim.api.nvim_buf_set_lines(review_buf, 0, -1, false, lines)
+    vim.bo[review_buf].modifiable = false
+  end
+  session = sessions.new(buf, { sr, sc, er, ec }, render)
+  render(session)
+  for _, scratch in ipairs({ prompt_buf, review_buf }) do
+    table.insert(autocmds, vim.api.nvim_create_autocmd({ "BufWipeout", "BufUnload" }, { buffer = scratch, callback = close_all }))
+  end
+  for _, win in ipairs({ prompt_win, review_win }) do
+    table.insert(autocmds, vim.api.nvim_create_autocmd("WinClosed", { pattern = tostring(win), callback = close_all }))
+  end
+  local function submit_or_apply(apply)
+    if closed then return end
+    vim.cmd("stopinsert")
+    if session.state == "streaming" then
+      vim.notify("Wait for streaming to finish, or press Esc to cancel.", vim.log.levels.INFO)
+      return
+    end
+    if apply and session.state == "ready" then
+      local ok, err = session:apply()
+      if not ok then vim.notify(err, vim.log.levels.WARN) end
     else
-      selected_text, s_row, s_col, e_row, e_col, sel_mode = get_visual_selection()
+      local instruction = table.concat(vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false), "\n")
+      session:start(instruction, M.fetch_edit, context)
     end
-
-    local buf = vim.api.nvim_get_current_buf()
-    
-    local sel_ns = vim.api.nvim_create_namespace("cade_edit_sel")
-    local sel_opts = {
-      end_row = e_row,
-      end_col = e_col,
-      hl_group = "Visual",
-      priority = 10000,
-    }
-    if sel_mode == "V" then
-      sel_opts.hl_eol = true
-    end
-    local sel_extmark = vim.api.nvim_buf_set_extmark(buf, sel_ns, s_row, s_col, sel_opts)
-    
-    local prefix_lines = vim.api.nvim_buf_get_lines(buf, math.max(0, s_row - 50), s_row, false)
-    if #prefix_lines > 0 then
-      local partial_start = ""
-      pcall(function()
-        partial_start = vim.api.nvim_buf_get_text(buf, s_row, 0, s_row, s_col, {})[1] or ""
-      end)
-      table.insert(prefix_lines, partial_start)
-    end
-    local prefix = table.concat(prefix_lines, "\n")
-    
-    local suffix_lines = vim.api.nvim_buf_get_lines(buf, e_row + 1, e_row + 20, false)
-    local partial_end = ""
-    pcall(function()
-      local partial_end_lines = vim.api.nvim_buf_get_text(buf, e_row, e_col, e_row, -1, {})
-      partial_end = partial_end_lines[1] or ""
-    end)
-    table.insert(suffix_lines, 1, partial_end)
-    local suffix = table.concat(suffix_lines, "\n")
-    
-    local language = vim.bo[buf].filetype
-    
-    local prompt_buf = vim.api.nvim_create_buf(false, true)
-    vim.bo[prompt_buf].filetype = "markdown"
-    vim.api.nvim_buf_set_option(prompt_buf, "bufhidden", "wipe")
-    
-    local win_opts = {
-      relative = "cursor",
-      row = 1,
-      col = 0,
-      width = math.min(80, vim.o.columns - 4),
-      height = 1,
-      style = "minimal",
-      border = "rounded",
-      title = " ✨ CADE Edit ",
-      title_pos = "center"
-    }
-    
-    local prompt_win = vim.api.nvim_open_win(prompt_buf, true, win_opts)
-    
-    -- Modern UI styling and wrapping
-    vim.api.nvim_set_option_value("wrap", true, { win = prompt_win })
-    vim.api.nvim_set_option_value("linebreak", true, { win = prompt_win })
-    vim.api.nvim_set_option_value("breakindent", true, { win = prompt_win })
-    vim.api.nvim_set_option_value("winhl", "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:Title", { win = prompt_win })
-    
-    local max_h = math.max(20, math.floor(vim.o.lines * 0.8))
-    
-    -- Dynamic resizing while typing
-    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-      buffer = prompt_buf,
-      callback = function()
-        local h = vim.api.nvim_win_text_height(prompt_win, {}).all
-        if h > 0 then
-          vim.api.nvim_win_set_config(prompt_win, { height = math.min(h, max_h) })
-        end
-      end
-    })
-    
-    vim.cmd("startinsert")
-    
-    local cancel = nil
-    local accumulated_response = ""
-    local error_occurred = false
-    local response_start_row = 0
-    local is_streaming = false
-    
-    local function close_all()
-      if cancel then cancel() end
-      pcall(vim.api.nvim_win_close, prompt_win, true)
-      pcall(vim.api.nvim_buf_del_extmark, buf, sel_ns, sel_extmark)
-    end
-    
-    local function submit_or_apply(is_ctrl_s)
-      if is_streaming then
-        vim.notify("Wait for the edit to finish streaming, or press Esc to cancel.", vim.log.levels.INFO)
-        return
-      end
-      
-      if error_occurred then
-        error_occurred = false
-      end
-      
-      -- If we already have a response, apply it (only via <C-s>)
-      if accumulated_response ~= "" then
-        if not is_ctrl_s then
-          -- Do not apply on Enter, only on <C-s>!
-          return
-        end
-        local start_pos = vim.api.nvim_buf_get_extmark_by_id(buf, sel_ns, sel_extmark, {details=true})
-        if #start_pos > 0 then
-          local cur_s_row, cur_s_col, details = start_pos[1], start_pos[2], start_pos[3]
-          local cur_e_row, cur_e_col = details.end_row, details.end_col
-          replace_text(buf, cur_s_row, cur_s_col, cur_e_row, cur_e_col, accumulated_response)
-        end
-        close_all()
-        return
-      end
-      
-      -- Otherwise, submit instruction
-      local lines = vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)
-      
-      -- If there is a separator from a previous failed run, truncate it to retry cleanly
-      local separator_idx = nil
-      for i, line in ipairs(lines) do
-        if line == "---" then
-          separator_idx = i
-          break
-        end
-      end
-      
-      if separator_idx then
-        local new_lines = {}
-        for i = 1, separator_idx - 1 do
-          table.insert(new_lines, lines[i])
-        end
-        -- Remove the separator and everything after it
-        vim.api.nvim_buf_set_lines(prompt_buf, separator_idx - 1, -1, false, {})
-        lines = new_lines
-      end
-
-      local instruction = vim.trim(table.concat(lines, "\n"))
-      if instruction == "" then return end
-      
-      vim.cmd("stopinsert")
-      
-      vim.api.nvim_buf_set_lines(prompt_buf, -1, -1, false, { "", "---", "", "```" .. language, "```" })
-      response_start_row = vim.api.nvim_buf_line_count(prompt_buf) - 1
-      
-      vim.api.nvim_win_set_config(prompt_win, { title = " ✨ CADE Edit (Streaming...) ", title_pos = "center" })
-      
-      is_streaming = true
-      
-      cancel = M.fetch_edit(prefix, selected_text, suffix, instruction, language, 
-        function(snap)
-          accumulated_response = snap
-          local rsp_lines = vim.split(snap, "\n", {plain=true})
-          table.insert(rsp_lines, "```")
-          local ok = pcall(vim.api.nvim_buf_set_lines, prompt_buf, response_start_row, -1, false, rsp_lines)
-          if not ok then return end
-          
-          local ok_h, new_height = pcall(function() return vim.api.nvim_win_text_height(prompt_win, {}).all end)
-          if ok_h and new_height > 0 then
-            pcall(vim.api.nvim_win_set_config, prompt_win, { height = math.min(max_h, new_height) })
-          end
-          
-          -- Auto-scroll to the bottom as new lines stream in
-          local ok_c, line_count = pcall(vim.api.nvim_buf_line_count, prompt_buf)
-          if ok_c then
-            pcall(vim.api.nvim_win_set_cursor, prompt_win, {line_count, 0})
-          end
-        end,
-        function()
-          is_streaming = false
-          cancel = nil
-          pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Press <C-s> to Apply, Esc to Cancel ", title_pos = "center" })
-        end,
-        function(err)
-          is_streaming = false
-          cancel = nil
-          error_occurred = true
-          vim.notify("CADE Edit error: " .. err, vim.log.levels.ERROR)
-          pcall(vim.api.nvim_win_set_config, prompt_win, { title = " ✨ Error ", title_pos = "center" })
-        end
-      )
-    end
-    
-    vim.keymap.set("n", "<Esc>", close_all, { buffer = prompt_buf })
-    vim.keymap.set("i", "<Esc>", function()
-      vim.cmd("stopinsert")
-    end, { buffer = prompt_buf })
-    
-    -- Use <C-s> or <CR> to submit or apply
-    vim.keymap.set("n", "<C-s>", function() submit_or_apply(true) end, { buffer = prompt_buf })
-    vim.keymap.set("i", "<C-s>", function() submit_or_apply(true) end, { buffer = prompt_buf })
-    
-    vim.keymap.set("n", "<CR>", function() submit_or_apply(false) end, { buffer = prompt_buf })
-    vim.keymap.set("i", "<CR>", function() submit_or_apply(false) end, { buffer = prompt_buf })
-  end)
+  end
+  for _, scratch in ipairs({ prompt_buf, review_buf }) do
+    vim.keymap.set({ "n", "i" }, "<Esc>", function() vim.cmd("stopinsert"); close_all() end, { buffer = scratch })
+    vim.keymap.set({ "n", "i" }, "<C-s>", function() submit_or_apply(true) end, { buffer = scratch })
+    vim.keymap.set({ "n", "i" }, "<CR>", function() submit_or_apply(false) end, { buffer = scratch })
+  end
+  vim.cmd("startinsert")
 end
 
 M._get_visual_selection = get_visual_selection
 M._replace_text = replace_text
-
 return M

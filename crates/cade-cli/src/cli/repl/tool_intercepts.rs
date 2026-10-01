@@ -137,16 +137,13 @@ impl Repl {
         if force_synchronous {
             args["background"] = serde_json::Value::Bool(false);
         }
+        let mut body = self.execution_options().await?;
+        body["conversation_id"] = serde_json::json!(self.conversation_id());
+        body["mode"] = self.permissions.mode().to_string().into();
+        body["args"] = args.clone();
         let response = self
             .client
-            .raw_post(
-                &format!("/agents/{}/subagents", self.agent_id()),
-                &serde_json::json!({
-                    "conversation_id": self.conversation_id(),
-                    "mode": self.permissions.mode().to_string(),
-                    "args": args,
-                }),
-            )
+            .raw_post(&format!("/agents/{}/subagents", self.agent_id()), &body)
             .await?;
         let mut result = cade_agent::tools::ToolResult {
             tool_call_id: call_id.to_string(),

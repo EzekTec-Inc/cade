@@ -23,6 +23,7 @@ fn question_other_accepts_digits_and_details_scroll_without_changing_focus() {
     let mut draw_state = ActiveQuestionDrawState::new(question);
     draw_state.cursor_pos = draw_state.other_idx;
     let mut overlay = ActiveQuestionState {
+        approval_id: None,
         draw_state,
         tx: Some(tx),
         result: None,
@@ -1215,6 +1216,7 @@ fn test_question_modal_renders_centered_with_radios_and_backdrop() {
 
     let (tx, _rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1339,6 +1341,7 @@ fn test_question_modal_single_select_number_key_resolves() {
 
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1381,6 +1384,7 @@ fn test_question_modal_navigation_and_enter_select() {
 
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1417,6 +1421,7 @@ fn test_question_modal_esc_dismisses_cleanly() {
 
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1459,6 +1464,7 @@ fn test_question_modal_multi_select_spacebar_toggle() {
 
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1598,6 +1604,7 @@ fn test_question_modal_multi_select_renders_checkboxes() {
 
     let (tx, _rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1654,6 +1661,7 @@ fn test_question_modal_freeform_other_text_editing_and_submit() {
 
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1726,6 +1734,7 @@ fn test_question_modal_overflow_scrolling_and_small_viewport() {
 
     let (tx, _rx) = tokio::sync::oneshot::channel();
     let mut state = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question),
         tx: Some(tx),
         result: None,
@@ -1794,6 +1803,7 @@ fn test_question_modal_sequence_progression_and_draft_preservation() {
 
     let (tx1, mut rx1) = tokio::sync::oneshot::channel();
     let mut state1 = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(q1),
         tx: Some(tx1),
         result: None,
@@ -1850,6 +1860,7 @@ fn test_question_modal_sequence_progression_and_draft_preservation() {
 
     let (tx2, mut rx2) = tokio::sync::oneshot::channel();
     let mut state2 = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(q2),
         tx: Some(tx2),
         result: None,

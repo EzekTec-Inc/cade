@@ -58,11 +58,23 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("CadeReconnect", function()
     M.reconnect()
   end, { desc = "Reconnect CADE IDE bridge to cade-ide-mcp" })
+
+  vim.api.nvim_create_user_command("CadeCheckConnection", function()
+    M.check_connection()
+  end, { desc = "Check CADE IDE bridge connection" })
+
+  vim.api.nvim_create_user_command("CadeDisconnect", function()
+    M.disconnect()
+  end, { desc = "Disconnect CADE IDE bridge" })
 end
 
 --- Manually reconnect (useful after restarting cade-ide-mcp).
 function M.reconnect()
   if _conn then _conn.connect() end
+end
+
+function M.disconnect()
+  M._teardown()
 end
 
 --- Print current connection state + latest snapshot the publisher would send.

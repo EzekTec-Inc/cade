@@ -11,9 +11,6 @@ vim.g.loaded_cade_nvim = 1
 local ok, cade = pcall(require, "cade")
 if not ok then return end
 
--- Default setup (user can call require("cade").setup({}) in their config to override)
-cade.setup({})
-
 local trigger = require("cade.trigger")
 
 -- Autocmds for completions

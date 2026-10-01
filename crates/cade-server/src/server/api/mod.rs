@@ -30,6 +30,7 @@ pub mod teams;
 pub mod tool_executions;
 pub mod tools;
 pub mod workflows;
+pub mod working_sessions;
 
 use crate::server::{rate_limit::rate_limit_middleware, state::AppState};
 use axum::{
@@ -75,6 +76,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/events", get(agents::stream_global_events))
         .route("/v1/defragment", post(health::defragment_database_handler))
         .route("/v1/approvals", get(approvals::list_approvals))
+        .route("/v1/working-sessions", post(working_sessions::open))
+        .route("/v1/working-sessions/{id}", delete(working_sessions::close))
+        .route(
+            "/v1/working-sessions/{id}/heartbeat",
+            post(working_sessions::renew),
+        )
         .route(
             "/v1/approvals/{id}/action",
             post(approvals::action_approval),

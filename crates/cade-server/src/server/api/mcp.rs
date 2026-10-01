@@ -165,7 +165,7 @@ mod tests {
         });
 
         AppState {
-            conversation_approvals: Default::default(),
+            permission_sessions: Default::default(),
             db,
             llm: Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
                 anthropic_api_key: None,

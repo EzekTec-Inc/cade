@@ -530,7 +530,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
     });
 
     let state = AppState {
-        conversation_approvals: Default::default(),
+        permission_sessions: Default::default(),
         subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -748,7 +748,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         max_context_budget: None,
     });
     let state = AppState {
-        conversation_approvals: Default::default(),
+        permission_sessions: Default::default(),
         subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -971,7 +971,7 @@ fn build_minimal_state(
         max_context_budget: None,
     });
     AppState {
-        conversation_approvals: Default::default(),
+        permission_sessions: Default::default(),
         subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),

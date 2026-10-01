@@ -418,10 +418,11 @@ fn manager_session_allow_invalid_ignored() {
 }
 
 #[test]
-fn exact_session_grant_obeys_hard_denials_and_invalidation() {
-    let mgr = PermissionManager::new(PermissionMode::Default);
+fn remembered_tool_grant_obeys_hard_denials_and_invalidation() {
+    let grants = SessionGrants::new(std::time::Duration::from_secs(300));
+    let mgr = PermissionManager::new(PermissionMode::Default).with_session_grants(grants.clone());
     let args = serde_json::json!({"path": "src/file.rs", "content": "first"});
-    mgr.add_session_allow_call("write_file", &args);
+    grants.grant_if("write_file", || Ok(true)).unwrap();
     assert!(mgr.resolve("write_file", &args, false).is_allow());
     assert!(
         mgr.resolve(
@@ -429,18 +430,17 @@ fn exact_session_grant_obeys_hard_denials_and_invalidation() {
             &serde_json::json!({"path": "src/file.rs", "content": "second"}),
             false
         )
-        .is_ask()
+        .is_allow()
     );
     mgr.add_deny_rule(PermissionRule::parse("write_file").unwrap());
     assert!(mgr.resolve("write_file", &args, false).is_deny());
 
-    let plan = PermissionManager::new(PermissionMode::Plan);
-    plan.add_session_allow_call("write_file", &args);
+    let plan = PermissionManager::new(PermissionMode::Plan).with_session_grants(grants.clone());
     assert!(plan.resolve("write_file", &args, false).is_deny());
 
-    let mcp = PermissionManager::new(PermissionMode::Default);
+    let mcp = PermissionManager::new(PermissionMode::Default).with_session_grants(grants.clone());
     let mcp_args = serde_json::json!({"path": "src/file.rs"});
-    mcp.add_session_allow_call("github__write_file", &mcp_args);
+    grants.grant_if("github__write_file", || Ok(true)).unwrap();
     assert!(
         mcp.resolve("github__write_file", &mcp_args, true)
             .is_allow()

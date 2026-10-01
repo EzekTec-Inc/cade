@@ -129,6 +129,7 @@ fn candidate6_freeform_digits_spaces_cursor_and_wrapped_paste_stay_typed() {
 
     // A long, double-width answer and a middle insertion cursor remain visible.
     let mut dialog = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(question(false)),
         tx: None,
         result: None,
@@ -247,6 +248,7 @@ fn candidate6_detail_scrolling_uses_visual_rows_and_preserves_choice() {
         .map(|i| format!("Row {i}: long details that wrap across a narrow terminal.\n"))
         .collect();
     let mut dialog = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(q),
         tx: None,
         result: None,
@@ -376,6 +378,7 @@ fn candidate6_dialog_json_formatting_and_same_name_theme_cache() {
     let mut q = question(false);
     q.text = r#"{"command":"git status","nested":{"value":7},"enabled":true}"#.into();
     let mut dialog = ActiveQuestionState {
+        approval_id: None,
         draw_state: ActiveQuestionDrawState::new(q),
         tx: None,
         result: None,

@@ -182,19 +182,7 @@ fn rename_schema(mut schema: Value, new_name: &str) -> Value {
     schema
 }
 
-/// Maps model-specific tool aliases to their canonical native names.
-pub fn canonical_name(name: &str) -> &str {
-    match name {
-        "RunShellCommand" => "bash",
-        "ReadFileGemini" => "read_file",
-        "WriteFileGemini" => "write_file",
-        "Replace" => "edit_file",
-        "SearchFileContent" => "grep",
-        "GlobGemini" => "glob",
-        "WriteTodos" => "TodoWrite",
-        _ => name,
-    }
-}
+pub use cade_core::permissions::canonical_tool_name as canonical_name;
 
 /// Strip the MCP server prefix from a tool name.
 ///

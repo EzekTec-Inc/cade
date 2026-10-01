@@ -823,6 +823,8 @@ impl HttpTransport {
 pub mod extensions;
 pub mod memory;
 pub mod messages;
+mod working_session;
+pub use working_session::WorkingSession;
 pub mod storage_impl;
 
 #[cfg(feature = "mcp")]

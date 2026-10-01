@@ -122,6 +122,7 @@ async fn direct_cli_launch_persists_inspectable_child_events() {
         State(state.clone()),
         Path("inspect-parent".into()),
         Json(super::LaunchSubagentPayload {
+            execution: Default::default(),
             conversation_id: None,
             args: json!({"prompt":"work", "background":true}),
             mode: "default".into(),
@@ -363,6 +364,10 @@ pub(super) fn seed_test_tools(db: &cade_store::sqlite::Db, agent_id: &str, names
         true,
     );
     schemas.extend(cade_agent::tools::all_meta_schemas());
+    schemas.extend(cade_agent::tools::manager::schemas_for_toolset(
+        cade_core::toolsets::Toolset::Gemini,
+        true,
+    ));
     let mut ids = Vec::new();
     for name in names {
         let schema = schemas
@@ -388,6 +393,9 @@ pub(super) fn seed_test_tools(db: &cade_store::sqlite::Db, agent_id: &str, names
         .expect("attach inherited capabilities to the real parent");
 }
 
+#[path = "working_session_tests.rs"]
+mod working_session_tests;
+
 fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
     seed_test_agent(db, agent_id);
     cade_store::sqlite::create_run(db, agent_id, None)
@@ -396,7 +404,7 @@ fn approval_test_run(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
 }
 
 #[tokio::test]
-async fn session_approval_reuses_only_exact_calls_in_its_conversation() {
+async fn working_session_approval_reuses_tool_across_arguments_runs_and_conversations() {
     use cade_agent::agent::client::CadeMessage;
 
     let dir = tempfile::Builder::new()
@@ -407,14 +415,89 @@ async fn session_approval_reuses_only_exact_calls_in_its_conversation() {
     approval_test_run(&state.db, "agent-scope");
     let first = cade_store::sqlite::create_conversation(&state.db, "agent-scope", "one").unwrap();
     let second = cade_store::sqlite::create_conversation(&state.db, "agent-scope", "two").unwrap();
-    let path = dir.path().join("file.txt");
-
-    for (conversation, content, action, prompts, writes) in [
-        (&first.id, "original", "approve_session", true, true),
-        (&first.id, "original", "", false, true),
-        (&first.id, "changed", "deny", true, false),
-        (&second.id, "original", "deny", true, false),
+    let root = dir.path().canonicalize().unwrap();
+    let session = state.permission_sessions.open(&root).unwrap();
+    let fresh_session = state.permission_sessions.open(&root).unwrap();
+    for (session_id, conversation, file, content, mode, action, prompts, writes, expected) in [
+        (
+            &session,
+            &first.id,
+            "first.txt",
+            "original",
+            "default",
+            "approve_session",
+            true,
+            true,
+            "original",
+        ),
+        (
+            &session,
+            &first.id,
+            "other.txt",
+            "changed",
+            "default",
+            "",
+            false,
+            true,
+            "changed",
+        ),
+        (
+            &session,
+            &second.id,
+            "other.txt",
+            "another conversation",
+            "default",
+            "",
+            false,
+            true,
+            "another conversation",
+        ),
+        (
+            &session,
+            &second.id,
+            "other.txt",
+            "plan cannot write",
+            "plan",
+            "",
+            false,
+            false,
+            "another conversation",
+        ),
+        (
+            &fresh_session,
+            &first.id,
+            "other.txt",
+            "fresh client",
+            "default",
+            "deny",
+            true,
+            false,
+            "another conversation",
+        ),
+        (
+            &fresh_session,
+            &first.id,
+            "other.txt",
+            "once",
+            "default",
+            "approve",
+            true,
+            true,
+            "once",
+        ),
+        (
+            &fresh_session,
+            &first.id,
+            "other.txt",
+            "again",
+            "default",
+            "deny",
+            true,
+            false,
+            "once",
+        ),
     ] {
+        let path = root.join(file);
         let run_id = cade_store::sqlite::create_run(&state.db, "agent-scope", Some(conversation))
             .unwrap()
             .id;
@@ -424,7 +507,7 @@ async fn session_approval_reuses_only_exact_calls_in_its_conversation() {
             conversation_id: Some(conversation.clone()),
             run_id,
             input: "write".into(),
-            permission_mode: Some("default".into()),
+            permission_mode: Some(mode.into()),
         };
         let call = LlmToolCall {
             id: format!("tc-{content}-{action}"),
@@ -432,43 +515,70 @@ async fn session_approval_reuses_only_exact_calls_in_its_conversation() {
             arguments: json!({"path": path, "content": content}),
             thought_signature: None,
         };
-        let worker = tokio::spawn(execute_turn_tools(state.clone(), input, vec![call], tx));
-
-        if prompts {
-            let id = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    let event = rx.recv().await.unwrap().unwrap();
-                    let message: CadeMessage = serde_json::from_str(&event.data).unwrap();
-                    if let Some(request) = message.approval_request() {
-                        break request.id.to_string();
-                    }
-                }
-            })
-            .await
-            .expect("approval required for a new invocation");
-            let _ = crate::server::api::approvals::action_approval(
-                State(state.clone()),
-                Path(id),
-                axum::Json(crate::server::api::approvals::ActionPayload {
-                    action: action.into(),
-                    feedback: None,
-                }),
-            )
-            .await
-            .unwrap();
+        let options = runtime::RunExecutionOptions {
+            cwd: Some(root.clone()),
+            working_session_id: Some(session_id.clone()),
+            permissions: Some(Default::default()),
+            allowed_paths: Some(vec![".".into()]),
+            ..Default::default()
         }
+        .resolve(
+            &state,
+            &runtime::RunRequest {
+                agent_id: input.agent_id.clone(),
+                conversation_id: input.conversation_id.clone(),
+                input: input.input.clone(),
+                permission_mode: input.permission_mode.clone(),
+            },
+        )
+        .unwrap();
+        let worker = tokio::spawn(super::execution::execute_turn_tools_with_options(
+            state.clone(),
+            input,
+            vec![call],
+            tx,
+            options,
+        ));
+        let mut prompt_count = 0;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(event) = rx.recv().await {
+                let event = event.unwrap();
+                let message: CadeMessage = serde_json::from_str(&event.data).unwrap();
+                if let Some(request) = message.approval_request() {
+                    assert!(prompts, "re-prompted for a remembered tool: {content}");
+                    prompt_count += 1;
+                    let _ = crate::server::api::approvals::action_approval(
+                        State(state.clone()),
+                        Path(request.id.to_owned()),
+                        axum::Json(crate::server::api::approvals::ActionPayload {
+                            action: action.into(),
+                            feedback: None,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        })
+        .await
+        .expect("tool execution must finish");
+        assert_eq!(prompt_count, usize::from(prompts));
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), worker)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(result[0].0.is_error, !writes, "{}", result[0].0.output);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
         assert!(
             cade_store::sqlite::list_pending_approvals(&state.db)
                 .unwrap()
                 .is_empty()
         );
     }
+    let descendant = state.permission_sessions.for_run(&session, &root).unwrap();
+    state.permission_sessions.close(&session);
+    assert!(!descendant.allows("write_file"));
+    assert!(state.permission_sessions.for_run(&session, &root).is_err());
 }
 
 #[tokio::test]
@@ -657,7 +767,7 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
         agent_id: "agent-failed-persistence".into(),
         run_id: "missing-run".into(),
         conversation_id: None,
-        conversation_approvals: Arc::clone(&state.conversation_approvals),
+        permission_sessions: Arc::clone(&state.permission_sessions),
         permissions: cade_core::permissions::PermissionManager::default(),
         tx,
     };
@@ -681,7 +791,7 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
         agent_id: "agent-timeout".into(),
         run_id,
         conversation_id: None,
-        conversation_approvals: Arc::clone(&state.conversation_approvals),
+        permission_sessions: Arc::clone(&state.permission_sessions),
         permissions: cade_core::permissions::PermissionManager::default(),
         tx,
     };
@@ -727,7 +837,7 @@ async fn approval_persistence_failure_and_short_timeout_fail_closed() {
         agent_id: "agent-cancel-approval".into(),
         run_id: run_id.clone(),
         conversation_id: None,
-        conversation_approvals: Arc::clone(&state.conversation_approvals),
+        permission_sessions: Arc::clone(&state.permission_sessions),
         permissions: cade_core::permissions::PermissionManager::default(),
         tx,
     };
@@ -1189,7 +1299,7 @@ pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>
         max_context_budget: None,
     });
     AppState {
-        conversation_approvals: Default::default(),
+        permission_sessions: Default::default(),
         subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -2338,6 +2448,7 @@ async fn cli_subagent_adapter_rejects_other_agents_conversations_and_unknown_def
     let other =
         cade_store::sqlite::create_conversation(&state.db, "another-parent", "other").unwrap();
     let request = |conversation_id: Option<String>| super::LaunchSubagentPayload {
+        execution: Default::default(),
         conversation_id,
         args: json!({"prompt": "task", "mode": "no-such-definition"}),
         mode: "default".into(),
@@ -2422,6 +2533,7 @@ async fn cli_subagent_adapter_uses_only_the_invoking_conversation_context() {
             State(state.clone()),
             Path("cli-context-parent".into()),
             Json(super::LaunchSubagentPayload {
+                execution: Default::default(),
                 conversation_id: Some(conversation.id.clone()),
                 args: json!({"prompt": "inspect context"}),
                 mode: "default".into(),
@@ -2491,6 +2603,7 @@ async fn cli_subagent_adapter_enforces_plan_policy_on_unlisted_tool_calls() {
         State(state),
         Path("cli-policy-parent".into()),
         Json(super::LaunchSubagentPayload {
+            execution: Default::default(),
             conversation_id: None,
             args: json!({"prompt": "task", "mode": "plan"}),
             mode: "plan".into(),
@@ -4664,7 +4777,7 @@ mod advanced_execution_tests {
             agent_id: "agent-approval-test".to_string(),
             run_id: approval_test_run(&state.db, "agent-approval-test"),
             conversation_id: None,
-            conversation_approvals: Arc::clone(&state.conversation_approvals),
+            permission_sessions: Arc::clone(&state.permission_sessions),
             permissions: cade_core::permissions::PermissionManager::default(),
             tx,
         };
@@ -4809,7 +4922,7 @@ mod advanced_execution_tests {
             agent_id: "agent-crud-prompt-test".to_string(),
             run_id: approval_test_run(&state.db, "agent-crud-prompt-test"),
             conversation_id: None,
-            conversation_approvals: Arc::clone(&state.conversation_approvals),
+            permission_sessions: Arc::clone(&state.permission_sessions),
             permissions: cade_core::permissions::PermissionManager::default(),
             tx,
         };

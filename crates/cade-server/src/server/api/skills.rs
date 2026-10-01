@@ -253,7 +253,7 @@ mod tests {
             max_context_budget: None,
         });
         AppState {
-            conversation_approvals: Default::default(),
+            permission_sessions: Default::default(),
             subagent_cancellations: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),

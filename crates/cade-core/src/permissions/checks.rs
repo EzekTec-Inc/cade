@@ -1,5 +1,20 @@
 // -- Write-schema detection (schema-level filtering for Plan mode & permission resolution)
 
+/// Native model aliases share a dispatch identity. Qualified external names are
+/// opaque and case-sensitive: never strip or case-fold a provider's identity.
+pub fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "RunShellCommand" => "bash",
+        "ReadFileGemini" => "read_file",
+        "WriteFileGemini" => "write_file",
+        "Replace" => "edit_file",
+        "SearchFileContent" => "grep",
+        "GlobGemini" => "glob",
+        "WriteTodos" => "TodoWrite",
+        _ => name,
+    }
+}
+
 /// Strip namespace and server prefixes (e.g. "default_api:serena__replace_content" -> "replace_content")
 /// and convert to lower-case.
 pub fn normalize_tool_name(name: &str) -> String {

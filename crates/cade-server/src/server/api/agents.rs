@@ -790,11 +790,6 @@ pub async fn delete_conversation(
     }
     let deleted =
         sqlite::delete_conversation(&state.db, &conv_id).map_err(|e| server_err(e.to_string()))?;
-    if deleted {
-        state
-            .conversation_approvals
-            .revoke_conversation(&agent_id, &conv_id);
-    }
     broadcast_global_event(json!({
         "event_type": "conversation_deleted",
         "agent_id": agent_id,

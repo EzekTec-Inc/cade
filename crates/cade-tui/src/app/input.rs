@@ -7,6 +7,10 @@ use crate::Result;
 use super::{ServerBootStatus, ToastLevel, TuiApp};
 use crate::autocomplete::AutocompleteProvider;
 
+#[cfg(test)]
+#[path = "completion_tests.rs"]
+mod completion_tests;
+
 /// Host work wakes the REPL without impersonating a submitted prompt.
 pub enum InputOutcome {
     Submitted(String),
@@ -41,7 +45,8 @@ pub(crate) fn dispatch_overlay_stack(
     let result = overlay.handle_event(event);
     if result == OverlayInputResult::NotHandled {
         return OverlayDispatch {
-            owned: matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)),
+            owned: overlay.is_modal()
+                && matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)),
             dirty,
             action: None,
         };
@@ -62,6 +67,30 @@ pub(crate) fn dispatch_overlay_stack(
 }
 
 impl TuiApp {
+    /// Synchronize a visible completion popup after edits, paste, or cursor moves.
+    /// Also used by the active-turn editor path, which does not use idle dispatch.
+    pub fn refresh_autocomplete(&mut self) {
+        let Some(ac) = self
+            .overlays
+            .last_mut()
+            .and_then(|overlay| overlay.as_any_mut())
+            .and_then(|overlay| overlay.downcast_mut::<crate::autocomplete::AutocompleteOverlay>())
+        else {
+            return;
+        };
+        ac.update_suggestions(
+            &self.editor.text(),
+            self.editor.cursor_pos(),
+            &self.slash_ac,
+            &self.tool_ac,
+            &self.next_step_ac,
+        );
+        if ac.dismissed {
+            self.overlays.pop();
+        }
+        self.draw_dirty = true;
+    }
+
     // -- Input loop
 
     /// Returns `true` if any UI animation (spinner, progress bar, toast) is actively running.
@@ -159,6 +188,7 @@ impl TuiApp {
         } else {
             self.editor.handle_paste(text);
         }
+        self.refresh_autocomplete();
         self.last_status = None;
         self.draw_dirty = true;
     }
@@ -174,7 +204,9 @@ impl TuiApp {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 let was_empty = self.editor.is_empty();
-                if let Some(result) = self.handle_key_input(key, history, hist_idx)? {
+                let result = self.handle_key_input(key, history, hist_idx)?;
+                self.refresh_autocomplete();
+                if let Some(result) = result {
                     return Ok(Some(match result {
                         Some(text) => InputOutcome::Submitted(text),
                         None => InputOutcome::Exit,
@@ -723,10 +755,7 @@ impl TuiApp {
                 let input_text = self.editor.text();
                 let cursor_pos = self.editor.cursor_pos();
 
-                let word_start = input_text[..cursor_pos]
-                    .rfind(|c: char| c.is_whitespace())
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
+                let word_start = crate::autocomplete::token_start(&input_text[..cursor_pos]);
                 let partial = &input_text[word_start..cursor_pos];
 
                 // Trigger Slash Command completion (Tab on '/')
@@ -883,27 +912,6 @@ impl TuiApp {
                             self.clear_selection();
                         }
 
-                        if let Some(ac) = self
-                            .overlays
-                            .last_mut()
-                            .and_then(|o| o.as_any_mut())
-                            .and_then(|a| {
-                                a.downcast_mut::<crate::autocomplete::AutocompleteOverlay>()
-                            })
-                            && !self.is_pasting
-                        {
-                            ac.update_suggestions(
-                                &self.editor.text(),
-                                self.editor.cursor_pos(),
-                                &self.slash_ac,
-                                &self.tool_ac,
-                                &self.next_step_ac,
-                            );
-                            if ac.suggestions.is_empty() {
-                                ac.dismissed = true;
-                            }
-                        }
-
                         if !self.is_pasting {
                             if let KeyCode::Char('/') = k.code {
                                 let input_text = self.editor.text();
@@ -992,20 +1000,11 @@ impl TuiApp {
     ) -> Result<Option<Option<String>>> {
         let action = match action.downcast::<crate::autocomplete::AutocompleteAction>() {
             Ok(ac_action) => {
-                let input = self.editor.text();
-                let before = &input[..ac_action.word_start];
-                let after = &input[ac_action.cursor_pos..];
-
-                let mut completed = ac_action.text;
-                if !completed.ends_with(' ') {
-                    completed.push(' ');
+                if let Some((input, cursor)) = ac_action.apply(&self.editor.text()) {
+                    self.editor.set_text(input);
+                    self.editor.set_cursor_pos(cursor);
+                    self.draw_dirty = true;
                 }
-
-                let new_input = format!("{}{}{}", before, completed, after);
-                let new_cursor = ac_action.word_start + completed.len();
-                self.editor.set_text(new_input);
-                self.editor.set_cursor_pos(new_cursor);
-                self.draw_dirty = true;
                 return Ok(None);
             }
             Err(action) => action,
@@ -1112,6 +1111,9 @@ impl TuiApp {
         &mut self,
         event: &Event,
     ) -> Result<(bool, Option<Option<String>>)> {
+        // Never accept a completion using a stale cursor/range, including after
+        // edits made outside the idle key path (e.g. active-turn input).
+        self.refresh_autocomplete();
         let dispatch = dispatch_overlay_stack(&mut self.overlays, event);
         self.draw_dirty |= dispatch.dirty;
         let submission = match dispatch.action {

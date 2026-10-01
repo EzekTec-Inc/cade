@@ -123,6 +123,8 @@ pub struct RunRequest {
 pub struct RunExecutionOptions {
     #[serde(alias = "workspace")]
     pub cwd: Option<PathBuf>,
+    /// Client-owned Working Session, independent of Conversation identity.
+    pub working_session_id: Option<String>,
     pub allowed_paths: Option<Vec<String>>,
     pub permission_mode: Option<String>,
     pub permissions: Option<PermissionSettings>,
@@ -281,7 +283,7 @@ impl RunExecutionOptions {
             })
             .transpose()?
             .unwrap_or_default();
-        let permissions = cade_core::permissions::PermissionManager::new_with_strict_bash(
+        let mut permissions = cade_core::permissions::PermissionManager::new_with_strict_bash(
             mode,
             permission_settings.strict_bash,
         );
@@ -299,10 +301,12 @@ impl RunExecutionOptions {
                 }
             }
         }
-        if let Some(conversation_id) = request.conversation_id.as_deref() {
-            state
-                .conversation_approvals
-                .apply_to(&request.agent_id, conversation_id, &permissions);
+        if let Some(id) = self.working_session_id.as_deref() {
+            let grants = state
+                .permission_sessions
+                .for_run(id, &cwd)
+                .map_err(RunStartError::invalid)?;
+            permissions = permissions.with_session_grants(grants);
         }
         let backend = if let Some(runtime) = self.tool_runtime.as_ref() {
             if runtime.cwd != cwd

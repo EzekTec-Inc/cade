@@ -92,6 +92,28 @@ impl TuiApp {
         &mut self,
         question: Question,
     ) -> Result<tokio::sync::oneshot::Receiver<Option<QuestionAnswer>>> {
+        self.start_question(question, None)
+    }
+
+    pub fn ask_approval_async(
+        &mut self,
+        id: String,
+        question: Question,
+    ) -> Result<tokio::sync::oneshot::Receiver<Option<QuestionAnswer>>> {
+        self.start_question(question, Some(id))
+    }
+
+    /// Remote resolution removes only the matching dialog. Dropping its sender
+    /// tells the waiting adapter that no new user decision should be submitted.
+    pub fn resolve_approval(&mut self, id: &str) {
+        self.draw_dirty |= dismiss_approval(&mut self.overlays, id);
+    }
+
+    fn start_question(
+        &mut self,
+        question: Question,
+        approval_id: Option<String>,
+    ) -> Result<tokio::sync::oneshot::Receiver<Option<QuestionAnswer>>> {
         self.scroll = 0;
         self.notify_if_unfocused(
             super::notifier::AttentionCue::QuestionAsked,
@@ -99,9 +121,60 @@ impl TuiApp {
             &question.text,
         );
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.overlays
-            .push(Box::new(ActiveQuestionState::new(question, tx)));
+        let mut dialog = ActiveQuestionState::new(question, tx);
+        dialog.approval_id = approval_id;
+        self.overlays.push(Box::new(dialog));
         self.draw()?;
         Ok(rx)
+    }
+}
+
+fn dismiss_approval(
+    overlays: &mut Vec<Box<dyn crate::overlay_component::OverlayComponent>>,
+    id: &str,
+) -> bool {
+    let count = overlays.len();
+    overlays.retain_mut(|overlay| {
+        !overlay
+            .as_any_mut()
+            .and_then(|overlay| overlay.downcast_mut::<ActiveQuestionState>())
+            .is_some_and(|question| question.approval_id.as_deref() == Some(id))
+    });
+    count != overlays.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::overlay_component::OverlayComponent;
+
+    #[tokio::test]
+    async fn remote_approval_resolution_drops_only_the_matching_answer_channel() {
+        let question = Question {
+            header: "Approve tool".into(),
+            text: "Allow?".into(),
+            options: vec![],
+            multi_select: false,
+            allow_other: false,
+            progress: None,
+        };
+        let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        let mut first = ActiveQuestionState::new(question.clone(), first_tx);
+        first.approval_id = Some("first".into());
+        let mut second = ActiveQuestionState::new(question, second_tx);
+        second.approval_id = Some("second".into());
+        let mut overlays: Vec<Box<dyn OverlayComponent>> = vec![Box::new(first), Box::new(second)];
+        assert!(dismiss_approval(&mut overlays, "first"));
+        assert!(
+            first_rx.await.is_err(),
+            "remote resolution is not a user Deny"
+        );
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(overlays.len(), 1);
+        assert!(!dismiss_approval(&mut overlays, "first"));
     }
 }

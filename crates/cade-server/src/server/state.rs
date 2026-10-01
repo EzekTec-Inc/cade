@@ -6,49 +6,6 @@ use serde_json::Value;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-/// Exact, process-lifetime grants keyed by agent and conversation.
-#[derive(Default)]
-pub struct ConversationApprovals {
-    grants: parking_lot::Mutex<
-        std::collections::HashMap<(String, String), std::collections::HashSet<(String, String)>>,
-    >,
-}
-
-impl ConversationApprovals {
-    pub fn grant(&self, agent_id: &str, conversation_id: &str, tool: &str, args: &Value) {
-        self.grants
-            .lock()
-            .entry((agent_id.to_owned(), conversation_id.to_owned()))
-            .or_default()
-            .insert((tool.to_lowercase(), args.to_string()));
-    }
-
-    pub fn revoke_conversation(&self, agent_id: &str, conversation_id: &str) {
-        self.grants
-            .lock()
-            .remove(&(agent_id.to_owned(), conversation_id.to_owned()));
-    }
-
-    pub fn apply_to(
-        &self,
-        agent_id: &str,
-        conversation_id: &str,
-        manager: &cade_core::permissions::PermissionManager,
-    ) {
-        if let Some(grants) = self
-            .grants
-            .lock()
-            .get(&(agent_id.to_owned(), conversation_id.to_owned()))
-        {
-            for (tool, args) in grants {
-                if let Ok(args) = serde_json::from_str(args) {
-                    manager.add_session_allow_call(tool, &args);
-                }
-            }
-        }
-    }
-}
-
 /// A thread-safe, panic-free LRU cache backed by std collections.
 pub struct SafeLruCache<K, V> {
     cap: usize,
@@ -324,7 +281,7 @@ pub struct SubagentResult {
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
-    pub conversation_approvals: Arc<ConversationApprovals>,
+    pub permission_sessions: Arc<super::permission_sessions::PermissionSessions>,
     pub llm: Arc<dyn LlmProvider>,
     /// Router behind RwLock for hot-reload — /connect adds providers without restart
     pub llm_router: Arc<RwLock<LlmRouter>>,
@@ -403,7 +360,7 @@ impl AppState {
     ) -> Self {
         Self {
             db,
-            conversation_approvals: Arc::new(ConversationApprovals::default()),
+            permission_sessions: Default::default(),
             llm,
             llm_router,
             config,

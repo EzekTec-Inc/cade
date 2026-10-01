@@ -236,57 +236,44 @@ impl AgentModelAutocompleteProvider {
     /// Returns `Some((new_input, new_cursor))` on success.
     pub fn complete_token(&self, input: &str, cursor: usize) -> Option<(String, usize)> {
         let cursor = cursor.min(input.len());
-        let before = &input[..cursor];
+        let before = input.get(..cursor)?;
 
-        let word_start = before
-            .rfind(|c: char| c.is_whitespace())
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let word_start = token_start(before);
         let partial = &before[word_start..];
 
-        if let Some(stripped) = partial.strip_prefix('@') {
-            let prefix = &stripped.to_lowercase();
-            let mut matches: Vec<String> = self
-                .agents
-                .iter()
-                .filter(|a| is_subsequence(prefix, &a.to_lowercase()))
-                .cloned()
-                .collect();
-
-            if matches.is_empty() {
-                return None;
-            }
-            matches.sort();
-
-            let common = common_prefix(&matches);
-            let new_token = format!("@{}", common);
-            let new_cursor = word_start + new_token.len();
-            let new_input = format!("{}{}{}", &input[..word_start], new_token, &input[cursor..]);
-            return Some((new_input, new_cursor));
+        let (marker, query, candidates) = if let Some(query) = partial.strip_prefix('@') {
+            ('@', query, &self.agents)
+        } else {
+            ('#', partial.strip_prefix('#')?, &self.models)
+        };
+        let query = query.to_lowercase();
+        let matches: Vec<String> = candidates
+            .iter()
+            .filter(|candidate| is_subsequence(&query, &candidate.to_lowercase()))
+            .cloned()
+            .collect();
+        if matches.is_empty() {
+            return None;
         }
 
-        if let Some(stripped) = partial.strip_prefix('#') {
-            let prefix = &stripped.to_lowercase();
-            let mut matches: Vec<String> = self
-                .models
-                .iter()
-                .filter(|m| is_subsequence(prefix, &m.to_lowercase()))
-                .cloned()
-                .collect();
-
-            if matches.is_empty() {
-                return None;
-            }
-            matches.sort();
-
-            let common = common_prefix(&matches);
-            let new_token = format!("#{}", common);
-            let new_cursor = word_start + new_token.len();
-            let new_input = format!("{}{}{}", &input[..word_start], new_token, &input[cursor..]);
-            return Some((new_input, new_cursor));
+        let common = common_prefix(&matches);
+        let end = cursor
+            + input[cursor..]
+                .find(char::is_whitespace)
+                .unwrap_or(input.len() - cursor);
+        // Fuzzy matches need not share the user's prefix. Keep ambiguous queries
+        // intact (including any suffix after the cursor) and consume Tab rather
+        // than falling through to history completion.
+        let existing = &input[word_start + marker.len_utf8()..end];
+        if matches.len() > 1 && !common.to_lowercase().starts_with(&existing.to_lowercase()) {
+            return Some((input.to_owned(), cursor));
         }
-
-        None
+        let new_token = format!("{marker}{common}");
+        let new_cursor = word_start + new_token.len();
+        Some((
+            format!("{}{new_token}{}", &input[..word_start], &input[end..]),
+            new_cursor,
+        ))
     }
 }
 
@@ -373,12 +360,18 @@ impl SlashCommandProvider {
 }
 
 impl AutocompleteProvider for SlashCommandProvider {
-    fn completions(&self, input: &str, _cursor: usize) -> Vec<Completion> {
-        let trimmed = input.trim();
-        if !trimmed.starts_with('/') {
+    fn completions(&self, input: &str, cursor: usize) -> Vec<Completion> {
+        let Some(before) = input.get(..cursor.min(input.len())) else {
+            return vec![];
+        };
+        let Some(prefix) = before.trim_start().strip_prefix('/') else {
+            return vec![];
+        };
+        // Only the command token before the cursor participates in matching.
+        // Whitespace after it means the user is editing arguments instead.
+        if prefix.chars().any(char::is_whitespace) {
             return vec![];
         }
-        let prefix = &trimmed[1..]; // strip the /
         self.matching(prefix)
             .into_iter()
             .map(|cmd| Completion {
@@ -390,6 +383,15 @@ impl AutocompleteProvider for SlashCommandProvider {
 }
 
 // -- Internal helpers
+
+/// Byte offset after the last whitespace character, including multibyte spaces.
+pub(crate) fn token_start(before: &str) -> usize {
+    before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map_or(0, |(index, c)| index + c.len_utf8())
+}
 
 fn collect_files_inner(
     root: &Path,
@@ -586,6 +588,26 @@ pub struct AutocompleteAction {
     pub cursor_pos: usize,
 }
 
+impl AutocompleteAction {
+    /// Replace the whole token, retaining arguments to the right of the cursor.
+    pub(crate) fn apply(&self, input: &str) -> Option<(String, usize)> {
+        if self.word_start > self.cursor_pos {
+            return None;
+        }
+        let before = input.get(..self.word_start)?;
+        let tail = input.get(self.cursor_pos..)?;
+        let after = &tail[tail.find(char::is_whitespace).unwrap_or(tail.len())..];
+        let mut completed = self.text.clone();
+        if !completed.ends_with(' ') {
+            completed.push(' ');
+        }
+        // Reuse an existing separator instead of inserting a second space.
+        let after = after.strip_prefix(' ').unwrap_or(after);
+        let cursor = before.len() + completed.len();
+        Some((format!("{before}{completed}{after}"), cursor))
+    }
+}
+
 pub struct AutocompleteOverlay {
     pub id: &'static str,
     pub suggestions: Vec<Completion>,
@@ -646,17 +668,14 @@ impl AutocompleteOverlay {
         }
         let before = &input[..cursor];
 
-        let mut word_start = self.word_start.min(before.len());
-        while word_start > 0 && !before.is_char_boundary(word_start) {
-            word_start -= 1;
-        }
-
-        if before.len() < word_start {
+        self.cursor_pos = cursor;
+        if token_start(before) != self.word_start || !before.is_char_boundary(self.word_start) {
             self.suggestions.clear();
             self.selected_idx = 0;
+            self.dismissed = true;
             return;
         }
-        let partial = &before[word_start..cursor];
+        let partial = &before[self.word_start..cursor];
 
         let suggestions = if partial.starts_with('/') {
             slash_ac.completions(input, cursor)
@@ -672,17 +691,21 @@ impl AutocompleteOverlay {
         };
 
         self.suggestions = suggestions;
+        self.dismissed = self.suggestions.is_empty();
 
         if self.selected_idx >= self.suggestions.len() {
             self.selected_idx = 0;
         }
-        self.cursor_pos = cursor;
     }
 }
 
 impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
     fn id(&self) -> &'static str {
         self.id
+    }
+
+    fn is_modal(&self) -> bool {
+        false
     }
 
     fn render_overlay(
@@ -761,6 +784,10 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
         use crate::overlay_component::OverlayInputResult;
         use crossterm::event::KeyCode;
 
+        // Modified navigation/Enter belong to the editor or global shortcuts.
+        if !key.modifiers.is_empty() {
+            return OverlayInputResult::NotHandled;
+        }
         match key.code {
             KeyCode::Up => {
                 if self.selected_idx > 0 {
@@ -817,6 +844,116 @@ impl crate::overlay_component::OverlayComponent for AutocompleteOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_slash_matching_respects_cursor_and_command_boundaries() {
+        let provider = SlashCommandProvider::new(vec![SlashCommandDef {
+            name: "help".into(),
+            description: "Help".into(),
+        }]);
+        for (input, cursor) in [
+            ("/he please", 3),
+            ("  /he please", 5),
+            ("\u{3000}/he please", 6),
+        ] {
+            assert_eq!(
+                provider
+                    .completions(input, cursor)
+                    .iter()
+                    .map(|c| c.text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["/help"]
+            );
+        }
+        for input in ["/help ", "/help argument", "explain /he"] {
+            assert!(
+                provider.completions(input, input.len()).is_empty(),
+                "unexpected commands for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_ambiguous_fuzzy_agent_and_model_queries_are_preserved() {
+        let names = vec!["alpha-main".into(), "beta-main".into()];
+        let provider = AgentModelAutocompleteProvider::new(names.clone(), names);
+        for input in ["#ma", "@ma", "use #MA next"] {
+            let cursor = if input.starts_with("use") {
+                7
+            } else {
+                input.len()
+            };
+            let result = provider.complete_token(input, cursor).unwrap();
+            assert_eq!(result, (input.to_owned(), cursor));
+        }
+        let names = vec!["alpha-main".into(), "alpha-mini".into()];
+        let provider = AgentModelAutocompleteProvider::new(names.clone(), names);
+        assert_eq!(
+            provider.complete_token("#al", 3).unwrap(),
+            ("#alpha-m".into(), 8)
+        );
+        assert_eq!(
+            provider.complete_token("@mini", 5).unwrap(),
+            ("@alpha-mini".into(), 11)
+        );
+        assert_eq!(
+            provider.complete_token("#alpha-mini next", 4).unwrap(),
+            ("#alpha-mini next".into(), 4)
+        );
+    }
+
+    #[test]
+    fn completion_acceptance_replaces_whole_token_and_keeps_arguments() {
+        for (input, cursor) in [("/he please", 3), ("/help please", 2), ("/help", 3)] {
+            let action = AutocompleteAction {
+                text: "/help".into(),
+                word_start: 0,
+                cursor_pos: cursor,
+            };
+            let expected = if input.ends_with("please") {
+                "/help please"
+            } else {
+                "/help "
+            };
+            assert_eq!(action.apply(input).unwrap(), (expected.into(), 6));
+        }
+        let action = AutocompleteAction {
+            text: ":read".into(),
+            word_start: "界 ".len(),
+            cursor_pos: "界 :r".len(),
+        };
+        assert_eq!(
+            action.apply("界 :r next").unwrap(),
+            ("界 :read next".into(), "界 :read ".len())
+        );
+        let invalid = AutocompleteAction {
+            text: "/help".into(),
+            word_start: 1,
+            cursor_pos: 2,
+        };
+        assert!(
+            invalid.apply("界").is_none(),
+            "invalid UTF-8 ranges must not panic"
+        );
+    }
+
+    #[test]
+    fn completion_leaving_original_token_dismisses_stale_suggestions() {
+        use crate::overlay_component::OverlayComponent;
+        let tool = ToolAutocompleteProvider::new(vec![], vec!["read".into()]);
+        let mut overlay = AutocompleteOverlay::new(tool.completions(":r", 2), 0, 2);
+        overlay.update_suggestions(
+            ":r :re",
+            6,
+            &SlashCommandProvider::new(vec![]),
+            &tool,
+            &Default::default(),
+        );
+        assert!(
+            overlay.is_dismissed(),
+            "moving to another token must not retain the old replacement range"
+        );
+    }
 
     #[test]
     fn test_autocomplete_overlay_dynamic_filtering() {

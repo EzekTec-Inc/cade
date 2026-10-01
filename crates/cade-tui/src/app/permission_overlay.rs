@@ -62,6 +62,7 @@ impl PermissionOverlay {
             tx: Some(tx),
             verdict: None,
             dialog: ActiveQuestionState {
+                approval_id: None,
                 draw_state: ActiveQuestionDrawState::new(question),
                 tx: None,
                 result: None,

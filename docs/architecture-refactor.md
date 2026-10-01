@@ -12,6 +12,14 @@ Local native file, search, patch, shell, planning, and audit operations use the 
 
 Subagents own their captured scope even after a parent disconnects or cancels. Scope narrowing and isolated-path rebasing preserve inherited restrictions. Session completion owns outcome publication, permits, ephemeral state, and workspace discard/reconciliation.
 
+## Remembered permission in a Working Session
+
+“Allow for this session” remembers the fully qualified tool, regardless of its arguments, for the active CLI Working Session in one workspace. Conversations and Runs share that identity; descendant Subagents observe grants made after they started. Explicit session grants suppress repeated `strict_bash` prompts, while explicit denies, protected paths, Plan mode, and accepted path/backend restrictions still apply. “Allow once” remains limited to the pending invocation.
+
+The client opens `POST /v1/working-sessions` with `cwd`, includes the returned `working_session_id` in Run and direct Subagent requests, renews through `POST /v1/working-sessions/{id}/heartbeat`, and closes with `DELETE /v1/working-sessions/{id}`. These routes use the existing authenticated transport. Normal CLI exit closes the session; abnormal exits have a five-minute lease, renewed every thirty seconds while the client is alive. Reconnection within that lease retains grants; fresh clients and expired sessions do not reuse them. Grants are not persisted across server restarts. After expiry or server restart, the still-running client opens a fresh, empty session before new execution; existing descendants retain their original scope.
+
+Both Run and Subagent approval adapters publish remembered grants through the same pending-decision path, before acknowledging `approve_session`. Native aliases share dispatch identity, while qualified external names retain their namespace and case. A cancelled or duplicate decision cannot create a grant, and question feedback cannot become a tool grant. Automatically released requests remain session-dependent; matching CLI dialogs close on remote resolution without submitting a denial. Clients without a Working Session retain once/deny behavior but cannot request remembered approval. See [ADR-0028](adr/0028-working-session-tool-grants-and-shared-approval-outcomes.md).
+
 ## Providers and models
 
 Provider protocols remain explicit Rust adapters. Provider names, endpoints, defaults, model identities, capability recipes, token limits, tokenizers, and routing preferences are configuration/discovery data.

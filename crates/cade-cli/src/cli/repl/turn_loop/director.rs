@@ -461,6 +461,7 @@ impl<'a> TurnDirector<'a> {
                                             | (KeyCode::Down, _) => {
                                                 let w = app.last_input_width;
                                                 app.editor.handle_input(k, w);
+                                                app.refresh_autocomplete();
                                                 let _ = app.draw();
                                             }
                                             _ => {}

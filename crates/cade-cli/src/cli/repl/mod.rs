@@ -145,6 +145,7 @@ use crate::cli::repl::format::mode_display;
 
 pub struct Repl {
     pub(crate) client: HttpTransport,
+    working_session: Option<cade_agent::agent::client::WorkingSession>,
     /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
     pub(crate) agent_id: Arc<Mutex<String>>,
     pub(crate) agent_name: Arc<Mutex<String>>,
@@ -314,6 +315,7 @@ impl Repl {
 
         Self {
             client,
+            working_session: None,
             agent_id: Arc::new(Mutex::new(agent_id)),
             agent_name: Arc::new(Mutex::new(agent_name)),
             permissions,
@@ -673,6 +675,40 @@ impl Repl {
     }
 
     pub async fn run(mut self) -> Result<()> {
+        self.working_session = Some(match self.client.open_working_session(&self.cwd).await {
+            Ok(session) => session,
+            Err(error) => {
+                ratatui::restore();
+                return Err(error.into());
+            }
+        });
+        let result = self.run_loop().await;
+        if result.is_err() {
+            ratatui::restore();
+            cade_core::askpass::clear();
+        }
+        if let Some(session) = self.working_session.take() {
+            let closed = session.close().await;
+            if let Err(error) = closed {
+                if result.is_ok() {
+                    return Err(error.into());
+                }
+                tracing::warn!(%error, "Could not close Working Session after REPL failure");
+            }
+        }
+        result
+    }
+
+    async fn execution_options(&self) -> Result<serde_json::Value> {
+        let mut options = match &self.working_session {
+            Some(session) => session.execution_options().await?,
+            None => json!({"cwd": self.cwd}),
+        };
+        options["permission_mode"] = self.permissions.mode().to_string().into();
+        Ok(options)
+    }
+
+    async fn run_loop(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
         // Spawn exactly ONE application-lifetime SIGINT watcher.

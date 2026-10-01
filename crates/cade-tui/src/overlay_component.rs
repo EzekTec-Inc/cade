@@ -78,12 +78,19 @@ pub trait OverlayComponent: Send + Sync {
     /// See [`OverlayInputResult`] for outcomes.
     fn handle_input(&mut self, key: KeyEvent) -> OverlayInputResult;
 
+    /// Blocking dialogs own unhandled input. Nonmodal popups, such as completion,
+    /// let editing keys, paste, and pointer events reach the composer.
+    fn is_modal(&self) -> bool {
+        true
+    }
+
     /// A modal owns pointer and paste input too, even when it has no handler.
-    /// This prevents hidden editors and extension slots receiving modal input.
+    /// Nonmodal overlays can pass these events through without duplicating routing.
     fn handle_event(&mut self, event: &Event) -> OverlayInputResult {
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_input(*key),
-            Event::Key(_) | Event::Mouse(_) | Event::Paste(_) => OverlayInputResult::Consumed,
+            Event::Key(_) => OverlayInputResult::Consumed,
+            Event::Mouse(_) | Event::Paste(_) if self.is_modal() => OverlayInputResult::Consumed,
             _ => OverlayInputResult::NotHandled,
         }
     }

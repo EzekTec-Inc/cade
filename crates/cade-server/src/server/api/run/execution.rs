@@ -173,7 +173,7 @@ pub(super) struct SseApprovalDelegate {
     pub(super) agent_id: String,
     pub(super) run_id: String,
     pub(super) conversation_id: Option<String>,
-    pub(super) conversation_approvals: Arc<crate::server::state::ConversationApprovals>,
+    pub(super) permission_sessions: Arc<crate::server::permission_sessions::PermissionSessions>,
     pub(super) permissions: cade_core::permissions::PermissionManager,
     pub(super) tx: SseTx,
 }
@@ -185,6 +185,7 @@ struct PendingRunApproval {
     run_id: String,
     tx: SseTx,
     abandonment_reason: &'static str,
+    permission_sessions: Option<Arc<crate::server::permission_sessions::PermissionSessions>>,
 }
 
 impl PendingRunApproval {
@@ -192,6 +193,11 @@ impl PendingRunApproval {
     async fn wait(&mut self, timeout: std::time::Duration) -> cade_agent::Result<String> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
+            if let Some(sessions) = &self.permission_sessions {
+                sessions
+                    .resolve_remembered(&self.db, &self.id)
+                    .map_err(cade_agent::Error::custom)?;
+            }
             let status =
                 cade_store::sqlite::get_approval_status(&self.db, &self.id).map_err(|error| {
                     cade_agent::Error::custom(format!("Failed to read decision: {error}"))
@@ -199,6 +205,12 @@ impl PendingRunApproval {
             match status.as_deref() {
                 Some("pending") => {}
                 Some(status) if status.starts_with("approved") || status.starts_with("denied") => {
+                    let event = self.journal_resolution(status);
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        self.tx.send(Ok(event)),
+                    )
+                    .await;
                     return Ok(status.to_owned());
                 }
                 _ => {
@@ -229,6 +241,25 @@ impl PendingRunApproval {
         }
     }
 
+    fn journal_resolution(&self, status: &str) -> super::runtime::RunEventEnvelope {
+        let mut event = json!({
+            "message_type": "approval_resolved", "id": self.id, "status": status,
+            "approved": status.starts_with("approved"),
+        });
+        match cade_store::sqlite::append_run_event(&self.db, &self.run_id, &event.to_string()) {
+            Ok(seq) => {
+                event["run_id"] = self.run_id.clone().into();
+                event["seq_id"] = seq.into();
+            }
+            Err(error) => {
+                tracing::error!(%error, approval_id = %self.id, "failed to persist approval resolution")
+            }
+        }
+        super::runtime::RunEventEnvelope {
+            data: event.to_string(),
+        }
+    }
+
     fn resolve(&self) -> Option<super::runtime::RunEventEnvelope> {
         let changed = match cade_store::sqlite::resolve_pending_approval(
             &self.db,
@@ -242,29 +273,13 @@ impl PendingRunApproval {
             }
         };
         if changed {
-            let mut event = json!({
-                "message_type": "approval_resolved",
-                "id": self.id,
-                "status": self.abandonment_reason,
-                "approved": false,
-            });
-            match cade_store::sqlite::append_run_event(&self.db, &self.run_id, &event.to_string()) {
-                Ok(seq) => {
-                    event["run_id"] = self.run_id.clone().into();
-                    event["seq_id"] = seq.into();
-                }
-                Err(error) => {
-                    tracing::error!(%error, approval_id = %self.id, "failed to persist approval resolution")
-                }
-            }
+            let event = self.journal_resolution(self.abandonment_reason);
             crate::server::api::agents::publish_global_event(
                 Some(&self.db),
                 "approval_resolved",
                 json!({"id": self.id, "status": self.abandonment_reason}),
             );
-            return Some(super::runtime::RunEventEnvelope {
-                data: event.to_string(),
-            });
+            return Some(event);
         }
         None
     }
@@ -300,11 +315,15 @@ impl SseApprovalDelegate {
         timeout: std::time::Duration,
     ) -> cade_agent::Result<bool> {
         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
+        let _registration =
+            self.permission_sessions
+                .register(&approval_id, tool_name, &self.permissions);
         let event_payload = json!({
             "message_type": "approval_required",
             "id": approval_id,
             "agent_id": self.agent_id,
             "run_id": self.run_id,
+            "conversation_id": self.conversation_id,
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "arguments": arguments,
@@ -331,6 +350,7 @@ impl SseApprovalDelegate {
             run_id: self.run_id.clone(),
             tx: self.tx.clone(),
             abandonment_reason: "denied:Approval request cancelled",
+            permission_sessions: Some(self.permission_sessions.clone()),
         };
 
         crate::server::api::agents::publish_global_event(
@@ -366,34 +386,8 @@ impl SseApprovalDelegate {
         }
 
         let status = pending.wait(timeout).await?;
-        match status.as_str() {
-            "approved_session" => {
-                let Some(conversation_id) = self.conversation_id.as_deref() else {
-                    return Err(cade_agent::Error::custom(
-                        "Session approval requires a conversation",
-                    ));
-                };
-                self.conversation_approvals.grant(
-                    &self.agent_id,
-                    conversation_id,
-                    tool_name,
-                    arguments,
-                );
-                self.permissions
-                    .add_session_allow_call(tool_name, arguments);
-                Ok(true)
-            }
-            "approved" => Ok(true),
-            status if status.starts_with("approved:") => Ok(true),
-            "denied" => Ok(false),
-            status if status.starts_with("denied:") => Err(cade_agent::Error::custom(format!(
-                "Permission Denied: {}",
-                &status[7..]
-            ))),
-            _ => Err(cade_agent::Error::custom(
-                "Approval request is missing or has an invalid status",
-            )),
-        }
+        crate::server::permission_sessions::approval_outcome(&status, tool_name, &self.permissions)
+            .map_err(cade_agent::Error::custom)
     }
 }
 
@@ -478,6 +472,7 @@ async fn handle_ask_user_question(
         run_id,
         tx: tx.clone(),
         abandonment_reason: "denied:Approval request cancelled",
+        permission_sessions: None,
     };
 
     crate::server::api::agents::publish_global_event(
@@ -613,12 +608,6 @@ async fn execute_turn_tools_scoped(
     let hooks = options.hooks.clone();
     let permissions = options.permissions.clone();
 
-    if let Some(conversation_id) = conversation_id.as_deref() {
-        state
-            .conversation_approvals
-            .apply_to(&agent_id, conversation_id, &permissions);
-    }
-
     // Bypass verdicts never call the delegate. Strict-bash prompts still must
     // reach a real decision queue even when the selected mode is bypass.
     let approval_delegate: Arc<dyn cade_agent::tools::ApprovalDelegate> =
@@ -627,7 +616,7 @@ async fn execute_turn_tools_scoped(
             agent_id: agent_id.clone(),
             run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
-            conversation_approvals: Arc::clone(&state.conversation_approvals),
+            permission_sessions: Arc::clone(&state.permission_sessions),
             permissions: permissions.clone(),
             tx: tx.clone(),
         });

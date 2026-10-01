@@ -1304,6 +1304,8 @@ pub struct LaunchSubagentPayload {
     pub conversation_id: Option<String>,
     pub args: Value,
     pub mode: String,
+    #[serde(flatten)]
+    pub execution: runtime::RunExecutionOptions,
 }
 
 /// Project the session's finalized outcome into the inspection run. The session
@@ -1455,6 +1457,18 @@ pub async fn launch_subagent_handler(
             "invalid permission mode".to_string(),
         )
     })?;
+    let options = payload
+        .execution
+        .resolve(
+            &state,
+            &runtime::RunRequest {
+                agent_id: agent_id.clone(),
+                conversation_id: payload.conversation_id.clone(),
+                input: String::new(),
+                permission_mode: Some(payload.mode.clone()),
+            },
+        )
+        .map_err(|error| (error.status, error.message))?;
     let run =
         cade_store::sqlite::create_run(&state.db, &agent_id, payload.conversation_id.as_deref())
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1478,14 +1492,17 @@ pub async fn launch_subagent_handler(
         }
         outcome
     });
-    let result = subagent::handle_run_subagent_tool_inner(
-        &state,
-        &agent_id,
-        payload.conversation_id.as_deref(),
-        &format!("cli-{}", uuid::Uuid::new_v4()),
-        &payload.args,
-        Box::new(subagent::SseEventEmitter { tx }),
-        mode,
+    let result = runtime::in_execution_scope(
+        Some(options),
+        subagent::handle_run_subagent_tool_inner(
+            &state,
+            &agent_id,
+            payload.conversation_id.as_deref(),
+            &format!("cli-{}", uuid::Uuid::new_v4()),
+            &payload.args,
+            Box::new(subagent::SseEventEmitter { tx }),
+            mode,
+        ),
     )
     .await;
     result_tx.send(result.clone()).map_err(|_| {

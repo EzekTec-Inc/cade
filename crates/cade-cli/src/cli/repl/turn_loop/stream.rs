@@ -64,6 +64,29 @@ fn tool_args_preview(args: &serde_json::Value) -> String {
     }
 }
 
+/// Own remote dialogs for this stream, including cleanup on disconnect/abort.
+struct PendingApprovalDialogs {
+    app: std::sync::Arc<parking_lot::Mutex<cade_tui::TuiApp>>,
+    ids: std::collections::HashSet<String>,
+}
+
+impl PendingApprovalDialogs {
+    fn resolve(&mut self, id: &str) {
+        if self.ids.remove(id) {
+            self.app.lock().resolve_approval(id);
+        }
+    }
+}
+
+impl Drop for PendingApprovalDialogs {
+    fn drop(&mut self) {
+        let mut app = self.app.lock();
+        for id in &self.ids {
+            app.resolve_approval(id);
+        }
+    }
+}
+
 impl Repl {
     /// Stream one turn (user message or tool return) and render live.
     /// Returns the complete collected message list.
@@ -82,6 +105,7 @@ impl Repl {
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<parking_lot::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
+        let options = self.execution_options().await?;
         // -- R-04: Async event buffering
         // Decouples network I/O from TUI rendering.  The SSE callback (`on_event`)
         // performs only lightweight session/stats bookkeeping and forwards each
@@ -178,6 +202,10 @@ impl Repl {
         let ui_task = tokio::spawn(async move {
             let mut ui_rx = ui_rx;
             let mut in_reasoning = false;
+            let mut approvals = PendingApprovalDialogs {
+                app: app_arc.clone(),
+                ids: Default::default(),
+            };
             while let Some(msg) = ui_rx.recv().await {
                 match msg.msg_type() {
                     "reasoning_message" => {
@@ -399,6 +427,11 @@ impl Repl {
                             let _ = app.draw();
                         }
                     }
+                    "approval_resolved" => {
+                        if let Some(id) = msg.id.as_deref().or_else(|| msg.data["id"].as_str()) {
+                            approvals.resolve(id);
+                        }
+                    }
                     "approval_required" => {
                         let Some(request) = msg.approval_request() else {
                             continue;
@@ -436,7 +469,7 @@ impl Repl {
                                 },
                                 cade_tui::question::QuestionOption {
                                     label: "Allow for this session".to_string(),
-                                    description: "Allow this exact call in this conversation"
+                                    description: "Allow this tool for this working session, including Subagents"
                                         .to_string(),
                                 },
                                 cade_tui::question::QuestionOption {
@@ -450,20 +483,37 @@ impl Repl {
                         };
 
                         let rx_opt = {
+                            if !approvals.ids.insert(id.clone()) {
+                                continue;
+                            }
                             let mut app = app_arc.lock();
                             app.show_toast(
                                 format!("🔒 Approval required for {tool}"),
                                 crate::ui::ToastLevel::Warning,
                             );
-                            app.ask_question_async(question).ok()
+                            app.ask_approval_async(id.clone(), question).ok()
                         };
 
                         if let Some(rx) = rx_opt {
+                            let app_for_error = app_arc.clone();
                             tokio::spawn(async move {
-                                let body = approval_decision(rx.await.ok().flatten());
-                                let _ = client_c
+                                // Closing the channel means the remote request was
+                                // resolved or its stream ended, not a user denial.
+                                let Ok(answer) = rx.await else {
+                                    return;
+                                };
+                                let body = approval_decision(answer);
+                                if let Err(error) = client_c
                                     .raw_post(&format!("/approvals/{approval_id_c}/action"), &body)
-                                    .await;
+                                    .await
+                                {
+                                    let mut app = app_for_error.lock();
+                                    app.show_toast(
+                                        format!("Approval was not accepted: {error}"),
+                                        crate::ui::ToastLevel::Error,
+                                    );
+                                    app.draw_dirty = true;
+                                }
                             });
                         }
                     }
@@ -736,8 +786,7 @@ impl Repl {
         let agent_id = self.agent_id();
         let cancel = &self.cancel_turn;
 
-        // A new REPL needs a real conversation identity before it can make
-        // conversation-scoped approval decisions on its very first turn.
+        // Conversation history remains independent of the Working Session's grants.
         if self.conversation_id().is_none() {
             let conversation = self.client.create_conversation(&agent_id, "").await?;
             let id = conversation["id"]
@@ -757,14 +806,13 @@ impl Repl {
             tool_output,
             ephemeral,
         );
-        let mode_str = self.permissions.mode().to_string();
         let messages = match self
             .client
-            .start_run_cancellable_with_mode(
+            .start_run_cancellable_with_options(
                 &agent_id,
                 input,
                 conv_ref,
-                Some(&mode_str),
+                &options,
                 on_event,
                 Some(cancel),
             )

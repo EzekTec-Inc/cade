@@ -7,6 +7,7 @@ pub mod config;
 pub mod consolidation;
 pub mod defragment;
 pub mod error;
+pub mod permission_sessions;
 pub mod poison;
 pub mod rate_limit;
 pub mod reflection;

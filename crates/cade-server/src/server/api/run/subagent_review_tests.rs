@@ -406,6 +406,8 @@ fn start_approval(
         db: db.clone(),
         parent_agent_id: parent.into(),
         subagent_id: child.into(),
+        permissions: Default::default(),
+        permission_sessions: Default::default(),
     };
     tokio::spawn(async move {
         adapter
@@ -649,6 +651,8 @@ async fn child_approval_withdrawal_failure_is_observed_before_a_later_request_is
         db: db.clone(),
         parent_agent_id: parent.clone(),
         subagent_id: "later-child".into(),
+        permissions: Default::default(),
+        permission_sessions: Default::default(),
     };
     let failure = later
         .request_permission("write_file", &json!({"path":"src/later"}))

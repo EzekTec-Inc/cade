@@ -64,8 +64,20 @@ pub async fn action_approval(
         }
     };
 
-    if !cade_store::sqlite::resolve_pending_approval(&state.db, &id, &status)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    if !state
+        .permission_sessions
+        .resolve(&state.db, &id, &status, payload.feedback.as_deref())
+        .map_err(|error| {
+            let status = match error {
+                crate::server::permission_sessions::DecisionError::InvalidScope(_) => {
+                    StatusCode::BAD_REQUEST
+                }
+                crate::server::permission_sessions::DecisionError::Storage(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            };
+            (status, error.to_string())
+        })?
     {
         let current = cade_store::sqlite::get_approval_status(&state.db, &id)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -82,16 +94,6 @@ pub async fn action_approval(
             },
         ));
     }
-
-    crate::server::api::agents::publish_global_event(
-        Some(&state.db),
-        "approval_resolved",
-        json!({
-            "id": id,
-            "status": status,
-            "feedback": payload.feedback,
-        }),
-    );
 
     Ok(Json(json!({ "id": id, "status": status })))
 }

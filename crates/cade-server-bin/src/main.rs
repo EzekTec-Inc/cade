@@ -361,7 +361,7 @@ async fn async_main() -> Result<()> {
     }
 
     let state = AppState {
-        conversation_approvals: Default::default(),
+        permission_sessions: Default::default(),
         db,
         llm,
         llm_router,

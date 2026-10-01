@@ -942,6 +942,8 @@ impl<'a> cade_agent::subagents::SubagentToolExecutor for ServerSubagentTools<'a>
                     db: self.state.db.clone(),
                     parent_agent_id: self.parent_agent_id.clone(),
                     subagent_id: self.runtime.agent_id.clone(),
+                    permissions: self.permissions.clone(),
+                    permission_sessions: self.state.permission_sessions.clone(),
                 },
                 authorized_name: cade_agent::tools::manager::canonical_name(tool_name).to_owned(),
                 authorized_arguments: self.runtime.prepare_arguments(tool_name, arguments),
@@ -1668,6 +1670,14 @@ async fn run_subagent_with_permit(
     } else {
         cade_core::permissions::PermissionManager::new(parent_mode)
     };
+    let permissions = if let Some(grants) = accepted_options
+        .as_ref()
+        .and_then(|options| options.permissions.session_grants())
+    {
+        permissions.with_session_grants(grants)
+    } else {
+        permissions
+    };
     let hooks_config = accepted_options
         .as_ref()
         .map(|options| options.hooks_config.clone())
@@ -1726,6 +1736,8 @@ async fn run_subagent_with_permit(
         db: state.db.clone(),
         parent_agent_id: parent_agent_id.to_string(),
         subagent_id: subagent_id.clone(),
+        permissions: tools_executor.permissions.clone(),
+        permission_sessions: state.permission_sessions.clone(),
     }));
 
     // Event forwarder from SubagentSession to SSE stream
@@ -2366,6 +2378,8 @@ pub struct HeadlessQueueAdapter {
     pub db: cade_store::sqlite::Db,
     pub parent_agent_id: String,
     pub subagent_id: String,
+    pub permissions: cade_core::permissions::PermissionManager,
+    pub permission_sessions: Arc<crate::server::permission_sessions::PermissionSessions>,
 }
 
 type ChildApprovalWithdrawal =
@@ -2508,6 +2522,9 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
     ) -> Result<bool, String> {
         finish_prior_child_approval_withdrawals(&self.parent_agent_id).await?;
         let approval_id = format!("app-{}", uuid::Uuid::new_v4());
+        let _registration =
+            self.permission_sessions
+                .register(&approval_id, tool_name, &self.permissions);
         let args_str = args.to_string();
         if let Err(e) = cade_store::sqlite::create_pending_approval(
             &self.db,
@@ -2573,15 +2590,17 @@ impl cade_core::permissions::PermissionService for HeadlessQueueAdapter {
                 return Err("Approval request timed out after 10 minutes.".to_string());
             }
 
+            self.permission_sessions
+                .resolve_remembered(&self.db, &approval_id)?;
             match cade_store::sqlite::get_approval_status(&self.db, &approval_id) {
-                Ok(Some(status)) if status == "approved" || status.starts_with("approved:") => {
-                    return Ok(true);
-                }
-                Ok(Some(status)) if status == "denied" => return Ok(false),
-                Ok(Some(status)) if status.starts_with("denied:") => {
-                    return Err(format!("Permission Denied: {}", &status[7..]));
-                }
                 Ok(Some(status)) if status == "pending" => {}
+                Ok(Some(status)) => {
+                    return crate::server::permission_sessions::approval_outcome(
+                        &status,
+                        tool_name,
+                        &self.permissions,
+                    );
+                }
                 other => return Err(format!("Approval status unavailable: {other:?}")),
             }
 
@@ -3049,6 +3068,8 @@ mod tests {
             db: db.clone(),
             parent_agent_id: "parent".into(),
             subagent_id: "child".into(),
+            permissions: Default::default(),
+            permission_sessions: Default::default(),
         };
         let request = tokio::spawn(async move {
             adapter

@@ -128,6 +128,7 @@ struct McpServer {
 #[derive(Debug, Clone)]
 pub struct McpDiagnostic {
     pub status: String,
+    pub command: String,
     pub error: Option<String>,
 }
 
@@ -141,6 +142,14 @@ pub struct McpManager {
 
 /// Type alias for deep module naming.
 pub type McpGateway = McpManager;
+
+pub(crate) fn server_command_display(config: &McpServerConfig) -> String {
+    if let Some(url) = &config.url {
+        format!("[http] {url}")
+    } else {
+        config.command.clone()
+    }
+}
 
 fn existing_identity<'a>(server: &Option<&'a McpServer>) -> Option<&'a str> {
     let s = (*server)?;
@@ -172,13 +181,14 @@ impl McpManager {
             let c = config.clone();
             join_set.spawn(async move {
                 let res = tokio::time::timeout(timeout_dur, Self::connect_server(&k, &c)).await;
-                (k, res)
+                (k, c, res)
             });
         }
 
         let mut diagnostics = HashMap::new();
 
-        while let Some(Ok((key, result))) = join_set.join_next().await {
+        while let Some(Ok((key, config, result))) = join_set.join_next().await {
+            let cmd_display = server_command_display(&config);
             let res = match result {
                 Ok(Ok(server)) => {
                     let count = server.tools.len();
@@ -191,6 +201,7 @@ impl McpManager {
                         key.clone(),
                         McpDiagnostic {
                             status: "ready".into(),
+                            command: server.command.clone(),
                             error: None,
                         },
                     );
@@ -204,6 +215,7 @@ impl McpManager {
                         key.clone(),
                         McpDiagnostic {
                             status: "failed".into(),
+                            command: cmd_display,
                             error: Some(msg.clone()),
                         },
                     );
@@ -221,6 +233,7 @@ impl McpManager {
                         key.clone(),
                         McpDiagnostic {
                             status: "timeout".into(),
+                            command: cmd_display,
                             error: Some(format!("Timed out after {MCP_SERVER_TIMEOUT_SECS}s")),
                         },
                     );
@@ -280,7 +293,32 @@ impl McpManager {
 
     /// Dynamically start and add a single MCP server on-demand.
     pub async fn start_and_add_server(&self, key: &str, config: &McpServerConfig) -> Result<()> {
-        let server = Self::connect_server(key, config).await?;
+        let server = match Self::connect_server(key, config).await {
+            Ok(server) => {
+                let mut diags = self.diagnostics.write().await;
+                diags.insert(
+                    key.to_string(),
+                    McpDiagnostic {
+                        status: "ready".into(),
+                        command: server.command.clone(),
+                        error: None,
+                    },
+                );
+                server
+            }
+            Err(e) => {
+                let mut diags = self.diagnostics.write().await;
+                diags.insert(
+                    key.to_string(),
+                    McpDiagnostic {
+                        status: "failed".into(),
+                        command: server_command_display(config),
+                        error: Some(e.to_string()),
+                    },
+                );
+                return Err(e);
+            }
+        };
         let mut servers = self.servers.write().await;
         servers.retain(|s| s.key != key);
         servers.push(server);
@@ -333,22 +371,38 @@ impl McpManager {
             *current = kept_servers;
         }
 
+        {
+            let mut diags = self.diagnostics.write().await;
+            diags.retain(|k, _| new_configs.contains_key(k));
+        }
+
         let mut join_set = tokio::task::JoinSet::new();
         for (key, config) in to_restart {
             let k = key.clone();
             let c = config.clone();
             join_set.spawn(async move {
                 let res = tokio::time::timeout(timeout_dur, Self::connect_server(&k, &c)).await;
-                (k, res)
+                (k, c, res)
             });
         }
 
-        while let Some(Ok((key, result))) = join_set.join_next().await {
+        while let Some(Ok((key, config, result))) = join_set.join_next().await {
+            let cmd_display = server_command_display(&config);
             match result {
                 Ok(Ok(new_server)) => {
                     let count = new_server.tools.len();
                     info!("MCP server '{key}' (re)started — {count} tool(s)");
                     summary.started.push(key.clone());
+                    let mut diags = self.diagnostics.write().await;
+                    diags.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "ready".into(),
+                            command: new_server.command.clone(),
+                            error: None,
+                        },
+                    );
+                    drop(diags);
                     let mut current = self.servers.write().await;
                     current.push(new_server);
                     if let Some(ref mut cb) = on_progress {
@@ -362,6 +416,16 @@ impl McpManager {
                     let msg = e.to_string();
                     warn!("MCP server '{key}' failed to start during reload: {msg}");
                     summary.failed.push(key.clone());
+                    let mut diags = self.diagnostics.write().await;
+                    diags.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "failed".into(),
+                            command: cmd_display,
+                            error: Some(msg.clone()),
+                        },
+                    );
+                    drop(diags);
                     if let Some(ref mut cb) = on_progress {
                         cb(McpStartResult::Failed { key, error: msg });
                     }
@@ -371,6 +435,16 @@ impl McpManager {
                         "MCP server '{key}' timed out during reload ({MCP_SERVER_TIMEOUT_SECS}s)"
                     );
                     summary.failed.push(key.clone());
+                    let mut diags = self.diagnostics.write().await;
+                    diags.insert(
+                        key.clone(),
+                        McpDiagnostic {
+                            status: "timeout".into(),
+                            command: cmd_display,
+                            error: Some(format!("Timed out after {MCP_SERVER_TIMEOUT_SECS}s")),
+                        },
+                    );
+                    drop(diags);
                     if let Some(ref mut cb) = on_progress {
                         cb(McpStartResult::Timeout {
                             key,
@@ -447,7 +521,7 @@ impl McpManager {
             if !seen.contains(k) {
                 list.push(McpStatus {
                     key: k.clone(),
-                    command: String::new(),
+                    command: diag.command.clone(),
                     tools: vec![],
                     tool_mutability: HashMap::new(),
                     disabled: false,
@@ -877,6 +951,7 @@ mod tests {
                 "broken_server".into(),
                 McpDiagnostic {
                     status: "failed".into(),
+                    command: "node broken.js".into(),
                     error: Some("connection refused".into()),
                 },
             );
@@ -884,6 +959,7 @@ mod tests {
                 "slow_server".into(),
                 McpDiagnostic {
                     status: "timeout".into(),
+                    command: "sleep 20".into(),
                     error: Some("Timed out after 10s".into()),
                 },
             );
@@ -894,10 +970,12 @@ mod tests {
 
         let broken = statuses.iter().find(|s| s.key == "broken_server").unwrap();
         assert_eq!(broken.status, "failed");
+        assert_eq!(broken.command, "node broken.js");
         assert_eq!(broken.error.as_deref(), Some("connection refused"));
 
         let slow = statuses.iter().find(|s| s.key == "slow_server").unwrap();
         assert_eq!(slow.status, "timeout");
+        assert_eq!(slow.command, "sleep 20");
         assert_eq!(slow.error.as_deref(), Some("Timed out after 10s"));
     }
 
