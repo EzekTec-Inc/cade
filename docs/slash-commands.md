@@ -81,7 +81,7 @@ the GUI palette uses the same triggers via `cade-core::resources::palette`.
 | `/search <query>` | Full-text search across messages |
 | `/reflect [focus]` | Trigger reflection subagent to extract memory |
 | `/summarize` | `/summary` — show the auto-generated session summary |
-| `/compact` | `/consolidate` — manually trigger Sleeptime consolidation |
+| `/compact` | `/consolidate` — manually trigger Sleeptime consolidation (surfaces structured telemetry, skip reasoning, and syncs context % usage) |
 
 See [memory-system.md](memory-system.md) for tier semantics.
 
@@ -95,8 +95,11 @@ See [memory-system.md](memory-system.md) for tier semantics.
 | `/mcp-save <name>` | Persist a connected server to `settings.json` |
 | `/connect <name>` | Re-attach a saved MCP server |
 | `/disconnect <name>` | Stop and detach an MCP server |
+| `/plugin [list]` | List installed plugins, enabled state, and registered capabilities |
+| `/plugin install <url> [id]` | Install a plugin from a remote URL or registry into the active workspace |
+| `/plugin uninstall <id>` | Safely uninstall and deregister a plugin by ID |
 | `/skills [filter]` | Browse installed skills |
-| `/subagents` | `/agents-list` — list discovered subagents |
+| `/subagents` | `/agents-list` — list discovered subagents and dockable control tray |
 | `/marketplace` | Browse, inspect, and install plugins from the central marketplace |
 | `/hooks` | Show configured hooks and trigger hot-reload |
 
@@ -163,7 +166,28 @@ To force an immediate summarization and fact extraction pass:
 ```bash
 /compact
 ```
-The compaction model compresses older turns, updates `session_summary`, extracts durable project decisions into typed memory blocks, and restores prompt space.
+Output:
+```text
+✓ Context compacted (session_summary: 1,420 chars)
+```
+Or if no dropped messages require compaction:
+```text
+✓ Compact skipped: no dropped turns to consolidate
+```
+The client queries post-consolidation token statistics upon completion, updating the real-time context token percentage indicator in the TUI status bar.
+
+### Example 5: Managing Plugins via PluginEngine
+To inspect, install, or uninstall dynamic plugins and capability packs:
+```bash
+# List all discovered plugins and their active states
+/plugin list
+
+# Install a plugin bundle into the project workspace
+/plugin install https://github.com/example/cade-plugin-pack.git my-plugin
+
+# Uninstall and deregister a plugin
+/plugin uninstall my-plugin
+```
 
 ## GUI dashboard parity
 

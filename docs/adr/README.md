@@ -28,3 +28,7 @@ This directory documents the significant architectural decisions made in the evo
 | [ADR-0023](0023-gemini-and-headroom-proxy-integration.md) | Gemini and Headroom Proxy Integration Strategy | Accepted | AI Routing & Token Compression |
 | [ADR-0024](0024-timeline-tool-activity-tree-and-pill-margins.md) | Timeline Tool Activity Tree and Pill Margins | Accepted | TUI Presentation & Layout |
 | [ADR-0025](0025-subagent-dockable-tray-hot-swap-and-plugin-engine.md) | Subagent Dockable Control Tray, Model Hot-Swap, and Server Plugin Engine | Accepted | Autonomous Subagents & Plugins |
+| [ADR-0026](0026-openai-gpt6-dual-wire-routing-and-interactive-approval-seams.md) | OpenAI GPT-6 Dual-Wire Routing, Deep MCP Normalization, and Interactive Permission Seams | Accepted | AI Routing & Permissions |
+| [ADR-0027](0027-owned-execution-and-historical-snapshot-publication.md) | Owned Execution Scopes and Historical Snapshot Publication | Accepted | Execution & Consolidation |
+| [ADR-0028](0028-working-session-tool-grants-and-shared-approval-outcomes.md) | Working Session Tool Grants and Shared Approval Outcomes | Accepted | Working Sessions & Approvals |
+| [ADR-0029](0029-ignore-aware-incremental-rag-indexing.md) | Ignore-Aware Incremental RAG Indexing and Responsive Retrieval | Accepted | RAG & Semantic Search |

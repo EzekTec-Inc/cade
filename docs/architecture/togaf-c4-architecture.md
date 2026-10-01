@@ -267,6 +267,11 @@ Asks before write/exec  Auto-approves edits    Blocks all mutations
 | **ADR-0020** | CapabilityMesh Unified Seam | Unify Native Tools, MCP Processes, and Skills behind a single `execute()` / `active_catalog()` trait seam. |
 | **ADR-0021** | SubagentSession Autonomous Harness | Decouple autonomous subagent execution with canonical `finish()` tool and strict dual bounds. |
 | **ADR-0022** | GUI Zero-Placeholder Contract | Enforce zero-stub, fully functional reactive WASM components across all 13 dashboard views. |
+| **ADR-0025** | Subagent Dockable Control Tray & Plugin Engine | Provide real-time subagent TUI control tray, live model hot-swapping, and unified `PluginEngine` across CLI and GUI. |
+| **ADR-0026** | OpenAI GPT-6 Dual-Wire Routing & Deep MCP Normalization | Route GPT-6 models through `/v1/responses` for function calling with reasoning, and normalize daemon MCP relative paths against workspace. |
+| **ADR-0027** | Owned Execution Scopes & Snapshot Publication | Bind each run's workspace, backend, and permissions at acceptance, publishing exact summarized-message coverage in fenced transactions. |
+| **ADR-0028** | Working Session Tool Grants & Shared Approvals | Bind session tool approvals to active Working Session, sharing grants across descendant subagents while enforcing deny policies. |
+| **ADR-0029** | Ignore-Aware Incremental RAG Indexing | Implement debounce-bounded incremental workspace indexing respecting parent/nested ignore semantics with transactional SQLite updates. |
 
 ---
 

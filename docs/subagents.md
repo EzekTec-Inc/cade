@@ -165,6 +165,16 @@ If a subagent is running a long-horizon task or is suspended awaiting permission
 *   The server intercepts this command via the `/subagents/:id/steer` endpoint, pushes it to the subagent's active instruction stream, and triggers a dynamic LLM redirection turn.
 *   This allows you to change constraints, correct early mistakes, or redirect subagents mid-flight without having to cancel, kill, or restart the entire task.
 
+### 3. Dockable Control Tray & Model Hot-Swap (ADR-0025)
+The CADE TUI features an interactive dockable subagent control tray that surfaces all running and recent background workers:
+- **Navigation & Inspection:** Press `Tab` or click subagent status chips to focus the tray, review streaming activity cards, inspect intermediate outputs, and monitor execution progress in real time.
+- **Model Hot-Swap:** You can switch the LLM driving a running subagent mid-task without aborting execution or losing worktree state (e.g., promoting a stalled exploration subagent from a lightweight model to a high-reasoning frontier model).
+
+### 4. Shared Session Tool Grants (ADR-0028)
+When you approve a tool invocation with *"Allow for this session"*, CADE attaches the authorization to the active Working Session rather than a single prompt:
+- **Descendant Inheritance:** Active and newly spawned background subagents inherit these working session tool grants automatically, eliminating repetitive confirmation prompts for trusted tools (like `bash` or `read_file`) within the workspace.
+- **Safety Bounds:** Explicit deny rules, protected path policies, and read-only plan mode still strictly override session grants. Grants automatically expire upon working session closure or lease timeout.
+
 ## Multi-Agent Teams & Swarm Topology (ADR-0015)
 
 In addition to individual subagents, CADE supports **Specialist Teams** — groups of subagents organized under a designated leader to tackle complex multi-step pipelines:

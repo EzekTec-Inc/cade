@@ -60,7 +60,34 @@ CADE can spawn "subagents" to handle complex or long-running tasks in the backgr
 
 ## 5. Security & Permissions
 
-CADE executes commands directly on your local machine.
+CADE executes commands directly on your local machine:
 - CADE strictly enforces path sandboxing and tool restrictions. 
 - In **Plan Mode**, all destructive operations (writing files, running shell scripts) are strictly blocked.
-- You can override or manage MCP server access globally in `~/.cade/settings.json` or locally in your project's `.cade/settings.local.json`.
+- **Working Session Tool Grants (ADR-0028):** When approving a tool confirmation prompt with *"Allow for this session"*, that tool remains pre-authorized for both the main session and any background subagents spawned within the working session.
+- You can configure MCP server access globally in `~/.cade/settings.json` or locally in your project's `.cade/settings.local.json`.
+
+## 6. Checkpoints & Working Tree Safety
+
+Before attempting complex refactors or multi-file transformations, snapshot your working tree:
+```sh
+/checkpoint before-major-refactor
+```
+If anything unexpected occurs, instantly restore the working tree to the captured commit:
+```sh
+/undo
+```
+Use `/tree` to inspect the full checkpoint history and navigate between past snapshot branches.
+
+## 7. Context Compaction & Telemetry
+
+During long engineering sessions, older conversation turns are consolidated to preserve token budget while maintaining active memory:
+- CADE runs background Sleeptime consolidation automatically.
+- To trigger an immediate compaction pass on demand, run `/compact`.
+- CADE responds with structured telemetry (character length of the updated `session_summary` or explicit skip reasoning if no turns required consolidation) and immediately updates the real-time context token % indicator in the status bar.
+
+## 8. Plugin Management
+
+Extend your workspace with community tools and skills using the unified `PluginEngine`:
+- `/plugin list` — Display all project- and user-scoped plugins.
+- `/plugin install <url> <id>` — Install a package into `.cade/plugins/<id>`.
+- `/plugin uninstall <id>` — Safely remove a project-scoped plugin.
