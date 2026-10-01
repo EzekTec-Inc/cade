@@ -783,6 +783,52 @@ fn build_tools_preserves_finish_task_meta_tool_when_truncating() -> Result<()> {
 }
 
 #[test]
+fn build_tools_preserves_core_native_tools_under_heavy_mcp_load() -> Result<()> {
+    let mut tools = Vec::new();
+    // 140 core MCP tools from multiple servers
+    for i in 0..140 {
+        tools.push(json!({
+            "name": format!("server_{}__tool_{}", i % 4, i),
+            "description": "mcp tool",
+            "parameters": { "type": "object", "properties": {} },
+            "tags": ["core_mcp"],
+            "x-cade": { "core_server": true, "server_key": format!("server_{}", i % 4) }
+        }));
+    }
+
+    // Native coding tools
+    for native in ["bash", "read_file", "write_file", "apply_patch", "glob", "grep"] {
+        tools.push(json!({
+            "name": native,
+            "description": "native tool",
+            "parameters": { "type": "object", "properties": {} },
+            "tags": ["cade"]
+        }));
+    }
+
+    let req = CompletionRequest {
+        model: "gpt-5".into(),
+        messages: vec![],
+        tools,
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let tools_val = OpenAiProvider::build_tools(&req);
+    let arr = tools_val.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr.len(), 128);
+
+    for native in ["bash", "read_file", "write_file", "apply_patch", "glob", "grep"] {
+        assert!(
+            arr.iter().any(|t| t["function"]["name"].as_str() == Some(native)),
+            "Native tool {native} must be preserved and not crowded out by MCP tools"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_github_create_issue_openai_tool() {
     let raw_tool = json!({
         "description": "Create an issue",

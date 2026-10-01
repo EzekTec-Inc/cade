@@ -9,11 +9,16 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    clean_openai_schema, provider_error, retry_with_backoff, seal_top_level_additional_properties,
+    provider_error, retry_with_backoff,
 };
 
+#[cfg(test)]
+use super::clean_openai_schema;
+
 mod responses;
+pub(crate) mod schema_normalizer;
 pub(crate) use responses::is_continuation as is_responses_continuation;
+pub(crate) use schema_normalizer::ToolSchemaNormalizer;
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
@@ -232,6 +237,16 @@ const PRIORITY_TOOL_NAMES: &[&str] = &[
     "list_checkpoints",
 ];
 
+const CORE_NATIVE_TOOL_NAMES: &[&str] = &[
+    "bash",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "glob",
+    "grep",
+];
+
 fn tool_name(schema: &Value) -> Option<&str> {
     if let Some(name) = schema
         .get("function")
@@ -271,6 +286,11 @@ fn is_meta_tool(schema: &Value) -> bool {
         || tool_name(schema).is_some_and(|name| PRIORITY_TOOL_NAMES.contains(&name))
 }
 
+fn is_core_native_tool(schema: &Value) -> bool {
+    has_tag(schema, "cade")
+        && tool_name(schema).is_some_and(|name| CORE_NATIVE_TOOL_NAMES.contains(&name))
+}
+
 fn is_core_server_tool(schema: &Value) -> bool {
     schema_bool(schema, "core_server")
         || schema_bool(schema, "is_core")
@@ -296,12 +316,26 @@ fn capped_tools_with_limit(schemas: &[Value], limit: usize) -> Vec<&Value> {
         return selected;
     }
 
-    // 2. Tier 1: Core MCP Servers (Server-Aware Fair Round-Robin Allocation)
+    // 2. Tier 0.5: Reserved Core Native Tools (Filesystem, Shell, Editing)
+    // Ensures basic coding capabilities are never starved by large MCP server toolsets.
+    let mut core_native: Vec<&Value> = schemas
+        .iter()
+        .filter(|s| !is_meta_tool(s) && is_core_native_tool(s))
+        .collect();
+    core_native.sort_by_key(|s| tool_name(s).unwrap_or(""));
+    let native_slots = limit.saturating_sub(selected.len());
+    selected.extend(core_native.into_iter().take(native_slots));
+
+    if selected.len() >= limit {
+        return selected;
+    }
+
+    // 3. Tier 1: Core MCP Servers (Server-Aware Fair Round-Robin Allocation)
     let mut core_by_server: std::collections::BTreeMap<&str, Vec<&Value>> =
         std::collections::BTreeMap::new();
     for schema in schemas
         .iter()
-        .filter(|s| !is_meta_tool(s) && is_core_server_tool(s))
+        .filter(|s| !is_meta_tool(s) && !is_core_native_tool(s) && is_core_server_tool(s))
     {
         let key = tool_server_key(schema);
         core_by_server.entry(key).or_default().push(schema);
@@ -333,10 +367,10 @@ fn capped_tools_with_limit(schemas: &[Value], limit: usize) -> Vec<&Value> {
         return selected;
     }
 
-    // 3. Tier 2: Remaining Non-Core Tools (Sorted deterministically by server_key, tool_name)
+    // 4. Tier 2: Remaining Non-Core Tools (Sorted deterministically by server_key, tool_name)
     let mut remaining: Vec<&Value> = schemas
         .iter()
-        .filter(|s| !is_meta_tool(s) && !is_core_server_tool(s))
+        .filter(|s| !is_meta_tool(s) && !is_core_native_tool(s) && !is_core_server_tool(s))
         .collect();
     remaining.sort_by_key(|s| (tool_server_key(s), tool_name(s).unwrap_or("")));
 
@@ -825,76 +859,13 @@ impl OpenAiProvider {
     fn build_responses_tools(req: &CompletionRequest, limit: usize) -> Value {
         let tools: Vec<Value> = capped_tools_with_limit(&req.tools, limit)
             .iter()
-            .map(|schema| {
-                let tool = Self::openai_tool_from_schema(schema);
-                let function = &tool["function"];
-                json!({
-                    "type": "function",
-                    "name": function["name"].clone(),
-                    "description": function["description"].clone(),
-                    "parameters": function["parameters"].clone(),
-                    "strict": function["strict"].clone()
-                })
-            })
+            .map(|schema| ToolSchemaNormalizer::normalize(schema, true))
             .collect();
         json!(tools)
     }
 
     fn openai_tool_from_schema(schema: &Value) -> Value {
-        let params_val = schema
-            .get("parameters")
-            .or_else(|| schema.get("input_schema"))
-            .or_else(|| schema.get("function").and_then(|f| f.get("parameters")));
-
-        let mut params = params_val
-            .filter(|v| !v.is_null())
-            .cloned()
-            .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
-        crate::utils::inline_schema_refs(&mut params);
-        clean_openai_schema(&mut params);
-
-        // OpenAI strictly requires function schema to have type 'object' and not have
-        // 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level.
-        if let Some(obj) = params.as_object_mut() {
-            obj.remove("oneOf");
-            obj.remove("anyOf");
-            obj.remove("allOf");
-            obj.remove("one_of");
-            obj.remove("any_of");
-            obj.remove("all_of");
-            obj.remove("enum");
-            obj.remove("const");
-            obj.remove("not");
-            obj.insert("type".to_string(), json!("object"));
-            if !obj.contains_key("properties") {
-                obj.insert("properties".to_string(), json!({}));
-            }
-        }
-        seal_top_level_additional_properties(&mut params);
-
-        let name = tool_name(schema).unwrap_or("unknown_tool").to_string();
-        let description = schema
-            .get("description")
-            .or_else(|| schema.get("function").and_then(|f| f.get("description")))
-            .cloned()
-            .unwrap_or_else(|| Value::String("".to_string()));
-
-        if name == "unknown_tool" {
-            tracing::warn!(
-                "OpenAI: missing tool name in schema: {}",
-                serde_json::to_string(schema).unwrap_or_default()
-            );
-        }
-
-        json!({
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": params,
-                "strict": false
-            }
-        })
+        ToolSchemaNormalizer::normalize(schema, false)
     }
 
     #[cfg(test)]
