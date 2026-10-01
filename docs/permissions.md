@@ -220,6 +220,47 @@ When an autonomous background subagent requests a risky tool call:
 ```
 CADE delivers your instructions directly into the subagent's active context as a system intervention message. The subagent revises its plan immediately without terminating the task.
 
+## Advisory Pre-Screening Seam (`ToolAdvisor`)
+
+Before prompting the user for confirmation on a `Verdict::Ask` tool call, CADE consults an asynchronous **`ToolAdvisor`** (`crates/cade-core/src/permissions/advisor.rs`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Pipeline as ToolPipeline
+    participant Advisor as ToolAdvisor (JevAdvisor)
+    participant Delegate as ApprovalDelegate (SseApprovalDelegate)
+    participant TUI as CADE TUI (stream.rs)
+    actor User as User / Reviewer
+
+    Pipeline->>Pipeline: Evaluate Verdict (Verdict::Ask)
+    Pipeline->>Advisor: advise(&AdvisoryRequest { tool, args, task })
+    Note over Advisor: Redacts secrets, evaluates 4-point review contract via TypeSafe System One
+    Advisor-->>Pipeline: AdvisoryReport { risk_score: 1, badges, summary, provider }
+    Pipeline->>Delegate: request_approval(tool, args, reason, Some(&advisory))
+    Delegate->>TUI: SSE event: approval_required { ..., advisory: {...} }
+    TUI->>User: Centered Question Modal with [Risk: Low] [Scope: Aligned] badges
+    User->>TUI: Approves / Denies
+```
+
+### Invariants & Non-Authoritative Guardrails
+1. **Asymmetric Authority**: Jev/System One models are **advisory only**. An advisory report can never downgrade a `Verdict::Deny` or bypass an explicit `Verdict::Ask` required by deterministic rules.
+2. **Fail-Closed Degradation**: If the advisory API experiences latency (>1500ms), 429 rate limits, or network failures, the advisor returns `None`. CADE immediately falls back to standard human approval without blocking the turn loop or hanging.
+3. **Secret Redaction**: `JevAdvisor` scrubs PEM private keys, API tokens (`sk-*`, `ghp_*`, Bearer tokens), and password patterns before sending state over the wire.
+
+### Concrete Adapters
+- **`NoopAdvisor`**: Default zero-overhead adapter returning `None` immediately when advisory pre-screening is disabled.
+- **`JevAdvisor`** (`crates/cade-agent/src/advisors/jev.rs`): Production adapter targeting TypeSafeAI's `POST /v1/systemone` endpoint (model `jev-1.13.0`), executing a 4-point review contract:
+  - `addresses_task`: Calibrated probability that the patch advances the active task.
+  - `unrelated_changes`: Calibrated probability that the action modifies unrelated files (scope drift).
+  - `touches_sensitive`: Calibrated probability of credential or sensitive configuration exposure.
+  - `risk_score`: 0–3 ordinal risk assessment.
+- **`MockAdvisor`**: Deterministic in-memory adapter for unit testing.
+
+### Wire Protocol & TUI Display
+- The `approval_required` SSE event carries the optional `advisory` object containing `risk_score`, `summary`, `badges`, `metrics`, and `provider`.
+- `cade-cli` and `cade-tui` render color-coded badge chips in the centered question modal title (e.g. `[Risk: Low]`, `[Scope: Aligned]`, `[Alert: Sensitive Data]`) and format the advisory summary directly above the argument preview.
+
 ### Scenario 3: Granular File I/O Sandboxing (RBAC allowed_paths)
 Restrict a specialist worker to a frontend directory:
 ```json
