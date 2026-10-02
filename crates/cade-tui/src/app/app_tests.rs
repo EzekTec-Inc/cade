@@ -1944,3 +1944,28 @@ fn test_question_modal_sequence_progression_and_draft_preservation() {
     assert!(state1.inline_height(24) > 0);
     assert!(state2.inline_height(24) > 0);
 }
+
+#[test]
+fn test_app_state_reset_context() -> Result<()> {
+    // -- Setup & Fixtures
+    let mut app = TuiApp::new(
+        cade_core::permissions::PermissionMode::Default,
+        "test-agent".into(),
+        "test-model".into(),
+        None,
+    );
+    app.set_context_pct(99);
+    app.footer_extra = Some("metrics info".to_string());
+    assert_eq!(app.context_pct, Some(99));
+    assert_eq!(app.token_history, vec![99]);
+    assert_eq!(app.footer_extra.as_deref(), Some("metrics info"));
+
+    // -- Exec
+    app.reset_context();
+
+    // -- Check
+    assert!(app.context_pct.is_none(), "context_pct should be cleared to None");
+    assert!(app.token_history.is_empty(), "token_history should be cleared");
+    assert!(app.footer_extra.is_none(), "footer_extra should be cleared");
+    Ok(())
+}

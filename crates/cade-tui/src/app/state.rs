@@ -467,6 +467,14 @@ impl TuiApp {
         self.refresh_lua_ui();
     }
 
+    /// Reset context-window usage and metrics (e.g. on new conversation or agent switch).
+    pub fn reset_context(&mut self) {
+        self.context_pct = None;
+        self.token_history.clear();
+        self.footer_extra = None;
+        self.refresh_lua_ui();
+    }
+
     /// Increment the turn counter (called when a user message is submitted).
     pub fn increment_turn(&mut self) {
         self.turn_count = self.turn_count.saturating_add(1);

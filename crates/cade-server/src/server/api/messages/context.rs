@@ -1559,9 +1559,12 @@ pub(crate) async fn compute_context_stats(
             .unwrap_or(false)
     };
 
+    let total_tokens_est = (chars_used + system_chars + memory_chars) / CHARS_PER_TOKEN;
+
     Ok(json!({
         "model":                   agent.model,
         "window_tokens":           window_tokens,
+        "total_tokens":            total_tokens_est,
         "turns_total":             total_turns,
         "turns_included":          turns_included,
         "turns_omitted":           turns_omitted,

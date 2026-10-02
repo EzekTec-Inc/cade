@@ -15,6 +15,7 @@ impl Repl {
     }
 
     pub(crate) fn select_conversation(&self, conversation: Option<String>) -> Result<()> {
+        self.app.lock().reset_context();
         self.command_session().select_conversation(conversation)
     }
 
@@ -38,6 +39,7 @@ impl Repl {
             }
             let mut app = self.app.lock();
             let _ = app.clear_content();
+            app.reset_context();
             app.update_agent_name(agent.name.clone());
             app.update_model(self.model());
         }

@@ -772,6 +772,7 @@ impl Repl {
                             .store(0, std::sync::atomic::Ordering::SeqCst);
                         self.first_turn
                             .store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.app.lock().reset_context();
                         self.tui_ok(format!(
                             "  ✓ New conversation started  ({})",
                             &cid[..cid.len().min(20)]

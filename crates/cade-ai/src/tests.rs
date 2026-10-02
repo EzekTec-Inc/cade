@@ -1120,6 +1120,28 @@ fn pricing_o1_mini_not_matched_by_o1_rule() {
 }
 
 #[test]
+fn test_catalogue_context_window_for_dynamic_and_alias_models() -> Result<()> {
+    // -- Setup & Fixtures
+    let models = [
+        ("gemini/gemini-flash-latest", 1_000_000),
+        ("gemini/gemini-pro-latest", 1_000_000),
+        ("anthropic/claude-3-5-sonnet-latest", 200_000),
+        ("openai/gpt-4o-latest", 128_000),
+    ];
+
+    // -- Exec & Check
+    for (model, min_window) in models {
+        let window = crate::catalogue::context_window_for_model(model);
+        assert!(
+            window >= min_window,
+            "Model {model} resolved context window {window}, expected at least {min_window}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn pricing_gpt_5_series() {
     let registry = crate::ModelRegistry::new();
     let p_base = registry.pricing_for_model("openai/gpt-5");
