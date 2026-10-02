@@ -18,6 +18,7 @@ pub mod provider_registry;
 pub mod registry;
 #[cfg(feature = "rig-compat")]
 pub mod rig_adapter;
+pub mod model_routing;
 pub mod router;
 pub mod runtime;
 pub mod tokenizer;
@@ -26,6 +27,7 @@ pub mod utils;
 pub mod vcr;
 
 pub use catalogue::{CATALOGUE, CatalogueRow, ModelEntry, catalogue_snapshot};
+pub use model_routing::*;
 pub use its::{
     AdaptiveToolSelector, IntelligentToolSelector, NeedleToolSelector, PassThroughToolSelector,
     TaggedToolSchema, resolve_tool_selector,

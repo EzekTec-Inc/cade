@@ -704,7 +704,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             Box::pin(context_builder.build(agent_id2.clone(), conv_id2.clone(), is_tool_return)),
         )
         .await;
-        let (model, messages, tools) = match context {
+        let (base_model, messages, tools) = match context {
             None => {
                 exit_status = RunExitStatus::Cancelled;
                 break;
@@ -715,6 +715,110 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                 exit_status = RunExitStatus::Error;
                 break;
             }
+        };
+
+        // ── Dynamic Model Routing (Jev Intent Router Seam) ───────────
+        // When dynamic model routing is active, evaluate Turn 1 user intent
+        // via Jev System One. For routine reconnaissance/read tasks, route
+        // to an economical fast tier model to conserve token budget.
+        let model = if turns == 1
+            && std::env::var("CADE_DISABLE_JEV_MODEL_ROUTING").is_err()
+        {
+            let last_user_prompt = messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+
+            if !last_user_prompt.is_empty() {
+                let mcp_mgr = state2.mcp.clone();
+                let classifier: cade_ai::model_routing::JevClassifierFn = std::sync::Arc::new(
+                    move |prompt, categories, min_conf, safe_def| {
+                        let mcp = mcp_mgr.clone();
+                        Box::pin(async move {
+                            let args = serde_json::json!({
+                                "prompt": prompt,
+                                "categories": categories,
+                                "min_confidence": min_conf,
+                                "safe_default": safe_def,
+                            });
+                            match mcp.call_tool("jev__jev_classify_intent", &args).await {
+                                Some(Ok((output, _, _))) => {
+                                    if let Ok(resp) = serde_json::from_str::<
+                                        cade_ai::model_routing::JevRouteResponse,
+                                    >(&output)
+                                    {
+                                        Ok(resp)
+                                    } else if let Ok(val) =
+                                        serde_json::from_str::<serde_json::Value>(&output)
+                                    {
+                                        let effective = val
+                                            .get("effective")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("deep_architecture")
+                                            .to_string();
+                                        let original_selection = val
+                                            .get("original_selection")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or(&effective)
+                                            .to_string();
+                                        let confidence = val
+                                            .get("confidence")
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(1.0);
+                                        let fallback_reason = val
+                                            .get("fallback_reason")
+                                            .and_then(|v| v.as_str())
+                                            .map(ToString::to_string);
+                                        Ok(cade_ai::model_routing::JevRouteResponse {
+                                            effective,
+                                            original_selection,
+                                            confidence,
+                                            fallback_reason,
+                                            probabilities: std::collections::HashMap::new(),
+                                        })
+                                    } else {
+                                        Err("Failed to parse Jev output".to_string())
+                                    }
+                                }
+                                Some(Err(e)) => Err(e.to_string()),
+                                None => Err("Jev MCP server not available".to_string()),
+                            }
+                        })
+                    },
+                );
+
+                let router = cade_ai::model_routing::JevIntentModelRouter::new(classifier);
+                let decision = router.route(&base_model, last_user_prompt).await;
+
+                if decision.is_downgraded_for_economy {
+                    tracing::info!(
+                        "Jev model routing: {} -> {} ({})",
+                        decision.original_model,
+                        decision.effective_model,
+                        decision.reason
+                    );
+                    send(json!({
+                        "message_type": "system_notice",
+                        "level":        "info",
+                        "code":         "model_routed_economy",
+                        "message":      format!(
+                            "Dynamic model routing: using {} for {} (conserving tokens)",
+                            decision.effective_model, decision.category
+                        ),
+                        "decision":     &decision,
+                    }))
+                    .await;
+                    decision.effective_model
+                } else {
+                    base_model
+                }
+            } else {
+                base_model
+            }
+        } else {
+            base_model
         };
 
         let max_tokens_cap = catalogue::max_tokens_for_model(&model);
