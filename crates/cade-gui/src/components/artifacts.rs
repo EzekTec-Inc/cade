@@ -1,5 +1,4 @@
-//! Live Artifact Studio & Interactive Diff/Data Explorer (PRD #128 / Issue #131).
-
+use crate::api_engine::{ApiClientEngine, ResourceState};
 use crate::types::AppState;
 use dioxus::prelude::*;
 
@@ -23,13 +22,56 @@ pub struct ArtifactItem {
 #[component]
 pub fn ArtifactStudioView() -> Element {
     let state = use_context::<AppState>();
+    let engine = use_context::<Memo<ApiClientEngine>>();
     let mut selected_tab = use_signal(|| 0usize);
     let mut filter_query = use_signal(String::new);
+    let mut server_artifacts = use_signal(|| ResourceState::<Vec<serde_json::Value>>::Loading);
 
-    // Extract artifacts from active messages
-    let msgs = (state.messages)();
+    // Fetch real artifacts from the server repository for the active agent
+    let agent_id_opt = (state.selected_agent)().map(|a| a.id);
+    use_effect(move || {
+        let eng = engine();
+        let agent_id = agent_id_opt.clone();
+        spawn(async move {
+            if let Some(id) = agent_id {
+                let res = eng.fetch_artifacts(&id).await;
+                server_artifacts.set(res);
+            } else {
+                server_artifacts.set(ResourceState::Ready(Vec::new()));
+            }
+        });
+    });
+
+    // Collate real server-backed artifacts and active session chat messages
     let mut detected_artifacts = Vec::<ArtifactItem>::new();
 
+    // 1. Add server repository artifacts
+    if let Some(items) = server_artifacts.read().value() {
+        for item in items {
+            let id = item["id"].as_str().unwrap_or("art").to_string();
+            let kind = item["kind"].as_str().unwrap_or("document");
+            let data_text = item["data_text"].as_str().unwrap_or("").to_string();
+            let size_bytes = item["size_bytes"].as_u64().unwrap_or(data_text.len() as u64) as usize;
+
+            let (artifact_type, title) = match kind {
+                "diff" => (ArtifactType::CodeDiff, format!("Diff ({id})")),
+                "table" | "dataset" => (ArtifactType::TableData, format!("Dataset ({id})")),
+                "json" => (ArtifactType::JsonPayload, format!("JSON ({id})")),
+                _ => (ArtifactType::MarkdownDoc, format!("Artifact ({id})")),
+            };
+
+            detected_artifacts.push(ArtifactItem {
+                id,
+                title,
+                artifact_type,
+                content: data_text,
+                size_bytes,
+            });
+        }
+    }
+
+    // 2. Add inline artifacts detected from conversation turns
+    let msgs = (state.messages)();
     for (i, m) in msgs.iter().enumerate() {
         let text = match &m.content {
             serde_json::Value::String(s) => s.clone(),
@@ -38,7 +80,7 @@ pub fn ArtifactStudioView() -> Element {
 
         if text.contains("```diff") || (text.contains("--- ") && text.contains("+++ ")) {
             detected_artifacts.push(ArtifactItem {
-                id: format!("art-diff-{i}"),
+                id: format!("session-diff-{i}"),
                 title: format!("Code Patch #{}", i + 1),
                 artifact_type: ArtifactType::CodeDiff,
                 content: text.clone(),
@@ -46,7 +88,7 @@ pub fn ArtifactStudioView() -> Element {
             });
         } else if text.contains("```json") || (text.starts_with('{') && text.ends_with('}')) {
             detected_artifacts.push(ArtifactItem {
-                id: format!("art-json-{i}"),
+                id: format!("session-json-{i}"),
                 title: format!("Structured Data #{}", i + 1),
                 artifact_type: ArtifactType::JsonPayload,
                 content: text.clone(),
@@ -54,7 +96,7 @@ pub fn ArtifactStudioView() -> Element {
             });
         } else if text.contains('|') && text.contains("---") {
             detected_artifacts.push(ArtifactItem {
-                id: format!("art-table-{i}"),
+                id: format!("session-table-{i}"),
                 title: format!("Tabular Dataset #{}", i + 1),
                 artifact_type: ArtifactType::TableData,
                 content: text.clone(),
@@ -62,30 +104,13 @@ pub fn ArtifactStudioView() -> Element {
             });
         } else if text.len() > 300 {
             detected_artifacts.push(ArtifactItem {
-                id: format!("art-doc-{i}"),
+                id: format!("session-doc-{i}"),
                 title: format!("Documentation Note #{}", i + 1),
                 artifact_type: ArtifactType::MarkdownDoc,
                 content: text.clone(),
                 size_bytes: text.len(),
             });
         }
-    }
-
-    if detected_artifacts.is_empty() {
-        detected_artifacts.push(ArtifactItem {
-            id: "sample-diff-1".to_string(),
-            title: "crates/cade-gui/src/components/chat.rs (Patch)".to_string(),
-            artifact_type: ArtifactType::CodeDiff,
-            content: "--- a/crates/cade-gui/src/components/chat.rs\n+++ b/crates/cade-gui/src/components/chat.rs\n@@ -114,3 +114,5 @@\n+    // Reactive session hydration\n+    use_effect(move || { ... });".to_string(),
-            size_bytes: 184,
-        });
-        detected_artifacts.push(ArtifactItem {
-            id: "sample-table-1".to_string(),
-            title: "Model Benchmark Telemetry (CSV/Table)".to_string(),
-            artifact_type: ArtifactType::TableData,
-            content: "| Model | Provider | Context Window | TTFT (ms) |\n|---|---|---|---|\n| claude-3-5-sonnet | Anthropic | 200k | 240 |\n| gpt-4o | OpenAI | 128k | 210 |\n| llama-3.3-70b | Ollama | 128k | 380 |".to_string(),
-            size_bytes: 236,
-        });
     }
 
     let query = filter_query().to_lowercase();
@@ -135,33 +160,37 @@ pub fn ArtifactStudioView() -> Element {
                 // Left Artifacts Drawer
                 div { class: "w-72 bg-[#070b14] border-r border-[#1e293b] flex flex-col p-4 space-y-2 overflow-y-auto select-none shrink-0",
                     span { class: "text-[10px] font-bold text-slate-500 tracking-wider uppercase mb-1 px-1", "Generated Artifacts" }
-                    {filtered_artifacts.iter().enumerate().map(|(idx, item)| {
-                        let is_active = selected_tab() == idx;
-                        let t = item.title.clone();
-                        let sz = item.size_bytes;
-                        let type_icon = match item.artifact_type {
-                            ArtifactType::CodeDiff => "⚡",
-                            ArtifactType::TableData => "📊",
-                            ArtifactType::MarkdownDoc => "📄",
-                            ArtifactType::JsonPayload => "📦",
-                        };
-                        rsx! {
-                            div {
-                                key: "{item.id}",
-                                class: if is_active {
-                                    "flex items-center justify-between px-3 py-2.5 rounded-lg bg-[#1f212a] text-white font-medium cursor-pointer border border-[#1e293b]"
-                                } else {
-                                    "flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-[#16171d] text-slate-400 cursor-pointer transition duration-150"
-                                },
-                                onclick: move |_| selected_tab.set(idx),
-                                div { class: "flex items-center space-x-2.5 truncate",
-                                    span { class: "text-xs", "{type_icon}" }
-                                    span { class: "text-xs truncate", "{t}" }
+                    if filtered_artifacts.is_empty() {
+                        div { class: "p-4 text-center text-xs text-slate-500 font-mono", "(no artifacts)" }
+                    } else {
+                        {filtered_artifacts.iter().enumerate().map(|(idx, item)| {
+                            let is_active = selected_tab() == idx;
+                            let t = item.title.clone();
+                            let sz = item.size_bytes;
+                            let type_icon = match item.artifact_type {
+                                ArtifactType::CodeDiff => "⚡",
+                                ArtifactType::TableData => "📊",
+                                ArtifactType::MarkdownDoc => "📄",
+                                ArtifactType::JsonPayload => "📦",
+                            };
+                            rsx! {
+                                div {
+                                    key: "{item.id}",
+                                    class: if is_active {
+                                        "flex items-center justify-between px-3 py-2.5 rounded-lg bg-[#1f212a] text-white font-medium cursor-pointer border border-[#1e293b]"
+                                    } else {
+                                        "flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-[#16171d] text-slate-400 cursor-pointer transition duration-150"
+                                    },
+                                    onclick: move |_| selected_tab.set(idx),
+                                    div { class: "flex items-center space-x-2.5 truncate",
+                                        span { class: "text-xs", "{type_icon}" }
+                                        span { class: "text-xs truncate", "{t}" }
+                                    }
+                                    span { class: "text-[10px] font-mono text-slate-500 shrink-0", "{sz} B" }
                                 }
-                                span { class: "text-[10px] font-mono text-slate-500 shrink-0", "{sz} B" }
                             }
-                        }
-                    })}
+                        })}
+                    }
                 }
 
                 // Right Detail & Sandbox Canvas
@@ -216,8 +245,10 @@ pub fn ArtifactStudioView() -> Element {
                             }
                         }
                     } else {
-                        div { class: "flex-1 flex items-center justify-center text-slate-600 italic select-none",
-                            "Select an artifact from the sidebar to inspect."
+                        div { class: "flex-1 flex flex-col items-center justify-center p-12 text-slate-400 font-sans select-none",
+                            span { class: "text-3xl mb-3", "📦" }
+                            p { class: "font-semibold text-slate-300 mb-1", "No artifacts generated yet" }
+                            p { class: "text-xs text-slate-500 max-w-sm text-center", "Code diffs, structured tables, and reports produced during agent sessions will appear here in real time." }
                         }
                     }
                 }

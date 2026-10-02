@@ -1,15 +1,47 @@
 use dioxus::prelude::*;
 
+use crate::api_engine::{ApiClientEngine, ConsoleStatus, ResourceState};
 use crate::types::{AppState, CodeLanguage};
 
 /// Dashboard home page with modern developer tool aesthetic.
 #[component]
 pub fn DashboardView() -> Element {
     let state = use_context::<AppState>();
+    let engine = use_context::<Memo<ApiClientEngine>>();
+    let mut console_status = use_signal(|| ResourceState::<ConsoleStatus>::Loading);
+
     let active_tab = use_signal(|| 0);
     let selected_lang = use_signal(|| CodeLanguage::Rust);
     let copied_key = use_signal(|| false);
     let copied_code = use_signal(|| false);
+
+    let agent_id_opt = (state.selected_agent)().map(|a| a.id);
+    use_effect(move || {
+        let eng = engine();
+        let agent_id = agent_id_opt.clone();
+        spawn(async move {
+            let res = eng.fetch_console_status(agent_id.as_deref()).await;
+            console_status.set(res);
+        });
+    });
+
+    let status_val = console_status.read().value().cloned().unwrap_or_default();
+    let (pill_cls, dot_cls) = if status_val.is_healthy {
+        (
+            "bg-emerald-950/80 text-emerald-400 border-emerald-800/80",
+            "bg-emerald-400 animate-pulse",
+        )
+    } else {
+        (
+            "bg-rose-950/80 text-rose-400 border-rose-800/80",
+            "bg-rose-400",
+        )
+    };
+    let mcp_label = if status_val.active_mcp_count > 0 {
+        format!("{} Active", status_val.active_mcp_count)
+    } else {
+        "Native Core".to_string()
+    };
 
     let (tab_title, tab_desc, tab_link, tab_href) = match active_tab() {
         0 => (
@@ -45,9 +77,9 @@ pub fn DashboardView() -> Element {
             div { class: "flex items-center space-x-6 text-[13px] text-slate-400 font-medium",
                 a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/index.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "Docs" }
                 a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/getting-started.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "API Spec" }
-                span { class: "bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs font-semibold shadow-sm flex items-center space-x-2",
-                    span { class: "w-2 h-2 rounded-full bg-emerald-400 animate-pulse" }
-                    span { "Engine Healthy (Local WAL)" }
+                span { class: "{pill_cls} border px-3 py-1 rounded-full text-xs font-semibold shadow-sm flex items-center space-x-2",
+                    span { class: "w-2 h-2 rounded-full {dot_cls}" }
+                    span { "{status_val.engine_status}" }
                 }
             }
         }
@@ -65,15 +97,15 @@ pub fn DashboardView() -> Element {
                 div { class: "flex items-center gap-3 select-none",
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
                         span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Model Context" }
-                        span { class: "text-xs font-bold text-cyan-400 font-mono", "128k - 1M Tokens" }
+                        span { class: "text-xs font-bold text-cyan-400 font-mono", "{status_val.context_window}" }
                     }
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
                         span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Recall Seam" }
-                        span { class: "text-xs font-bold text-slate-300 font-mono", "BM25 + Vector" }
+                        span { class: "text-xs font-bold text-slate-300 font-mono", "{status_val.recall_backend}" }
                     }
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
                         span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "MCP Status" }
-                        span { class: "text-xs font-bold text-purple-400 font-mono", "Active Native" }
+                        span { class: "text-xs font-bold text-purple-400 font-mono", "{mcp_label}" }
                     }
                 }
             }

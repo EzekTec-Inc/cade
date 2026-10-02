@@ -515,6 +515,29 @@ pub async fn list_models(api_key: &str) -> Result<serde_json::Value, String> {
     serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
 }
 
+// ── Artifacts ─────────────────────────────────────────────────────────────
+
+/// List artifacts produced for an agent from the server repository.
+pub async fn list_artifacts(
+    agent_id: &str,
+    api_key: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let path = format!("/v1/agents/{agent_id}/artifacts");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
+/// Get details for a specific artifact by ID.
+pub async fn get_artifact(
+    agent_id: &str,
+    art_id: &str,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let path = format!("/v1/agents/{agent_id}/artifacts/{art_id}");
+    let body = api_request("GET", &path, None, api_key).await?;
+    serde_json::from_str(&body).map_err(|e| format!("JSON parse: {e}"))
+}
+
 // ── Metrics / Context Stats ───────────────────────────────────────────────
 
 /// Fetch agent metrics (token usage, costs, etc.).

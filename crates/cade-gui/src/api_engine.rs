@@ -38,6 +38,32 @@ impl<T> ResourceState<T> {
     }
 }
 
+/// Live engine status and telemetry model for the executive dashboard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsoleStatus {
+    pub is_healthy: bool,
+    pub engine_status: String,
+    pub default_model: String,
+    pub provider: String,
+    pub active_mcp_count: usize,
+    pub context_window: String,
+    pub recall_backend: String,
+}
+
+impl Default for ConsoleStatus {
+    fn default() -> Self {
+        Self {
+            is_healthy: true,
+            engine_status: "Engine Healthy (Local WAL)".to_string(),
+            default_model: "Auto".to_string(),
+            provider: "Native".to_string(),
+            active_mcp_count: 0,
+            context_window: "128k - 1M Tokens".to_string(),
+            recall_backend: "BM25 + Vector".to_string(),
+        }
+    }
+}
+
 /// Typed mutations for backend entity state.
 #[derive(Debug, Clone)]
 pub enum ResourceMutation {
@@ -226,6 +252,96 @@ impl ApiClientEngine {
             },
             Err(error) => ResourceState::Error(error),
         }
+    }
+
+    /// Fetch server-stored artifacts for an agent.
+    pub async fn fetch_artifacts(&self, agent_id: &str) -> ResourceState<Vec<serde_json::Value>> {
+        let client = self.client();
+        let path = format!("/v1/agents/{agent_id}/artifacts");
+        match api_request("GET", &path, None, &client.api_key).await {
+            Ok(response) => match serde_json::from_str::<Vec<serde_json::Value>>(&response) {
+                Ok(items) => ResourceState::Ready(items),
+                Err(error) => ResourceState::Error(error.to_string()),
+            },
+            Err(error) => ResourceState::Error(error),
+        }
+    }
+
+    /// Fetch live console status aggregating health, server config, and MCP availability.
+    pub async fn fetch_console_status(
+        &self,
+        agent_id: Option<&str>,
+    ) -> ResourceState<ConsoleStatus> {
+        let client = self.client();
+        // 1. Fetch health
+        let is_healthy = match api_request("GET", "/v1/health", None, &client.api_key).await {
+            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(val) => val["status"].as_str().map(|s| s == "ok").unwrap_or(true),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        };
+
+        // 2. Fetch config (default model & provider)
+        let (default_model, provider) =
+            match api_request("GET", "/v1/config", None, &client.api_key).await {
+                Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                    Ok(val) => (
+                        val["default_model"].as_str().unwrap_or("Auto").to_string(),
+                        val["provider"].as_str().unwrap_or("Native").to_string(),
+                    ),
+                    Err(_) => ("Auto".to_string(), "Native".to_string()),
+                },
+                Err(_) => ("Auto".to_string(), "Native".to_string()),
+            };
+
+        // 3. Fetch MCP servers count
+        let active_mcp_count = match api_request("GET", "/v1/mcp", None, &client.api_key).await {
+            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(val) => val["servers"].as_array().map(|a| a.len()).unwrap_or(0),
+                Err(_) => 0,
+            },
+            Err(_) => 0,
+        };
+
+        // 4. Fetch context window if agent_id is provided
+        let context_window = if let Some(id) = agent_id {
+            let path = format!("/v1/agents/{id}/context_stats");
+            match api_request("GET", &path, None, &client.api_key).await {
+                Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                    Ok(val) => {
+                        let win = val["window_tokens"].as_u64().unwrap_or(0);
+                        if win > 0 {
+                            if win >= 1_000_000 {
+                                format!("{:.1}M Tokens", win as f64 / 1_000_000.0)
+                            } else {
+                                format!("{}k Tokens", win / 1_000)
+                            }
+                        } else {
+                            "128k - 1M Tokens".to_string()
+                        }
+                    }
+                    Err(_) => "128k - 1M Tokens".to_string(),
+                },
+                Err(_) => "128k - 1M Tokens".to_string(),
+            }
+        } else {
+            "128k - 1M Tokens".to_string()
+        };
+
+        ResourceState::Ready(ConsoleStatus {
+            is_healthy,
+            engine_status: if is_healthy {
+                "Engine Healthy (Local WAL)".to_string()
+            } else {
+                "Engine Offline".to_string()
+            },
+            default_model,
+            provider,
+            active_mcp_count,
+            context_window,
+            recall_backend: "BM25 + Vector".to_string(),
+        })
     }
 
     /// Execute a resource mutation atomically.
