@@ -472,6 +472,7 @@ impl TuiApp {
         self.context_pct = None;
         self.token_history.clear();
         self.footer_extra = None;
+        self.modified_files_tracker.clear();
         self.refresh_lua_ui();
     }
 

@@ -1956,9 +1956,15 @@ fn test_app_state_reset_context() -> Result<()> {
     );
     app.set_context_pct(99);
     app.footer_extra = Some("metrics info".to_string());
+    app.modified_files_tracker.record_mutation(
+        "/workspace/src/lib.rs",
+        "old content",
+        "new content",
+    );
     assert_eq!(app.context_pct, Some(99));
     assert_eq!(app.token_history, vec![99]);
     assert_eq!(app.footer_extra.as_deref(), Some("metrics info"));
+    assert_eq!(app.modified_files_tracker.len(), 1);
 
     // -- Exec
     app.reset_context();
@@ -1967,6 +1973,10 @@ fn test_app_state_reset_context() -> Result<()> {
     assert!(app.context_pct.is_none(), "context_pct should be cleared to None");
     assert!(app.token_history.is_empty(), "token_history should be cleared");
     assert!(app.footer_extra.is_none(), "footer_extra should be cleared");
+    assert!(
+        app.modified_files_tracker.is_empty(),
+        "modified_files_tracker must be cleared on reset_context"
+    );
     Ok(())
 }
 

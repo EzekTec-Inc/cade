@@ -312,6 +312,7 @@ impl Repl {
         reasoning_buf.lock().clear();
         assistant_buf.lock().clear();
         let client_for_ui = self.client.clone();
+        let working_dir_for_ui = std::env::current_dir().unwrap_or_default();
         let ui_task = tokio::spawn(async move {
             let mut in_reasoning = false;
             let mut approvals = PendingApprovalDialogs {
@@ -319,6 +320,8 @@ impl Repl {
                 ids: Default::default(),
             };
             let mut dialog_tasks = tokio::task::JoinSet::new();
+            let mut pending_file_edits: std::collections::HashMap<String, (std::path::PathBuf, String)> =
+                std::collections::HashMap::new();
             consume_presented_events(ui_rx, live_text, &reasoning_buf, &assistant_buf, |msg| {
                 match msg.msg_type() {
                     "reasoning_message" => {
@@ -350,7 +353,7 @@ impl Repl {
                     }
                     "tool_call_message" => {
                         in_reasoning = false;
-                        let (_tool_id, tool_name, args) = match msg.as_tool_call() {
+                        let (tool_id, tool_name, args) = match msg.as_tool_call() {
                             Some(t) => t,
                             None => return,
                         };
@@ -370,6 +373,24 @@ impl Repl {
                             };
                             *bar.lock() = format!("● {}…", display);
                         }
+
+                        // Track pre-mutation content for live Modified Files side-tray updates
+                        if cade_agent::tools::manager::is_file_edit_tool(&tool_name) {
+                            let target = args
+                                .get("file_path")
+                                .or_else(|| args.get("path"))
+                                .or_else(|| args.get("relative_path"))
+                                .or_else(|| args.get("filePath"))
+                                .or_else(|| args.get("target_path"))
+                                .and_then(|p| p.as_str())
+                                .map(std::path::PathBuf::from);
+
+                            if let Some(path) = target {
+                                let pre = std::fs::read_to_string(&path).unwrap_or_default();
+                                pending_file_edits.insert(tool_id.clone(), (path.clone(), pre.clone()));
+                                pending_file_edits.insert(tool_name.clone(), (path, pre));
+                            }
+                        }
                     }
                     "tool_result_message" => {
                         let content = msg.data["tool_result"]["output"]
@@ -382,6 +403,33 @@ impl Repl {
                         let _ = app_arc
                             .lock()
                             .push(RenderLine::ToolResult { is_error, content });
+
+                        // If file mutation succeeded, update live Modified Files side-tray
+                        if !is_error {
+                            let tool_id = msg.data["tool_result"]["tool_call_id"]
+                                .as_str()
+                                .or_else(|| msg.data["tool_result"]["call_id"].as_str())
+                                .unwrap_or("");
+                            let tool_name = msg.data["tool_result"]["tool_name"]
+                                .as_str()
+                                .unwrap_or("");
+
+                            let pending = pending_file_edits
+                                .remove(tool_id)
+                                .or_else(|| pending_file_edits.remove(tool_name));
+
+                            if let Some((path, pre)) = pending {
+                                let post = std::fs::read_to_string(&path).unwrap_or_default();
+                                let mut app = app_arc.lock();
+                                app.modified_files_tracker.record_mutation_in_workspace(
+                                    &path,
+                                    &working_dir_for_ui,
+                                    &pre,
+                                    &post,
+                                );
+                                app.draw_dirty = true;
+                            }
+                        }
                     }
                     "usage_statistics" => {
                         use std::sync::atomic::Ordering;

@@ -85,6 +85,25 @@ impl ModifiedFilesTracker {
         }
     }
 
+    /// Record a file mutation relative to a known workspace root.
+    /// Normalizes relative paths to absolute paths within `workspace_root`
+    /// so that keys are consistently mapped regardless of how callers format the path.
+    pub fn record_mutation_in_workspace(
+        &mut self,
+        file_path: impl AsRef<Path>,
+        workspace_root: &Path,
+        pre_content: &str,
+        post_content: &str,
+    ) {
+        let p = file_path.as_ref();
+        let normalized = if p.is_relative() {
+            workspace_root.join(p)
+        } else {
+            p.to_path_buf()
+        };
+        self.record_mutation(normalized, pre_content, post_content);
+    }
+
     /// Calculate addition and deletion line metrics between two strings.
     fn compute_net_metrics(baseline: &str, current: &str) -> FileDiffMetrics {
         let diff = TextDiff::from_lines(baseline, current);
@@ -211,6 +230,35 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].relative_path, "src/a_module.rs");
         assert_eq!(entries[1].relative_path, "src/z_module.rs");
+    }
+
+    #[test]
+    fn test_relative_and_absolute_paths_normalize_to_same_file() {
+        // -- Setup & Fixtures
+        let mut tracker = ModifiedFilesTracker::new();
+        let working_dir = Path::new("/workspace");
+        let rel_path = PathBuf::from("src/main.rs");
+        let abs_path = PathBuf::from("/workspace/src/main.rs");
+        let v0 = "fn main() {\n}\n";
+        let v1 = "fn main() {\n    println!(\"1\");\n}\n";
+        let v2 = "fn main() {\n    println!(\"1\");\n    println!(\"2\");\n}\n";
+
+        // -- Exec
+        // First edit recorded with relative path
+        tracker.record_mutation_in_workspace(&rel_path, working_dir, v0, v1);
+        // Second edit recorded with absolute path
+        tracker.record_mutation_in_workspace(&abs_path, working_dir, v1, v2);
+
+        // -- Check
+        let entries = tracker.entries(working_dir);
+        assert_eq!(
+            entries.len(),
+            1,
+            "Must normalize relative and absolute paths to a single entry, got: {:?}",
+            entries
+        );
+        assert_eq!(entries[0].relative_path, "src/main.rs");
+        assert_eq!(entries[0].metrics.additions, 2);
     }
 }
 
