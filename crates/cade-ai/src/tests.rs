@@ -1033,6 +1033,90 @@ fn clean_gemini_schema_still_strips_keywords_on_schema_nodes() {
 }
 
 #[test]
+fn clean_gemini_schema_handles_deeply_nested_combinators() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "config": {
+                "anyOf": [
+                    { "type": "null" },
+                    {
+                        "oneOf": [
+                            { "type": "null" },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "rate": { "type": "float" }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    let config = schema["properties"]["config"].as_object().unwrap();
+    assert!(!config.contains_key("anyOf"));
+    assert!(!config.contains_key("oneOf"));
+    assert_eq!(config["type"], "OBJECT");
+    assert_eq!(config["properties"]["rate"]["type"], "NUMBER");
+}
+
+#[test]
+fn clean_gemini_schema_injects_and_normalizes_array_items() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array"
+            },
+            "records": {
+                "type": "array",
+                "items": {}
+            }
+        }
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    assert_eq!(schema["properties"]["tags"]["type"], "ARRAY");
+    assert_eq!(schema["properties"]["tags"]["items"]["type"], "STRING");
+    assert_eq!(schema["properties"]["records"]["type"], "ARRAY");
+    assert_eq!(schema["properties"]["records"]["items"]["type"], "STRING");
+}
+
+#[test]
+fn clean_gemini_schema_sanitizes_enums_and_empty_required() {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "enum": ["active", 1, true]
+            },
+            "empty_enum": {
+                "enum": []
+            }
+        },
+        "required": ["missing_field"]
+    });
+
+    clean_gemini_schema(&mut schema);
+
+    // required pruned because missing_field is not in properties, and empty required removed
+    assert!(schema.get("required").is_none());
+
+    let status = schema["properties"]["status"].as_object().unwrap();
+    assert_eq!(status["type"], "STRING");
+    assert_eq!(status["enum"], json!(["active", "1", "true"]));
+
+    let empty = schema["properties"]["empty_enum"].as_object().unwrap();
+    assert!(!empty.contains_key("enum"));
+}
+
+#[test]
 fn clean_openai_schema_flattens_snake_case_combinators_for_newer_models() {
     let mut schema = json!({
         "properties": {

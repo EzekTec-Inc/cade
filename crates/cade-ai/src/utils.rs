@@ -177,34 +177,42 @@ fn clean_openai_schema_inner(v: &mut Value, is_properties_map: bool) {
 }
 
 fn simplify_schema_combinators(map: &mut serde_json::Map<String, Value>, uppercase_types: bool) {
-    for key in ["anyOf", "allOf", "oneOf", "any_of", "all_of", "one_of"] {
-        let Some(val) = map.remove(key) else {
-            continue;
-        };
-        let Some(arr) = val.as_array() else {
-            continue;
-        };
-        let Some(chosen_schema) = arr
-            .iter()
-            .find(|item| !schema_is_null_type(item))
-            .or_else(|| arr.first())
-        else {
-            continue;
-        };
-        let Some(obj) = chosen_schema.as_object() else {
-            continue;
-        };
+    let combinator_keys = ["anyOf", "allOf", "oneOf", "any_of", "all_of", "one_of"];
+    for _ in 0..5 {
+        let mut simplified_any = false;
+        for key in combinator_keys {
+            let Some(val) = map.remove(key) else {
+                continue;
+            };
+            let Some(arr) = val.as_array() else {
+                continue;
+            };
+            let Some(chosen_schema) = arr
+                .iter()
+                .find(|item| !schema_is_null_type(item))
+                .or_else(|| arr.first())
+            else {
+                continue;
+            };
+            let Some(obj) = chosen_schema.as_object() else {
+                continue;
+            };
 
-        for (k, v) in obj {
-            if k != "type" || !map.contains_key("type") {
-                let mut value = v.clone();
-                if uppercase_types && k == "type" {
-                    uppercase_schema_type(&mut value);
-                }
-                if !uppercase_types || !is_gemini_blocked_schema_key(k) {
-                    map.insert(k.clone(), value);
+            for (k, v) in obj {
+                if k != "type" || !map.contains_key("type") {
+                    let mut value = v.clone();
+                    if uppercase_types && k == "type" {
+                        uppercase_schema_type(&mut value);
+                    }
+                    if !uppercase_types || !is_gemini_blocked_schema_key(k) {
+                        map.insert(k.clone(), value);
+                    }
                 }
             }
+            simplified_any = true;
+        }
+        if !simplified_any || !combinator_keys.iter().any(|k| map.contains_key(*k)) {
+            break;
         }
     }
 }
@@ -242,6 +250,9 @@ fn prune_required_to_existing_properties(map: &mut serde_json::Map<String, Value
     };
 
     required.retain(|name| name.as_str().is_some_and(|name| prop_names.contains(name)));
+    if required.is_empty() {
+        map.remove("required");
+    }
 }
 
 fn schema_is_null_type(v: &Value) -> bool {
@@ -257,11 +268,21 @@ fn schema_is_null_type(v: &Value) -> bool {
 
 fn uppercase_schema_type(v: &mut Value) {
     match v {
-        Value::String(s) => *s = s.to_uppercase(),
+        Value::String(s) => {
+            let upper = s.to_uppercase();
+            *s = match upper.as_str() {
+                "FLOAT" | "DOUBLE" => "NUMBER".to_string(),
+                _ => upper,
+            };
+        }
         Value::Array(types) => {
             if let Some(primary_type) = types.iter().find(|t| t.as_str() != Some("null")) {
                 if let Some(s) = primary_type.as_str() {
-                    *v = Value::String(s.to_uppercase());
+                    let upper = s.to_uppercase();
+                    *v = Value::String(match upper.as_str() {
+                        "FLOAT" | "DOUBLE" => "NUMBER".to_string(),
+                        _ => upper,
+                    });
                 } else {
                     *v = primary_type.clone();
                 }
@@ -445,6 +466,13 @@ fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
                     map.remove(&k);
                 }
 
+                // Strip non-string description annotations.
+                if let Some(desc) = map.get("description")
+                    && !desc.is_string()
+                {
+                    map.remove("description");
+                }
+
                 // Gemini rejects JSON Schema combinators in function declarations.
                 // Flatten to the first non-null branch before recursively cleaning.
                 simplify_schema_combinators(map, true);
@@ -456,6 +484,29 @@ fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
                     }
                 }
 
+                // Sanitize enum: Gemini only supports string enums in function schemas
+                if let Some(enum_val) = map.get_mut("enum") {
+                    if let Some(arr) = enum_val.as_array_mut() {
+                        let mut string_enums: Vec<Value> = Vec::new();
+                        for item in arr.iter() {
+                            match item {
+                                Value::String(s) => string_enums.push(Value::String(s.clone())),
+                                Value::Number(n) => string_enums.push(Value::String(n.to_string())),
+                                Value::Bool(b) => string_enums.push(Value::String(b.to_string())),
+                                _ => {}
+                            }
+                        }
+                        if string_enums.is_empty() {
+                            map.remove("enum");
+                        } else {
+                            *arr = string_enums;
+                            map.insert("type".to_string(), json!("STRING"));
+                        }
+                    } else {
+                        map.remove("enum");
+                    }
+                }
+
                 // Gemini only permits `required` for OBJECT nodes.  Many MCP/JSON
                 // schema generators omit `type` on object-like anyOf branches.
                 if (map.contains_key("required") || map.contains_key("properties"))
@@ -464,10 +515,38 @@ fn clean_gemini_schema_inner(v: &mut Value, is_properties_map: bool) {
                     map.insert("type".to_string(), Value::String("OBJECT".to_string()));
                 }
 
-                if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT")
-                    && !map.contains_key("properties")
-                {
-                    map.insert("properties".to_string(), json!({}));
+                if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT") {
+                    if let Some(props) = map.get_mut("properties") {
+                        if !props.is_object() {
+                            *props = json!({});
+                        }
+                    } else {
+                        map.insert("properties".to_string(), json!({}));
+                    }
+                }
+
+                // Gemini requires array schemas to have a valid `items` schema.
+                if map.get("type").and_then(|t| t.as_str()) == Some("ARRAY") {
+                    let items_needs_fix = match map.get("items") {
+                        None | Some(Value::Null) => true,
+                        Some(Value::Object(obj)) => obj.is_empty() || !obj.contains_key("type"),
+                        _ => true,
+                    };
+                    if items_needs_fix {
+                        if let Some(Value::Object(obj)) = map.get_mut("items") {
+                            if !obj.contains_key("type") {
+                                if obj.contains_key("properties") {
+                                    obj.insert("type".to_string(), json!("OBJECT"));
+                                } else if obj.contains_key("items") {
+                                    obj.insert("type".to_string(), json!("ARRAY"));
+                                } else {
+                                    obj.insert("type".to_string(), json!("STRING"));
+                                }
+                            }
+                        } else {
+                            map.insert("items".to_string(), json!({"type": "STRING"}));
+                        }
+                    }
                 }
 
                 prune_required_to_existing_properties(map);
