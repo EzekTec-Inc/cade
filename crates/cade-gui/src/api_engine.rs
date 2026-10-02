@@ -209,6 +209,25 @@ impl ApiClientEngine {
         }
     }
 
+    /// Search remote marketplace catalog for plugins.
+    pub async fn search_marketplace(&self, query: &str) -> ResourceState<Vec<serde_json::Value>> {
+        let client = self.client();
+        let path = if query.trim().is_empty() {
+            "/v1/plugins/search".to_string()
+        } else {
+            format!("/v1/plugins/search?query={}", query.trim())
+        };
+        match api_request("GET", &path, None, &client.api_key).await {
+            Ok(response) => match serde_json::from_str::<serde_json::Value>(&response) {
+                Ok(value) => {
+                    ResourceState::Ready(value["plugins"].as_array().cloned().unwrap_or_default())
+                }
+                Err(error) => ResourceState::Error(error.to_string()),
+            },
+            Err(error) => ResourceState::Error(error),
+        }
+    }
+
     /// Execute a resource mutation atomically.
     pub async fn mutate(&self, mutation: ResourceMutation) -> Result<String, String> {
         let client = self.client();

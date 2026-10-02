@@ -1,148 +1,291 @@
 use dioxus::prelude::*;
+use serde_json::Value;
 
 use crate::api_engine::{ApiClientEngine, ResourceMutation, ResourceState};
 use crate::types::{AppState, ToastLevel, add_toast};
 
 #[component]
 pub fn PluginSettings() -> Element {
-    let state = use_context::<AppState>();
-    let client = use_context::<Memo<crate::api::CadeApiClient>>();
-    let engine = ApiClientEngine::new(client);
-    let plugins = use_signal(|| ResourceState::Loading);
-    let mut install_url = use_signal(String::new);
-    let mut install_id = use_signal(String::new);
-    let busy = use_signal(|| false);
+    let engine = use_context::<Memo<ApiClientEngine>>();
+    let app_state = use_context::<AppState>();
+    let mut plugins = use_signal(|| ResourceState::<Vec<Value>>::Loading);
+    let mut active_tab = use_signal(|| "installed");
 
-    let engine_for_load = engine.clone();
-    let load_plugins = move || {
-        let engine = engine_for_load.clone();
-        let mut plugins = plugins;
-        spawn(async move { plugins.set(engine.fetch_plugins().await) });
-    };
-    let effect_load_plugins = load_plugins.clone();
-    use_effect(effect_load_plugins);
+    // Marketplace state
+    let mut market_query = use_signal(String::new);
+    let mut market_plugins = use_signal(|| ResourceState::<Vec<Value>>::Loading);
 
-    let content = match plugins() {
-        ResourceState::Loading => rsx! {
-            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 animate-pulse",
-                div { class: "h-4 bg-[#272833] rounded w-1/4 mb-3" }
-                div { class: "h-3 bg-[#272833] rounded w-2/3" }
+    // Initial load for installed plugins
+    use_effect(move || {
+        let eng = engine();
+        spawn(async move {
+            let res = eng.fetch_plugins().await;
+            plugins.set(res);
+        });
+    });
+
+    // Load marketplace plugins when tab switches to marketplace
+    use_effect(move || {
+        if active_tab() == "marketplace" {
+            let eng = engine();
+            let query = market_query();
+            spawn(async move {
+                market_plugins.set(ResourceState::Loading);
+                let res = eng.search_marketplace(&query).await;
+                market_plugins.set(res);
+            });
+        }
+    });
+
+    let on_refresh = move |_| {
+        let eng = engine();
+        spawn(async move {
+            plugins.set(ResourceState::Loading);
+            let res = eng.fetch_plugins().await;
+            plugins.set(res);
+
+            if active_tab() == "marketplace" {
+                market_plugins.set(ResourceState::Loading);
+                let mres = eng.search_marketplace(&market_query()).await;
+                market_plugins.set(mres);
             }
-        },
-        ResourceState::Error(error) => rsx! {
-            div { class: "bg-[#090d16] border border-red-900/50 rounded-xl p-5 text-red-300 text-sm", "Plugin inventory unavailable: {error}" }
-        },
-        ResourceState::Ready(plugin_list) if plugin_list.is_empty() => rsx! {
-            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 text-slate-500 text-sm", "No active plugins." }
-        },
-        ResourceState::Ready(plugin_list) => rsx! {
-            div { class: "space-y-2",
-                for plugin in plugin_list {
-                    plugin_card { plugin, engine: engine.clone(), plugins, busy, state }
+        });
+    };
+
+    let on_market_search = move |_| {
+        let eng = engine();
+        let query = market_query();
+        spawn(async move {
+            market_plugins.set(ResourceState::Loading);
+            let res = eng.search_marketplace(&query).await;
+            market_plugins.set(res);
+        });
+    };
+
+    let on_uninstall = move |id: String| {
+        let eng = engine();
+        spawn(async move {
+            let res = eng
+                .mutate(ResourceMutation::UninstallPlugin { plugin_id: id.clone() })
+                .await;
+            match res {
+                Ok(_) => {
+                    add_toast(&app_state, ToastLevel::Success, "Plugin Uninstalled", format!("{id} removed"));
+                    let updated = eng.fetch_plugins().await;
+                    plugins.set(updated);
+                }
+                Err(e) => {
+                    add_toast(&app_state, ToastLevel::Error, "Uninstall Failed", e);
                 }
             }
-        },
+        });
+    };
+
+    let on_market_install = move |plugin_id: String| {
+        let eng = engine();
+        spawn(async move {
+            add_toast(&app_state, ToastLevel::Info, "Installing Plugin", format!("Installing {plugin_id}..."));
+            let res = eng
+                .mutate(ResourceMutation::InstallPlugin {
+                    url: plugin_id.clone(),
+                    plugin_id: plugin_id.clone(),
+                })
+                .await;
+            match res {
+                Ok(_) => {
+                    add_toast(&app_state, ToastLevel::Success, "Plugin Installed", format!("{plugin_id} installed successfully"));
+                    let updated = eng.fetch_plugins().await;
+                    plugins.set(updated);
+                }
+                Err(e) => {
+                    add_toast(&app_state, ToastLevel::Error, "Installation Failed", e);
+                }
+            }
+        });
     };
 
     rsx! {
-        div { class: "space-y-3",
-            div { class: "flex items-center justify-between",
-                h2 { class: "text-sm font-semibold text-slate-100", "Plugins" }
+        div { class: "flex flex-col h-full bg-[#181825] text-[#cdd6f4] p-6 overflow-y-auto",
+            div { class: "flex justify-between items-center mb-6",
+                div {
+                    h1 { class: "text-2xl font-bold tracking-tight text-[#cdd6f4]", "Plugin Ecosystem" }
+                    p { class: "text-sm text-[#a6adc8]", "Manage installed packages and explore the remote community marketplace." }
+                }
                 button {
-                    class: "text-xs text-slate-400 hover:text-slate-100 disabled:opacity-50",
-                    disabled: busy(),
-                    onclick: move |_| load_plugins(),
+                    class: "px-4 py-2 bg-[#313244] hover:bg-[#45475a] text-[#cdd6f4] rounded-lg transition duration-200 text-sm font-medium flex items-center gap-2",
+                    onclick: on_refresh,
                     "Refresh"
                 }
             }
-            {content}
-            div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 space-y-3",
-                p { class: "text-slate-400 text-xs", "Install a validated Plugin package by URL and stable identifier." }
-                div { class: "flex gap-2",
-                    input {
-                        class: "flex-1 bg-[#1f212a] text-slate-100 text-xs border border-[#1e293b] rounded-md px-2 py-1.5 outline-none focus:border-[#ff7c5c]",
-                        placeholder: "Package URL",
-                        value: "{install_url}",
-                        oninput: move |event| install_url.set(event.value()),
-                    }
-                    input {
-                        class: "w-40 bg-[#1f212a] text-slate-100 text-xs border border-[#1e293b] rounded-md px-2 py-1.5 outline-none focus:border-[#ff7c5c]",
-                        placeholder: "Plugin id",
-                        value: "{install_id}",
-                        oninput: move |event| install_id.set(event.value()),
-                    }
-                    button {
-                        class: "bg-[#ff7c5c] hover:bg-[#ff906f] text-[#141414] text-xs font-semibold rounded-md px-3 py-1.5 disabled:opacity-50",
-                        disabled: busy() || install_url().trim().is_empty() || install_id().trim().is_empty(),
-                        onclick: move |_| {
-                            let url = install_url().trim().to_string();
-                            let plugin_id = install_id().trim().to_string();
-                            let engine = engine.clone();
-                            let mut plugins = plugins;
-                            let mut busy = busy;
-                            let st = state;
-                            busy.set(true);
-                            spawn(async move {
-                                match engine.mutate(ResourceMutation::InstallPlugin { url, plugin_id }).await {
-                                    Ok(id) => {
-                                        add_toast(&st, ToastLevel::Success, "Plugin installed", id);
-                                        plugins.set(engine.fetch_plugins().await);
-                                    }
-                                    Err(error) => add_toast(&st, ToastLevel::Error, "Plugin installation failed", error),
-                                }
-                                busy.set(false);
-                            });
-                        },
-                        "Install"
-                    }
+
+            // Tab Navigation
+            div { class: "flex gap-2 border-b border-[#313244] mb-6 pb-2",
+                button {
+                    class: if active_tab() == "installed" {
+                        "px-4 py-2 bg-[#89b4fa]/20 text-[#89b4fa] font-semibold rounded-lg text-sm transition"
+                    } else {
+                        "px-4 py-2 text-[#a6adc8] hover:text-[#cdd6f4] text-sm transition"
+                    },
+                    onclick: move |_| active_tab.set("installed"),
+                    "Installed Plugins"
+                }
+                button {
+                    class: if active_tab() == "marketplace" {
+                        "px-4 py-2 bg-[#89b4fa]/20 text-[#89b4fa] font-semibold rounded-lg text-sm transition"
+                    } else {
+                        "px-4 py-2 text-[#a6adc8] hover:text-[#cdd6f4] text-sm transition"
+                    },
+                    onclick: move |_| active_tab.set("marketplace"),
+                    "Marketplace Catalog"
                 }
             }
-        }
-    }
-}
 
-#[component]
-fn plugin_card(
-    plugin: serde_json::Value,
-    engine: ApiClientEngine,
-    mut plugins: Signal<ResourceState<Vec<serde_json::Value>>>,
-    mut busy: Signal<bool>,
-    state: AppState,
-) -> Element {
-    let id = plugin["id"].as_str().unwrap_or("unknown").to_string();
-    let name = plugin["name"].as_str().unwrap_or(&id).to_string();
-    let version = plugin["version"].as_str().unwrap_or("unknown").to_string();
-    let scope = plugin["scope"].as_str().unwrap_or("unknown").to_string();
-    let tools = plugin["tools_count"].as_u64().unwrap_or(0);
-
-    rsx! {
-        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl p-5 flex items-center justify-between gap-4",
-            div { class: "min-w-0",
-                p { class: "text-slate-100 text-sm font-medium truncate", "{name}" }
-                p { class: "text-slate-500 text-xs font-mono", "{id} · v{version} · {scope} · {tools} tools" }
-            }
-            if scope == "project" {
-                button {
-                    class: "text-red-300 hover:text-red-200 text-xs border border-red-900/60 hover:border-red-700 rounded-md px-2 py-1 disabled:opacity-50",
-                    disabled: busy(),
-                    onclick: move |_| {
-                        let plugin_id = id.clone();
-                        let engine = engine.clone();
-                        let mut busy = busy;
-                        let st = state;
-                        busy.set(true);
-                        spawn(async move {
-                            match engine.mutate(ResourceMutation::UninstallPlugin { plugin_id }).await {
-                                Ok(removed) => {
-                                    add_toast(&st, ToastLevel::Success, "Plugin removed", removed);
-                                    plugins.set(engine.fetch_plugins().await);
-                                }
-                                Err(error) => add_toast(&st, ToastLevel::Error, "Plugin removal failed", error),
-                            }
-                            busy.set(false);
-                        });
+            if active_tab() == "installed" {
+                // Installed Plugins View
+                match &*plugins.read() {
+                    ResourceState::Loading => rsx! {
+                        div { class: "flex justify-center p-12 text-[#a6adc8]", "Loading installed plugin inventory..." }
                     },
-                    "Remove"
+                    ResourceState::Error(err) => rsx! {
+                        div { class: "p-4 bg-[#f38ba8]/20 border border-[#f38ba8] text-[#f38ba8] rounded-lg",
+                            "Failed to load plugins: {err}"
+                        }
+                    },
+                    ResourceState::Ready(list) => {
+                        if list.is_empty() {
+                            rsx! {
+                                div { class: "p-8 text-center text-[#a6adc8] bg-[#1e1e2e] rounded-xl border border-[#313244]",
+                                    p { class: "mb-2", "No plugins currently installed." }
+                                    p { class: "text-xs text-[#6c7086]", "Switch to the Marketplace Catalog tab to discover community plugins." }
+                                }
+                            }
+                        } else {
+                            rsx! {
+                                div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
+                                    for item in list {
+                                        {
+                                            let id = item["id"].as_str().unwrap_or("unknown").to_string();
+                                            let name = item["name"].as_str().unwrap_or(&id).to_string();
+                                            let version = item["version"].as_str().unwrap_or("0.1.0").to_string();
+                                            let scope = item["scope"].as_str().unwrap_or("global").to_string();
+                                            let tools_cnt = item["tools_count"].as_u64().unwrap_or(0);
+                                            let skills_cnt = item["skills_count"].as_u64().unwrap_or(0);
+                                            let id_clone = id.clone();
+
+                                            rsx! {
+                                                div { key: "{id}", class: "bg-[#1e1e2e] border border-[#313244] rounded-xl p-5 flex flex-col justify-between hover:border-[#45475a] transition",
+                                                    div {
+                                                        div { class: "flex justify-between items-start mb-2",
+                                                            h3 { class: "text-lg font-bold text-[#cdd6f4]", "{name}" }
+                                                            span { class: "text-xs px-2 py-0.5 rounded bg-[#313244] text-[#a6adc8]", "v{version}" }
+                                                        }
+                                                        div { class: "flex items-center gap-2 mb-4 text-xs text-[#a6adc8]",
+                                                            span { class: "uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#45475a]/50 text-[#cdd6f4]", "{scope}" }
+                                                            span { "•" }
+                                                            span { "{tools_cnt} tools" }
+                                                            span { "•" }
+                                                            span { "{skills_cnt} skills" }
+                                                        }
+                                                    }
+                                                    div { class: "flex justify-end pt-3 border-t border-[#313244]/60",
+                                                        button {
+                                                            class: "px-3 py-1.5 bg-[#f38ba8]/20 hover:bg-[#f38ba8]/30 text-[#f38ba8] text-xs font-semibold rounded transition",
+                                                            onclick: move |_| on_uninstall(id_clone.clone()),
+                                                            "Uninstall"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                div { class: "flex flex-col gap-4",
+                    // Search bar
+                    div { class: "flex gap-2",
+                        input {
+                            class: "flex-1 px-4 py-2.5 bg-[#1e1e2e] border border-[#313244] rounded-lg text-sm text-[#cdd6f4] placeholder-[#6c7086] focus:outline-none focus:border-[#89b4fa]",
+                            placeholder: "Search marketplace plugins (e.g. rust, lsp, python, git)...",
+                            value: "{market_query}",
+                            oninput: move |evt| market_query.set(evt.value().clone()),
+                        }
+                        button {
+                            class: "px-5 py-2.5 bg-[#89b4fa] hover:bg-[#b4befe] text-[#11111b] font-semibold text-sm rounded-lg transition",
+                            onclick: on_market_search,
+                            "Search Catalog"
+                        }
+                    }
+
+                    // Marketplace Results
+                    match &*market_plugins.read() {
+                        ResourceState::Loading => rsx! {
+                            div { class: "flex justify-center p-12 text-[#a6adc8]", "Querying marketplace registry..." }
+                        },
+                        ResourceState::Error(err) => rsx! {
+                            div { class: "p-4 bg-[#f38ba8]/20 border border-[#f38ba8] text-[#f38ba8] rounded-lg",
+                                "Marketplace catalog error: {err}"
+                            }
+                        },
+                        ResourceState::Ready(list) => {
+                            if list.is_empty() {
+                                rsx! {
+                                    div { class: "p-8 text-center text-[#a6adc8] bg-[#1e1e2e] rounded-xl border border-[#313244]",
+                                        "No marketplace plugins found matching '{market_query}'."
+                                    }
+                                }
+                            } else {
+                                rsx! {
+                                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
+                                        for item in list {
+                                            {
+                                                let id = item["id"].as_str().unwrap_or("unknown").to_string();
+                                                let version = item["version"].as_str().unwrap_or("0.1.0").to_string();
+                                                let desc = item["description"].as_str().unwrap_or("").to_string();
+                                                let author = item["author"].as_str().unwrap_or("community").to_string();
+                                                let tags = item["tags"].as_array().cloned().unwrap_or_default();
+                                                let id_clone = id.clone();
+
+                                                rsx! {
+                                                    div { key: "{id}", class: "bg-[#1e1e2e] border border-[#313244] rounded-xl p-5 flex flex-col justify-between hover:border-[#89b4fa]/50 transition",
+                                                        div {
+                                                            div { class: "flex justify-between items-start mb-2",
+                                                                div {
+                                                                    h3 { class: "text-lg font-bold text-[#cdd6f4]", "{id}" }
+                                                                    span { class: "text-xs text-[#a6adc8]", "by {author}" }
+                                                                }
+                                                                span { class: "text-xs px-2 py-0.5 rounded bg-[#313244] text-[#a6adc8]", "v{version}" }
+                                                            }
+                                                            p { class: "text-sm text-[#bac2de] mb-3 line-clamp-2", "{desc}" }
+                                                            if !tags.is_empty() {
+                                                                div { class: "flex flex-wrap gap-1.5 mb-3",
+                                                                    for tag in tags {
+                                                                        span { class: "text-xs px-2 py-0.5 bg-[#313244]/80 text-[#89dceb] rounded",
+                                                                            "{tag.as_str().unwrap_or(\"\")}"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        div { class: "flex justify-end pt-3 border-t border-[#313244]/60",
+                                                            button {
+                                                                class: "px-4 py-1.5 bg-[#a6e3a1] hover:bg-[#94e2d5] text-[#11111b] text-xs font-bold rounded transition",
+                                                                onclick: move |_| on_market_install(id_clone.clone()),
+                                                                "Install"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
