@@ -559,6 +559,8 @@ pub(crate) async fn run_agent_loop_with_dependencies(
     }
 
     let mut turns = 0usize;
+    let mut current_active_model: Option<String> = None;
+    let mut prior_turn_signals: Vec<cade_ai::model_routing::TurnExecutionSignal> = Vec::new();
     let max_turns = options.max_turns;
     let turns_ceiling = options.turns_ceiling;
     // P4: resolve the session cost cap from `.cade/settings.json`
@@ -810,12 +812,49 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                         "decision":     &decision,
                     }))
                     .await;
+                    current_active_model = Some(decision.effective_model.clone());
                     decision.effective_model
                 } else {
+                    current_active_model = Some(base_model.clone());
                     base_model
                 }
             } else {
+                current_active_model = Some(base_model.clone());
                 base_model
+            }
+        } else if turns >= 2
+            && std::env::var("CADE_DISABLE_JEV_MODEL_ROUTING").is_err()
+            && let Some(ref current) = current_active_model
+        {
+            if let Some(escalation) =
+                cade_ai::model_routing::JevIntentModelRouter::evaluate_turn_escalation(
+                    current,
+                    &base_model,
+                    turns,
+                    &prior_turn_signals,
+                )
+            {
+                tracing::warn!(
+                    "In-flight model escalation: {} -> {} ({})",
+                    escalation.original_model,
+                    escalation.effective_model,
+                    escalation.reason
+                );
+                send(json!({
+                    "message_type": "system_notice",
+                    "level":        "warning",
+                    "code":         "model_escalated_complexity",
+                    "message":      format!(
+                        "In-flight model escalation: switching from {} to {} due to verification/tool error",
+                        escalation.original_model, escalation.effective_model
+                    ),
+                    "decision":     &escalation,
+                }))
+                .await;
+                current_active_model = Some(escalation.effective_model.clone());
+                escalation.effective_model
+            } else {
+                current.clone()
             }
         } else {
             base_model
@@ -1149,6 +1188,15 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                 tx.clone(),
             )
             .await;
+
+        prior_turn_signals = turn_results
+            .iter()
+            .map(|(result, _)| cade_ai::model_routing::TurnExecutionSignal {
+                is_error: result.is_error,
+                tool_name: result.tool_name.clone(),
+                output_snippet: result.output.chars().take(200).collect(),
+            })
+            .collect();
 
         for (result, arguments) in turn_results {
             // Durable parent history must precede both the result event and the

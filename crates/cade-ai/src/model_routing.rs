@@ -32,6 +32,14 @@ pub struct ModelRoutingDecision {
     pub reason: String,
 }
 
+/// Execution outcome signal emitted by a tool during a turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnExecutionSignal {
+    pub is_error: bool,
+    pub tool_name: String,
+    pub output_snippet: String,
+}
+
 /// Abstract seam for model routing engines.
 pub trait ModelRoutingEngine: Send + Sync {
     fn route<'a>(
@@ -153,6 +161,46 @@ impl JevIntentModelRouter {
     /// Inherent route method for ergonomic non-trait dispatch.
     pub async fn route(&self, base_model: &str, prompt: &str) -> ModelRoutingDecision {
         <Self as ModelRoutingEngine>::route(self, base_model, prompt).await
+    }
+
+    /// Evaluates whether an in-flight economy model should be escalated back to the base frontier model.
+    /// Escalation triggers when:
+    /// 1. Current model is downgraded from base_model (i.e. running on fast tier).
+    /// 2. Turn >= 2.
+    /// 3. Any tool in the prior turn resulted in an error (compiler failure, test rejection, security violation)
+    ///    or output indicates compilation/execution failure.
+    pub fn evaluate_turn_escalation(
+        current_model: &str,
+        base_model: &str,
+        turn_number: usize,
+        recent_signals: &[TurnExecutionSignal],
+    ) -> Option<ModelRoutingDecision> {
+        if current_model == base_model || turn_number < 2 {
+            return None;
+        }
+
+        let has_failure = recent_signals.iter().any(|s| {
+            s.is_error
+                || s.output_snippet.contains("error:")
+                || s.output_snippet.contains("FAILED")
+                || s.output_snippet.contains("Compilation failed")
+                || s.output_snippet.contains("Build failed")
+        });
+
+        if has_failure {
+            Some(ModelRoutingDecision {
+                effective_model: base_model.to_string(),
+                original_model: current_model.to_string(),
+                category: Self::DEEP_ARCHITECTURE.to_string(),
+                confidence: 1.0,
+                is_downgraded_for_economy: false,
+                reason: format!(
+                    "In-flight escalation: prior turn encountered tool/verification error; restored base frontier model ({base_model})"
+                ),
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -382,6 +430,86 @@ mod tests {
             JevIntentModelRouter::resolve_fast_model("openai/gpt-6-sol"),
             "openai/gpt-4o-mini"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_triggers_on_tool_error() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "openai/gpt-4o-mini";
+        let base_model = "openai/gpt-6-sol";
+        let turn_number = 2;
+        let signals = vec![TurnExecutionSignal {
+            is_error: true,
+            tool_name: "bash".to_string(),
+            output_snippet: "cargo test failed with compilation error".to_string(),
+        }];
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+        );
+
+        // -- Check
+        let dec = decision.ok_or("Expected escalation decision on error signal")?;
+        assert_eq!(dec.effective_model, "openai/gpt-6-sol");
+        assert_eq!(dec.original_model, "openai/gpt-4o-mini");
+        assert_eq!(dec.category, JevIntentModelRouter::DEEP_ARCHITECTURE);
+        assert!(!dec.is_downgraded_for_economy);
+        assert!(dec.reason.contains("In-flight escalation"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_skips_when_already_on_base_model() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "openai/gpt-6-sol";
+        let base_model = "openai/gpt-6-sol";
+        let turn_number = 2;
+        let signals = vec![TurnExecutionSignal {
+            is_error: true,
+            tool_name: "bash".to_string(),
+            output_snippet: "error".to_string(),
+        }];
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+        );
+
+        // -- Check
+        assert!(decision.is_none(), "Must not escalate if already on base model");
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_skips_when_turn_is_1() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "openai/gpt-4o-mini";
+        let base_model = "openai/gpt-6-sol";
+        let turn_number = 1;
+        let signals = vec![TurnExecutionSignal {
+            is_error: true,
+            tool_name: "bash".to_string(),
+            output_snippet: "error".to_string(),
+        }];
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+        );
+
+        // -- Check
+        assert!(decision.is_none(), "Must not evaluate turn escalation on Turn 1");
         Ok(())
     }
 }
