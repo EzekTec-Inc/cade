@@ -68,6 +68,8 @@ pub struct PluginManifest {
     #[serde(default)]
     pub subagents: Vec<PathBuf>,
     #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
     pub mcp_servers:
         std::collections::HashMap<String, cade_core::settings::models::McpServerConfig>,
 }

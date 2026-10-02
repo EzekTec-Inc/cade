@@ -61,6 +61,35 @@ pub trait PluginEngine: Send + Sync {
 
     /// Dispatch a plugin tool execution.
     async fn dispatch(&self, tool_name: &str, args: &Value) -> Result<String>;
+
+    /// Search remote marketplace catalog for matching plugin packages.
+    async fn search_marketplace(
+        &self,
+        registry_url: &str,
+        query: &str,
+    ) -> Result<Vec<crate::marketplace::RegistryPluginInfo>> {
+        let index = crate::marketplace::fetch_catalog(registry_url).await?;
+        Ok(crate::marketplace::search_catalog(&index, query)
+            .into_iter()
+            .cloned()
+            .collect())
+    }
+
+    /// Install a plugin directly from the marketplace by identifier with automatic checksum verification.
+    async fn install_from_marketplace(
+        &self,
+        registry_url: &str,
+        plugin_id: &str,
+    ) -> Result<PluginReport> {
+        let index = crate::marketplace::fetch_catalog(registry_url).await?;
+        let info = index
+            .plugins
+            .iter()
+            .find(|p| p.id == plugin_id)
+            .ok_or_else(|| Error::custom(format!("Plugin '{plugin_id}' not found in registry")))?;
+        self.install_with_checksum(&info.url, plugin_id, info.sha256.as_deref())
+            .await
+    }
 }
 
 // endregion: --- Types
