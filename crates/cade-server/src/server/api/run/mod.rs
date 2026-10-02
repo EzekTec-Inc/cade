@@ -826,12 +826,19 @@ pub(crate) async fn run_agent_loop_with_dependencies(
             && std::env::var("CADE_DISABLE_JEV_MODEL_ROUTING").is_err()
             && let Some(ref current) = current_active_model
         {
+            let prior_assistant_text = messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "assistant")
+                .map(|m| m.content.as_str());
+
             if let Some(escalation) =
                 cade_ai::model_routing::JevIntentModelRouter::evaluate_turn_escalation(
                     current,
                     &base_model,
                     turns,
                     &prior_turn_signals,
+                    prior_assistant_text,
                 )
             {
                 tracing::warn!(
@@ -845,7 +852,7 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                     "level":        "warning",
                     "code":         "model_escalated_complexity",
                     "message":      format!(
-                        "In-flight model escalation: switching from {} to {} due to verification/tool error",
+                        "In-flight model escalation: switching from {} to {} due to verification/tool error or complexity",
                         escalation.original_model, escalation.effective_model
                     ),
                     "decision":     &escalation,

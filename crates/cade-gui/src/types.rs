@@ -20,6 +20,7 @@ pub enum SelectedPage {
     ApiKeys,
     Usage,
     Settings,
+    Marketplace,
 }
 
 /// Code language selector for API examples.

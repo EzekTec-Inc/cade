@@ -77,6 +77,7 @@ pub fn Sidebar() -> Element {
                 nav_item { active_page: state.active_page, page: SelectedPage::Tools, icon: "🛠", label: "Tools & Approvals", collapsed }
                 nav_item { active_page: state.active_page, page: SelectedPage::Models, icon: "⚙", label: "Models", collapsed }
                 nav_item { active_page: state.active_page, page: SelectedPage::Providers, icon: "📡", label: "Providers", collapsed }
+                nav_item { active_page: state.active_page, page: SelectedPage::Marketplace, icon: "🧩", label: "Marketplace & Plugins", collapsed }
             }
 
             // Bottom controls (Pinned, shrink-0)

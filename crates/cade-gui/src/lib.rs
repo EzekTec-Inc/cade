@@ -499,6 +499,8 @@ fn App() -> Element {
                         components::usage::UsageView {}
                     } else if (active_page)() == SelectedPage::Settings {
                         components::settings::SettingsView {}
+                    } else if (active_page)() == SelectedPage::Marketplace {
+                        components::plugins::PluginSettings {}
                     } else if (active_page)() == SelectedPage::Live {
                         components::live::LiveView {}
                     } else {
@@ -538,6 +540,7 @@ fn App() -> Element {
                                         (SelectedPage::Tools, "🛠", "MCP Tools & Approvals", "Tools"),
                                         (SelectedPage::Models, "⚙", "Model Registry & Context Limits", "Models"),
                                         (SelectedPage::Providers, "📡", "LLM Providers & API Keys", "Providers"),
+                                        (SelectedPage::Marketplace, "🧩", "Community Marketplace & Plugins", "Marketplace"),
                                         (SelectedPage::Usage, "📊", "Telemetry & Token Costs", "Usage"),
                                         (SelectedPage::Settings, "⚙", "System Settings", "Ctrl+,"),
                                     ];

@@ -40,6 +40,38 @@ pub struct TurnExecutionSignal {
     pub output_snippet: String,
 }
 
+/// Specific granular trigger that caused an in-flight model escalation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EscalationTrigger {
+    ToolExecutionError { tool_name: String },
+    CompilationOrTestFailure { detail: String },
+    SecurityOrPermissionDenial { detail: String },
+    LlmUncertaintyOrRefusal { phrase: String },
+    RepetitiveToolLoop { tool_name: String, repetitions: usize },
+}
+
+impl EscalationTrigger {
+    pub fn description(&self) -> String {
+        match self {
+            Self::ToolExecutionError { tool_name } => {
+                format!("Tool execution error in '{tool_name}'")
+            }
+            Self::CompilationOrTestFailure { detail } => {
+                format!("Compilation or test failure: {detail}")
+            }
+            Self::SecurityOrPermissionDenial { detail } => {
+                format!("Security or permission denial: {detail}")
+            }
+            Self::LlmUncertaintyOrRefusal { phrase } => {
+                format!("Model uncertainty/refusal detected: \"{phrase}\"")
+            }
+            Self::RepetitiveToolLoop { tool_name, repetitions } => {
+                format!("Repetitive tool loop detected in '{tool_name}' ({repetitions} executions)")
+            }
+        }
+    }
+}
+
 /// Abstract seam for model routing engines.
 pub trait ModelRoutingEngine: Send + Sync {
     fn route<'a>(
@@ -167,40 +199,95 @@ impl JevIntentModelRouter {
     /// Escalation triggers when:
     /// 1. Current model is downgraded from base_model (i.e. running on fast tier).
     /// 2. Turn >= 2.
-    /// 3. Any tool in the prior turn resulted in an error (compiler failure, test rejection, security violation)
-    ///    or output indicates compilation/execution failure.
+    /// 3. Any tool in the prior turn resulted in an error, compilation failure, security denial,
+    ///    repetitive loop, or prior assistant text expressed refusal/uncertainty.
     pub fn evaluate_turn_escalation(
         current_model: &str,
         base_model: &str,
         turn_number: usize,
         recent_signals: &[TurnExecutionSignal],
+        prior_assistant_text: Option<&str>,
     ) -> Option<ModelRoutingDecision> {
         if current_model == base_model || turn_number < 2 {
             return None;
         }
 
-        let has_failure = recent_signals.iter().any(|s| {
-            s.is_error
+        // 1. Check for specific tool execution or compilation errors
+        let mut detected_trigger = None;
+        for s in recent_signals {
+            if s.is_error {
+                detected_trigger = Some(EscalationTrigger::ToolExecutionError {
+                    tool_name: s.tool_name.clone(),
+                });
+                break;
+            }
+            if s.output_snippet.contains("error[E")
                 || s.output_snippet.contains("error:")
                 || s.output_snippet.contains("FAILED")
                 || s.output_snippet.contains("Compilation failed")
                 || s.output_snippet.contains("Build failed")
-        });
-
-        if has_failure {
-            Some(ModelRoutingDecision {
-                effective_model: base_model.to_string(),
-                original_model: current_model.to_string(),
-                category: Self::DEEP_ARCHITECTURE.to_string(),
-                confidence: 1.0,
-                is_downgraded_for_economy: false,
-                reason: format!(
-                    "In-flight escalation: prior turn encountered tool/verification error; restored base frontier model ({base_model})"
-                ),
-            })
-        } else {
-            None
+            {
+                let detail = s.output_snippet.lines().next().unwrap_or("build error").to_string();
+                detected_trigger = Some(EscalationTrigger::CompilationOrTestFailure { detail });
+                break;
+            }
+            if s.output_snippet.contains("Security Exception")
+                || s.output_snippet.contains("Access denied")
+                || s.output_snippet.contains("Permission denied")
+                || s.output_snippet.contains("blocked by policy")
+            {
+                let detail = s.output_snippet.lines().next().unwrap_or("access denied").to_string();
+                detected_trigger = Some(EscalationTrigger::SecurityOrPermissionDenial { detail });
+                break;
+            }
         }
+
+        // 2. Check for repetitive tool loop (>= 3 calls to the same tool in turn)
+        if detected_trigger.is_none() && recent_signals.len() >= 3 {
+            let first_tool = &recent_signals[0].tool_name;
+            if recent_signals.iter().all(|s| &s.tool_name == first_tool) {
+                detected_trigger = Some(EscalationTrigger::RepetitiveToolLoop {
+                    tool_name: first_tool.clone(),
+                    repetitions: recent_signals.len(),
+                });
+            }
+        }
+
+        // 3. Check for LLM uncertainty / refusal phrases in prior assistant output
+        if detected_trigger.is_none()
+            && let Some(text) = prior_assistant_text
+        {
+            let lower = text.to_lowercase();
+            let uncertainty_markers = [
+                "i cannot determine",
+                "unable to complete",
+                "need more context to resolve",
+                "unsure how to",
+                "i am not sure",
+                "exceeds my capability",
+                "i cannot solve",
+            ];
+            for marker in uncertainty_markers {
+                if lower.contains(marker) {
+                    detected_trigger = Some(EscalationTrigger::LlmUncertaintyOrRefusal {
+                        phrase: marker.to_string(),
+                    });
+                    break;
+                }
+            }
+        }
+
+        detected_trigger.map(|trigger| ModelRoutingDecision {
+            effective_model: base_model.to_string(),
+            original_model: current_model.to_string(),
+            category: Self::DEEP_ARCHITECTURE.to_string(),
+            confidence: 1.0,
+            is_downgraded_for_economy: false,
+            reason: format!(
+                "In-flight escalation: {}; restored base frontier model ({base_model})",
+                trigger.description()
+            ),
+        })
     }
 }
 
@@ -442,7 +529,7 @@ mod tests {
         let signals = vec![TurnExecutionSignal {
             is_error: true,
             tool_name: "bash".to_string(),
-            output_snippet: "cargo test failed with compilation error".to_string(),
+            output_snippet: "generic failure".to_string(),
         }];
 
         // -- Exec
@@ -451,15 +538,135 @@ mod tests {
             base_model,
             turn_number,
             &signals,
+            None,
         );
 
         // -- Check
         let dec = decision.ok_or("Expected escalation decision on error signal")?;
         assert_eq!(dec.effective_model, "openai/gpt-6-sol");
         assert_eq!(dec.original_model, "openai/gpt-4o-mini");
-        assert_eq!(dec.category, JevIntentModelRouter::DEEP_ARCHITECTURE);
-        assert!(!dec.is_downgraded_for_economy);
-        assert!(dec.reason.contains("In-flight escalation"));
+        assert!(dec.reason.contains("Tool execution error in 'bash'"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_triggers_on_compilation_failure() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "gemini/gemini-2.5-flash";
+        let base_model = "gemini/gemini-2.5-pro";
+        let turn_number = 2;
+        let signals = vec![TurnExecutionSignal {
+            is_error: false,
+            tool_name: "bash".to_string(),
+            output_snippet: "error[E0308]: mismatched types\n  expected struct A, found struct B".to_string(),
+        }];
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+            None,
+        );
+
+        // -- Check
+        let dec = decision.ok_or("Expected escalation on compiler error")?;
+        assert_eq!(dec.effective_model, "gemini/gemini-2.5-pro");
+        assert!(dec.reason.contains("Compilation or test failure"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_triggers_on_security_denial() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "anthropic/claude-3-5-haiku-latest";
+        let base_model = "anthropic/claude-3-7-sonnet";
+        let turn_number = 3;
+        let signals = vec![TurnExecutionSignal {
+            is_error: false,
+            tool_name: "write_file".to_string(),
+            output_snippet: "Security Exception: Access denied to path outside sandbox boundary".to_string(),
+        }];
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+            None,
+        );
+
+        // -- Check
+        let dec = decision.ok_or("Expected escalation on security denial")?;
+        assert_eq!(dec.effective_model, "anthropic/claude-3-7-sonnet");
+        assert!(dec.reason.contains("Security or permission denial"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_triggers_on_repetitive_tool_loop() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "openai/gpt-4o-mini";
+        let base_model = "openai/gpt-6-sol";
+        let turn_number = 2;
+        let signals = vec![
+            TurnExecutionSignal {
+                is_error: false,
+                tool_name: "grep".to_string(),
+                output_snippet: "no match".to_string(),
+            },
+            TurnExecutionSignal {
+                is_error: false,
+                tool_name: "grep".to_string(),
+                output_snippet: "no match".to_string(),
+            },
+            TurnExecutionSignal {
+                is_error: false,
+                tool_name: "grep".to_string(),
+                output_snippet: "no match".to_string(),
+            },
+        ];
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+            None,
+        );
+
+        // -- Check
+        let dec = decision.ok_or("Expected escalation on repetitive tool loop")?;
+        assert_eq!(dec.effective_model, "openai/gpt-6-sol");
+        assert!(dec.reason.contains("Repetitive tool loop detected in 'grep'"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_turn_escalation_triggers_on_llm_uncertainty() -> Result<()> {
+        // -- Setup & Fixtures
+        let current_model = "openai/gpt-4o-mini";
+        let base_model = "openai/gpt-6-sol";
+        let turn_number = 2;
+        let signals = vec![];
+        let assistant_text = "I am unable to complete this refactoring safely without deeper architectural analysis.";
+
+        // -- Exec
+        let decision = JevIntentModelRouter::evaluate_turn_escalation(
+            current_model,
+            base_model,
+            turn_number,
+            &signals,
+            Some(assistant_text),
+        );
+
+        // -- Check
+        let dec = decision.ok_or("Expected escalation on assistant uncertainty")?;
+        assert_eq!(dec.effective_model, "openai/gpt-6-sol");
+        assert!(dec.reason.contains("Model uncertainty/refusal detected"));
         Ok(())
     }
 
@@ -481,6 +688,7 @@ mod tests {
             base_model,
             turn_number,
             &signals,
+            None,
         );
 
         // -- Check
@@ -506,6 +714,7 @@ mod tests {
             base_model,
             turn_number,
             &signals,
+            None,
         );
 
         // -- Check
