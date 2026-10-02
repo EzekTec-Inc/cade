@@ -6,7 +6,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{
         IntoResponse, Response,
@@ -33,6 +33,43 @@ pub struct InstallPluginPayload {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub sha256: Option<String>,
+    #[serde(default)]
+    pub registry_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchPluginsQuery {
+    pub query: Option<String>,
+    pub registry_url: Option<String>,
+}
+
+/// `GET /v1/plugins/search` — search the remote marketplace catalog for plugins.
+pub async fn search_plugins_handler(
+    State(_state): State<AppState>,
+    Query(params): Query<SearchPluginsQuery>,
+) -> Response {
+    let registry_url = params.registry_url.unwrap_or_else(|| {
+        std::env::var("CADE_REGISTRY_URL")
+            .unwrap_or_else(|_| "https://registry.cade.dev".to_string())
+    });
+    let query = params.query.unwrap_or_default();
+    let engine = default_engine();
+    match engine.search_marketplace(&registry_url, &query).await {
+        Ok(plugins) => Json(json!({
+            "plugins": plugins,
+            "count": plugins.len(),
+            "query": query,
+            "registry_url": registry_url,
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to search marketplace catalog");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Marketplace search failed: {error}"),
+            )
+        }
+    }
 }
 
 /// `GET /v1/plugins` — list the canonical manifest-derived Plugin inventory.
@@ -105,10 +142,24 @@ pub async fn install_plugin_handler(
     });
     let engine = default_engine();
 
-    match engine
-        .install_with_checksum(&payload.url, &plugin_id, payload.sha256.as_deref())
-        .await
+    let install_res = if payload.url.starts_with("http://")
+        || payload.url.starts_with("https://")
+        || payload.url.starts_with("file://")
     {
+        engine
+            .install_with_checksum(&payload.url, &plugin_id, payload.sha256.as_deref())
+            .await
+    } else {
+        let registry_url = payload.registry_url.unwrap_or_else(|| {
+            std::env::var("CADE_REGISTRY_URL")
+                .unwrap_or_else(|_| "https://registry.cade.dev".to_string())
+        });
+        engine
+            .install_from_marketplace(&registry_url, &payload.url)
+            .await
+    };
+
+    match install_res {
         Ok(report) => {
             crate::server::api::agents::publish_global_event(
                 Some(&state.db),

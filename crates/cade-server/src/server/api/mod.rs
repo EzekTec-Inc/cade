@@ -115,6 +115,7 @@ pub fn router(state: AppState) -> Router {
             post(run::launch_subagent_handler),
         )
         .route("/v1/plugins", get(plugins::list_plugins_handler))
+        .route("/v1/plugins/search", get(plugins::search_plugins_handler))
         .route("/v1/plugins/install", post(plugins::install_plugin_handler))
         .route(
             "/v1/plugins/{id}",

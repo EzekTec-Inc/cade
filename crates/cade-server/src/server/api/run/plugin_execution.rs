@@ -487,6 +487,7 @@ mod tests {
                     plugin_id: Some("candidate7-fixture".into()),
                     agent_id: None,
                     sha256: Some(packed.sha256),
+                    registry_url: None,
                 }),
             )
             .await;

@@ -17,8 +17,10 @@ use super::clean_openai_schema;
 
 mod responses;
 pub(crate) mod schema_normalizer;
+pub(crate) mod wire;
 pub(crate) use responses::is_continuation as is_responses_continuation;
 pub(crate) use schema_normalizer::ToolSchemaNormalizer;
+pub(crate) use wire::OpenAiWireEngine;
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
@@ -796,15 +798,7 @@ impl OpenAiProvider {
                 "Upstream completion error: {error}"
             )));
         }
-        if protocol == ApiProtocol::ChatCompletions {
-            if !body["choices"][0]["message"].is_object() {
-                return Err(crate::Error::custom(
-                    "Expected Chat Completions choices[0].message",
-                ));
-            }
-            return Ok(Self::parse_response(body));
-        }
-        responses::decode(body)
+        OpenAiWireEngine::decode_response(body, protocol)
     }
 
     async fn send_completion(
@@ -879,11 +873,7 @@ impl OpenAiProvider {
         stream: bool,
         protocol: ApiProtocol,
     ) -> Value {
-        if protocol == ApiProtocol::Responses {
-            self.build_responses_body(req, stream)
-        } else {
-            self.build_chat_body(req, stream)
-        }
+        OpenAiWireEngine::build_body(self, req, stream, protocol)
     }
 
     pub(crate) fn build_chat_body(&self, req: &CompletionRequest, stream: bool) -> Value {
@@ -1078,9 +1068,9 @@ impl LlmProvider for OpenAiProvider {
                             || v.get("error").is_some_and(|e| !e.is_null()) {
                             yield Err(crate::Error::custom(format!("Upstream stream error: {v}"))); return;
                         }
-                        if (protocol == ApiProtocol::Responses && v.get("choices").is_some())
-                            || (protocol == ApiProtocol::ChatCompletions && event.starts_with("response.")) {
-                            yield Err(crate::Error::custom("Completion stream protocol does not match configured endpoint")); return;
+                        if let Err(e) = OpenAiWireEngine::validate_stream_event(event, &v, protocol) {
+                            yield Err(e);
+                            return;
                         }
                         // 1. Standard Chat Completions SSE schema
                         if let Some(choices) = v.get("choices").and_then(Value::as_array)
