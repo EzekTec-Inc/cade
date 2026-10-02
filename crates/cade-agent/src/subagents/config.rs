@@ -165,6 +165,16 @@ impl SubagentConfig {
         let enforce_isolation = args["enforce_isolation"]
             .as_bool()
             .or_else(|| args["_enforce_isolation"].as_bool())
+            .or_else(|| args["sandbox"].as_bool())
+            .or_else(|| {
+                args["isolation"].as_str().map(|s| {
+                    let lower = s.to_ascii_lowercase();
+                    lower == "sandbox"
+                        || lower == "virtual_sandbox"
+                        || lower == "isolated"
+                        || lower == "worktree"
+                })
+            })
             .unwrap_or(false);
 
         let action = args["action"]
@@ -572,6 +582,39 @@ mod tests {
     fn config_validate_accepts_non_empty_prompt() {
         let cfg = SubagentConfig::from_args(&json!({ "prompt": "do something" }));
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_isolation_parsing_sandbox_boolean() {
+        // -- Setup & Fixtures
+        let args_true = json!({ "prompt": "test task", "sandbox": true });
+        let args_false = json!({ "prompt": "test task", "sandbox": false });
+
+        // -- Exec
+        let cfg_true = SubagentConfig::from_args(&args_true);
+        let cfg_false = SubagentConfig::from_args(&args_false);
+
+        // -- Check
+        assert!(cfg_true.enforce_isolation, "sandbox: true must enable enforce_isolation");
+        assert!(!cfg_false.enforce_isolation, "sandbox: false must not enable enforce_isolation");
+    }
+
+    #[test]
+    fn test_config_isolation_parsing_isolation_string() {
+        // -- Setup & Fixtures
+        let args_sandbox = json!({ "prompt": "test task", "isolation": "sandbox" });
+        let args_virtual = json!({ "prompt": "test task", "isolation": "virtual_sandbox" });
+        let args_none = json!({ "prompt": "test task", "isolation": "none" });
+
+        // -- Exec
+        let cfg_sandbox = SubagentConfig::from_args(&args_sandbox);
+        let cfg_virtual = SubagentConfig::from_args(&args_virtual);
+        let cfg_none = SubagentConfig::from_args(&args_none);
+
+        // -- Check
+        assert!(cfg_sandbox.enforce_isolation, "isolation: sandbox must enable enforce_isolation");
+        assert!(cfg_virtual.enforce_isolation, "isolation: virtual_sandbox must enable enforce_isolation");
+        assert!(!cfg_none.enforce_isolation, "isolation: none must not enable enforce_isolation");
     }
 
     // -- resolve_system_prompt

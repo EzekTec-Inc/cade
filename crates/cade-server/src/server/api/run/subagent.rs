@@ -1604,7 +1604,16 @@ async fn run_subagent_with_permit(
     .with_conversation(parent_conversation_id.map(str::to_owned));
     child_runtime.allowed_paths = allowed_paths;
     if let Some(options) = accepted_options.as_ref() {
-        child_runtime.backend = options.runtime.backend.clone();
+        child_runtime.backend = if use_isolation {
+            let sandbox = cade_agent::backends::VirtualSandboxBackend::new(execution_path.clone());
+            if is_subagent_readonly {
+                Arc::new(cade_agent::backends::ReadOnlyBackend::new(sandbox))
+            } else {
+                Arc::new(sandbox)
+            }
+        } else {
+            options.runtime.backend.clone()
+        };
         child_runtime.extension = if execution_path == cwd_for_defs {
             options.runtime.extension.clone()
         } else {
@@ -1617,6 +1626,13 @@ async fn run_subagent_with_permit(
                     state.mcp.clone(),
                 )) as Arc<dyn cade_agent::tools::runtime::ToolExtension>
             })
+        };
+    } else if use_isolation {
+        let sandbox = cade_agent::backends::VirtualSandboxBackend::new(execution_path.clone());
+        child_runtime.backend = if is_subagent_readonly {
+            Arc::new(cade_agent::backends::ReadOnlyBackend::new(sandbox))
+        } else {
+            Arc::new(sandbox)
         };
     }
     if child_runtime.extension.is_none() {
