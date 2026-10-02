@@ -15,6 +15,7 @@ This directory documents the significant architectural decisions made in the evo
 | [ADR-0009](0009-adaptive-typewriter-governor-for-tui-streaming.md) | Adaptive Typewriter Governor for TUI Streaming | Accepted | TUI Rendering |
 | [ADR-0010](0010-decoupled-async-subagent-executor-trait.md) | Decoupled Async Subagent Executor Trait | Accepted | Subagents Engine |
 | [ADR-0011](0011-unified-permissions-service-and-adapters.md) | Unified Permissions Service and Adapters | Accepted | Security & Policies |
+| ADR-0012 | *(numbering gap — no ADR-0012 was ever authored; 0011 is followed directly by 0013)* | — | — |
 | [ADR-0013](0013-pluggable-polymorphic-token-counters.md) | Pluggable Polymorphic Token Counters | Accepted | AI & Tokenization |
 | [ADR-0014](0014-firecracker-microvm-hypervisor-sandboxing-and-vsock-exchange.md) | Firecracker MicroVM Hypervisor Sandboxing | Accepted | Execution Backends |
 | [ADR-0015](0015-multi-agent-team-coordination-and-git-branch-sandboxing.md) | Multi-Agent Team Coordination and Git Branch Sandboxing | Accepted | Teams & Worktrees |
