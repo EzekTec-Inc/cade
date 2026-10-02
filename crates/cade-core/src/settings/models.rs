@@ -183,6 +183,8 @@ pub enum ExecutionBackendKind {
     ReadOnly,
     /// Run commands in a virtual restricted local sandbox.
     Virtual,
+    /// Run commands inside a kernel/process-confined Landlock sandbox.
+    Landlock,
     /// Run commands inside a hardware-isolated Firecracker MicroVM.
     MicroVm,
 }
@@ -195,6 +197,7 @@ impl ExecutionBackendKind {
             Self::Ssh => "ssh",
             Self::ReadOnly => "readonly",
             Self::Virtual => "virtual",
+            Self::Landlock => "landlock",
             Self::MicroVm => "microvm",
         }
     }
@@ -209,8 +212,9 @@ impl std::str::FromStr for ExecutionBackendKind {
             "ssh" => Ok(Self::Ssh),
             "readonly" | "read-only" | "read_only" => Ok(Self::ReadOnly),
             "virtual" => Ok(Self::Virtual),
+            "landlock" | "sandbox" => Ok(Self::Landlock),
             other => Err(format!(
-                "Unknown backend '{other}'. Valid: local, docker, ssh, readonly, virtual"
+                "Unknown backend '{other}'. Valid: local, docker, ssh, readonly, virtual, landlock"
             )),
         }
     }

@@ -7,6 +7,7 @@ use crate::Result;
 use crate::backends::{BashOutput, DirEntry, ExecutionBackend};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone)]
 pub struct VirtualSandboxBackend {
     workspace_root: PathBuf,
     allowed_env: Vec<String>,

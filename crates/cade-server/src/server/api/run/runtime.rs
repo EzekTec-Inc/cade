@@ -334,6 +334,10 @@ impl RunExecutionOptions {
                     cade_agent::backends::VirtualSandboxBackend::new(cwd.clone()),
                 )
                     as Arc<dyn ExecutionBackend>,
+                cade_core::settings::ExecutionBackendKind::Landlock => Arc::new(
+                    cade_agent::backends::LandlockSandboxBackend::new(cwd.clone()),
+                )
+                    as Arc<dyn ExecutionBackend>,
                 // The legacy factory uses process cwd for MicroVM. Do not silently run elsewhere.
                 cade_core::settings::ExecutionBackendKind::MicroVm => {
                     return Err(RunStartError::invalid(

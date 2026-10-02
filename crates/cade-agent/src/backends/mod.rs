@@ -18,11 +18,13 @@ pub mod microvm;
 pub mod readonly;
 #[cfg(feature = "backend-ssh")]
 pub mod ssh;
+pub mod landlock_sandbox;
 pub mod storage;
 pub mod virtual_sandbox;
 
 #[cfg(feature = "backend-docker")]
 pub use docker::DockerBackend;
+pub use landlock_sandbox::LandlockSandboxBackend;
 pub use local::LocalBackend;
 #[cfg(unix)]
 pub use microvm::MicroVmBackend;
@@ -242,6 +244,9 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
         ExecutionBackendKind::ReadOnly => Box::new(ReadOnlyBackend::new(LocalBackend)),
         ExecutionBackendKind::Local => Box::new(LocalBackend),
         ExecutionBackendKind::Virtual => Box::new(VirtualSandboxBackend::new(
+            std::env::current_dir().unwrap_or_default(),
+        )),
+        ExecutionBackendKind::Landlock => Box::new(LandlockSandboxBackend::new(
             std::env::current_dir().unwrap_or_default(),
         )),
         ExecutionBackendKind::MicroVm => {
