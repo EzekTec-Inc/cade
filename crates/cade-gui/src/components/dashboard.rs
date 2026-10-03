@@ -48,19 +48,19 @@ pub fn DashboardView() -> Element {
             "Send a message to an agent",
             "Make an API request to send your stateful agent a message.",
             "Get started with the API",
-            "https://github.com/EzekTec-Inc/CADE/blob/main/docs/getting-started.md",
+            "https://github.com/EzekTec-Inc/cade/blob/main/docs/getting-started.md",
         ),
         1 => (
             "Create an agent",
             "Deploy a new autonomous agent with custom system prompts, tools, and persona.",
             "Explore agent creation",
-            "https://github.com/EzekTec-Inc/CADE/blob/main/docs/agents-and-conversations.md",
+            "https://github.com/EzekTec-Inc/cade/blob/main/docs/agents-and-conversations.md",
         ),
         _ => (
             "Inspect agent memory",
             "Retrieve and inspect the stateful core memory blocks of an active agent.",
             "Read about memory state",
-            "https://github.com/EzekTec-Inc/CADE/blob/main/docs/memory-system.md",
+            "https://github.com/EzekTec-Inc/cade/blob/main/docs/memory-system.md",
         ),
     };
 
@@ -75,8 +75,8 @@ pub fn DashboardView() -> Element {
                 span { class: "text-xs font-mono font-bold text-cyan-400 uppercase tracking-widest", "CADE Autonomous Intelligence Platform" }
             }
             div { class: "flex items-center space-x-6 text-[13px] text-slate-400 font-medium",
-                a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/index.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "Docs" }
-                a { href: "https://github.com/EzekTec-Inc/CADE/blob/main/docs/getting-started.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "API Spec" }
+                a { href: "https://github.com/EzekTec-Inc/cade/blob/main/docs/index.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "Docs" }
+                a { href: "https://github.com/EzekTec-Inc/cade/blob/main/docs/getting-started.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "API Spec" }
                 span { class: "{pill_cls} border px-3 py-1 rounded-full text-xs font-semibold shadow-sm flex items-center space-x-2",
                     span { class: "w-2 h-2 rounded-full {dot_cls}" }
                     span { "{status_val.engine_status}" }
@@ -163,11 +163,11 @@ pub fn DashboardView() -> Element {
             // Feature cards grid
             div { class: "grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 select-none",
                 // CARD 1: Desktop App
-                feature_card_desktop { }
+                feature_card_desktop { active_page }
                 // CARD 2: CADE CLI
-                feature_card_cli { }
+                feature_card_cli { active_page }
                 // CARD 3: CADE API
-                feature_card_api { }
+                feature_card_api { active_page }
             }
 
             // API Section
@@ -220,9 +220,11 @@ pub fn DashboardView() -> Element {
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 #[component]
-fn feature_card_desktop() -> Element {
+fn feature_card_desktop(mut active_page: Signal<crate::types::SelectedPage>) -> Element {
     rsx! {
-        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-slate-600 group transition-all duration-200 flex flex-col justify-between shadow-md",
+        div {
+            class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-sky-500/60 group transition-all duration-200 flex flex-col justify-between shadow-md cursor-pointer",
+            onclick: move |_| active_page.set(crate::types::SelectedPage::Tools),
             div { class: "relative h-36 bg-gradient-to-br from-blue-950/40 via-slate-900/60 to-[#090d16] flex items-center justify-center p-4 overflow-hidden border-b border-[#1e293b]/50",
                 svg { class: "w-20 h-20 text-sky-500/80 filter drop-shadow-[0_0_15px_rgba(14,165,233,0.2)]", view_box: "0 0 100 100",
                     circle { cx: "50", cy: "50", r: "32", fill: "none", stroke: "#0284c7", "stroke-width": "1.5" }
@@ -236,15 +238,21 @@ fn feature_card_desktop() -> Element {
                     h3 { class: "text-slate-100 font-bold text-sm mb-1.5 group-hover:text-sky-400 transition-colors duration-150", "Desktop Extensions" }
                     p { class: "text-slate-400 text-xs leading-relaxed", "Cross-platform desktop automation, screen capture, window control, and notification hooks." }
                 }
+                span { class: "text-[11px] text-sky-400 group-hover:translate-x-1 transition-transform inline-flex items-center space-x-1 font-medium mt-3",
+                    span { "Explore Tools & Approvals" }
+                    span { "→" }
+                }
             }
         }
     }
 }
 
 #[component]
-fn feature_card_cli() -> Element {
+fn feature_card_cli(mut active_page: Signal<crate::types::SelectedPage>) -> Element {
     rsx! {
-        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-slate-600 group transition-all duration-200 flex flex-col justify-between shadow-md",
+        div {
+            class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-emerald-500/60 group transition-all duration-200 flex flex-col justify-between shadow-md cursor-pointer",
+            onclick: move |_| active_page.set(crate::types::SelectedPage::Live),
             div { class: "relative h-36 bg-gradient-to-br from-emerald-950/40 via-slate-900/60 to-[#090d16] flex items-center justify-center p-4 overflow-hidden border-b border-[#1e293b]/50",
                 svg { class: "w-20 h-20 text-emerald-500/80 filter drop-shadow-[0_0_15px_rgba(16,185,129,0.2)]", view_box: "0 0 100 100",
                     rect { x: "25", y: "30", width: "50", height: "40", rx: "6", fill: "#0f172a", stroke: "#059669", "stroke-width": "1.5" }
@@ -257,15 +265,21 @@ fn feature_card_cli() -> Element {
                     h3 { class: "text-slate-100 font-bold text-sm mb-1.5 group-hover:text-emerald-400 transition-colors duration-150", "Smart Shell & CLI" }
                     p { class: "text-slate-400 text-xs leading-relaxed", "Interactive Ratatui TUI console with autonomous workflows, plan checklists, and diff inspectors." }
                 }
+                span { class: "text-[11px] text-emerald-400 group-hover:translate-x-1 transition-transform inline-flex items-center space-x-1 font-medium mt-3",
+                    span { "Inspect Live Activity" }
+                    span { "→" }
+                }
             }
         }
     }
 }
 
 #[component]
-fn feature_card_api() -> Element {
+fn feature_card_api(mut active_page: Signal<crate::types::SelectedPage>) -> Element {
     rsx! {
-        div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-slate-600 group transition-all duration-200 flex flex-col justify-between shadow-md",
+        div {
+            class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-amber-500/60 group transition-all duration-200 flex flex-col justify-between shadow-md cursor-pointer",
+            onclick: move |_| active_page.set(crate::types::SelectedPage::Code),
             div { class: "relative h-36 bg-gradient-to-br from-amber-950/40 via-slate-900/60 to-[#090d16] flex items-center justify-center p-4 overflow-hidden border-b border-[#1e293b]/50",
                 svg { class: "w-20 h-20 text-amber-500/80 filter drop-shadow-[0_0_15px_rgba(245,158,11,0.2)]", view_box: "0 0 100 100",
                     rect { x: "30", y: "30", width: "40", height: "40", rx: "6", fill: "#0f172a", stroke: "#d97706", "stroke-width": "1.5" }
@@ -277,6 +291,10 @@ fn feature_card_api() -> Element {
                 div {
                     h3 { class: "text-slate-100 font-bold text-sm mb-1.5 group-hover:text-amber-400 transition-colors duration-150", "Embedded SDK" }
                     p { class: "text-slate-400 text-xs leading-relaxed", "Zero-daemon in-process runtime (Rust, Python, TypeScript) for standalone and serverless deployments." }
+                }
+                span { class: "text-[11px] text-amber-400 group-hover:translate-x-1 transition-transform inline-flex items-center space-x-1 font-medium mt-3",
+                    span { "Open API Playground" }
+                    span { "→" }
                 }
             }
         }

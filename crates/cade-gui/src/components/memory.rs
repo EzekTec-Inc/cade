@@ -178,22 +178,22 @@ pub fn MemoryBlocksView() -> Element {
                 }
                 div { class: "flex items-center space-x-2 select-none",
                     button {
-                        class: if active_subtab() == 0 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        class: if active_subtab() == 0 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium cursor-pointer transition shadow-sm" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition" },
                         onclick: move |_| active_subtab.set(0),
                         "Memory Blocks"
                     }
                     button {
-                        class: if active_subtab() == 1 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        class: if active_subtab() == 1 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium cursor-pointer transition shadow-sm" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition" },
                         onclick: move |_| active_subtab.set(1),
                         "Knowledge Graph Triples"
                     }
                     button {
-                        class: if active_subtab() == 2 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        class: if active_subtab() == 2 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium cursor-pointer transition shadow-sm" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition" },
                         onclick: move |_| active_subtab.set(2),
                         "Force-Directed Graph Canvas"
                     }
                     button {
-                        class: if active_subtab() == 3 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 border border-[#1e293b] rounded-lg text-xs font-medium" },
+                        class: if active_subtab() == 3 { "px-3 py-1 bg-purple-600 text-white rounded-lg text-xs font-medium cursor-pointer transition shadow-sm" } else { "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition" },
                         onclick: move |_| active_subtab.set(3),
                         "Semantic Recall Playground"
                     }

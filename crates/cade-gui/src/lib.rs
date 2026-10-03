@@ -528,22 +528,7 @@ fn App() -> Element {
                             div { class: "p-2 max-h-80 overflow-y-auto space-y-1 text-xs",
                                 {
                                     let q = palette_query().to_lowercase();
-                                    let items = vec![
-                                        (SelectedPage::Dashboard, "🎛", "Dashboard Overview", "Overview"),
-                                        (SelectedPage::Chat, "💬", "Jump to Chat", "Ctrl+N"),
-                                        (SelectedPage::Arena, "⚡", "Multi-Model Arena Matrix", "Arena"),
-                                        (SelectedPage::Workflows, "🔄", "Visual Workflow DAG Canvas", "Workflows"),
-                                        (SelectedPage::Swarm, "🌐", "Swarm Supervisory Topology", "Swarm"),
-                                        (SelectedPage::Artifacts, "📦", "Live Artifact Studio", "Artifacts"),
-                                        (SelectedPage::Agents, "🤖", "Autonomous Agents Manager", "Agents"),
-                                        (SelectedPage::MemoryBlocks, "🧠", "Memory Blocks & Token Heatmap", "Memory"),
-                                        (SelectedPage::Tools, "🛠", "MCP Tools & Approvals", "Tools"),
-                                        (SelectedPage::Models, "⚙", "Model Registry & Context Limits", "Models"),
-                                        (SelectedPage::Providers, "📡", "LLM Providers & API Keys", "Providers"),
-                                        (SelectedPage::Marketplace, "🧩", "Community Marketplace & Plugins", "Marketplace"),
-                                        (SelectedPage::Usage, "📊", "Telemetry & Token Costs", "Usage"),
-                                        (SelectedPage::Settings, "⚙", "System Settings", "Ctrl+,"),
-                                    ];
+                                    let items = palette_items();
                                     let filtered: Vec<_> = items.into_iter().filter(|(_, _, label, _)| q.is_empty() || label.to_lowercase().contains(&q)).collect();
 
                                     filtered.into_iter().map(|(page, icon, label, shortcut)| {
@@ -570,6 +555,30 @@ fn App() -> Element {
     }
 }
 
+/// Full registry of all available command palette entries.
+pub fn palette_items() -> Vec<(SelectedPage, &'static str, &'static str, &'static str)> {
+    vec![
+        (SelectedPage::Dashboard, "🎛", "Dashboard Overview", "Overview"),
+        (SelectedPage::Chat, "💬", "Jump to Chat", "Ctrl+N"),
+        (SelectedPage::Arena, "⚡", "Multi-Model Arena Matrix", "Arena"),
+        (SelectedPage::Workflows, "🔄", "Visual Workflow DAG Canvas", "Workflows"),
+        (SelectedPage::Swarm, "🌐", "Swarm Supervisory Topology", "Swarm"),
+        (SelectedPage::Artifacts, "📦", "Live Artifact Studio", "Artifacts"),
+        (SelectedPage::Agents, "🤖", "Autonomous Agents Manager", "Agents"),
+        (SelectedPage::MemoryBlocks, "🧠", "Memory Blocks & Token Heatmap", "Memory"),
+        (SelectedPage::Tools, "🛠", "MCP Tools & Approvals", "Tools"),
+        (SelectedPage::Models, "⚙", "Model Registry & Context Limits", "Models"),
+        (SelectedPage::Providers, "📡", "LLM Providers & API Keys", "Providers"),
+        (SelectedPage::Marketplace, "🧩", "Community Marketplace & Plugins", "Marketplace"),
+        (SelectedPage::Live, "🟢", "Live Activity & Runtime Telemetry", "Live"),
+        (SelectedPage::Code, "⌨", "API Playground & Code", "Code"),
+        (SelectedPage::Logs, "📋", "Event Logs & Traces", "Logs"),
+        (SelectedPage::ApiKeys, "🔑", "API Keys & Authentication", "ApiKeys"),
+        (SelectedPage::Usage, "📊", "Telemetry & Token Costs", "Usage"),
+        (SelectedPage::Settings, "⚙", "System Settings", "Ctrl+,"),
+    ]
+}
+
 #[component]
 fn palette_entry(
     show_palette: Signal<bool>,
@@ -591,6 +600,43 @@ fn palette_entry(
                 span { class: "font-medium text-xs", "{label}" }
             }
             span { class: "text-[10px] font-mono text-slate-500 bg-[#16171d] px-1.5 py-0.5 rounded border border-[#1e293b]", "{shortcut}" }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_all_pages_represented_in_palette() {
+        let items = palette_items();
+        let pages: HashSet<SelectedPage> = items.iter().map(|(p, _, _, _)| *p).collect();
+        let all_variants = [
+            SelectedPage::Dashboard,
+            SelectedPage::Live,
+            SelectedPage::Code,
+            SelectedPage::Chat,
+            SelectedPage::Arena,
+            SelectedPage::Workflows,
+            SelectedPage::Swarm,
+            SelectedPage::Artifacts,
+            SelectedPage::Agents,
+            SelectedPage::Logs,
+            SelectedPage::MemoryBlocks,
+            SelectedPage::Tools,
+            SelectedPage::Models,
+            SelectedPage::Providers,
+            SelectedPage::ApiKeys,
+            SelectedPage::Usage,
+            SelectedPage::Settings,
+            SelectedPage::Marketplace,
+        ];
+        assert_eq!(all_variants.len(), 18);
+        assert_eq!(pages.len(), 18, "All 18 SelectedPage variants must be represented in palette");
+        for variant in all_variants {
+            assert!(pages.contains(&variant), "Missing variant in palette");
         }
     }
 }

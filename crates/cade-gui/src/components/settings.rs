@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api;
-use crate::types::{AppState, ToastLevel, add_toast};
+use crate::types::{AppState, SelectedPage, ToastLevel, add_toast};
 
 fn save_agent_name(
     edit_name: Signal<String>,
@@ -102,10 +102,43 @@ pub fn SettingsView() -> Element {
         "(not set)".to_string()
     };
 
+    let mut active_page = state.active_page;
+
     rsx! {
         div { class: "flex-1 bg-[#040711] h-full overflow-y-auto select-text",
-            header { class: "px-10 py-4 flex items-center justify-between select-none border-b border-[#1e293b]/70",
+            header { class: "px-10 py-4 flex flex-wrap items-center justify-between gap-4 select-none border-b border-[#1e293b]/70 bg-[#090d16]",
                 h1 { class: "text-lg font-semibold text-slate-100", "Settings" }
+                div { class: "flex items-center space-x-1.5 overflow-x-auto",
+                    button {
+                        class: "px-3 py-1 bg-slate-800 text-sky-400 border border-slate-700 rounded-lg text-xs font-medium cursor-pointer transition shadow-sm",
+                        "General"
+                    }
+                    button {
+                        class: "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition",
+                        onclick: move |_| active_page.set(SelectedPage::ApiKeys),
+                        "API Keys"
+                    }
+                    button {
+                        class: "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition",
+                        onclick: move |_| active_page.set(SelectedPage::Usage),
+                        "Telemetry & Cost"
+                    }
+                    button {
+                        class: "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition",
+                        onclick: move |_| active_page.set(SelectedPage::Marketplace),
+                        "Marketplace"
+                    }
+                    button {
+                        class: "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition",
+                        onclick: move |_| active_page.set(SelectedPage::Providers),
+                        "Providers"
+                    }
+                    button {
+                        class: "px-3 py-1 bg-[#16171d] text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-[#1e293b] rounded-lg text-xs font-medium cursor-pointer transition",
+                        onclick: move |_| active_page.set(SelectedPage::Models),
+                        "Models"
+                    }
+                }
             }
 
             div { class: "p-10 space-y-8 max-w-3xl",

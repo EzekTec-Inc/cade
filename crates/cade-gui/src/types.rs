@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 /// Top-level navigation pages.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectedPage {
     Dashboard,
     Live,
