@@ -541,8 +541,14 @@ impl LlmRouter {
             };
 
             tracing::debug!("Probing candidate cheaper model: {candidate}");
-            match provider.complete(&candidate_req).await {
-                Ok(_) => {
+            let probe_result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                provider.complete(&candidate_req),
+            )
+            .await;
+
+            match probe_result {
+                Ok(Ok(_)) => {
                     tracing::info!("Health check succeeded for cheaper model: {candidate}");
                     let target_req = CompletionRequest {
                         model: bare_model,
@@ -551,8 +557,11 @@ impl LlmRouter {
                     let usage_model = candidate.to_string();
                     return Ok((provider, target_req, usage_model));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!("Health check failed for cheaper model {candidate}: {e}; trying next alternative");
+                }
+                Err(_) => {
+                    tracing::warn!("Health check timed out after 5s for cheaper model {candidate}; trying next alternative");
                 }
             }
         }
