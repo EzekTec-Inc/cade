@@ -642,6 +642,9 @@ impl Repl {
             SlashCmd::Plugin(args) => {
                 return self.cmd_plugin(args).await;
             }
+            SlashCmd::Queue(args) => {
+                return self.cmd_queue(args).await;
+            }
             SlashCmd::Clear => {
                 return self.cmd_clear().await;
             }

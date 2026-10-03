@@ -48,6 +48,7 @@ use crate::server::state::AppState;
 
 #[cfg(test)]
 mod direct_launch_tests;
+pub(crate) mod intercom;
 pub(crate) mod plugin_execution;
 #[cfg(test)]
 mod responses_continuation_tests;

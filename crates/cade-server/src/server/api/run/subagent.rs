@@ -653,15 +653,19 @@ pub(super) async fn handle_subagent_tool(
         let to = args.get("to").and_then(|v| v.as_str()).unwrap_or("");
         let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
         let reply_to = args.get("replyTo").and_then(|v| v.as_str()).unwrap_or("");
-
-        let output = match action {
-            "list" => "[] (No active intercom channels)".to_string(),
-            "send" | "ask" => format!("Message successfully sent to '{}': '{}'", to, message),
-            "reply" => format!("Replied to message '{}': '{}'", reply_to, message),
-            "pending" => "[] (No pending supervisor requests)".to_string(),
-            "status" => "Intercom channel: connected. Routing table: 0 active routes.".to_string(),
-            other => format!("Unsupported action '{}'", other),
+        let caller = if parent_agent_id.trim().is_empty() {
+            "supervisor"
+        } else {
+            parent_agent_id.trim()
         };
+
+        let output = super::intercom::IntercomHub::global().dispatch(
+            action,
+            caller,
+            to,
+            message,
+            reply_to,
+        );
 
         return cade_agent::tools::manager::ToolResult {
             tool_call_id: tool_call_id.clone(),
@@ -1122,7 +1126,18 @@ pub(super) async fn handle_run_subagent_tool_inner(
                         let output = completion
                             .outcome()
                             .map(|outcome| outcome.summary_text().to_string())
-                            .unwrap_or_else(|| reason.to_string());
+                            .unwrap_or_else(|| {
+                                if status == TerminalStatus::Timeout {
+                                    super::intercom::IntercomHub::generate_timeout_report(
+                                        &completion_id,
+                                        subagent_timeout_secs(),
+                                        0,
+                                        Some(&reason.to_string()),
+                                    )
+                                } else {
+                                    reason.to_string()
+                                }
+                            });
                         (output, true, status)
                     }
                 };

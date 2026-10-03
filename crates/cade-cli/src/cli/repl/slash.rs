@@ -40,6 +40,7 @@ command_catalogue! {
     Help => ["help", "?", "menu"], "Session", "Browse available commands", false, None, |_, _| SlashCmd::Help;
     Exit => ["exit", "quit", "q"], "Session", "Exit CADE", false, None, |_, _| SlashCmd::Exit;
     Clear => ["clear"], "Session", "Clear the timeline and agent message context", false, None, |_, _| SlashCmd::Clear;
+    Queue(Option<String>) => ["queue"], "Session", "Inspect and control interactive steering and follow-up queues", false, None, |_, arg| SlashCmd::Queue(arg), examples: ["/queue list" => false, "/queue drop 1" => true, "/queue clear" => false];
     Agent => ["agent"], "Session", "Show the current agent name and ID", false, None, |_, _| SlashCmd::Agent;
     Info => ["info"], "Session", "Show agent, conversation, model, mode and workspace", false, None, |_, _| SlashCmd::Info;
     New => ["new"], "Session", "Start a new conversation on the current agent", false, None, |_, _| SlashCmd::New;
@@ -254,7 +255,7 @@ mod tests {
         let defs = all_slash_command_defs();
         let names: BTreeSet<_> = defs.iter().map(|def| &def.name).collect();
         assert_eq!(names.len(), defs.len());
-        assert_eq!(names.len(), 97, "builtin compatibility inventory changed");
+        assert_eq!(names.len(), 98, "builtin compatibility inventory changed");
     }
 
     #[test]
@@ -262,8 +263,8 @@ mod tests {
         let entries = command_menu_entries(None);
         assert_eq!(
             entries.len(),
-            87,
-            "74 builtin commands, 10 examples and 3 tool hints"
+            91,
+            "75 builtin commands, 13 examples and 3 tool hints"
         );
         let mut variants = std::collections::HashSet::new();
         for entry in entries
@@ -278,7 +279,7 @@ mod tests {
                 entry.command
             );
         }
-        assert_eq!(variants.len(), 74);
+        assert_eq!(variants.len(), 75);
         for example in entries
             .iter()
             .filter(|entry| entry.command.starts_with('/') && entry.command.contains(' '))
@@ -298,10 +299,10 @@ mod tests {
         assert!(!names.contains("/agents"));
         assert!(!names.contains("/subagents"));
         assert!(!names.contains("/mcp"));
-        for control in ["/approvals", "/approve", "/deny", "/steer", "/plugin"] {
+        for control in ["/approvals", "/approve", "/deny", "/steer", "/plugin", "/queue"] {
             assert!(names.contains(control));
         }
-        assert_eq!(command_menu_entries(Some(&CapabilitySet::full())).len(), 87);
+        assert_eq!(command_menu_entries(Some(&CapabilitySet::full())).len(), 91);
     }
 
     #[test]

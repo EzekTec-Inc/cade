@@ -21,6 +21,8 @@ pub mod commands_newagent;
 pub mod commands_permissions;
 pub mod commands_plugin;
 pub mod commands_pricing;
+pub mod commands_queue;
+pub mod queue_controller;
 pub mod commands_providers;
 pub mod commands_resume;
 pub mod commands_search;
