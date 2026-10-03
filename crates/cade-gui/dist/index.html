@@ -83,7 +83,7 @@
 </script>
 <script>
 (function() {
-  var STARTUP_TIMEOUT_MS = 10000;
+  var STARTUP_TIMEOUT_MS = 30000;
   var POLL_INTERVAL_MS = 100;
   var pollTimer = null;
   var timeoutTimer = null;
@@ -199,15 +199,13 @@
 
   window.addEventListener("TrunkApplicationStarted", function() {
     log("TrunkApplicationStarted event received.");
-    if (!checkReady()) {
-      ready("TrunkApplicationStarted event received before canvas children were visible.");
-    }
+    ready("TrunkApplicationStarted event received.");
   });
 
   pollTimer = window.setInterval(checkReady, POLL_INTERVAL_MS);
   timeoutTimer = window.setTimeout(function() {
     if (!window.__CADE_GUI_READY && !checkReady()) {
-      error("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 10 seconds. Diagnostic details:");
+      error("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 30 seconds. Diagnostic details:");
     }
   }, STARTUP_TIMEOUT_MS);
 
@@ -218,10 +216,17 @@
   });
 
   window.addEventListener("error", function(e) {
-    var msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
+    var target = e.target;
+    var msg;
+    if (target && (target.tagName === "SCRIPT" || target.tagName === "LINK")) {
+      var src = target.src || target.href || "resource";
+      msg = "Failed to load resource: " + src;
+    } else {
+      msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
+    }
     log("Runtime error: " + msg);
     error("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
-  });
+  }, true);
 })();
 </script>
 
@@ -236,7 +241,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/dashboard/cade-gui-ebf63dac2cc9ccd7.js" crossorigin="anonymous" integrity="sha384-q8eLtqNIdHBiVl/0kC22BdaAWrozf/Vcy7a+3v9KgkcxLPz8atktMTTozuOx4mGQ"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/inline0.js" crossorigin="anonymous" integrity="sha384-E7XrAE0tjDaRj+uif7xg0rIvO4VMl9KbHNgq94n8VQaTlxijO4YyNOEWxo5jD9IU"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline2.js" crossorigin="anonymous" integrity="sha384-ekqRzY3OufUEB7y6uITFjRimsyqsrKmfKj1c0rT1qv540x4U9SRCOHi2gdqWqpwF"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/src/js/patch_console.js" crossorigin="anonymous" integrity="sha384-5JBHRbmtlt+1itRKLdoRs4hjdIQ0pUfmNhwtAJCq+u7x+x3KJJzzps279xv7KZFv"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/src/js/hydrate.js" crossorigin="anonymous" integrity="sha384-pfz3GoOS0du3Se5f5C1lkvbvMo0g507e24Rcu0dm29CmSCqxguUw3chk5PS1brtF"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-bf44d47c344f35d0/src/js/eval.js" crossorigin="anonymous" integrity="sha384-2DHjVGrzcpbms06h5LAGWYB1zXEqfWTjATq1YsBBgX1CE2W+T4mRjoljwlXKhTcj"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-bf44d47c344f35d0/inline0.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-bf44d47c344f35d0/inline1.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-r2ksgmK5/hubS3t3BrAqIhD4l7Un3E1kP9DgqRpdRr379cC+H4WzWhC6RzxUalxr"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline1.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-cli-config-24e80746d3c500cd/inline0.js" crossorigin="anonymous" integrity="sha384-63GOaGGIhEHCB9m4vzzYEBfUIIUWiAYuNlk/LB2TuDDcjK13LO2II01K9xxO0fFG"><link rel="preload" href="/dashboard/cade-gui-ebf63dac2cc9ccd7_bg.wasm" crossorigin="anonymous" integrity="sha384-q0TN7P/wz0tWNQJguNF5n+mZWWhxRyHmAk7yGssh/fZHOMcfhscPEBJlEyls4xHe" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/dashboard/cade-gui-ebf63dac2cc9ccd7.js" crossorigin="anonymous" integrity="sha384-q8eLtqNIdHBiVl/0kC22BdaAWrozf/Vcy7a+3v9KgkcxLPz8atktMTTozuOx4mGQ"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline1.js" crossorigin="anonymous" integrity="sha384-5E/0vLGKQzzJeHB8uV4IvBREmeZQGatu9Has9XqIrEs+HUUHkMvvI+U4vt8OXBXt"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-bf44d47c344f35d0/inline0.js" crossorigin="anonymous" integrity="sha384-xqSmg18C2FmchYWi9fb4cSqOW4ZNNo4b7NWZK1eW+fOqg4no+2F+zETwKUf1PJy3"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/inline0.js" crossorigin="anonymous" integrity="sha384-E7XrAE0tjDaRj+uif7xg0rIvO4VMl9KbHNgq94n8VQaTlxijO4YyNOEWxo5jD9IU"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/src/js/patch_console.js" crossorigin="anonymous" integrity="sha384-5JBHRbmtlt+1itRKLdoRs4hjdIQ0pUfmNhwtAJCq+u7x+x3KJJzzps279xv7KZFv"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js" crossorigin="anonymous" integrity="sha384-r2ksgmK5/hubS3t3BrAqIhD4l7Un3E1kP9DgqRpdRr379cC+H4WzWhC6RzxUalxr"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/src/js/common.js" crossorigin="anonymous" integrity="sha384-lNXbLTw7Z18z5HtM0HV3R7/8J+II5Ei18I53QeIZolR+l1nGEBr27UjMtT/DJpiC"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-bf44d47c344f35d0/src/js/eval.js" crossorigin="anonymous" integrity="sha384-2DHjVGrzcpbms06h5LAGWYB1zXEqfWTjATq1YsBBgX1CE2W+T4mRjoljwlXKhTcj"><link rel="modulepreload" href="/dashboard/snippets/dioxus-cli-config-24e80746d3c500cd/inline0.js" crossorigin="anonymous" integrity="sha384-63GOaGGIhEHCB9m4vzzYEBfUIIUWiAYuNlk/LB2TuDDcjK13LO2II01K9xxO0fFG"><link rel="modulepreload" href="/dashboard/snippets/dioxus-interpreter-js-53424282ea002554/src/js/hydrate.js" crossorigin="anonymous" integrity="sha384-pfz3GoOS0du3Se5f5C1lkvbvMo0g507e24Rcu0dm29CmSCqxguUw3chk5PS1brtF"><link rel="modulepreload" href="/dashboard/snippets/dioxus-web-bf44d47c344f35d0/inline1.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline2.js" crossorigin="anonymous" integrity="sha384-ekqRzY3OufUEB7y6uITFjRimsyqsrKmfKj1c0rT1qv540x4U9SRCOHi2gdqWqpwF"><link rel="preload" href="/dashboard/cade-gui-ebf63dac2cc9ccd7_bg.wasm" crossorigin="anonymous" integrity="sha384-q0TN7P/wz0tWNQJguNF5n+mZWWhxRyHmAk7yGssh/fZHOMcfhscPEBJlEyls4xHe" as="fetch" type="application/wasm"></head>
 <body class="bg-[#0f1115] text-[#e5e7eb]">
 <div id="cade-loader" class="cade-loader">
   <div class="cade-spinner"></div>

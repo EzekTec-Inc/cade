@@ -83,7 +83,7 @@
 </script>
 <script>
 (function() {
-  var STARTUP_TIMEOUT_MS = 10000;
+  var STARTUP_TIMEOUT_MS = 30000;
   var POLL_INTERVAL_MS = 100;
   var pollTimer = null;
   var timeoutTimer = null;
@@ -199,15 +199,13 @@
 
   window.addEventListener("TrunkApplicationStarted", function() {
     log("TrunkApplicationStarted event received.");
-    if (!checkReady()) {
-      ready("TrunkApplicationStarted event received before canvas children were visible.");
-    }
+    ready("TrunkApplicationStarted event received.");
   });
 
   pollTimer = window.setInterval(checkReady, POLL_INTERVAL_MS);
   timeoutTimer = window.setTimeout(function() {
     if (!window.__CADE_GUI_READY && !checkReady()) {
-      error("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 10 seconds. Diagnostic details:");
+      error("CADE Dashboard Startup Timeout", "The WebAssembly application did not initialize within 30 seconds. Diagnostic details:");
     }
   }, STARTUP_TIMEOUT_MS);
 
@@ -218,10 +216,17 @@
   });
 
   window.addEventListener("error", function(e) {
-    var msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
+    var target = e.target;
+    var msg;
+    if (target && (target.tagName === "SCRIPT" || target.tagName === "LINK")) {
+      var src = target.src || target.href || "resource";
+      msg = "Failed to load resource: " + src;
+    } else {
+      msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
+    }
     log("Runtime error: " + msg);
     error("CADE GUI Runtime Error", "A runtime error occurred during initialization:");
-  });
+  }, true);
 })();
 </script>
 <link data-trunk rel="rust" data-wasm-opt="0" />
