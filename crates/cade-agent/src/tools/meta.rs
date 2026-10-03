@@ -48,6 +48,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_wait(),
         schema_intercom(),
         schema_subagent_supervisor(),
+        schema_task_handoff(),
         schema_run_parallel_subagents(),
         schema_run_team(),
         schema_cancel_subagent(),
@@ -552,6 +553,43 @@ fn schema_subagent_supervisor() -> Value {
                 }
             },
             "required": ["action"]
+        }
+    })
+}
+
+fn schema_task_handoff() -> Value {
+    json!({
+        "name": "task_handoff",
+        "description": "Enforce atomic task closure and hot-potato handoffs to downstream seats or subagents. Actions: 'handoff' (close and forward), 'validate' (test closure rules), 'inbox' (fetch assigned pending tasks).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "Handoff action: 'handoff', 'validate', or 'inbox'. Default is 'handoff'."
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional existing task ID. If omitted, registers and hands off the current task context."
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Target seat or agent ID (e.g. 'seat:reviewer', 'tester', 'supervisor'). Required for handoff and escalation."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Closure reason: 'handed_off_to', 'blocked_on', 'denied', 'canceled', 'no_follow_on', 'escalation', 'superseded'."
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary of work accomplished and next action required."
+                },
+                "payload": {
+                    "type": "object",
+                    "description": "Optional context object or artifact references passed directly to the successor task."
+                }
+            },
+            "required": ["reason", "summary"]
         }
     })
 }

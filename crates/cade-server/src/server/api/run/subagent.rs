@@ -676,6 +676,83 @@ pub(super) async fn handle_subagent_tool(
         };
     }
 
+    if tool_name == "task_handoff" || tool_name == "handoff" {
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("handoff");
+        let task_id = args.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+        let to = args.get("to").and_then(|v| v.as_str()).unwrap_or("supervisor");
+        let reason_str = args.get("reason").and_then(|v| v.as_str()).unwrap_or("handed_off_to");
+        let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("Task handed off");
+        let payload = args.get("payload").cloned();
+
+        let coordinator = cade_agent::subagents::handoff::TaskHandoffCoordinator::global();
+
+        let output = match action {
+            "inbox" => {
+                let target = if to.trim().is_empty() { parent_agent_id.as_str() } else { to };
+                let tasks = coordinator.pending_inbox(target);
+                serde_json::to_string_pretty(&tasks).unwrap_or_else(|_| "[]".to_string())
+            }
+            "validate" => {
+                let reason = cade_agent::subagents::handoff::ClosureReason::from_str_loose(reason_str)
+                    .unwrap_or(cade_agent::subagents::handoff::ClosureReason::HandedOffTo);
+                let req = cade_agent::subagents::handoff::ClosureRequest {
+                    state: "done".to_string(),
+                    closure_reason: Some(reason),
+                    closure_target: Some(to.to_string()),
+                    summary: summary.to_string(),
+                    payload,
+                };
+                match coordinator.validate_closure(task_id, &req) {
+                    Ok(r) => format!("Validation succeeded: closure_reason={r}"),
+                    Err(e) => format!("Validation failed: {e}"),
+                }
+            }
+            _ => {
+                let reason = cade_agent::subagents::handoff::ClosureReason::from_str_loose(reason_str)
+                    .unwrap_or(cade_agent::subagents::handoff::ClosureReason::HandedOffTo);
+                let req = cade_agent::subagents::handoff::ClosureRequest {
+                    state: "done".to_string(),
+                    closure_reason: Some(reason),
+                    closure_target: Some(to.to_string()),
+                    summary: summary.to_string(),
+                    payload,
+                };
+
+                let actual_task_id = if task_id.trim().is_empty() || coordinator.get_task(task_id).is_none() {
+                    let created = coordinator.register_task(
+                        if parent_agent_id.trim().is_empty() { "subagent" } else { &parent_agent_id },
+                        summary,
+                        None,
+                    );
+                    created.id
+                } else {
+                    task_id.to_string()
+                };
+
+                match coordinator.close_task(&actual_task_id, req) {
+                    Ok(receipt) => {
+                        format!(
+                            "Task '{}' closed with reason '{}'. Successor task '{}' enqueued to '{}'.",
+                            receipt.task_id,
+                            receipt.closure_reason,
+                            receipt.successor_task_id.as_deref().unwrap_or("none"),
+                            receipt.closure_target.as_deref().unwrap_or("none")
+                        )
+                    }
+                    Err(e) => format!("Handoff failed: {e}"),
+                }
+            }
+        };
+
+        return cade_agent::tools::manager::ToolResult {
+            tool_call_id: tool_call_id.clone(),
+            tool_name,
+            output,
+            is_error: false,
+            ui_resource_uri: None,
+        };
+    }
+
     // Background children have a lifecycle beyond this run. Give their events
     // a detached, durable relay instead of retaining the HTTP response sender.
     let sse_tx = if args.get("background").and_then(|v| v.as_bool()) == Some(true) {
