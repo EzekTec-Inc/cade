@@ -103,9 +103,8 @@ fn mime_for(path: &str) -> &'static str {
 /// The public dashboard routes are unauthenticated, so path traversal and path
 /// syntax from other platforms must be rejected before reaching the asset layer.
 fn normalize_asset_path(path: &str) -> Option<&str> {
-    let path = path.trim_start_matches("./");
+    let path = path.trim_start_matches("./").trim_start_matches('/');
     if path.is_empty()
-        || path.starts_with('/')
         || path.contains('\\')
         || path.contains('\0')
         || path

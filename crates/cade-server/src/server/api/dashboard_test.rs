@@ -288,6 +288,17 @@ async fn snippets_fallback_route_returns_200() {
 }
 
 #[tokio::test]
+async fn dashboard_serves_inline0_snippet_asset() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard/snippets/cade-gui-c494d2e7ec7af535/inline0.js")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn dashboard_tailwind_asset_served_locally() {
     let app = make_app(make_state(None));
     let req = Request::builder()

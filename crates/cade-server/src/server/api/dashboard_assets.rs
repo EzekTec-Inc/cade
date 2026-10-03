@@ -82,7 +82,23 @@ impl DashboardAssets {
             return Some(DashboardAsset { data: file.data });
         }
 
-        // 3. Fallback for index.html when dist/ is missing or empty
+        // 3. Fallback to local workspace crates/cade-gui/dist if running in a workspace checkout
+        for candidate_root in [
+            "crates/cade-gui/dist",
+            "../cade-gui/dist",
+            "../../crates/cade-gui/dist",
+        ] {
+            let candidate = std::path::Path::new(candidate_root).join(file_path);
+            if candidate.is_file()
+                && let Ok(bytes) = std::fs::read(&candidate)
+            {
+                return Some(DashboardAsset {
+                    data: Cow::Owned(bytes),
+                });
+            }
+        }
+
+        // 4. Fallback for index.html when dist/ is missing or empty
         if file_path == "index.html" {
             return Some(DashboardAsset {
                 data: Cow::Borrowed(FALLBACK_INDEX_HTML),

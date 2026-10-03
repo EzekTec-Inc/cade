@@ -35,13 +35,19 @@ fn main() {
     // a new hashed bundle name).
     println!("cargo:rerun-if-changed={}", dist_dir.display());
 
-    // Also watch each individual file so in-place modifications (same
-    // filename, new content — possible if the hash happens to stay stable)
-    // trigger a rebuild.
-    if let Ok(entries) = std::fs::read_dir(&dist_dir) {
+    // Also watch all files and subdirectories (e.g. snippets/*) recursively
+    // so new snippets and nested assets trigger an automatic rebuild.
+    watch_dir_recursive(&dist_dir);
+}
+
+fn watch_dir_recursive(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
+            if path.is_dir() {
+                println!("cargo:rerun-if-changed={}", path.display());
+                watch_dir_recursive(&path);
+            } else if path.is_file() {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
         }
