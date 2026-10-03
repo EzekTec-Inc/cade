@@ -506,6 +506,61 @@ impl LlmRouter {
             fallback,
         })
     }
+
+    /// Proactively probe candidate cheaper models with a lightweight ping completion
+    /// to ensure they work before switching. Cascades through alternatives until success.
+    pub async fn probe_and_route_cheapest_verified(
+        &self,
+        req: &CompletionRequest,
+        candidate_models: &[String],
+    ) -> Result<(Arc<dyn LlmProvider>, CompletionRequest, String)> {
+        let probe_req = CompletionRequest {
+            model: "".to_string(),
+            messages: vec![crate::LlmMessage {
+                role: "user".to_string(),
+                content: "ping".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+                cache_control: None,
+            }],
+            tools: Vec::new(),
+            max_tokens: 5,
+            reasoning_effort: None,
+        };
+
+        for candidate in candidate_models {
+            let (provider, bare_model) = match self.resolve_provider(candidate) {
+                Ok(res) => res,
+                Err(_) => continue,
+            };
+
+            let candidate_req = CompletionRequest {
+                model: bare_model.clone(),
+                ..probe_req.clone()
+            };
+
+            tracing::debug!("Probing candidate cheaper model: {candidate}");
+            match provider.complete(&candidate_req).await {
+                Ok(_) => {
+                    tracing::info!("Health check succeeded for cheaper model: {candidate}");
+                    let target_req = CompletionRequest {
+                        model: bare_model,
+                        ..req.clone()
+                    };
+                    let usage_model = candidate.to_string();
+                    return Ok((provider, target_req, usage_model));
+                }
+                Err(e) => {
+                    tracing::warn!("Health check failed for cheaper model {candidate}: {e}; trying next alternative");
+                }
+            }
+        }
+
+        // Fallback to original route if all probes fail
+        let route = self.route(req)?;
+        Ok((route.provider, route.request, route.usage_model))
+    }
 }
 
 struct Route {

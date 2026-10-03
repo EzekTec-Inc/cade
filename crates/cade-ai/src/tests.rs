@@ -1914,6 +1914,81 @@ fn test_openai_provider_deepseek_thinking_serialization() {
     assert_eq!(body_disabled["reasoning_effort"], "none");
 }
 
+#[tokio::test]
+async fn test_probe_and_route_cheapest_verified_cascade() {
+    struct FailingMockProvider;
+    #[async_trait::async_trait]
+    impl LlmProvider for FailingMockProvider {
+        async fn complete(&self, _req: &CompletionRequest) -> crate::Result<CompletionResponse> {
+            Err(crate::Error::custom("provider unavailable"))
+        }
+        async fn stream(
+            &self,
+            _req: &CompletionRequest,
+        ) -> crate::Result<std::pin::Pin<Box<dyn futures::Stream<Item = crate::Result<StreamChunk>> + Send>>> {
+            Err(crate::Error::custom("not implemented"))
+        }
+    }
+
+    struct SuccessMockProvider;
+    #[async_trait::async_trait]
+    impl LlmProvider for SuccessMockProvider {
+        async fn complete(&self, _req: &CompletionRequest) -> crate::Result<CompletionResponse> {
+            Ok(CompletionResponse {
+                content: Some("pong".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+        async fn stream(
+            &self,
+            _req: &CompletionRequest,
+        ) -> crate::Result<std::pin::Pin<Box<dyn futures::Stream<Item = crate::Result<StreamChunk>> + Send>>> {
+            Err(crate::Error::custom("not implemented"))
+        }
+    }
+
+    let config = AiConfig {
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        deepseek_api_key: None,
+        ollama_base_url: "http://localhost:11434".into(),
+        llm_provider: "mock".into(),
+    };
+    let mut router = LlmRouter::build(&config);
+    router.add_provider("failing".into(), Arc::new(FailingMockProvider));
+    router.add_provider("success".into(), Arc::new(SuccessMockProvider));
+
+    let req = CompletionRequest {
+        model: "openai/gpt-4o".into(),
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: "Hello".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+            cache_control: None,
+        }],
+        tools: vec![],
+        max_tokens: 100,
+        reasoning_effort: None,
+    };
+
+    let candidates = vec![
+        "failing/model-a".to_string(),
+        "success/model-b".to_string(),
+    ];
+
+    let (_, routed_req, usage_model) = router
+        .probe_and_route_cheapest_verified(&req, &candidates)
+        .await
+        .unwrap();
+
+    assert_eq!(usage_model, "success/model-b");
+    assert_eq!(routed_req.model, "model-b");
+}
+
 #[test]
 fn test_openai_provider_deepseek_cache_token_accounting() {
     // 1. DeepSeek top-level prompt_cache_hit_tokens
