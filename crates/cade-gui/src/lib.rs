@@ -2,6 +2,7 @@ pub mod api;
 pub mod api_engine;
 pub mod chat_session;
 pub mod components;
+pub mod primitives;
 pub mod startup;
 pub mod theme;
 pub mod types;

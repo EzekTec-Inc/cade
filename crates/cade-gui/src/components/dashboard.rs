@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 
 use crate::api_engine::{ApiClientEngine, ConsoleStatus, ResourceState};
-use crate::types::{AppState, CodeLanguage};
+use crate::primitives::{FeatureTile, TabPill, TileAccent, TileIcon};
+use crate::types::{AppState, CodeLanguage, SelectedPage};
 
 /// Dashboard home page with modern developer tool aesthetic.
 #[component]
@@ -10,7 +11,7 @@ pub fn DashboardView() -> Element {
     let engine = use_context::<Memo<ApiClientEngine>>();
     let mut console_status = use_signal(|| ResourceState::<ConsoleStatus>::Loading);
 
-    let active_tab = use_signal(|| 0);
+    let mut active_tab = use_signal(|| 0);
     let selected_lang = use_signal(|| CodeLanguage::Rust);
     let copied_key = use_signal(|| false);
     let copied_code = use_signal(|| false);
@@ -160,14 +161,38 @@ pub fn DashboardView() -> Element {
                 }
             }
 
-            // Feature cards grid
+            // Feature cards grid (using deep FeatureTile primitives)
             div { class: "grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 select-none",
-                // CARD 1: Desktop App
-                feature_card_desktop { active_page }
-                // CARD 2: CADE CLI
-                feature_card_cli { active_page }
-                // CARD 3: CADE API
-                feature_card_api { active_page }
+                FeatureTile {
+                    title: "Desktop Extensions",
+                    description: "Cross-platform desktop automation, screen capture, window control, and notification hooks.",
+                    badge: "Native",
+                    action_label: "Explore Tools & Approvals",
+                    icon: TileIcon::Desktop,
+                    accent: TileAccent::Sky,
+                    destination: SelectedPage::Tools,
+                    active_page,
+                }
+                FeatureTile {
+                    title: "Smart Shell & CLI",
+                    description: "Interactive Ratatui TUI console with autonomous workflows, plan checklists, and diff inspectors.",
+                    badge: "Terminal",
+                    action_label: "Inspect Live Activity",
+                    icon: TileIcon::Terminal,
+                    accent: TileAccent::Emerald,
+                    destination: SelectedPage::Live,
+                    active_page,
+                }
+                FeatureTile {
+                    title: "Embedded SDK",
+                    description: "Zero-daemon in-process runtime (Rust, Python, TypeScript) for standalone and serverless deployments.",
+                    badge: "SDK",
+                    action_label: "Open API Playground",
+                    icon: TileIcon::Sdk,
+                    accent: TileAccent::Amber,
+                    destination: SelectedPage::Code,
+                    active_page,
+                }
             }
 
             // API Section
@@ -177,12 +202,24 @@ pub fn DashboardView() -> Element {
             }
 
             div { class: "border border-[#1e293b] bg-[#090d16] rounded-xl overflow-hidden shadow-xl flex flex-col",
-                // Tab navigation
+                // Tab navigation (using deep TabPill primitives)
                 div { class: "px-6 py-3 border-b border-[#1e293b] flex items-center justify-between select-none text-[13px] font-medium text-slate-400 bg-[#0f172a]/50",
-                    div { class: "flex items-center space-x-1.5",
-                        tab_button { active_tab: active_tab, idx: 0, label: "Send Message" }
-                        tab_button { active_tab: active_tab, idx: 1, label: "Deploy Agent" }
-                        tab_button { active_tab: active_tab, idx: 2, label: "Inspect Memory" }
+                    div { class: "flex items-center space-x-2",
+                        TabPill {
+                            active: active_tab() == 0,
+                            label: "Send Message".to_string(),
+                            onclick: move |_| active_tab.set(0),
+                        }
+                        TabPill {
+                            active: active_tab() == 1,
+                            label: "Deploy Agent".to_string(),
+                            onclick: move |_| active_tab.set(1),
+                        }
+                        TabPill {
+                            active: active_tab() == 2,
+                            label: "Inspect Memory".to_string(),
+                            onclick: move |_| active_tab.set(2),
+                        }
                     }
                     // API Key widget
                     api_key_widget { copied_key: copied_key, api_key: state.api_key }
@@ -218,107 +255,6 @@ pub fn DashboardView() -> Element {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
-
-#[component]
-fn feature_card_desktop(mut active_page: Signal<crate::types::SelectedPage>) -> Element {
-    rsx! {
-        div {
-            class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-sky-500/60 group transition-all duration-200 flex flex-col justify-between shadow-md cursor-pointer",
-            onclick: move |_| active_page.set(crate::types::SelectedPage::Tools),
-            div { class: "relative h-36 bg-gradient-to-br from-blue-950/40 via-slate-900/60 to-[#090d16] flex items-center justify-center p-4 overflow-hidden border-b border-[#1e293b]/50",
-                svg { class: "w-20 h-20 text-sky-500/80 filter drop-shadow-[0_0_15px_rgba(14,165,233,0.2)]", view_box: "0 0 100 100",
-                    circle { cx: "50", cy: "50", r: "32", fill: "none", stroke: "#0284c7", "stroke-width": "1.5" }
-                    circle { cx: "50", cy: "50", r: "20", fill: "#0369a1", "fill-opacity": "0.3" }
-                    rect { x: "42", y: "42", width: "16", height: "16", rx: "3", fill: "#38bdf8" }
-                }
-                span { class: "absolute top-3 right-3 bg-sky-950 text-sky-400 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-sky-800 uppercase tracking-wider", "Native" }
-            }
-            div { class: "p-5 flex-1 flex flex-col justify-between",
-                div {
-                    h3 { class: "text-slate-100 font-bold text-sm mb-1.5 group-hover:text-sky-400 transition-colors duration-150", "Desktop Extensions" }
-                    p { class: "text-slate-400 text-xs leading-relaxed", "Cross-platform desktop automation, screen capture, window control, and notification hooks." }
-                }
-                span { class: "text-[11px] text-sky-400 group-hover:translate-x-1 transition-transform inline-flex items-center space-x-1 font-medium mt-3",
-                    span { "Explore Tools & Approvals" }
-                    span { "→" }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn feature_card_cli(mut active_page: Signal<crate::types::SelectedPage>) -> Element {
-    rsx! {
-        div {
-            class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-emerald-500/60 group transition-all duration-200 flex flex-col justify-between shadow-md cursor-pointer",
-            onclick: move |_| active_page.set(crate::types::SelectedPage::Live),
-            div { class: "relative h-36 bg-gradient-to-br from-emerald-950/40 via-slate-900/60 to-[#090d16] flex items-center justify-center p-4 overflow-hidden border-b border-[#1e293b]/50",
-                svg { class: "w-20 h-20 text-emerald-500/80 filter drop-shadow-[0_0_15px_rgba(16,185,129,0.2)]", view_box: "0 0 100 100",
-                    rect { x: "25", y: "30", width: "50", height: "40", rx: "6", fill: "#0f172a", stroke: "#059669", "stroke-width": "1.5" }
-                    text { x: "32", y: "52", fill: "#34d399", "font-family": "monospace", "font-size": "14", "font-weight": "bold", ">_ " }
-                }
-                span { class: "absolute top-3 right-3 bg-emerald-950 text-emerald-400 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-emerald-800 uppercase tracking-wider", "Terminal" }
-            }
-            div { class: "p-5 flex-1 flex flex-col justify-between",
-                div {
-                    h3 { class: "text-slate-100 font-bold text-sm mb-1.5 group-hover:text-emerald-400 transition-colors duration-150", "Smart Shell & CLI" }
-                    p { class: "text-slate-400 text-xs leading-relaxed", "Interactive Ratatui TUI console with autonomous workflows, plan checklists, and diff inspectors." }
-                }
-                span { class: "text-[11px] text-emerald-400 group-hover:translate-x-1 transition-transform inline-flex items-center space-x-1 font-medium mt-3",
-                    span { "Inspect Live Activity" }
-                    span { "→" }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn feature_card_api(mut active_page: Signal<crate::types::SelectedPage>) -> Element {
-    rsx! {
-        div {
-            class: "bg-[#090d16] border border-[#1e293b] rounded-xl overflow-hidden hover:border-amber-500/60 group transition-all duration-200 flex flex-col justify-between shadow-md cursor-pointer",
-            onclick: move |_| active_page.set(crate::types::SelectedPage::Code),
-            div { class: "relative h-36 bg-gradient-to-br from-amber-950/40 via-slate-900/60 to-[#090d16] flex items-center justify-center p-4 overflow-hidden border-b border-[#1e293b]/50",
-                svg { class: "w-20 h-20 text-amber-500/80 filter drop-shadow-[0_0_15px_rgba(245,158,11,0.2)]", view_box: "0 0 100 100",
-                    rect { x: "30", y: "30", width: "40", height: "40", rx: "6", fill: "#0f172a", stroke: "#d97706", "stroke-width": "1.5" }
-                    circle { cx: "50", cy: "50", r: "8", fill: "#fbbf24" }
-                }
-                span { class: "absolute top-3 right-3 bg-amber-950 text-amber-400 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-amber-800 uppercase tracking-wider", "SDK" }
-            }
-            div { class: "p-5 flex-1 flex flex-col justify-between",
-                div {
-                    h3 { class: "text-slate-100 font-bold text-sm mb-1.5 group-hover:text-amber-400 transition-colors duration-150", "Embedded SDK" }
-                    p { class: "text-slate-400 text-xs leading-relaxed", "Zero-daemon in-process runtime (Rust, Python, TypeScript) for standalone and serverless deployments." }
-                }
-                span { class: "text-[11px] text-amber-400 group-hover:translate-x-1 transition-transform inline-flex items-center space-x-1 font-medium mt-3",
-                    span { "Open API Playground" }
-                    span { "→" }
-                }
-            }
-        }
-    }
-}
-
-/// A single tab button in the API getting-started section.
-#[component]
-fn tab_button(active_tab: Signal<i32>, idx: i32, label: String) -> Element {
-    let is_active = active_tab() == idx;
-    let cls = if is_active {
-        "px-3.5 py-1.5 bg-slate-800 text-sky-400 rounded-lg cursor-pointer border border-slate-700 font-medium text-xs shadow-sm transition-all"
-    } else {
-        "px-3.5 py-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 rounded-lg cursor-pointer text-xs transition-colors duration-150"
-    };
-
-    rsx! {
-        span {
-            class: "{cls}",
-            onclick: move |_| active_tab.set(idx),
-            "{label}"
-        }
-    }
-}
 
 /// API key display widget with copy button.
 #[component]
