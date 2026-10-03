@@ -26,22 +26,40 @@ pub fn DashboardView() -> Element {
         });
     });
 
-    let status_val = console_status.read().value().cloned().unwrap_or_default();
-    let (pill_cls, dot_cls) = if status_val.is_healthy {
-        (
-            "bg-emerald-950/80 text-emerald-400 border-emerald-800/80",
-            "bg-emerald-400 animate-pulse",
-        )
-    } else {
-        (
+    let status_state = console_status.read().clone();
+    let status_error = status_state.error().map(str::to_owned);
+    let status_val = status_state.value().cloned().unwrap_or_else(ConsoleStatus::unknown);
+    let (pill_cls, dot_cls, pill_label) = match status_state {
+        ResourceState::Loading => (
+            "bg-slate-900 text-slate-300 border-slate-700",
+            "bg-slate-400 animate-pulse",
+            "Checking engine".to_string(),
+        ),
+        ResourceState::Error(_) => (
             "bg-rose-950/80 text-rose-400 border-rose-800/80",
             "bg-rose-400",
-        )
+            "Status unavailable".to_string(),
+        ),
+        ResourceState::Ready(status) if status.is_healthy => (
+            "bg-emerald-950/80 text-emerald-400 border-emerald-800/80",
+            "bg-emerald-400",
+            status.engine_status,
+        ),
+        ResourceState::Ready(status) => (
+            "bg-rose-950/80 text-rose-400 border-rose-800/80",
+            "bg-rose-400",
+            status.engine_status,
+        ),
     };
-    let mcp_label = if status_val.active_mcp_count > 0 {
-        format!("{} Active", status_val.active_mcp_count)
+    let mcp_label = if status_error.is_some() {
+        "Unavailable".to_string()
+    } else if status_val.configured_mcp_count == 0 {
+        "None configured".to_string()
     } else {
-        "Native Core".to_string()
+        format!(
+            "{} / {} active",
+            status_val.active_mcp_count, status_val.configured_mcp_count
+        )
     };
 
     let (tab_title, tab_desc, tab_link, tab_href) = match active_tab() {
@@ -80,7 +98,7 @@ pub fn DashboardView() -> Element {
                 a { href: "https://github.com/EzekTec-Inc/cade/blob/main/docs/getting-started.md", target: "_blank", class: "hover:text-slate-100 cursor-pointer transition-colors duration-150", "API Spec" }
                 span { class: "{pill_cls} border px-3 py-1 rounded-full text-xs font-semibold shadow-sm flex items-center space-x-2",
                     span { class: "w-2 h-2 rounded-full {dot_cls}" }
-                    span { "{status_val.engine_status}" }
+                    span { "{pill_label}" }
                 }
             }
         }
@@ -97,8 +115,12 @@ pub fn DashboardView() -> Element {
                 }
                 div { class: "flex items-center gap-3 select-none",
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
+                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Provider / Model" }
+                        span { class: "text-xs font-bold text-cyan-400 font-mono", "{status_val.provider} / {status_val.default_model}" }
+                    }
+                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
                         span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Model Context" }
-                        span { class: "text-xs font-bold text-cyan-400 font-mono", "{status_val.context_window}" }
+                        span { class: "text-xs font-bold text-cyan-400 font-mono tabular-nums", "{status_val.context_window}" }
                     }
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
                         span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Recall Seam" }
@@ -106,8 +128,11 @@ pub fn DashboardView() -> Element {
                     }
                     div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
                         span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "MCP Status" }
-                        span { class: "text-xs font-bold text-purple-400 font-mono", "{mcp_label}" }
+                        span { class: "text-xs font-bold text-purple-400 font-mono tabular-nums", "{mcp_label}" }
                     }
+                }
+                if let Some(error) = status_error {
+                    p { class: "mt-3 text-xs text-rose-300", "Live status could not be verified: {error}" }
                 }
             }
 

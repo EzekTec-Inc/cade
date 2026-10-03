@@ -8,6 +8,47 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{CadeApiClient, api_request};
 
+fn non_empty_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn mcp_counts(servers: Option<&serde_json::Value>) -> (usize, usize) {
+    let Some(servers) = servers.and_then(serde_json::Value::as_array) else {
+        return (0, 0);
+    };
+    let active = servers
+        .iter()
+        .filter(|server| server["disabled"].as_bool() != Some(true))
+        .count();
+    (active, servers.len())
+}
+
+fn format_context_window(value: &serde_json::Value) -> String {
+    let Some(window) = value["window_tokens"].as_u64().filter(|window| *window > 0) else {
+        return "Unavailable".into();
+    };
+    let used = value["total_tokens"].as_u64().unwrap_or(0);
+    format!(
+        "{} / {}",
+        format_token_count(used),
+        format_token_count(window)
+    )
+}
+
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{}k", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
 // region:    --- Types
 
 /// State of an asynchronous resource query.
@@ -39,6 +80,9 @@ impl<T> ResourceState<T> {
 }
 
 /// Live engine status and telemetry model for the executive dashboard.
+///
+/// Every field is derived from a server response. Missing or failed sources stay
+/// explicit so the dashboard cannot present invented healthy telemetry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsoleStatus {
     pub is_healthy: bool,
@@ -46,21 +90,29 @@ pub struct ConsoleStatus {
     pub default_model: String,
     pub provider: String,
     pub active_mcp_count: usize,
+    pub configured_mcp_count: usize,
     pub context_window: String,
     pub recall_backend: String,
 }
 
+impl ConsoleStatus {
+    pub fn unknown() -> Self {
+        Self {
+            is_healthy: false,
+            engine_status: "Status unavailable".to_string(),
+            default_model: "Unavailable".to_string(),
+            provider: "Unavailable".to_string(),
+            active_mcp_count: 0,
+            configured_mcp_count: 0,
+            context_window: "No agent selected".to_string(),
+            recall_backend: "Unavailable".to_string(),
+        }
+    }
+}
+
 impl Default for ConsoleStatus {
     fn default() -> Self {
-        Self {
-            is_healthy: true,
-            engine_status: "Engine Healthy (Local WAL)".to_string(),
-            default_model: "Auto".to_string(),
-            provider: "Native".to_string(),
-            active_mcp_count: 0,
-            context_window: "128k - 1M Tokens".to_string(),
-            recall_backend: "BM25 + Vector".to_string(),
-        }
+        Self::unknown()
     }
 }
 
@@ -267,81 +319,112 @@ impl ApiClientEngine {
         }
     }
 
-    /// Fetch live console status aggregating health, server config, and MCP availability.
+    /// Fetch live console status from health, config, MCP, and context routes.
+    ///
+    /// A failed source remains unavailable. It is never replaced with a healthy
+    /// or invented value.
     pub async fn fetch_console_status(
         &self,
         agent_id: Option<&str>,
     ) -> ResourceState<ConsoleStatus> {
         let client = self.client();
-        // 1. Fetch health
-        let is_healthy = match api_request("GET", "/v1/health", None, &client.api_key).await {
+        let api_key = &client.api_key;
+        let mut errors = Vec::new();
+
+        let is_healthy = match api_request("GET", "/v1/health", None, api_key).await {
             Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-                Ok(val) => val["status"].as_str().map(|s| s == "ok").unwrap_or(true),
-                Err(_) => false,
+                Ok(value) => value["status"].as_str() == Some("ok"),
+                Err(error) => {
+                    errors.push(format!("health response was not JSON: {error}"));
+                    false
+                }
             },
-            Err(_) => false,
+            Err(error) => {
+                errors.push(format!("health request failed: {error}"));
+                false
+            }
         };
 
-        // 2. Fetch config (default model & provider)
-        let (default_model, provider) =
-            match api_request("GET", "/v1/config", None, &client.api_key).await {
+        let (default_model, provider) = match api_request("GET", "/v1/config", None, api_key).await {
+            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(value) => (
+                    non_empty_string(&value["default_model"]).unwrap_or_else(|| "Unavailable".into()),
+                    non_empty_string(&value["provider"]).unwrap_or_else(|| "Unavailable".into()),
+                ),
+                Err(error) => {
+                    errors.push(format!("config response was not JSON: {error}"));
+                    ("Unavailable".into(), "Unavailable".into())
+                }
+            },
+            Err(error) => {
+                errors.push(format!("config request failed: {error}"));
+                ("Unavailable".into(), "Unavailable".into())
+            }
+        };
+
+        let (active_mcp_count, configured_mcp_count) =
+            match api_request("GET", "/v1/mcp", None, api_key).await {
                 Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-                    Ok(val) => (
-                        val["default_model"].as_str().unwrap_or("Auto").to_string(),
-                        val["provider"].as_str().unwrap_or("Native").to_string(),
-                    ),
-                    Err(_) => ("Auto".to_string(), "Native".to_string()),
+                    Ok(value) => mcp_counts(value.get("servers")),
+                    Err(error) => {
+                        errors.push(format!("MCP response was not JSON: {error}"));
+                        (0, 0)
+                    }
                 },
-                Err(_) => ("Auto".to_string(), "Native".to_string()),
+                Err(error) => {
+                    errors.push(format!("MCP request failed: {error}"));
+                    (0, 0)
+                }
             };
 
-        // 3. Fetch MCP servers count
-        let active_mcp_count = match api_request("GET", "/v1/mcp", None, &client.api_key).await {
-            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-                Ok(val) => val["servers"].as_array().map(|a| a.len()).unwrap_or(0),
-                Err(_) => 0,
-            },
-            Err(_) => 0,
-        };
-
-        // 4. Fetch context window if agent_id is provided
-        let context_window = if let Some(id) = agent_id {
-            let path = format!("/v1/agents/{id}/context_stats");
-            match api_request("GET", &path, None, &client.api_key).await {
-                Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-                    Ok(val) => {
-                        let win = val["window_tokens"].as_u64().unwrap_or(0);
-                        if win > 0 {
-                            if win >= 1_000_000 {
-                                format!("{:.1}M Tokens", win as f64 / 1_000_000.0)
-                            } else {
-                                format!("{}k Tokens", win / 1_000)
-                            }
-                        } else {
-                            "128k - 1M Tokens".to_string()
+        let context_window = match agent_id {
+            Some(id) => {
+                let path = format!("/v1/agents/{id}/context");
+                match api_request("GET", &path, None, api_key).await {
+                    Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(value) => format_context_window(&value),
+                        Err(error) => {
+                            errors.push(format!("context response was not JSON: {error}"));
+                            "Unavailable".into()
                         }
+                    },
+                    Err(error) => {
+                        errors.push(format!("context request failed: {error}"));
+                        "Unavailable".into()
                     }
-                    Err(_) => "128k - 1M Tokens".to_string(),
-                },
-                Err(_) => "128k - 1M Tokens".to_string(),
+                }
             }
-        } else {
-            "128k - 1M Tokens".to_string()
+            None => "No agent selected".into(),
         };
 
-        ResourceState::Ready(ConsoleStatus {
+        let recall_backend = if is_healthy {
+            "Lexical recall".into()
+        } else {
+            "Unavailable".into()
+        };
+
+        let status = ConsoleStatus {
             is_healthy,
             engine_status: if is_healthy {
-                "Engine Healthy (Local WAL)".to_string()
+                "Engine healthy".into()
+            } else if errors.is_empty() {
+                "Engine offline".into()
             } else {
-                "Engine Offline".to_string()
+                "Status unavailable".into()
             },
             default_model,
             provider,
             active_mcp_count,
+            configured_mcp_count,
             context_window,
-            recall_backend: "BM25 + Vector".to_string(),
-        })
+            recall_backend,
+        };
+
+        if errors.is_empty() {
+            ResourceState::Ready(status)
+        } else {
+            ResourceState::Error(errors.join("; "))
+        }
     }
 
     /// Execute a resource mutation atomically.
@@ -468,6 +551,35 @@ impl ApiClientEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_status_defaults_are_not_healthy() {
+        let status = ConsoleStatus::default();
+        assert!(!status.is_healthy);
+        assert_eq!(status.engine_status, "Status unavailable");
+        assert_ne!(status.recall_backend, "BM25 + Vector");
+        assert_ne!(status.context_window, "128k - 1M Tokens");
+    }
+
+    #[test]
+    fn mcp_counts_exclude_disabled_servers() {
+        let servers = serde_json::json!([
+            {"key": "ready", "disabled": false},
+            {"key": "stopped", "disabled": true},
+            {"key": "legacy"}
+        ]);
+        assert_eq!(mcp_counts(Some(&servers)), (2, 3));
+    }
+
+    #[test]
+    fn context_window_uses_live_usage_and_rejects_missing_window() {
+        let live = serde_json::json!({"window_tokens": 200000, "total_tokens": 12345});
+        assert_eq!(format_context_window(&live), "12k / 200k");
+        assert_eq!(
+            format_context_window(&serde_json::json!({"window_tokens": 0})),
+            "Unavailable"
+        );
+    }
 
     #[test]
     fn test_resource_state_methods() {
