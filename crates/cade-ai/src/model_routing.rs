@@ -179,6 +179,59 @@ impl JevIntentModelRouter {
         }
     }
 
+    /// Plans an ordered, deduplicated sequence of up to 3 candidate economy models
+    /// to probe before falling back to the session frontier model.
+    ///
+    /// The order prioritizes:
+    /// 1. The primary family fast model (same provider family as the frontier model).
+    /// 2. The primary family balanced model if distinct from both fast and base models.
+    /// 3. Cross-provider fallback models, preferring configured environment providers.
+    pub fn candidate_economy_models(
+        base_model: &str,
+        available_providers: Option<&[String]>,
+    ) -> Vec<String> {
+        let mut candidates = Vec::new();
+        let mut push_candidate = |candidate: String| {
+            if candidate != base_model && !candidates.iter().any(|existing| existing == &candidate) {
+                candidates.push(candidate);
+            }
+        };
+
+        // 1. Same-family fast model
+        push_candidate(Self::resolve_fast_model(base_model));
+
+        // 2. Same-family balanced model
+        push_candidate(Self::resolve_balanced_model(base_model));
+
+        // 3. Fallback fast models ordered across all known providers
+        let configured_providers = crate::provider_registry::ProviderRegistry::configured();
+        let env_providers;
+        let active_providers: &[String] = match available_providers {
+            Some(p) => p,
+            None => {
+                env_providers = crate::catalogue::available_env_providers();
+                &env_providers[..]
+            }
+        };
+
+        let mut provider_defs = configured_providers.get_all_providers().to_vec();
+        provider_defs.sort_by_key(|p| {
+            let is_active = active_providers.iter().any(|ap| ap == &p.name || p.aliases.contains(ap));
+            let active_rank = if is_active { 0 } else { 1 };
+            (active_rank, p.fast_priority, p.priority, p.name.clone())
+        });
+
+        for p in provider_defs {
+            if let Some(ref fast) = p.fast_model {
+                push_candidate(format!("{}/{fast}", p.name));
+            }
+        }
+
+        // Hard guarantee: at most three candidates
+        candidates.truncate(3);
+        candidates
+    }
+
     /// Resolves the balanced tier model for a given provider family.
     pub fn resolve_balanced_model(base_model: &str) -> String {
         let (provider, _bare) = base_model.split_once('/').unwrap_or(("", base_model));
@@ -517,6 +570,20 @@ mod tests {
             JevIntentModelRouter::resolve_fast_model("openai/gpt-6-sol"),
             "openai/gpt-4o-mini"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_candidate_economy_models_caps_at_three_and_excludes_base() -> Result<()> {
+        let base_model = "anthropic/claude-3-7-sonnet";
+        let candidates = JevIntentModelRouter::candidate_economy_models(
+            base_model,
+            Some(&["anthropic".into(), "openai".into(), "gemini".into()]),
+        );
+        assert!(!candidates.is_empty());
+        assert!(candidates.len() <= 3);
+        assert!(!candidates.contains(&base_model.to_string()));
+        assert_eq!(candidates[0], "anthropic/claude-3-5-haiku-latest");
         Ok(())
     }
 

@@ -53,6 +53,7 @@ pub(crate) mod plugin_execution;
 #[cfg(test)]
 mod responses_continuation_tests;
 pub mod runtime;
+pub(crate) mod verified_routing;
 #[cfg(test)]
 mod runtime_execution_tests;
 pub mod storage_impl;
@@ -796,25 +797,92 @@ pub(crate) async fn run_agent_loop_with_dependencies(
                 let decision = router.route(&base_model, last_user_prompt).await;
 
                 if decision.is_downgraded_for_economy {
-                    tracing::info!(
-                        "Jev model routing: {} -> {} ({})",
-                        decision.original_model,
-                        decision.effective_model,
-                        decision.reason
+                    let candidates = cade_ai::model_routing::JevIntentModelRouter::candidate_economy_models(
+                        &base_model,
+                        None,
                     );
-                    send(json!({
-                        "message_type": "system_notice",
-                        "level":        "info",
-                        "code":         "model_routed_economy",
-                        "message":      format!(
-                            "Dynamic model routing: using {} for {} (conserving tokens)",
-                            decision.effective_model, decision.category
-                        ),
-                        "decision":     &decision,
-                    }))
+                    let llm_for_probe = state2.llm.clone();
+                    let outcome = verified_routing::resolve_and_verify_candidate_model(
+                        &decision,
+                        &candidates,
+                        |probe_req| {
+                            let llm = llm_for_probe.clone();
+                            async move { llm.stream(&probe_req).await }
+                        },
+                    )
                     .await;
-                    current_active_model = Some(decision.effective_model.clone());
-                    decision.effective_model
+
+                    match outcome {
+                        verified_routing::VerifiedRouteOutcome::VerifiedCandidate {
+                            model: verified_model,
+                            attempts,
+                            discarded_failures,
+                        } => {
+                            if !discarded_failures.is_empty() {
+                                send(json!({
+                                    "message_type": "system_notice",
+                                    "level":        "warning",
+                                    "code":         "model_routing_candidate_cycled",
+                                    "message":      format!(
+                                        "Dynamic model routing: skipped {} failing candidate(s) after verification error; selected {}",
+                                        discarded_failures.len(),
+                                        verified_model
+                                    ),
+                                    "discarded_failures": discarded_failures,
+                                }))
+                                .await;
+                            }
+                            tracing::info!(
+                                "Jev model routing verified: {} -> {} (after {} attempt{}) ({})",
+                                decision.original_model,
+                                verified_model,
+                                attempts,
+                                if attempts == 1 { "" } else { "s" },
+                                decision.reason
+                            );
+                            send(json!({
+                                "message_type": "system_notice",
+                                "level":        "info",
+                                "code":         "model_routed_economy",
+                                "message":      format!(
+                                    "Dynamic model routing: verified and using {} for {} (conserving tokens)",
+                                    verified_model, decision.category
+                                ),
+                                "decision":     &decision,
+                            }))
+                            .await;
+                            current_active_model = Some(verified_model.clone());
+                            verified_model
+                        }
+                        verified_routing::VerifiedRouteOutcome::FallbackToFrontier {
+                            frontier_model,
+                            attempts,
+                            failures,
+                            reason,
+                        } => {
+                            tracing::warn!(
+                                "Jev model routing aborted after {} failed attempts; restoring session frontier model {}: {}",
+                                attempts,
+                                frontier_model,
+                                reason
+                            );
+                            send(json!({
+                                "message_type": "system_notice",
+                                "level":        "warning",
+                                "code":         "model_routed_frontier_fallback",
+                                "message":      format!(
+                                    "Dynamic model routing: all {} candidate economy models returned errors; maintaining session frontier model {}",
+                                    attempts,
+                                    frontier_model
+                                ),
+                                "failed_candidates": failures,
+                                "original_model": &frontier_model,
+                            }))
+                            .await;
+                            current_active_model = Some(frontier_model.clone());
+                            frontier_model
+                        }
+                    }
                 } else {
                     current_active_model = Some(base_model.clone());
                     base_model
