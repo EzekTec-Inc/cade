@@ -66,6 +66,7 @@ impl DashboardSite {
                 [
                     (header::CONTENT_TYPE, mime_for(path)),
                     (header::CACHE_CONTROL, CACHE_CONTROL_REVALIDATE),
+                    (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
                 ],
                 file.data.to_vec(),
             )

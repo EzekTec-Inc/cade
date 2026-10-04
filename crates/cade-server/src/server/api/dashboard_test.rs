@@ -296,6 +296,11 @@ async fn dashboard_serves_inline0_snippet_asset() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let cors = resp
+        .headers()
+        .get("access-control-allow-origin")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(cors, Some("*"));
 }
 
 #[tokio::test]

@@ -220,6 +220,16 @@
     var msg;
     if (target && (target.tagName === "SCRIPT" || target.tagName === "LINK")) {
       var src = target.src || target.href || "resource";
+      // Preload / prefetch links are advisory performance hints. Browser policies,
+      // privacy extensions, or subresource integrity checks on modulepreload may fire
+      // non-fatal errors on link tags while module imports succeed. Log and continue.
+      if (target.tagName === "LINK") {
+        var rel = (target.rel || "").toLowerCase();
+        if (rel.indexOf("preload") !== -1 || rel.indexOf("prefetch") !== -1) {
+          log("Advisory preload link failed (non-fatal): " + src);
+          return;
+        }
+      }
       msg = "Failed to load resource: " + src;
     } else {
       msg = e.error ? (e.error.stack || e.error.message || e.message) : (e.message || e.toString());
