@@ -6,12 +6,12 @@ impl Repl {
     /// Manage the canonical PluginEngine lifecycle through the Server API.
     pub(crate) async fn cmd_plugin(&self, args: Option<String>) -> Result<bool> {
         let Some(args) = args else {
-            self.tui_sys("Usage: /plugin list | search <query> | install-market <id> | install <url> <id> | uninstall <id>");
+            self.tui_sys("Usage: /plugin list | reload | search <query> | install-market <id> | install <url> <id> | uninstall <id>");
             return Ok(false);
         };
         let mut parts = args.split_whitespace();
         let Some(action) = parts.next() else {
-            self.tui_sys("Usage: /plugin list | search <query> | install-market <id> | install <url> <id> | uninstall <id>");
+            self.tui_sys("Usage: /plugin list | reload | search <query> | install-market <id> | install <url> <id> | uninstall <id>");
             return Ok(false);
         };
 
@@ -110,6 +110,19 @@ impl Repl {
                     Err(error) => self.tui_err(format!("Plugin installation failed: {error}")),
                 }
             }
+            "reload" => {
+                self.tui_sys("Hot-swapping and reloading plugin registry...".to_string());
+                match self.client.raw_post("/plugins/reload", &json!({})).await {
+                    Ok(response) => {
+                        let count = response["plugins_count"].as_u64().unwrap_or(0);
+                        let tools = response["tools_count"].as_u64().unwrap_or(0);
+                        self.tui_ok(format!(
+                            "Reloaded {count} active plugin(s) ({tools} tools ready)."
+                        ));
+                    }
+                    Err(error) => self.tui_err(format!("Plugin reload failed: {error}")),
+                }
+            }
             "uninstall" => {
                 let Some(plugin_id) = parts.next() else {
                     self.tui_err("Usage: /plugin uninstall <id>".to_string());
@@ -129,7 +142,7 @@ impl Repl {
                 }
             }
             _ => self.tui_err(
-                "Usage: /plugin list | search <query> | install-market <id> | install <url> <id> | uninstall <id>"
+                "Usage: /plugin list | reload | search <query> | install-market <id> | install <url> <id> | uninstall <id>"
                     .to_string(),
             ),
         }

@@ -117,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/plugins", get(plugins::list_plugins_handler))
         .route("/v1/plugins/search", get(plugins::search_plugins_handler))
         .route("/v1/plugins/install", post(plugins::install_plugin_handler))
+        .route("/v1/plugins/reload", post(plugins::reload_plugins_handler))
         .route(
             "/v1/plugins/{id}",
             delete(plugins::uninstall_plugin_handler),

@@ -60,6 +60,11 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> SafeLruCache<K, V> {
     {
         self.map.retain(|k, (_, v)| f(k, v));
     }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.access_seq = 0;
+    }
 }
 
 use tokio::sync::RwLock;
@@ -406,6 +411,13 @@ impl AppState {
                 cache.retain(|k, _| !k.starts_with(&prefix));
             }
         }
+    }
+
+    /// Invalidate context cache entries across all agents and conversations.
+    /// Used when global tool availability changes dynamically (e.g. plugin install, remove, or reload).
+    pub fn invalidate_all_context_caches(&self) {
+        let mut cache = self.context_cache.lock();
+        cache.clear();
     }
 }
 

@@ -35,6 +35,11 @@ pub trait PluginEngine: Send + Sync {
     /// Discover and load all plugins from the search directories.
     fn load_all(&self) -> Result<Vec<PluginReport>>;
 
+    /// Explicitly reload all plugins, refreshing internal registries and returning updated inventory.
+    fn reload(&self) -> Result<Vec<PluginReport>> {
+        self.load_all()
+    }
+
     /// Install a plugin package from a remote URL or tarball into target directory.
     async fn install(&self, url: &str, plugin_id: &str) -> Result<PluginReport>;
 

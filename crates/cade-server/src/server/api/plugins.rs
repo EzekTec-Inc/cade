@@ -161,13 +161,19 @@ pub async fn install_plugin_handler(
 
     match install_res {
         Ok(report) => {
+            state.invalidate_all_context_caches();
             crate::server::api::agents::publish_global_event(
                 Some(&state.db),
                 "plugin_installed",
                 json!({
                     "plugin_id": report.id,
+                    "name": report.name,
+                    "version": report.version,
                     "scope": report.scope,
                     "status": report.status,
+                    "tools_count": report.tools_count,
+                    "skills_count": report.skills_count,
+                    "mcp_servers_count": report.mcp_servers_count,
                 }),
             );
             Json(json!({ "status": "installed", "plugin": report })).into_response()
@@ -192,13 +198,19 @@ pub async fn uninstall_plugin_handler(
 
     match engine.uninstall(&plugin_id) {
         Ok(report) => {
+            state.invalidate_all_context_caches();
             crate::server::api::agents::publish_global_event(
                 Some(&state.db),
                 "plugin_removed",
                 json!({
                     "plugin_id": report.id,
+                    "name": report.name,
+                    "version": report.version,
                     "scope": report.scope,
                     "status": report.status,
+                    "tools_count": report.tools_count,
+                    "skills_count": report.skills_count,
+                    "mcp_servers_count": report.mcp_servers_count,
                 }),
             );
             Json(json!({ "status": "removed", "plugin": report })).into_response()
@@ -213,6 +225,40 @@ pub async fn uninstall_plugin_handler(
     }
 }
 
+/// `POST /v1/plugins/reload` — hot-swap reload all plugins and invalidate context caches.
+pub async fn reload_plugins_handler(State(state): State<AppState>) -> Response {
+    let engine = default_engine();
+    match engine.reload() {
+        Ok(reports) => {
+            state.invalidate_all_context_caches();
+            let tools = engine.list_tools();
+            crate::server::api::agents::publish_global_event(
+                Some(&state.db),
+                "plugin_reloaded",
+                json!({
+                    "plugins_count": reports.len(),
+                    "tools_count": tools.len(),
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                }),
+            );
+            Json(json!({
+                "status": "reloaded",
+                "plugins_count": reports.len(),
+                "tools_count": tools.len(),
+                "plugins": reports,
+            }))
+            .into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to reload plugins");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Plugin reload failed: {error}"),
+            )
+        }
+    }
+}
+
 /// `GET /v1/plugins/events` — live SSE stream of plugin lifecycle events.
 pub async fn stream_plugin_events_handler(
     State(_state): State<AppState>,
@@ -222,7 +268,7 @@ pub async fn stream_plugin_events_handler(
         tokio_stream::wrappers::BroadcastStream::new(receiver).filter_map(|result| async move {
             let event = result.ok()?;
             let kind = event["event_type"].as_str()?;
-            if !matches!(kind, "plugin_installed" | "plugin_removed") {
+            if !matches!(kind, "plugin_installed" | "plugin_removed" | "plugin_reloaded") {
                 return None;
             }
             Some(Ok(Event::default().event(kind).data(event.to_string())))
@@ -306,5 +352,37 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn test_plugin_engine_hot_swap_reload_lifecycle() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path().join(".cade/plugins");
+        std::fs::create_dir_all(&install_dir).unwrap();
+
+        let engine = NativePluginEngine::new(vec![install_dir.clone()], install_dir.clone());
+        let initial_reports = engine.load_all().expect("initial load should succeed");
+        assert!(initial_reports.is_empty());
+
+        // Hot-swap in a new plugin dynamically
+        let plugin_dir = install_dir.join("live-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("cade-plugin.json"),
+            serde_json::json!({
+                "name": "Live Plugin",
+                "version": "2.0.0",
+                "tools": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Hot-swap reload without restart
+        let reloaded_reports = engine.reload().expect("reload should succeed");
+        assert_eq!(reloaded_reports.len(), 1);
+        assert_eq!(reloaded_reports[0].id, "live-plugin");
+        assert_eq!(reloaded_reports[0].name, "Live Plugin");
+        assert_eq!(reloaded_reports[0].version, "2.0.0");
     }
 }
