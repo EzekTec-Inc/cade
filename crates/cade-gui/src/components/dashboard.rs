@@ -84,7 +84,7 @@ pub fn DashboardView() -> Element {
     };
 
     let code_content = code_for_tab(active_tab(), selected_lang());
-    let mut active_page = state.active_page;
+    let active_page = state.active_page;
 
     rsx! {
         // Header bar with Glassmorphism & Status Beacon
@@ -106,29 +106,29 @@ pub fn DashboardView() -> Element {
         // Dashboard Content
         div { class: "px-10 pt-8 pb-12 flex-1 overflow-y-auto bg-[#040711]",
             // Greeting & Live Telemetry Ticker
-            div { class: "mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e293b]/50 pb-6",
+            div { class: "mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-[#1e293b]/60 pb-6",
                 div {
-                    h1 { class: "text-2xl font-extrabold text-slate-100 tracking-tight flex items-center space-x-3",
+                    h1 { class: "text-2xl font-bold text-slate-100 tracking-tight text-balance flex items-center space-x-3",
                         span { "Executive AI Intelligence Console" }
                     }
-                    p { class: "text-xs text-slate-400 mt-1", "Real-time stateful autonomous agent mesh, multi-model arena, and AST refactoring harness." }
+                    p { class: "text-xs text-slate-400 mt-1 text-pretty max-w-xl", "Real-time stateful autonomous agent mesh, multi-model arena, and AST refactoring harness." }
                 }
-                div { class: "flex items-center gap-3 select-none",
-                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
-                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Provider / Model" }
-                        span { class: "text-xs font-bold text-cyan-400 font-mono", "{status_val.provider} / {status_val.default_model}" }
+                div { class: "flex flex-wrap items-center gap-2.5 select-none",
+                    div { class: "bg-[#090d16] border border-slate-800/90 rounded-xl px-3.5 py-2 flex flex-col items-center shadow-[0px_2px_3px_-1px_rgba(0,0,0,0.1),0px_1px_0px_0px_rgba(25,28,33,0.02),0px_0px_0px_1px_rgba(25,28,33,0.08)]",
+                        span { class: "text-[10px] uppercase text-slate-500 font-mono", "Provider / Model" }
+                        span { class: "text-xs font-semibold text-sky-400 font-mono", "{status_val.provider} / {status_val.default_model}" }
                     }
-                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
-                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Model Context" }
-                        span { class: "text-xs font-bold text-cyan-400 font-mono tabular-nums", "{status_val.context_window}" }
+                    div { class: "bg-[#090d16] border border-slate-800/90 rounded-xl px-3.5 py-2 flex flex-col items-center shadow-[0px_2px_3px_-1px_rgba(0,0,0,0.1),0px_1px_0px_0px_rgba(25,28,33,0.02),0px_0px_0px_1px_rgba(25,28,33,0.08)]",
+                        span { class: "text-[10px] uppercase text-slate-500 font-mono", "Model Context" }
+                        span { class: "text-xs font-semibold text-sky-400 font-mono tabular-nums", "{status_val.context_window}" }
                     }
-                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
-                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "Recall Seam" }
-                        span { class: "text-xs font-bold text-slate-300 font-mono", "{status_val.recall_backend}" }
+                    div { class: "bg-[#090d16] border border-slate-800/90 rounded-xl px-3.5 py-2 flex flex-col items-center shadow-[0px_2px_3px_-1px_rgba(0,0,0,0.1),0px_1px_0px_0px_rgba(25,28,33,0.02),0px_0px_0px_1px_rgba(25,28,33,0.08)]",
+                        span { class: "text-[10px] uppercase text-slate-500 font-mono", "Recall Seam" }
+                        span { class: "text-xs font-semibold text-slate-300 font-mono", "{status_val.recall_backend}" }
                     }
-                    div { class: "bg-[#090d16] border border-[#1e293b] rounded-xl px-4 py-2 flex flex-col items-center",
-                        span { class: "text-[10px] uppercase tracking-wider text-slate-500 font-mono", "MCP Status" }
-                        span { class: "text-xs font-bold text-purple-400 font-mono tabular-nums", "{mcp_label}" }
+                    div { class: "bg-[#090d16] border border-slate-800/90 rounded-xl px-3.5 py-2 flex flex-col items-center shadow-[0px_2px_3px_-1px_rgba(0,0,0,0.1),0px_1px_0px_0px_rgba(25,28,33,0.02),0px_0px_0px_1px_rgba(25,28,33,0.08)]",
+                        span { class: "text-[10px] uppercase text-slate-500 font-mono", "MCP Status" }
+                        span { class: "text-xs font-semibold text-purple-400 font-mono tabular-nums", "{mcp_label}" }
                     }
                 }
                 if let Some(error) = status_error {
@@ -143,45 +143,41 @@ pub fn DashboardView() -> Element {
                     span { class: "text-[11px] text-slate-500 font-mono", "Single-click operations" }
                 }
                 div { class: "grid grid-cols-1 md:grid-cols-4 gap-4",
-                    div {
-                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-cyan-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-cyan-500/10",
-                        onclick: move |_| active_page.set(crate::types::SelectedPage::Arena),
-                        div { class: "flex items-center justify-between mb-2",
-                            span { class: "text-lg", "⚡" }
-                            span { class: "text-[10px] font-mono font-bold text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800", "Arena Battle" }
-                        }
-                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-cyan-300 transition-colors", "Multi-Model Arena" }
-                        p { class: "text-slate-400 text-xs mt-1", "Stream 2-4 models side-by-side with latency & diff analysis." }
+                    ActionCard {
+                        icon: "⚡",
+                        tag: "Arena Battle",
+                        title: "Multi-Model Arena",
+                        description: "Stream 2-4 models side-by-side with latency & diff analysis.",
+                        accent: TileAccent::Sky,
+                        destination: SelectedPage::Arena,
+                        active_page,
                     }
-                    div {
-                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-purple-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-purple-500/10",
-                        onclick: move |_| active_page.set(crate::types::SelectedPage::Workflows),
-                        div { class: "flex items-center justify-between mb-2",
-                            span { class: "text-lg", "🔄" }
-                            span { class: "text-[10px] font-mono font-bold text-purple-400 bg-purple-950/80 px-2 py-0.5 rounded border border-purple-800", "DAG Visualizer" }
-                        }
-                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-purple-300 transition-colors", "Workflows & Pipelines" }
-                        p { class: "text-slate-400 text-xs mt-1", "Visual DAG canvas with animated step execution pulses." }
+                    ActionCard {
+                        icon: "🔄",
+                        tag: "DAG Visualizer",
+                        title: "Workflows & Pipelines",
+                        description: "Visual DAG canvas with animated step execution pulses.",
+                        accent: TileAccent::Purple,
+                        destination: SelectedPage::Workflows,
+                        active_page,
                     }
-                    div {
-                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-emerald-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-emerald-500/10",
-                        onclick: move |_| active_page.set(crate::types::SelectedPage::Swarm),
-                        div { class: "flex items-center justify-between mb-2",
-                            span { class: "text-lg", "🌐" }
-                            span { class: "text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800", "Swarm Tree" }
-                        }
-                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-emerald-300 transition-colors", "Swarm Topology" }
-                        p { class: "text-slate-400 text-xs mt-1", "Inspect supervisory trees, subagents, and token metrics." }
+                    ActionCard {
+                        icon: "🌐",
+                        tag: "Swarm Tree",
+                        title: "Swarm Topology",
+                        description: "Inspect supervisory trees, subagents, and token metrics.",
+                        accent: TileAccent::Emerald,
+                        destination: SelectedPage::Swarm,
+                        active_page,
                     }
-                    div {
-                        class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] hover:border-amber-500/50 rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg hover:shadow-amber-500/10",
-                        onclick: move |_| active_page.set(crate::types::SelectedPage::Artifacts),
-                        div { class: "flex items-center justify-between mb-2",
-                            span { class: "text-lg", "📦" }
-                            span { class: "text-[10px] font-mono font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800", "Artifacts" }
-                        }
-                        h3 { class: "text-slate-100 font-bold text-sm group-hover:text-amber-300 transition-colors", "Artifact Studio" }
-                        p { class: "text-slate-400 text-xs mt-1", "Inspect generated code diffs, datasets, and markdown." }
+                    ActionCard {
+                        icon: "📦",
+                        tag: "Artifacts",
+                        title: "Artifact Studio",
+                        description: "Inspect generated code diffs, datasets, and markdown.",
+                        accent: TileAccent::Amber,
+                        destination: SelectedPage::Artifacts,
+                        active_page,
                     }
                 }
             }
@@ -222,13 +218,13 @@ pub fn DashboardView() -> Element {
 
             // API Section
             div { class: "flex items-center justify-between mb-4",
-                h2 { class: "text-base font-bold text-slate-100 tracking-tight", "Developer API Workbench" }
+                h2 { class: "text-base font-bold text-slate-100 tracking-tight text-balance", "Developer API Workbench" }
                 span { class: "text-xs text-slate-500 font-mono", "REST / SSE / In-Process" }
             }
 
-            div { class: "border border-[#1e293b] bg-[#090d16] rounded-xl overflow-hidden shadow-xl flex flex-col",
+            div { class: "border border-slate-800/90 bg-[#090d16] rounded-xl overflow-hidden shadow-[0px_0px_0px_1px_rgba(0,0,0,0.06),0px_1px_1px_-0.5px_rgba(0,0,0,0.06),0px_3px_3px_-1.5px_rgba(0,0,0,0.06),_0px_6px_6px_-3px_rgba(0,0,0,0.06),0px_12px_12px_-6px_rgba(0,0,0,0.06),0px_24px_24px_-12px_rgba(0,0,0,0.06)] flex flex-col",
                 // Tab navigation (using deep TabPill primitives)
-                div { class: "px-6 py-3 border-b border-[#1e293b] flex items-center justify-between select-none text-[13px] font-medium text-slate-400 bg-[#0f172a]/50",
+                div { class: "px-6 py-3 border-b border-slate-800/80 flex items-center justify-between select-none text-[13px] font-medium text-slate-400 bg-[#0f172a]/40",
                     div { class: "flex items-center space-x-2",
                         TabPill {
                             active: active_tab() == 0,
@@ -253,15 +249,15 @@ pub fn DashboardView() -> Element {
                 // Main block split section
                 div { class: "grid grid-cols-1 md:grid-cols-12 min-h-[300px]",
                     // Left column - description
-                    div { class: "md:col-span-4 p-8 border-r border-[#1e293b] flex flex-col justify-between bg-[#070b14]",
+                    div { class: "md:col-span-4 p-8 border-r border-slate-800/80 flex flex-col justify-between bg-[#070b14]",
                         div {
-                            h3 { class: "text-slate-100 text-base font-bold mb-3 tracking-tight", "{tab_title}" }
-                            p { class: "text-slate-400 text-xs leading-relaxed", "{tab_desc}" }
+                            h3 { class: "text-slate-100 text-base font-bold mb-3 tracking-tight text-balance", "{tab_title}" }
+                            p { class: "text-slate-400 text-xs leading-relaxed text-pretty", "{tab_desc}" }
                         }
                         a {
                             href: "{tab_href}",
                             target: "_blank",
-                            class: "inline-flex items-center space-x-2 text-xs font-medium text-slate-200 border border-slate-700 bg-slate-800/80 hover:bg-slate-700 hover:text-white py-2 px-3.5 rounded-lg w-fit shadow-sm transition-colors duration-150",
+                            class: "inline-flex items-center space-x-2 text-xs font-medium text-slate-200 border border-slate-700 bg-slate-800/80 hover:bg-slate-700 hover:text-white py-2 px-3.5 rounded-lg w-fit shadow-sm transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sky-400 outline-none",
                             span { "{tab_link}" }
                             span { class: "text-[10px] text-slate-400", "↗" }
                         }
@@ -281,34 +277,105 @@ pub fn DashboardView() -> Element {
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
-/// API key display widget with copy button.
+/// Deep ActionCard component encapsulating Launchpad quick-action navigation,
+/// accessibility (role="button", tabindex, keyboard activation), and themed hover states.
 #[component]
-fn api_key_widget(copied_key: Signal<bool>, api_key: Signal<String>) -> Element {
+fn ActionCard(
+    icon: &'static str,
+    tag: &'static str,
+    title: &'static str,
+    description: &'static str,
+    accent: TileAccent,
+    destination: SelectedPage,
+    mut active_page: Signal<SelectedPage>,
+) -> Element {
+    let border_hover = match accent {
+        TileAccent::Sky => "hover:border-cyan-500/60 focus-visible:border-cyan-400 hover:shadow-cyan-500/10",
+        TileAccent::Purple => "hover:border-purple-500/60 focus-visible:border-purple-400 hover:shadow-purple-500/10",
+        TileAccent::Emerald => "hover:border-emerald-500/60 focus-visible:border-emerald-400 hover:shadow-emerald-500/10",
+        TileAccent::Amber => "hover:border-amber-500/60 focus-visible:border-amber-400 hover:shadow-amber-500/10",
+    };
+    let tag_cls = match accent {
+        TileAccent::Sky => "text-cyan-400 bg-cyan-950/80 border-cyan-800",
+        TileAccent::Purple => "text-purple-400 bg-purple-950/80 border-purple-800",
+        TileAccent::Emerald => "text-emerald-400 bg-emerald-950/80 border-emerald-800",
+        TileAccent::Amber => "text-amber-400 bg-amber-950/80 border-amber-800",
+    };
+    let text_hover = match accent {
+        TileAccent::Sky => "group-hover:text-cyan-300",
+        TileAccent::Purple => "group-hover:text-purple-300",
+        TileAccent::Emerald => "group-hover:text-emerald-300",
+        TileAccent::Amber => "group-hover:text-amber-300",
+    };
+
     rsx! {
-        div { class: "flex items-center space-x-2 bg-[#090d16] border border-[#1e293b] py-1.5 px-3 rounded-lg text-xs",
+        div {
+            class: "bg-gradient-to-br from-[#090d16] to-[#0f172a] border border-[#1e293b] {border_hover} rounded-xl p-5 cursor-pointer group transition-all duration-200 shadow-lg select-none outline-none focus-visible:ring-2 focus-visible:ring-cyan-400",
+            role: "button",
+            tabindex: 0,
+            "aria-label": "{title}: {description}",
+            onclick: move |_| active_page.set(destination),
+            onkeydown: move |evt: KeyboardEvent| {
+                if evt.key() == Key::Enter || evt.key() == Key::Character(" ".to_string()) {
+                    active_page.set(destination);
+                }
+            },
+            div { class: "flex items-center justify-between mb-2",
+                span { class: "text-lg", "{icon}" }
+                span { class: "text-[10px] font-mono font-bold px-2 py-0.5 rounded border {tag_cls}", "{tag}" }
+            }
+            h3 { class: "text-slate-100 font-bold text-sm {text_hover} transition-colors", "{title}" }
+            p { class: "text-slate-400 text-xs mt-1", "{description}" }
+        }
+    }
+}
+
+/// API key display widget with copy button and visual feedback.
+#[component]
+fn api_key_widget(mut copied_key: Signal<bool>, api_key: Signal<String>) -> Element {
+    let key_val = api_key();
+    let has_key = !key_val.is_empty();
+
+    rsx! {
+        div { class: "flex items-center space-x-2 bg-[#090d16] border border-[#1e293b] py-1 px-2.5 rounded-lg text-xs select-none",
             span { class: "text-slate-500 font-medium", "API Key:" }
             span { class: "text-slate-300 font-mono text-[11px] tracking-wider",
-                if api_key().len() > 8 {
-                    "{&api_key()[..8]}...{&api_key()[api_key().len()-4..]}"
-                } else if !api_key().is_empty() {
-                    "{api_key()}"
+                if key_val.len() > 8 {
+                    "{&key_val[..8]}...{&key_val[key_val.len()-4..]}"
+                } else if has_key {
+                    "{key_val}"
                 } else {
                     "No Key Required"
+                }
+            }
+            if has_key {
+                button {
+                    class: "text-[11px] text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors ml-1 cursor-pointer",
+                    title: "Copy API Key",
+                    onclick: move |_| {
+                        let to_copy = key_val.clone();
+                        crate::api::copyText(&to_copy);
+                        copied_key.set(true);
+                        spawn(async move {
+                            gloo_timers::future::TimeoutFuture::new(2000).await;
+                            copied_key.set(false);
+                        });
+                    },
+                    span { if copied_key() { "✓" } else { "Copy" } }
                 }
             }
         }
     }
 }
 
-/// Code panel component displaying snippet in selected language.
+/// Code panel component displaying snippet in selected language with copy feedback.
 #[component]
 fn code_panel(
     selected_lang: Signal<CodeLanguage>,
-    copied_code: Signal<bool>,
+    mut copied_code: Signal<bool>,
     code_content: String,
 ) -> Element {
-    let mut copied = copied_code;
-    let _text_to_copy = code_content.clone();
+    let text_to_copy = code_content.clone();
 
     rsx! {
         div { class: "md:col-span-8 p-6 flex flex-col justify-between bg-[#040711]",
@@ -320,11 +387,17 @@ fn code_panel(
                     lang_button { selected_lang: selected_lang, lang: CodeLanguage::Curl, label: "cURL" }
                 }
                 button {
-                    class: "text-xs text-slate-400 hover:text-white flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1 rounded-md border border-slate-700/60 transition-colors",
+                    class: "text-xs text-slate-400 hover:text-white flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1 rounded-md border border-slate-700/60 transition-colors cursor-pointer",
                     onclick: move |_| {
-                        copied.set(true);
+                        let to_copy = text_to_copy.clone();
+                        crate::api::copyText(&to_copy);
+                        copied_code.set(true);
+                        spawn(async move {
+                            gloo_timers::future::TimeoutFuture::new(2000).await;
+                            copied_code.set(false);
+                        });
                     },
-                    span { if copied() { "Copied ✓" } else { "Copy code" } }
+                    span { if copied_code() { "Copied ✓" } else { "Copy code" } }
                 }
             }
             pre { class: "text-xs font-mono text-slate-300 overflow-x-auto p-4 bg-[#090d16] rounded-lg border border-[#1e293b]/60 leading-relaxed",
